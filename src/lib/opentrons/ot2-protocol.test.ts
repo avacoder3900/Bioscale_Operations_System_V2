@@ -145,6 +145,66 @@ describe('maintenance verbs', () => {
 	});
 });
 
+describe('CALIB-5 per-robot rack offsets on the maintenance run', () => {
+	const DEF = { namespace: 'cosmas_damian', version: 1, parameters: { loadName: 'cosmasanddamian_96_tiprack_20ul' } };
+	const identity = { definition: DEF, labwareNamespace: 'cosmas_damian', labwareVersion: 1 };
+	const offset = { definitionUri: 'cosmas_damian/cosmasanddamian_96_tiprack_20ul/1', slotName: '11', vector: { x: 2, y: 4, z: 0 } };
+	// A run that already holds `loaded` labware; every register/offset/command succeeds.
+	const rackRobot = (loaded: unknown[] = []) =>
+		robot((c) => {
+			if (c.method === 'GET' && c.path === '/maintenance_runs/m1') return res(200, { data: { labware: loaded } });
+			if (c.path.endsWith('/labware_definitions')) return res(201, { data: {} });
+			if (c.path.endsWith('/labware_offsets')) return res(201, { data: { id: 'o1' } });
+			return okCmd({ labwareId: 'lw1' });
+		});
+	// The robot-side sequence as the operator would read it: registrations by path, commands by type.
+	const sequence = (calls: Call[]) =>
+		calls.filter((c) => c.method === 'POST').map((c) => (c.path.includes('/commands') ? c.body.data.commandType : c.path));
+
+	it('loadLabware: the offset is posted (definitionUri + slot + vector) BEFORE the loadLabware command', async () => {
+		const { t, calls } = rackRobot();
+		const r = await runVerb(t, 'mx.loadLabware', { runId: 'm1', loadName: 'cosmasanddamian_96_tiprack_20ul', slot: '11', ...identity, labwareOffset: offset });
+		expect(r).toEqual({ status: 200, body: { labwareId: 'lw1' } });
+		expect(sequence(calls)).toEqual(['/maintenance_runs/m1/labware_definitions', '/maintenance_runs/m1/labware_offsets', 'loadLabware']);
+		expect(calls.find((c) => c.path.endsWith('/labware_offsets'))!.body).toEqual({
+			data: { definitionUri: offset.definitionUri, location: { slotName: '11' }, vector: { x: 2, y: 4, z: 0 } }
+		});
+	});
+	it('pickUpTip: offset → load → pickUpTip, in that order', async () => {
+		const { t, calls } = rackRobot();
+		const r = await runVerb(t, 'mx.pickUpTip', { runId: 'm1', pipetteId: 'p', tiprackLoadName: 'cosmasanddamian_96_tiprack_20ul', slot: '11', tipWell: 'B3', ...identity, labwareOffset: offset });
+		expect(r).toEqual({ status: 200, body: { tiprackLabwareId: 'lw1' } });
+		expect(sequence(calls)).toEqual(['/maintenance_runs/m1/labware_definitions', '/maintenance_runs/m1/labware_offsets', 'loadLabware', 'pickUpTip']);
+	});
+	it('a zero vector posts no offset (= the shared definition as-is)', async () => {
+		const { t, calls } = rackRobot();
+		await runVerb(t, 'mx.loadLabware', { runId: 'm1', loadName: 'cosmasanddamian_96_tiprack_20ul', slot: '11', ...identity, labwareOffset: { ...offset, vector: { x: 0, y: 0, z: 0 } } });
+		expect(sequence(calls)).toEqual(['/maintenance_runs/m1/labware_definitions', 'loadLabware']);
+	});
+	it('no labwareOffset at all (cartridge decks, pre-CALIB-5 callers) posts nothing', async () => {
+		const { t, calls } = rackRobot();
+		await runVerb(t, 'mx.loadLabware', { runId: 'm1', loadName: 'gen4deck_gen7cartridge_004', slot: '1', ...identity });
+		await runVerb(t, 'mx.pickUpTip', { runId: 'm1', pipetteId: 'p', tiprackLoadName: 'cosmasanddamian_96_tiprack_20ul', ...identity });
+		expect(calls.some((c) => c.path.endsWith('/labware_offsets'))).toBe(false);
+	});
+	it('rack already loaded in the slot: reuse as before, no offset posted (a changed offset needs a reopen)', async () => {
+		const { t, calls } = rackRobot([{ id: 'old', loadName: 'cosmasanddamian_96_tiprack_20ul', definitionUri: offset.definitionUri, location: { slotName: '11' } }]);
+		const r = await runVerb(t, 'mx.loadLabware', { runId: 'm1', loadName: 'cosmasanddamian_96_tiprack_20ul', slot: '11', ...identity, hardened: true, labwareOffset: offset });
+		expect(r).toEqual({ status: 200, body: { labwareId: 'old' } });
+		expect(sequence(calls)).toEqual(['/maintenance_runs/m1/labware_definitions']);
+	});
+	it('robot refuses the offset → 502 and the labware is never loaded without it', async () => {
+		const { t, calls } = robot((c) => {
+			if (c.method === 'GET') return res(200, { data: { labware: [] } });
+			if (c.path.endsWith('/labware_offsets')) return res(422, { errors: [{ detail: 'bad vector' }] });
+			return c.path.endsWith('/labware_definitions') ? res(201, { data: {} }) : okCmd({ labwareId: 'lw1' });
+		});
+		const r = await runVerb(t, 'mx.loadLabware', { runId: 'm1', loadName: 'cosmasanddamian_96_tiprack_20ul', slot: '11', ...identity, labwareOffset: offset });
+		expect(r).toEqual({ status: 502, body: { message: 'bad vector' } });
+		expect(sequence(calls)).not.toContain('loadLabware');
+	});
+});
+
 describe('verbRoute / browserTransport', () => {
 	it('maps verbs onto the existing BIMS routes', () => {
 		expect(verbRoute('run.get', { rid: 'r' })).toEqual({ method: 'GET', path: '/runs/r' });

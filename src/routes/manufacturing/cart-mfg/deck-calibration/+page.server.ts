@@ -52,7 +52,16 @@ import {
 	rollbackDeckVersion,
 	listDeckVersions
 } from '$lib/server/services/deck-calibration/deck-versions';
-import { isDeckLoadName } from '$lib/server/services/deck-calibration/resolve';
+import { isDeckLoadName, resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
+// CALIB-5: the tip rack (slot 11) and tube rack (slot 10) are shared definitions
+// offset PER ROBOT; the Studio writes those rows and never the shared document.
+import {
+	rackSlotFor,
+	listRackOffsets,
+	saveRackOffset,
+	revertRackOffset,
+	type RackOffsetRow
+} from '$lib/server/services/deck-calibration/rack-offsets';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { DeckVersion } from '$lib/server/db';
@@ -64,6 +73,21 @@ const TUBE_RACKS = ['cosmas_and_damian_drybath_tuberack', 'custom_2ml_24_tube_ra
 const TIP_RACKS = ['cosmasanddamian_96_tiprack_20ul', 'cosmas_and_damian_biotix_96_200ul_tiprack'];
 // Default OT-2 slot per labware kind (deck/carriage spans 1-9 from slot 1).
 const SLOT_FOR_KIND: Record<string, string> = { deck: '1', tube: '10', tip: '11' };
+
+/**
+ * CALIB-5: the message the shared-write actions answer with when the labware is
+ * a rack. One definition serves every robot, so the Studio keeps it read-only
+ * and routes the operator to the per-robot offset instead. Null = not a rack.
+ */
+function refuseSharedRackWrite(loadName: string): string | null {
+	const slot = rackSlotFor(loadName);
+	if (slot === null) return null;
+	return (
+		`${loadName} is the shared ${slot === '11' ? 'tip' : 'tube'}-rack definition (slot ${slot}) — every robot loads it, so editing it would ` +
+		`move all of them at once. Nothing was written. On the ${slot === '11' ? 'Tip rack' : 'Tube rack'} tab, Apply / Set position / Shift whole grid ` +
+		`save the SELECTED robot's own offset for this rack instead (the whole rack moves together).`
+	);
+}
 
 /**
  * The calibrator point baked into the .py before it was BIMS-tunable. Used when a
@@ -321,8 +345,37 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		} catch { /* display only */ }
 	}
 
+	// CALIB-5: for a rack, every robot's offset rows (the page picks the selected
+	// robot's row for THIS rack by definition URI + slot and shows the others
+	// beside it, so an operator can see "B07: (x, y, z)" next to "R04: (x, y, z)").
+	// The URI is what the rows are keyed on — the shared definition's current
+	// namespace/loadName/version — so a re-versioned rack reads as "never taught".
+	const rackSlot = kind === 'tube' || kind === 'tip' ? rackSlotFor(selected) : null;
+	let selectedDefinitionUri: string | null = null;
+	const rackOffsets: Record<string, RackOffsetRow[]> = {};
+	if (rackSlot && selected) {
+		try {
+			selectedDefinitionUri = (await resolveLabwareDefinition(selected, { strict: true })).uri;
+		} catch (e) {
+			console.warn('[deck-calibration] rack definition URI unavailable:', e instanceof Error ? e.message : e);
+		}
+		await Promise.all(
+			robots.map(async (r) => {
+				try {
+					rackOffsets[r._id] = await listRackOffsets(r._id);
+				} catch (e) {
+					console.warn(`[deck-calibration] rack offsets for ${r._id} unavailable:`, e instanceof Error ? e.message : e);
+					rackOffsets[r._id] = [];
+				}
+			})
+		);
+	}
+
 	return {
 		kind,
+		rackSlot,
+		selectedDefinitionUri,
+		rackOffsets: JSON.parse(JSON.stringify(rackOffsets)),
 		nextTipWells,
 		versions: JSON.parse(JSON.stringify(versions)),
 		liveVersion: selectedDef?.version ?? null,
@@ -417,6 +470,13 @@ export const actions: Actions = {
 		}
 
 		if (!deckLoadName) return fail(400, { error: 'Pick a deck' });
+		// CALIB-5: a rack's definition is shared by every robot — a Studio edit to it
+		// moved all three (2026-10-26: +2/+5 taught for R04 reached B07 by auto-resync
+		// and broke its pick-ups). Racks are offset per robot instead; refuse here so
+		// no client path can write the shared geometry. Cartridge decks are per-deck
+		// documents and keep today's behaviour.
+		const rackRefusal = refuseSharedRackWrite(deckLoadName);
+		if (rackRefusal) return fail(400, { error: rackRefusal });
 		if (!Array.isArray(wellNames) || wellNames.length === 0) return fail(400, { error: 'Select at least one hole' });
 		if (![dx, dy, dz].every((n) => Number.isFinite(n))) return fail(400, { error: 'Offset values must be numbers' });
 		if (dx === 0 && dy === 0 && dz === 0) return fail(400, { error: 'Enter a non-zero offset' });
@@ -464,6 +524,9 @@ export const actions: Actions = {
 		}
 
 		if (!deckLoadName) return fail(400, { error: 'Pick a deck' });
+		// CALIB-5: same guard as applyBatch — a rack moves as one piece, per robot.
+		const rackRefusal = refuseSharedRackWrite(deckLoadName);
+		if (rackRefusal) return fail(400, { error: rackRefusal });
 		if (!Array.isArray(rawEdits) || rawEdits.length === 0) return fail(400, { error: 'No edits to apply' });
 		const edits = rawEdits
 			.filter((e) => e?.wellName && [e.dx, e.dy, e.dz].every((v) => Number.isFinite(Number(v))))
@@ -480,6 +543,78 @@ export const actions: Actions = {
 			return { success: true, action: 'applyPerWell', ...res };
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Per-well apply failed' });
+		}
+	},
+
+	/**
+	 * CALIB-5: save the selected robot's offset for a rack (slot 10 tube rack /
+	 * slot 11 tip rack). This is what "Apply", "Set position" and "Shift whole
+	 * grid" call on the Tip rack / Tube rack tabs — the whole rack moves as one
+	 * piece, so there is no well list.
+	 *
+	 * Fields: robotId, deckLoadName (the rack's load name), dx/dy/dz, note
+	 * (optional), mode — 'delta' (default: the captured jog, ADDED to the stored
+	 * vector) or 'absolute' (dx/dy/dz IS the new vector: "Set position" types
+	 * where the anchor should land, so the vector is typed − shared definition).
+	 *
+	 * The service validates the result against ±RACK_OFFSET_LIMIT_MM (reject,
+	 * never clamp), snapshots the replaced vector onto history, and writes the
+	 * AuditLog row. The shared labware definition is never touched.
+	 */
+	saveRackOffset: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim() || '';
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		const mode = data.get('mode')?.toString() === 'absolute' ? 'absolute' : 'delta';
+		const dx = Number(data.get('dx') || 0);
+		const dy = Number(data.get('dy') || 0);
+		const dz = Number(data.get('dz') || 0);
+		const note = (data.get('note')?.toString() ?? '').trim().slice(0, 300) || null;
+
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		if (!deckLoadName) return fail(400, { error: 'Pick a rack' });
+		if (rackSlotFor(deckLoadName) === null) {
+			return fail(400, { error: `${deckLoadName} is not a per-robot rack — only the slot 10 tube racks and slot 11 tip racks carry a robot offset. Cartridge decks are edited directly.` });
+		}
+		if (![dx, dy, dz].every((n) => Number.isFinite(n))) return fail(400, { error: 'Offset values must be numbers' });
+		if (mode === 'delta' && dx === 0 && dy === 0 && dz === 0) return fail(400, { error: 'Enter a non-zero offset' });
+
+		try {
+			const v = { x: dx, y: dy, z: dz };
+			const res = await saveRackOffset({
+				robotId,
+				loadName: deckLoadName,
+				...(mode === 'absolute' ? { vector: v } : { delta: v }),
+				user: { _id: locals.user._id, username: locals.user.username },
+				source: 'studio',
+				note
+			});
+			return { success: true, action: 'saveRackOffset', mode, rackOffset: JSON.parse(JSON.stringify(res)) };
+		} catch (e) {
+			return fail(400, { error: e instanceof Error ? e.message : 'Saving the rack offset failed' });
+		}
+	},
+
+	/**
+	 * CALIB-5: put back the vector this robot's rack had before the last save
+	 * (the service pops the newest history entry; with no history it goes to zero).
+	 * Fields: robotId, deckLoadName.
+	 */
+	revertRackOffset: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const robotId = (data.get('robotId') as string)?.trim() || '';
+		const deckLoadName = (data.get('deckLoadName') as string)?.trim() || '';
+		if (!robotId) return fail(400, { error: 'Pick a robot' });
+		if (!deckLoadName || rackSlotFor(deckLoadName) === null) return fail(400, { error: 'Pick a rack (slot 10 tube rack or slot 11 tip rack)' });
+		try {
+			const res = await revertRackOffset({ robotId, loadName: deckLoadName, user: { _id: locals.user._id, username: locals.user.username } });
+			return { success: true, action: 'revertRackOffset', rackOffset: JSON.parse(JSON.stringify(res)) };
+		} catch (e) {
+			return fail(400, { error: e instanceof Error ? e.message : 'Reverting the rack offset failed' });
 		}
 	},
 

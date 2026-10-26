@@ -611,6 +611,10 @@ export class RobotSession {
 			if (typeof args.namespace === 'string' && args.namespace) q.set('namespace', args.namespace);
 			if (args.version != null) q.set('version', String(args.version));
 		}
+		// CALIB-5: the per-robot rack offset is keyed on robot + slot; same defaults
+		// as the routes (load-labware slot 1, pick-up-tip slot 11).
+		q.set('robotId', this.robotId);
+		q.set('slot', String(args.slot ?? (verb === 'mx.pickUpTip' ? '11' : '1')));
 		const res = await this.fetchImpl(`/api/opentrons-lab/labware/resolve?${q}`, { signal });
 		if (!res.ok) return res;
 		return (await res.json()) as Record<string, unknown>;

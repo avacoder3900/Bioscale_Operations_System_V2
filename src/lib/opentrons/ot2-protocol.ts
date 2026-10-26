@@ -526,6 +526,50 @@ export async function registerLabwareDefinition(t: Ot2Transport, runId: string, 
 	}
 }
 
+/**
+ * CALIB-5: a per-robot labware offset to register on the maintenance run
+ * before the labware is loaded. BIMS resolves it (resolveLabwareForRobot →
+ * robot_labware_offsets) and hands it over as `args.labwareOffset`; the
+ * robot keys it on definitionUri + slot, so it must be posted BEFORE the
+ * loadLabware command that binds it.
+ */
+export type LabwareOffsetArg = {
+	definitionUri: string;
+	slotName: string;
+	vector: { x: number; y: number; z: number };
+};
+
+/** The non-zero, well-formed offset in `args.labwareOffset`, or null (nothing to register). */
+export function labwareOffsetOf(args: Record<string, unknown>): LabwareOffsetArg | null {
+	const o = args.labwareOffset as any;
+	if (!o || typeof o !== 'object') return null;
+	if (!o.definitionUri || !o.slotName) return null;
+	const v = o.vector ?? {};
+	const x = Number(v.x ?? 0), y = Number(v.y ?? 0), z = Number(v.z ?? 0);
+	if (![x, y, z].every(Number.isFinite)) return null;
+	if (x === 0 && y === 0 && z === 0) return null;
+	return { definitionUri: String(o.definitionUri), slotName: String(o.slotName), vector: { x, y, z } };
+}
+
+/**
+ * Register a labware offset on a maintenance run. Offsets bind at loadLabware
+ * time, so call this before the load; one registered after the fact changes
+ * nothing until the run is reopened.
+ */
+export async function registerLabwareOffset(t: Ot2Transport, runId: string, offset: LabwareOffsetArg): Promise<void> {
+	const res = await t.post(`/maintenance_runs/${runId}/labware_offsets`, {
+		data: {
+			definitionUri: offset.definitionUri,
+			location: { slotName: offset.slotName },
+			vector: { x: offset.vector.x, y: offset.vector.y, z: offset.vector.z }
+		}
+	});
+	if (!res.ok) {
+		const body = await res.json().catch(() => ({}));
+		throw new Error((body as any)?.errors?.[0]?.detail ?? `Robot returned ${res.status} registering labware offset`);
+	}
+}
+
 async function loadedLabwareAtSlot(
 	t: Ot2Transport,
 	runId: string,
@@ -545,12 +589,18 @@ async function loadedLabwareAtSlot(
  * (the robot's DECK_HARDENING_ROBOT_IDS status, decided by BIMS) makes reuse
  * require the full namespace/loadName/version identity, so a deck edit can't
  * leave the run bound to stale geometry.
+ *
+ * `labwareOffset` (CALIB-5, racks in slots 10/11) is registered on the run
+ * right before the loadLabware command, because the engine binds offsets at
+ * load. On the reuse path nothing is posted: the labware already sits where
+ * it was loaded, and a changed offset only takes effect after a reopen — the
+ * Studio flags that (deckDirty → Reload deck) rather than this code guessing.
  */
 export async function loadLabwareInRun(
 	t: Ot2Transport,
 	runId: string,
 	args: { namespace: string; loadName: string; version: number; slot: string },
-	opts: { hardened: boolean }
+	opts: { hardened: boolean; labwareOffset?: LabwareOffsetArg | null }
 ): Promise<string> {
 	const existing = await loadedLabwareAtSlot(t, runId, args.slot).catch(() => null);
 	const wantUri = `${args.namespace}/${args.loadName}/${args.version}`;
@@ -565,6 +615,7 @@ export async function loadLabwareInRun(
 	if (existing && existing.loadName !== args.loadName) {
 		throw new SlotOccupiedError(args.slot, existing.loadName, args.loadName);
 	}
+	if (opts.labwareOffset) await registerLabwareOffset(t, runId, opts.labwareOffset);
 	const result = (await sendMaintenanceCommand(
 		t,
 		runId,
@@ -701,7 +752,13 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 		const slot = String(args.slot ?? '1');
 		try {
 			await registerLabwareDefinition(t, runId, args.definition);
-			const labwareId = await loadLabwareInRun(t, runId, { namespace, loadName, version, slot }, { hardened: args.hardened === true });
+			// CALIB-5: this robot's rack offset (slots 10/11) goes on the run before the load.
+			const labwareId = await loadLabwareInRun(
+				t,
+				runId,
+				{ namespace, loadName, version, slot },
+				{ hardened: args.hardened === true, labwareOffset: labwareOffsetOf(args) }
+			);
 			return ok({ labwareId });
 		} catch (e) {
 			return fail(502, msgOf(e, 'Failed to load labware'));
@@ -719,7 +776,13 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 		try {
 			await registerLabwareDefinition(t, runId, args.definition);
 			// loadLabwareInRun is idempotent (reuses the slot if already loaded).
-			const tiprackLabwareId = await loadLabwareInRun(t, runId, { namespace, loadName: tiprackLoadName, version, slot }, { hardened: args.hardened === true });
+			// CALIB-5: the robot's slot-11 tip-rack offset is registered before the load.
+			const tiprackLabwareId = await loadLabwareInRun(
+				t,
+				runId,
+				{ namespace, loadName: tiprackLoadName, version, slot },
+				{ hardened: args.hardened === true, labwareOffset: labwareOffsetOf(args) }
+			);
 			try {
 				await pickUpTip(t, runId, pipetteId, tiprackLabwareId, tipWell);
 			} catch (tipErr) {

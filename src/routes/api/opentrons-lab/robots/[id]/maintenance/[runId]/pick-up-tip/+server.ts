@@ -32,9 +32,12 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!pipetteId || typeof pipetteId !== 'string') error(400, 'pipetteId required');
 	if (!tiprackLoadName || typeof tiprackLoadName !== 'string') error(400, 'tiprackLoadName required');
 
+	const slot = String(body?.slot ?? '11');
 	let resolved;
 	try {
-		resolved = await resolveLabwareForRobot(tiprackLoadName);
+		// CALIB-5: `resolved` also carries THIS robot's slot-11 tip-rack offset, so the
+		// pick-up presses where the fill's pick-up will.
+		resolved = await resolveLabwareForRobot(tiprackLoadName, { robotId: params.id, slot });
 	} catch (e) {
 		throw error(404, e instanceof Error ? e.message : `Tiprack "${tiprackLoadName}" not found`);
 	}
@@ -46,7 +49,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			runId: params.runId,
 			pipetteId,
 			tiprackLoadName,
-			slot: String(body?.slot ?? '11'),
+			slot,
 			tipWell: body?.tipWell ?? 'A1',
 			...resolved,
 			hardened: isHardenedRobot(robot)

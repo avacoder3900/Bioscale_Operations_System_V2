@@ -30,11 +30,16 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	const loadName = body?.loadName;
 	if (!loadName || typeof loadName !== 'string') error(400, 'loadName required');
 
+	const slot = String(body?.slot ?? '1');
 	let resolved;
 	try {
+		// CALIB-5: for a rack in its slot (10/11), `resolved` also carries THIS
+		// robot's labwareOffset, which the verb registers on the run before loading.
 		resolved = await resolveLabwareForRobot(loadName, {
 			namespace: body?.namespace ?? null,
-			version: body?.version != null ? Number(body.version) : null
+			version: body?.version != null ? Number(body.version) : null,
+			robotId: params.id,
+			slot
 		});
 	} catch (e) {
 		throw error(404, e instanceof Error ? e.message : `Labware definition "${loadName}" not found`);
@@ -43,7 +48,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	return verbResponse(robot, 'mx.loadLabware', {
 		runId: params.runId,
 		loadName,
-		slot: String(body?.slot ?? '1'),
+		slot,
 		...resolved,
 		hardened: isHardenedRobot(robot)
 	});

@@ -35,6 +35,29 @@
 	});
 	const robot = $derived(robots.find((r) => r._id === selectedRobotId) ?? null);
 
+	// ── CALIB-5: per-robot rack offsets (tip rack slot 11, tube rack slot 10) ──
+	// A rack's definition is ONE shared document that every robot loads, so the
+	// canvas draws it as-is and THIS robot's vector is added on top at load — in
+	// a fill as the tiprack_offset_* / tuberack_offset_* run-time parameters, in
+	// the Studio as a maintenance-run labware offset registered before
+	// loadLabware. On the rack tabs, Apply / Set position / Shift therefore write
+	// the selected robot's row (never the shared document — the server refuses
+	// that for racks since 2026-10-26, when R04's +2/+5 reached B07 and broke its
+	// pick-ups), the whole rack moves together, and the run needs a reload.
+	const isRack = $derived(kind === 'tip' || kind === 'tube');
+	type RackOffsetRow = { _id: string; robotId: string; loadName: string; definitionUri: string; slotName: string; vector: Vec3; taughtBy: { _id?: string; username?: string } | null; taughtAt: string | null; source: string; note: string | null; historyCount: number };
+	const rackOffsetRows = $derived((data.rackOffsets ?? {}) as Record<string, RackOffsetRow[]>);
+	/** A robot's row for the SELECTED rack (keyed on definition URI + slot), or null = never taught = zero. */
+	function rackRowFor(robotId: string): RackOffsetRow | null {
+		if (!isRack || !data.selectedDefinitionUri) return null;
+		return (rackOffsetRows[robotId] ?? []).find((r) => r.definitionUri === data.selectedDefinitionUri && r.slotName === data.rackSlot) ?? null;
+	}
+	const currentRackOffset = $derived(selectedRobotId ? rackRowFor(selectedRobotId) : null);
+	const ZERO3: Vec3 = { x: 0, y: 0, z: 0 };
+	const rackVector = $derived<Vec3>(currentRackOffset?.vector ?? ZERO3);
+	const rackLabel = $derived(kind === 'tip' ? 'tip rack' : 'tube rack');
+	const fmtVec = (v: Vec3) => `(${v.x}, ${v.y}, ${v.z})`;
+
 	// ── Fill-mistake marks from the reagent run-page well tracker (2026-10-08) ──
 	// Entries logged on runs that used THIS deck on the SELECTED robot (60 days),
 	// resolved to labware wells server-side. Drawn as red rings on the holes and
@@ -324,7 +347,11 @@
 	$effect(() => {
 		if (anchor) {
 			const w = wellByName.get(anchor);
-			if (w) { setX = +w.x.toFixed(3); setY = +w.y.toFixed(3); setZ = +w.z.toFixed(3); }
+			// On a rack tab the fields show where THIS robot's anchor actually lands
+			// (shared definition + its offset), so "Set position" types a landing
+			// point and the saved vector is typed − shared (CALIB-5).
+			const v = isRack ? rackVector : ZERO3;
+			if (w) { setX = +(w.x + v.x).toFixed(3); setY = +(w.y + v.y).toFixed(3); setZ = +(w.z + v.z).toFixed(3); }
 		}
 	});
 
@@ -333,7 +360,9 @@
 	type Vec3 = { x: number; y: number; z: number };
 	// A uniform entry carries one delta for all wells; an align entry carries a
 	// per-well edit list (each hole moved by its own amount) — undo inverts each.
-	let undoStack = $state<{ wellNames: string[]; delta: Vec3; label: string; edits?: { wellName: string; delta: Vec3 }[] }[]>([]);
+	// A rack entry (CALIB-5) carries the robot + rack whose offset moved; undo
+	// adds the inverse delta to that robot's row.
+	let undoStack = $state<{ wellNames: string[]; delta: Vec3; label: string; edits?: { wellName: string; delta: Vec3 }[]; rack?: { robotId: string; loadName: string } }[]>([]);
 	// nominal carries the tip-state it was measured in. The OT-2 position readback
 	// (savePosition) is the pipette CRITICAL POINT, which drops by the tip length
 	// (~50mm) the moment a tip is picked up. dz = live − nominal is only a true
@@ -394,6 +423,47 @@
 		return r;
 	}
 
+	// ── CALIB-5: the rack tabs write the selected robot's offset row ─────────────
+	// `delta` = the captured jog, ADDED to the stored vector; `absolute` = dx/dy/dz
+	// IS the new vector (Set position). Either way the whole rack moves together
+	// and the well selection is irrelevant. The run then needs a reload: the
+	// offset binds at loadLabware, and a rack already in the run keeps the vector
+	// it was loaded with (the server reuses it rather than guessing), so Move to
+	// hole and Pick up stay on the OLD position until "Reload deck".
+	async function saveRackOffsetFor(d: Vec3, mode: 'delta' | 'absolute', label: string, record = true) {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return null; }
+		const r = await postAction('saveRackOffset', {
+			robotId: selectedRobotId,
+			deckLoadName: data.selected,
+			mode,
+			dx: String(d.x), dy: String(d.y), dz: String(d.z),
+			note: label
+		});
+		const o = r?.rackOffset;
+		if (o) {
+			if (record) {
+				const applied = { x: +(o.after.x - o.before.x).toFixed(3), y: +(o.after.y - o.before.y).toFixed(3), z: +(o.after.z - o.before.z).toFixed(3) };
+				undoStack = [...undoStack, { wellNames: [], delta: applied, label, rack: { robotId: selectedRobotId, loadName: data.selected } }];
+			}
+			msg = `Saved ${robot?.name ?? selectedRobotId}'s offset for ${data.selected}: ${fmtVec(o.after)} (was ${fmtVec(o.before)}). ` +
+				(runId ? 'Reload deck to move with it.' : `The next run on ${robot?.name ?? 'this robot'} moves with it; no Sync needed.`);
+			if (runId) deckDirty = true;
+		}
+		return r;
+	}
+	async function revertRackOffsetFor() {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+		if (!currentRackOffset) { errMsg = `${robot?.name ?? 'This robot'} has no saved offset for ${data.selected} — nothing to revert`; return; }
+		const back = currentRackOffset.historyCount ? 'the vector it had before the last save' : 'zero (no earlier value is recorded)';
+		if (!confirm(`Revert ${robot?.name ?? selectedRobotId}'s offset for ${data.selected} from ${fmtVec(rackVector)} to ${back}?`)) return;
+		const r = await postAction('revertRackOffset', { robotId: selectedRobotId, deckLoadName: data.selected });
+		const o = r?.rackOffset;
+		if (o) {
+			msg = `Reverted ${robot?.name ?? selectedRobotId}'s offset for ${data.selected}: ${fmtVec(o.after)} (was ${fmtVec(o.before)}).` + (runId ? ' Reload deck to move with it.' : '');
+			if (runId) deckDirty = true;
+		}
+	}
+
 	// ── Align selection to the anchor hole (straighten every line) ───────────────
 	// The anchor is the jog-verified, trusted hole. Every OTHER selected hole of the
 	// SAME role snaps onto a clean grid ruled by the anchor's row + column:
@@ -405,6 +475,7 @@
 	// deliberately staggered (~one row pitch), so their Y must come from a ruler
 	// column of their own role; re-run with an anchor of the other type.
 	async function alignSelectionToAnchor() {
+		if (isRack) { errMsg = `A ${rackLabel} moves as one piece per robot — Align is for cartridge decks. Use Apply or Set position.`; return; }
 		if (selection.size < 2) { errMsg = 'Select the cartridge (or group) to align — at least 2 holes, anchor included'; return; }
 		const aName = anchor;
 		const a = aName ? wellByName.get(aName) : null;
@@ -449,6 +520,12 @@
 	}
 
 	async function applyToSelection() {
+		if (isRack) {
+			// Whole rack, this robot only — the selection is irrelevant (CALIB-5).
+			if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture or enter a non-zero offset'; return; }
+			await saveRackOffsetFor({ x: dx, y: dy, z: dz }, 'delta', `offset (${dx}, ${dy}, ${dz})`);
+			return;
+		}
 		if (selection.size === 0) { errMsg = 'Select at least one hole'; return; }
 		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture or enter a non-zero offset'; return; }
 		const r = await applyDelta([...selection], { x: dx, y: dy, z: dz }, `offset (${dx}, ${dy}, ${dz})`);
@@ -468,6 +545,14 @@
 		const aName = anchor;
 		const a = aName ? wellByName.get(aName) : null;
 		if (!a) { errMsg = 'Anchor hole not found'; return; }
+		if (isRack) {
+			// The typed point is where THIS robot's anchor should land, so the robot's
+			// vector becomes typed − shared definition: an absolute set, not a delta.
+			const v = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
+			if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position equals current — nothing to change'; return; }
+			await saveRackOffsetFor(v, 'absolute', `set ${aName} → (${setX}, ${setY}, ${setZ})`);
+			return;
+		}
 		const d = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
 		if (d.x === 0 && d.y === 0 && d.z === 0) { errMsg = 'Position equals current — nothing to change'; return; }
 		const names = [...selection];
@@ -485,6 +570,18 @@
 	async function undoLast() {
 		const last = undoStack[undoStack.length - 1];
 		if (!last) { errMsg = 'Nothing to undo'; return; }
+		if (last.rack) {
+			// A rack entry belongs to one robot's row: undo only from that robot + rack.
+			if (last.rack.robotId !== selectedRobotId || last.rack.loadName !== data.selected) {
+				const who = robots.find((r) => r._id === last.rack!.robotId)?.name ?? last.rack.robotId;
+				errMsg = `The last change was ${who}'s offset for ${last.rack.loadName} — select that robot and rack to undo it (or use Revert).`;
+				return;
+			}
+			if (last.delta.x === 0 && last.delta.y === 0 && last.delta.z === 0) { undoStack = undoStack.slice(0, -1); msg = `Nothing to undo for ${last.label} — it changed nothing.`; return; }
+			const r = await saveRackOffsetFor({ x: -last.delta.x, y: -last.delta.y, z: -last.delta.z }, 'delta', `undo ${last.label}`, false);
+			if (r) { undoStack = undoStack.slice(0, -1); msg = `Undid ${last.label}. ${msg ?? ''}`; }
+			return;
+		}
 		const r = last.edits
 			? await applyPerWellEdits(
 				last.edits.map((e) => ({ wellName: e.wellName, delta: { x: -e.delta.x, y: -e.delta.y, z: -e.delta.z } })),
@@ -521,6 +618,12 @@
 	// grid (active role) as a rigid translation. Use when the entire deck is off.
 	async function applyGlobalShift() {
 		if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture (or type) a non-zero offset first'; return; }
+		if (isRack) {
+			// On a rack this IS the everyday apply: one vector, whole rack, this robot only.
+			if (!confirm(`Shift ${robot?.name ?? 'this robot'}'s whole ${rackLabel} (${data.selected}) by dx=${dx} dy=${dy} dz=${dz}? Only ${robot?.name ?? 'this robot'} moves; the shared definition and the other robots stay put.`)) return;
+			await saveRackOffsetFor({ x: dx, y: dy, z: dz }, 'delta', `rack shift (${dx}, ${dy}, ${dz})`);
+			return;
+		}
 		const names = wells.filter((w) => isActiveRole(w.name)).map((w) => w.name);
 		if (names.length === 0) { errMsg = 'No holes to shift'; return; }
 		const label = roleFilter === 'all' ? 'the entire deck' : `all ${roleFilter} holes`;
@@ -698,9 +801,11 @@
 		await stopMaintenance();
 		await startMaintenance();
 		if (!errMsg) {
+			// A rack is reloaded with the robot's CURRENT offset (registered before the load).
+			const what = isRack ? `${data.selected} at ${robot?.name ?? 'this robot'}'s offset ${fmtVec(rackVector)}` : 'your corrected deck';
 			msg = hadTip
-				? 'Reloaded with your corrected deck. The tip went to the trash first (a new run cannot see it) — press "Calibrate tip" for a fresh, zeroed tip, then move to a hole to verify.'
-				: 'Reloaded — the run now uses your corrected deck. Move to a hole to verify.';
+				? `Reloaded with ${what}. The tip went to the trash first (a new run cannot see it) — press "Calibrate tip" for a fresh, zeroed tip, then move to a hole to verify.`
+				: `Reloaded — the run now uses ${what}. Move to a hole to verify.`;
 		}
 	}
 	async function stopMaintenance() {
@@ -1092,6 +1197,19 @@
 				? 'cosmas_and_damian_biotix_96_200ul_tiprack'
 				: null
 	);
+	// CALIB-5: on the Tip rack tab the tip type FOLLOWS the selected rack, so Move
+	// to hole (loads the selected rack) and Pick up (loads the profile's rack) use
+	// the same rack in slot 11 — and therefore the same per-robot offset. The
+	// mapping is the inverse of tiprackForProfile; picking the other rack above is
+	// how the operator switches. Elsewhere the choice stays explicit, as before.
+	const TIP_RACK_PROFILE: Record<string, 'wax' | 'reagent'> = {
+		cosmasanddamian_96_tiprack_20ul: 'wax',
+		cosmas_and_damian_biotix_96_200ul_tiprack: 'reagent'
+	};
+	const rackLockedProfile = $derived(kind === 'tip' ? (TIP_RACK_PROFILE[data.selected] ?? null) : null);
+	$effect(() => {
+		if (rackLockedProfile && tipProfile !== rackLockedProfile) tipProfile = rackLockedProfile;
+	});
 
 	// Which stored field the Probe Z control is editing right now. Keyed off the
 	// explicit tip profile, never the mount -- getting that wrong is the 6.309 mm
@@ -1457,7 +1575,11 @@
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Deck Calibration Studio</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				Jog to a hole, capture the real offset, select a group of holes, apply it. Corrections persist in BIMS and reach the robot on Sync.
+				{#if isRack}
+					Jog to a hole, capture the real offset, apply it. On a rack it is saved as <strong>{robot?.name ?? 'the selected robot'}'s</strong> offset for the whole {rackLabel} (slot {data.slot}) — the shared definition and the other robots stay put, and {robot?.name ?? 'the robot'}'s next run picks it up by itself.
+				{:else}
+					Jog to a hole, capture the real offset, select a group of holes, apply it. Corrections persist in BIMS and reach the robot on Sync.
+				{/if}
 			</p>
 		</div>
 		<!-- Text tuner (deck-tuner, CALIB-1) deleted 2026-08-28: superseded by this
@@ -1520,6 +1642,32 @@
 		{:else}
 			<div class="text-xs" style="color: var(--color-tron-text-secondary)">{wells.length} holes · {dim.x}×{dim.y} mm · slot {data.slot}</div>
 		{/if}
+
+		{#if isRack}
+			<!-- CALIB-5: the per-robot vector in force for the selected rack, with Revert.
+			     Shown next to the pickers because robot + rack together are its key. -->
+			<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 px-2 py-1.5 text-xs" style="color: var(--color-tron-text-secondary)" title="Added to the shared definition when this robot loads the rack — as tiprack_offset_* / tuberack_offset_* run-time parameters in a fill, as a maintenance-run labware offset here. Other robots keep their own.">
+				<div class="flex flex-wrap items-center gap-2">
+					<span>{robot?.name ?? 'Robot'}'s offset for this {rackLabel}</span>
+					<span class="font-mono text-[var(--color-tron-cyan)]">{fmtVec(rackVector)}</span>
+					<button type="button" onclick={revertRackOffsetFor} disabled={busy || !currentRackOffset} class="rounded border border-amber-500/50 bg-amber-900/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title={currentRackOffset ? 'Put back the vector this robot had before the last save (zero if none is recorded)' : 'Nothing saved for this robot + rack'}>Revert</button>
+				</div>
+				<div class="mt-0.5 text-[10px]">
+					{#if currentRackOffset}
+						{currentRackOffset.taughtBy?.username ?? '?'}{currentRackOffset.taughtAt ? ` · ${new Date(currentRackOffset.taughtAt).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}` : ''} · {currentRackOffset.source}{currentRackOffset.note ? ` · ${currentRackOffset.note}` : ''}
+					{:else}
+						never taught — {robot?.name ?? 'this robot'} runs on the shared definition as-is
+					{/if}
+					{#if robots.length > 1}
+						<span> · others:</span>
+						{#each robots.filter((r) => r._id !== selectedRobotId) as r (r._id)}
+							{@const row = rackRowFor(r._id)}
+							<span class="ml-1 font-mono" title={row ? `${row.taughtBy?.username ?? '?'} · ${row.source}` : 'never taught'}>{r.name} {fmtVec(row?.vector ?? ZERO3)}</span>
+						{/each}
+					{/if}
+				</div>
+			</div>
+		{/if}
 	</div>
 
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
@@ -1543,6 +1691,8 @@
 								>{label}</button>
 							{/each}
 						</div>
+					{:else if isRack}
+						<span class="text-[11px]" style="color: var(--color-tron-text-secondary)" title="The canvas draws the shared definition, which every robot loads. The selected robot's offset is added on top when its rack is loaded.">shared definition (every robot) · {robot?.name ?? 'robot'} adds <span class="font-mono">{fmtVec(rackVector)}</span> at load</span>
 					{/if}
 					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's calibrated height">
 						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover deck for coords</span>{/if}
@@ -1660,7 +1810,7 @@
 
 				{#if runId && deckDirty}
 					<div class="mt-2 flex items-center justify-between gap-2 rounded border border-amber-500/40 bg-amber-900/15 p-2 text-[11px] text-amber-200">
-						<span>Deck edits aren't in the run's loaded copy yet — Move to hole will use the old positions.</span>
+						<span>{isRack ? `${robot?.name ?? 'This robot'}'s ${rackLabel} offset changed — the run loaded the rack with the old one, so Move to hole and Pick up still land on the old position.` : "Deck edits aren't in the run's loaded copy yet — Move to hole will use the old positions."}</span>
 						<button type="button" onclick={reloadDeckIntoRun} disabled={busy || connecting} class="shrink-0 rounded border border-amber-400/60 bg-amber-900/30 px-2 py-1 font-bold text-amber-100 disabled:opacity-40">Reload deck</button>
 					</div>
 				{/if}
@@ -1718,12 +1868,16 @@
 								<button
 									type="button"
 									onclick={() => (tipProfile = p as 'wax' | 'reagent')}
-									disabled={busy || hasTip}
-									title={hasTip ? 'Drop the tip before changing tip type' : 'Sets the tiprack and the calibration probe Z'}
+									disabled={busy || hasTip || !!rackLockedProfile}
+									title={rackLockedProfile ? `Follows the selected tip rack (${data.selected}) — pick the other rack above to switch` : hasTip ? 'Drop the tip before changing tip type' : 'Sets the tiprack and the calibration probe Z'}
 									class="rounded border px-2 py-1.5 text-[11px] transition-colors disabled:opacity-40 {tipProfile === p ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]/60'}"
 									style={tipProfile === p ? '' : 'color: var(--color-tron-text-secondary)'}>{lbl}</button>
 							{/each}
 						</div>
+						{#if rackLockedProfile}
+							<!-- CALIB-5: one rack for Move to hole AND Pick up, so both use this robot's same offset. -->
+							<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Tip type follows the selected rack (<span class="font-mono">{data.selected}</span>) so Move to hole and Pick up load the same rack with {robot?.name ?? 'this robot'}'s same offset. Pick the other rack above to switch.</p>
+						{/if}
 						{#if !tipProfile}
 							<p class="mt-1 text-[10px] text-amber-300/90">Pick the tip type — probe depth differs by 6.309 mm and is never guessed.</p>
 						{:else}
@@ -1866,13 +2020,21 @@
 						<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 						<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 					</div>
-					<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
-						Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
-					</button>
-					<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
-						⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
-					</button>
-					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
+					{#if isRack}
+						<!-- CALIB-5: one vector per robot × rack — no hole list, no shared write. -->
+						<button type="button" onclick={applyToSelection} disabled={busy || !selectedRobotId} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title="Adds dx/dy/dz to this robot's offset for the whole rack. Other robots and the shared definition are untouched.">
+							Apply to {robot?.name ?? 'robot'}'s {rackLabel} (whole rack)
+						</button>
+						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Jog to any hole → Capture → <strong>Apply</strong> moves the whole {rackLabel} for {robot?.name ?? 'this robot'} only (now {fmtVec(rackVector)}). Then <strong>Reload deck</strong> and Move to hole / Pick up to verify — the offset binds when the rack is loaded.</p>
+					{:else}
+						<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
+							Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}
+						</button>
+						<button type="button" onclick={applyGlobalShift} disabled={busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">
+							⤧ Shift whole grid by this offset {roleFilter !== 'all' ? `(${roleFilter} only)` : ''}
+						</button>
+						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole (e.g. a corner) → Capture → <strong>Shift whole grid</strong> translates every hole of the active role by that offset.</p>
+					{/if}
 					<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, global, or set-position)">
 						↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}
 					</button>
@@ -1894,7 +2056,7 @@
 					</select>
 					<button type="button" onclick={syncToRobot} disabled={busy || !selectedRobotId} class="flex-1 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/15 px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Re-upload to {robot?.name ?? 'robot'}</button>
 				</div>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Re-uploads the protocol so the corrected deck reaches the OT-2. Needs the protocol .py stored in BIMS.</p>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Re-uploads the protocol so the corrected deck reaches the OT-2. Needs the protocol .py stored in BIMS.{#if isRack} <strong>Not needed for a rack offset</strong> — it is not in the protocol; BIMS injects {robot?.name ?? 'the robot'}'s vector as run-time parameters at every run start.{/if}</p>
 			</section>
 		</div>
 	</div>
@@ -1954,7 +2116,11 @@
 	<!-- Set absolute position (selection, anchor-translate) -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
-		<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
+		{#if isRack}
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) where the <strong>anchor</strong> hole should land on <strong>{robot?.name ?? 'this robot'}</strong>. Prefilled with where it lands now (shared definition + {robot?.name ?? 'the robot'}'s offset {fmtVec(rackVector)}); the whole {rackLabel} moves with it, and the saved offset becomes typed − shared definition.</p>
+		{:else}
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
+		{/if}
 		<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
 			{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more move with it)` : ''}` : 'Select one or more holes'}
 		</div>
@@ -1975,8 +2141,8 @@
 		<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
 			{anchor && selCount >= 2 ? `Anchor: ${anchor} (${roleOf(anchor)}) — ${selCount - 1} other hole(s) selected` : 'Select the cartridge, click the trusted hole last'}
 		</div>
-		<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40" title="Straighten every line in the selection to the anchor hole's row + line (same hole type only; Z untouched)">
-			{selCount < 2 ? 'Select the cartridge + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
+		<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2 || isRack} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40" title={isRack ? 'A rack moves as one piece per robot — Align is for cartridge decks' : "Straighten every line in the selection to the anchor hole's row + line (same hole type only; Z untouched)"}>
+			{isRack ? `Racks move as one piece — use Apply / Set position` : selCount < 2 ? 'Select the cartridge + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
 		</button>
 	</section>
 	</div>
@@ -2058,7 +2224,7 @@
 	<!-- History -->
 	{#if data.history?.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent edits</h2>
+			<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent edits{#if isRack} <span class="normal-case font-normal">— to the shared definition (reach every robot; the Studio no longer writes these for racks)</span>{/if}</h2>
 			<div class="overflow-x-auto">
 				<table class="w-full text-left text-[11px]">
 					<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Hole</th><th class="px-2 py-1">Δ (x,y,z)</th><th class="px-2 py-1">After</th><th class="px-2 py-1">By</th><th class="px-2 py-1">When</th></tr></thead>

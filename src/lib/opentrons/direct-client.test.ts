@@ -291,15 +291,17 @@ describe('fetchRoute (pages that already call BIMS routes)', () => {
 		expect(ff.urls).not.toContain('/api/opentrons-lab/robots/b14/maintenance'); // the queue route was not used
 	});
 
-	it('pick-up-tip over the tailnet: definition from BIMS, robot direct, cursor via /direct-record', async () => {
+	it('pick-up-tip over the tailnet: definition (+ CALIB-5 rack offset) from BIMS, robot direct, cursor via /direct-record', async () => {
 		const DEF = { namespace: 'opentrons', version: 1 };
+		const labwareOffset = { definitionUri: 'opentrons/opentrons_96_tiprack_20ul/1', slotName: '11', vector: { x: 2, y: 4, z: 0 } };
 		const ff = fakeFetch((url) => {
 			if (url.endsWith('/connection')) return res(200, { transport: 'tailnet', directUrl: DIRECT, reason: 't', busy: null, hardened: true });
 			if (url === `${DIRECT}/health`) return res(200, {});
-			if (url.startsWith('/api/opentrons-lab/labware/resolve?')) return res(200, { definition: DEF, labwareNamespace: 'opentrons', labwareVersion: 1 });
+			if (url.startsWith('/api/opentrons-lab/labware/resolve?')) return res(200, { definition: DEF, labwareNamespace: 'opentrons', labwareVersion: 1, labwareOffset });
 			if (url.endsWith('/direct-record')) return res(200, { nextTipWell: 'D1' });
 			if (url === `${DIRECT}/maintenance_runs/m1`) return res(200, { data: { labware: [] } });
 			if (url.endsWith('/labware_definitions')) return res(201, {});
+			if (url.endsWith('/labware_offsets')) return res(201, {});
 			return res(201, { data: { status: 'succeeded', result: { labwareId: 'rack' } } });
 		});
 		const s = new RobotSession('b14', { ...opts, fetchImpl: ff.f });
@@ -309,7 +311,14 @@ describe('fetchRoute (pages that already call BIMS routes)', () => {
 			body: JSON.stringify({ pipetteId: 'p', tiprackLoadName: 'opentrons_96_tiprack_20ul', slot: '11', tipWell: 'C1' })
 		});
 		expect(await r.json()).toEqual({ tiprackLabwareId: 'rack', nextTipWell: 'D1' });
-		expect(ff.urls).toContain('/api/opentrons-lab/labware/resolve?loadName=opentrons_96_tiprack_20ul');
+		// The resolver is asked for THIS robot's offset in THIS slot (CALIB-5)…
+		expect(ff.urls).toContain('/api/opentrons-lab/labware/resolve?loadName=opentrons_96_tiprack_20ul&robotId=b14&slot=11');
+		// …and the browser registers it on the run BEFORE the rack is loaded, same as the queue route.
+		const robotUrls = ff.urls.filter((u) => u.startsWith(DIRECT));
+		const offsetAt = robotUrls.indexOf(`${DIRECT}/maintenance_runs/m1/labware_offsets`);
+		const loadAt = robotUrls.findIndex((u) => u.includes('/maintenance_runs/m1/commands'));
+		expect(offsetAt).toBeGreaterThan(-1);
+		expect(offsetAt).toBeLessThan(loadAt);
 	});
 
 	it('unknown labware → the resolver 404 comes back as-is, robot untouched', async () => {
