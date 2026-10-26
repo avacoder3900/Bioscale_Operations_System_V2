@@ -23607,3 +23607,24 @@ What this deployment is for: CALIB-5 per-robot rack offsets live (R04 tip-rack o
 next wax start; Studio per-robot rack panel), health pill from live heartbeat, background-tab cadence,
 docs/agent set. Pushed at Jacob's request 2026-10-26 ~20:30Z ("push through all these changes") while
 B07 and R04 were idle. Rollback: git revert the merge range or redeploy 0d7b7d44; offsets default to 0.
+
+================================================================================
+2026-10-26 — feat/ot2-wired-1 — OT2-LOG-1 shipped (daemon 1.3 telemetry/journal; samples + daily collections; ingest, sampling, rollup cron); wired cutover phase 0
+================================================================================
+Daemon 1.3 (scripts/ot2-bridge.py): heartbeat metadata.link (iface, tailscale, poll RTT + error counts,
+worker busy age, sha256, uptime, retry backlog), journal ring /data/ot2-bridge/journal.jsonl, job-report
+retry queue replayed after a good heartbeat; test_ot2_bridge_server 29/29 + harness. Server: models
+RobotLinkSample (TTL 50 d) / RobotLinkDaily, heartbeat route samples metadata.link at <=1/min (one
+findOneAndUpdate, never fails the heartbeat), POST /api/agent/robot-link/samples (agent key, <=500 rows),
+[robot-link] log lines on poll + heartbeat, /api/cron/robot-link-daily (00:10 UTC) + vercel.json entry;
+39 new tests; indexes created with scripts/ensure-indexes.ts --apply (2026-10-26). iMac link monitor
+installed as ~/Library/LaunchAgents/com.bims.linkmon.plist (1/min, CSV + spool until the route is live).
+Wired cutover (OT2-WIRED-1 phase 0, 2026-10-26 ~20:45-21:00Z): Internet Sharing on the lab iMac
+(Wi-Fi -> en0/en5/en7, bridge100 192.168.2.1); each robot's eth0 moved from profile wired-linklocal to
+the DHCP profile `wired` (nmcli con up wired; rollback nmcli con up wired-linklocal): R04 192.168.2.2,
+default route via eth0 metric 100, BIMS reachable, Tailscale online. B07/B14 same procedure (see next
+entry for addresses). WiFi stays on until 48 h clean, then off (decision 2).
+npm run check: 16 errors / 432 warnings (baseline 16).
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (GitHub integration, master fast-forwarded)
+Source: branch feat/ot2-wired-1 @ the commit of this progress entry
+What this deployment is for: OT2-LOG-1 server side live (samples ingest + heartbeat sampling + rollup cron).
