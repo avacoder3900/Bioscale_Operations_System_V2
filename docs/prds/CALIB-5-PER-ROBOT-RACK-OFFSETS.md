@@ -25,7 +25,7 @@ Racks are the same physical part in a slightly different place on each robot. Ca
 | Rack | Shared definition after migration | Per-robot offsets |
 |---|---|---|
 | `cosmasanddamian_96_tiprack_20ul` (wax, slot 11) | stays as now: A1 (14.38, 75.74, 21.62) = Oct-14 geometry +1 Y; B07 picked up and probed first-time on it at 19:36Z | R04 (+2, +4, 0) — its working state today was Oct-14 +2/+5; B07 0; B14 0 |
-| `cosmas_and_damian_drybath_tuberack` (wax, slot 10) | restored to Oct-14 geometry A1 (36.5, 73, 67.25) that all three ran on | B07 (−3, 0, +2) — today's 19:22Z edit, unverified by a completed run; R04 0; B14 0 |
+| `cosmas_and_damian_drybath_tuberack` (wax, slot 10) | restored to Oct-14 geometry A1 (36.5, 73, 67.25) that all three ran on — B07 completed a full wax run on it at 15:06Z today | all 0. Today's 19:22Z −3/0/+2 edit (B07 selected) never completed a run, so it is recorded as a note on B07's row, not applied; re-teach in the Studio once S4 lands if B07 really needs it |
 | `cosmas_and_damian_biotix_96_200ul_tiprack` (reagent, slot 11) | stays as now (z −1.0 from 17:12/17:13Z); R04 and B14 completed reagent runs on it | all 0 |
 | `custom_2ml_24_tube_rack` (reagent, slot 10) | unchanged | all 0 |
 

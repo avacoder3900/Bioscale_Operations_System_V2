@@ -17,9 +17,11 @@ const opentronsRunRecordSchema = new Schema({
 	// Runtime parameters sent to robot
 	runtimeParameters: Schema.Types.Mixed,
 
-	// Labware offsets applied
+	// Labware offsets applied (CALIB-5: the per-robot rack offsets sent as
+	// tiprack_offset_* / tuberack_offset_* RTPs, written at startConfirm)
 	labwareOffsets: [{
 		_id: false,
+		loadName: String,
 		definitionUri: String,
 		slotName: String,
 		vector: {

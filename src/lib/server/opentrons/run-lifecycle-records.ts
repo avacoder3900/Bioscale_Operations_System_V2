@@ -58,6 +58,7 @@ import { getRobot, bridgeDeviceIdForRobot, withRequester } from './proxy';
 import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
+import { rackOffsetRtpValues, type AppliedRackOffset, type RackSlot } from '$lib/server/services/deck-calibration/rack-offsets';
 import {
 	currentProtocolEntry,
 	loadExpectedWells,
@@ -481,7 +482,12 @@ export async function computeRunParameters(
 	schema: unknown,
 	robotId: string,
 	deckBinding: any
-): Promise<{ runTimeParameterValues: Record<string, number | string | boolean>; protocolParameters: Record<string, number | string | boolean> }> {
+): Promise<{
+	runTimeParameterValues: Record<string, number | string | boolean>;
+	protocolParameters: Record<string, number | string | boolean>;
+	/** CALIB-5: the per-robot rack offsets the RTPs carry, for the run record. */
+	labwareOffsets: AppliedRackOffset[];
+}> {
 	const paramSchema = (Array.isArray(schema) ? schema : []) as ParamDef[];
 	const runTimeParameterValues: Record<string, number | string | boolean> = {};
 	const protocolParameters: Record<string, number | string | boolean> = {};
@@ -537,7 +543,29 @@ export async function computeRunParameters(
 	});
 	Object.assign(runTimeParameterValues, calRtps);
 	Object.assign(protocolParameters, calRtps);
-	return { runTimeParameterValues, protocolParameters };
+
+	// CALIB-5: per-robot offsets for the two racks this run will load, as
+	// tiprack_offset_* / tuberack_offset_* RTPs (the .py passes them to
+	// set_offset). Keyed by the robot, not the deck. The reagent .py chooses its
+	// tube rack by the `tube_rack` RTP, so the load names follow the request.
+	// No-op for a protocol that does not declare these RTPs.
+	const rackLoadNames = rackLoadNamesFor(kind, runTimeParameterValues);
+	const rack = await rackOffsetRtpValues(String(robotId), paramSchema as any, rackLoadNames);
+	Object.assign(runTimeParameterValues, rack.rtp);
+	Object.assign(protocolParameters, rack.rtp);
+	return { runTimeParameterValues, protocolParameters, labwareOffsets: rack.applied };
+}
+
+/** Which rack each fill loads in slots 10 and 11 (mirrors the load_labware calls in the .py files). */
+export function rackLoadNamesFor(kind: FillKind, rtp: Record<string, unknown>): Partial<Record<RackSlot, string>> {
+	if (kind === 'wax') {
+		return { '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' };
+	}
+	const incubator = String(rtp['tube_rack'] ?? 'standard') === 'incubator';
+	return {
+		'10': incubator ? 'cosmas_and_damian_drybath_tuberack' : 'custom_2ml_24_tube_rack',
+		'11': 'cosmas_and_damian_biotix_96_200ul_tiprack'
+	};
 }
 
 type StartContext = { runId: string; run: any; robotId: string; robot: any; deckBinding: any };
@@ -717,7 +745,10 @@ export async function startPrepare(
 			protocolId: current.opentronsProtocolId,
 			runTimeParameterValues: params.runTimeParameterValues,
 			protocolParameters: params.protocolParameters,
-			deckGeometry: ctx.deckBinding ?? null
+			deckGeometry: ctx.deckBinding ?? null,
+			// CALIB-5 provenance: the rack offsets the RTPs above carry. The RTPs
+			// themselves are what the resume/adopt comparison sees.
+			labwareOffsets: params.labwareOffsets
 		};
 	}
 	const decision = priorIntentDecision(
@@ -809,7 +840,8 @@ export async function startRecordResync(
 					protocolId: uploaded.opentronsProtocolId,
 					runTimeParameterValues: params.runTimeParameterValues,
 					protocolParameters: params.protocolParameters,
-					deckGeometry: ctx.deckBinding ?? null
+					deckGeometry: ctx.deckBinding ?? null,
+					labwareOffsets: params.labwareOffsets
 				},
 				'startIntent.resync': { from, to: uploaded.opentronsProtocolId, reason: String(reason).slice(0, 2000), audited: false }
 			}
@@ -902,6 +934,7 @@ export async function startConfirm(
 					opentronsRunId: obs.opentronsRunId,
 					opentronsProtocolId: createArgs.protocolId,
 					runtimeParameters: createArgs.runTimeParameterValues,
+					labwareOffsets: Array.isArray((createArgs as any).labwareOffsets) ? (createArgs as any).labwareOffsets : [],
 					deckGeometry: createArgs.deckGeometry,
 					status: 'created',
 					robotCreatedAt: new Date(),

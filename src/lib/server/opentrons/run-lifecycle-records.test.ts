@@ -95,6 +95,18 @@ vi.mock('$lib/opentrons/ot2-protocol', async (importOriginal) => {
 	return { ...m, runVerb: (...a: any[]) => (runVerbMock.fn ? runVerbMock.fn(...a) : m.runVerb(...a)) };
 });
 vi.mock('./calibration-rtps', () => ({ calibrationRtpValues: async () => ({}) }));
+// CALIB-5: the per-robot rack offsets. Default = no rows (zero vectors, nothing
+// applied); a test can swap `impl` to assert what reaches the RTPs.
+const rackMock = vi.hoisted(() => ({
+	impl: null as null | ((robotId: string, schema: any[], loadNames: Record<string, string>) => Promise<{ rtp: Record<string, number>; applied: any[] }>),
+	calls: [] as Array<{ robotId: string; loadNames: Record<string, string> }>
+}));
+vi.mock('$lib/server/services/deck-calibration/rack-offsets', () => ({
+	rackOffsetRtpValues: async (robotId: string, schema: any[], loadNames: Record<string, string>) => {
+		rackMock.calls.push({ robotId, loadNames });
+		return rackMock.impl ? rackMock.impl(robotId, schema, loadNames) : { rtp: {}, applied: [] };
+	}
+}));
 vi.mock('./protocol-freshness', () => ({}));
 vi.mock('$lib/server/services/deck-calibration/run-guard', () => ({ resolveDeckBinding: async () => ({}), DeckBindingError: class {} }));
 vi.mock('$lib/server/services/deck-calibration/rollout', () => ({ isHardenedRobot: () => false }));
@@ -105,6 +117,7 @@ vi.mock('$lib/server/services/bucket-service', () => ({ returnCarts: vi.fn(async
 vi.mock('$lib/server/notifications', () => ({ notifyRunLifecycle: vi.fn(async () => {}) }));
 vi.mock('$lib/manufacturing/reagent-run-estimate', () => ({ estimateReagentRunSeconds: () => ({ seconds: 600 }) }));
 
+import { computeRunParameters, rackLoadNamesFor } from './run-lifecycle-records';
 import {
 	autoResumeFallback,
 	finishConfirm,
@@ -460,5 +473,42 @@ describe('autoResumeFallback', () => {
 		const r: any = await autoResumeFallback('wax', 'W8', USER);
 		expect(r.fail.status).toBe(409);
 		expect(db.writes.some((w) => w.model === 'bridge')).toBe(false);
+	});
+});
+
+// ── CALIB-5: per-robot rack offsets ride the RTPs ─────────────────────────────
+describe('computeRunParameters — rack offsets (CALIB-5)', () => {
+	const schemaWith = (names: string[]) =>
+		names.map((variableName) => ({ variableName, type: 'float', default: 0, min: -10, max: 10 }));
+
+	it('rackLoadNamesFor mirrors the .py load_labware calls, including the reagent tube-rack choice', () => {
+		expect(rackLoadNamesFor('wax', {})).toEqual({ '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' });
+		expect(rackLoadNamesFor('reagent', {})).toEqual({ '10': 'custom_2ml_24_tube_rack', '11': 'cosmas_and_damian_biotix_96_200ul_tiprack' });
+		expect(rackLoadNamesFor('reagent', { tube_rack: 'incubator' })['10']).toBe('cosmas_and_damian_drybath_tuberack');
+	});
+
+	it('asks for THIS robot and the racks this run loads; injected RTPs land in both maps and the applied list is returned', async () => {
+		rackMock.calls.length = 0;
+		rackMock.impl = async (robotId, _schema, loadNames) => ({
+			rtp: { tiprack_offset_x: 2, tiprack_offset_y: 4, tiprack_offset_z: 0 },
+			applied: [{ loadName: loadNames['11'], definitionUri: 'custom_beta/cosmasanddamian_96_tiprack_20ul/1', slotName: '11', vector: { x: 2, y: 4, z: 0 } }]
+		});
+		try {
+			const form = new FormData();
+			const r = await computeRunParameters('wax', form, schemaWith(['tiprack_offset_x', 'tiprack_offset_y', 'tiprack_offset_z']), 'CCyX8FjTRGvYOd9vISGvi', null);
+			expect(rackMock.calls).toEqual([{ robotId: 'CCyX8FjTRGvYOd9vISGvi', loadNames: { '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' } }]);
+			expect(r.runTimeParameterValues).toMatchObject({ tiprack_offset_x: 2, tiprack_offset_y: 4, tiprack_offset_z: 0 });
+			expect(r.protocolParameters).toMatchObject({ tiprack_offset_x: 2, tiprack_offset_y: 4, tiprack_offset_z: 0 });
+			expect(r.labwareOffsets).toHaveLength(1);
+			expect(r.labwareOffsets[0].slotName).toBe('11');
+		} finally {
+			rackMock.impl = null;
+		}
+	});
+
+	it('a protocol without the RTPs gets nothing injected and an empty applied list', async () => {
+		const r = await computeRunParameters('reagent', new FormData(), schemaWith(['cartridges']), '2vIu0fzsbqzkZ7_Zjj3h2', null);
+		expect(Object.keys(r.runTimeParameterValues).filter((k) => k.includes('_offset_'))).toEqual([]);
+		expect(r.labwareOffsets).toEqual([]);
 	});
 });

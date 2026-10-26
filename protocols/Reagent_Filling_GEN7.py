@@ -179,12 +179,17 @@ def add_parameters(parameters: protocol_api.Parameters):
     # ==================================================================
     # NATIVE-CALIBRATION-SYSTEM PRD 6 — BIMS-driven calibration RTPs.
     # When bims_native is True, the global offset (supplied by BIMS from
-    # RobotDeckOffset) replaces the built-in ROBOT_OFFSETS table and is
-    # applied to ALL labware (deck carriage + tube rack + tip rack), not
-    # just the carriage. Defaults reproduce current behavior, so a run
-    # with no BIMS values (manual/Opentrons app) is unchanged. The
-    # calibrator point + z_cal are read here too (defaults = the
-    # previously-hardcoded values) so the tip-calibration probe is tunable.
+    # RobotDeckOffset) replaces the built-in ROBOT_OFFSETS table.
+    # offset_x/y/z is CARRIAGE-ONLY (always 0 since 2026-08-19).
+    # CALIB-5 (2026-10-26): the slot-11 tip rack and slot-10 tube rack take
+    # their own per-robot offsets (tiprack_offset_* / tuberack_offset_*,
+    # injected by BIMS from robot_labware_offsets) on top of the SHARED
+    # labware definition, so the same rack can sit in a slightly different
+    # place on each robot without editing the definition.
+    # Defaults reproduce current behavior, so a run with no BIMS values
+    # (manual/Opentrons app) is unchanged. The calibrator point + z_cal are
+    # read here too (defaults = the previously-hardcoded values) so the
+    # tip-calibration probe is tunable.
     # ==================================================================
     parameters.add_bool(
         variable_name="bims_native",
@@ -210,6 +215,27 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="z_cal", display_name="Tip-calibrator Z",
         description="Tip-calibration probe Z (p300 200uL reagent tip).",
         default=40.8, minimum=0.0, maximum=200.0, unit="mm")
+    # CALIB-5: per-robot rack offsets (robot x rack definition x slot), added to
+    # the shared labware definition via set_offset() in run(). Default 0 = today.
+    # The slot-10 row BIMS injects must match the rack chosen by `tube_rack`.
+    parameters.add_float(variable_name="tiprack_offset_x", display_name="Tip rack offset X",
+        description="Per-robot offset for the slot-11 tip rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tiprack_offset_y", display_name="Tip rack offset Y",
+        description="Per-robot offset for the slot-11 tip rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tiprack_offset_z", display_name="Tip rack offset Z",
+        description="Per-robot offset for the slot-11 tip rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tuberack_offset_x", display_name="Tube rack offset X",
+        description="Per-robot offset for the slot-10 tube rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tuberack_offset_y", display_name="Tube rack offset Y",
+        description="Per-robot offset for the slot-10 tube rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tuberack_offset_z", display_name="Tube rack offset Z",
+        description="Per-robot offset for the slot-10 tube rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
 
     # Which tube rack holds the four reagents in slot 10 (2026-09-21). 'standard'
     # is the 24-tube rack this protocol has always used (tubes D3-D6) and is
@@ -290,12 +316,27 @@ def run(protocol: protocol_api.ProtocolContext):
     tiprack = protocol.load_labware('cosmas_and_damian_biotix_96_200ul_tiprack', 11)
     pipette = protocol.load_instrument('p300_single_gen2', mount='left', tip_racks=[tiprack])
 
-    # PRD 6: in BIMS-native mode the global offset shifts the tube rack + tip rack
-    # too (the carriage is shifted later, where it's loaded by particle ID). In the
-    # legacy table mode this is skipped so behavior is byte-for-byte unchanged.
+    # PRD 6 / CALIB-5: in BIMS-native mode each rack gets its OWN per-robot offset
+    # (tiprack_offset_* / tuberack_offset_*, injected by BIMS from
+    # robot_labware_offsets: one row per robot x rack definition x slot, so the
+    # slot-10 row must be the one for the rack `tube_rack` selected) on top of the
+    # shared labware definition. The global offset_x/y/z (robot_offsets) no longer
+    # touches the racks: it is carriage-only and has been 0 since 2026-08-19 (the
+    # carriage is shifted later, where it's loaded by particle ID). In the legacy
+    # table mode this is skipped so behavior is byte-for-byte unchanged.
     if bims_native:
-        tuberack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
-        tiprack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
+        tiprack_offset = { 'x': float(protocol.params.tiprack_offset_x),
+                           'y': float(protocol.params.tiprack_offset_y),
+                           'z': float(protocol.params.tiprack_offset_z) }
+        tuberack_offset = { 'x': float(protocol.params.tuberack_offset_x),
+                            'y': float(protocol.params.tuberack_offset_y),
+                            'z': float(protocol.params.tuberack_offset_z) }
+        tuberack.set_offset(x=tuberack_offset['x'], y=tuberack_offset['y'], z=tuberack_offset['z'])
+        tiprack.set_offset(x=tiprack_offset['x'], y=tiprack_offset['y'], z=tiprack_offset['z'])
+        protocol.comment(f'Rack offsets (CALIB-5): tip rack (slot 11) '
+                         f'x={tiprack_offset["x"]} y={tiprack_offset["y"]} z={tiprack_offset["z"]} mm')
+        protocol.comment(f'Rack offsets (CALIB-5): tube rack (slot 10, {tuberack.load_name}) '
+                         f'x={tuberack_offset["x"]} y={tuberack_offset["y"]} z={tuberack_offset["z"]} mm')
 
     # =====================================================================
     # PERSISTENT TIP TRACKING
