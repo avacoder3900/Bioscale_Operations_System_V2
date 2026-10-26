@@ -22,6 +22,7 @@
 
 import type { BridgeClient } from './bridge-client';
 import { submitAutoResume } from './fill-bridge-jobs';
+import { sleep as unthrottledSleep } from './unthrottled-timer';
 
 /** Minimal transport. Both implementations return a native Response. */
 export interface Ot2Transport {
@@ -431,7 +432,7 @@ async function clearStaleProtocolRun(t: Ot2Transport): Promise<void> {
 	for (let i = 0; i < 6; i++) {
 		const cur = await currentProtocolRun(t);
 		if (!cur || TERMINAL_RUN_STATES.has((cur.status ?? '').toLowerCase())) break;
-		await new Promise((r) => setTimeout(r, 500));
+		await unthrottledSleep(500);
 	}
 	await t.delete(`/runs/${run.id}`).catch(() => {});
 }
@@ -1116,7 +1117,7 @@ async function bundledDefsMatch(
 		}
 		if (list.some((a: any) => a.status === 'failed')) throw new Error('protocol analysis failed');
 		if (Date.now() >= deadline) throw new Error('no completed analysis for protocol');
-		await new Promise((r) => setTimeout(r, 3000));
+		await unthrottledSleep(3000);
 	}
 	const detRes = await t.get(`/protocols/${protocolId}/analyses/${analysisId}`);
 	if (!detRes.ok) throw new Error(`robot returned ${detRes.status} fetching analysis`);
@@ -1260,7 +1261,7 @@ async function runUploadProtocol(t: Ot2Transport, args: Record<string, unknown>)
 		let parsed: any = { parametersSchema: null, labwareDefinitions: null, pipettesRequired: null };
 		const deadline = Date.now() + ANALYSIS_BUDGET_MS;
 		while (Date.now() < deadline) {
-			await new Promise((r) => setTimeout(r, ANALYSIS_POLL_MS));
+			await unthrottledSleep(ANALYSIS_POLL_MS);
 			const ar = await t.get(`/protocols/${pid}/analyses`).catch(() => null);
 			if (!ar || !ar.ok) continue;
 			const analyses = ((await ar.json()) as any)?.data ?? [];

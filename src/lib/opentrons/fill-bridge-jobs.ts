@@ -25,6 +25,7 @@
  * $lib/server); every I/O is injectable for the unit tests.
  */
 import { BridgeError, type BridgeClient, type BridgeJob, type BridgeJobDescriptor, type BridgeJobKind } from './bridge-client';
+import { sleep as unthrottledSleep } from './unthrottled-timer';
 import type { ActionPoster } from './ot2-protocol';
 
 export interface FillJobDeps {
@@ -37,7 +38,7 @@ export interface FillJobDeps {
 export type JobFail = { ok: false; error: string; status?: number };
 
 const bimsFetchOf = (d?: FillJobDeps) => d?.fetch ?? ((input: string, init?: RequestInit) => globalThis.fetch(input, init));
-const sleepOf = (d?: FillJobDeps) => d?.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+const sleepOf = (d?: FillJobDeps) => d?.sleep ?? unthrottledSleep;
 const nowOf = (d?: FillJobDeps) => d?.nowMs ?? (() => Date.now());
 
 const errText = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -483,7 +484,7 @@ export async function restartServerOverBridge(
 /** The daemon's refusal message for a restart job, if it refused within ~4 s. */
 async function restartRefusal(bridge: BridgeClient, jobId: string): Promise<string | null> {
 	for (let i = 0; i < 8; i++) {
-		await new Promise((r) => setTimeout(r, 500));
+		await unthrottledSleep(500);
 		let job;
 		try {
 			job = await bridge.getJob(jobId);

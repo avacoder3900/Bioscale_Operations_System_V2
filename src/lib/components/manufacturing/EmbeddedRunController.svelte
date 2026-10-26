@@ -28,6 +28,7 @@
 <script lang="ts">
 	import { onDestroy } from 'svelte';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { setUnthrottledTimeout, onVisible } from '$lib/opentrons/unthrottled-timer';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 
 	let {
@@ -99,8 +100,19 @@
 	let pauseWarning = $state<string | null>(null);
 	/** Last status handed to onStatusChange, so it only fires on real transitions. */
 	let lastNotifiedStatus: string | null = null;
-	let pollHandle: ReturnType<typeof setTimeout> | null = null;
+	/**
+	 * The poll timer is driven from a Web Worker (unthrottled-timer.ts): a tab in
+	 * the background has its page timers slowed to once a minute by Chrome, which
+	 * turned this 1 s loop into a 60 s loop whenever the operator worked the other
+	 * robot's tab (2026-10-14). `pollHandle` is the cancel function.
+	 */
+	let pollHandle: (() => void) | null = null;
+	let unsubscribeVisible: (() => void) | null = null;
 	let destroyed = false;
+	let pollInFlight = false;
+	/** Polls observed since the pause was requested — the warning is earned by observation, not by the wall clock. */
+	let pollsSincePauseRequest = 0;
+	const PAUSE_POLLS_BEFORE_WARNING = 10;
 	/** The line this page uses to reach the robot — decided once, shown in the pill. */
 	let session: RobotSession | null = null;
 	let unsubscribeShared: (() => void) | null = null;
@@ -173,19 +185,21 @@
 			return;
 		}
 		const every = conn?.transport === 'direct' ? Math.min(pollMs, DIRECT_POLL_MS) : pollMs;
-		if (!destroyed) pollHandle = setTimeout(poll, every);
+		if (!destroyed) pollHandle = setUnthrottledTimeout(() => void poll(), every);
 	}
-	// Force an immediate reconcile poll (e.g. right after a control action) rather
-	// than waiting for the next tick.
+	// Force an immediate reconcile poll (e.g. right after a control action, or
+	// when the tab comes back into view) rather than waiting for the next tick.
 	function pollNow() {
-		if (pollHandle) { clearTimeout(pollHandle); pollHandle = null; }
-		void poll();
+		if (pollHandle) { pollHandle(); pollHandle = null; }
+		if (!pollInFlight) void poll();
 	}
 
 	async function poll() {
 		// Don't fight an in-flight control action for the serialized bridge queue,
 		// and never overwrite the optimistic status with an older reading.
 		if (actionInFlight) { schedulePoll(); return; }
+		pollInFlight = true;
+		if (pausePending) pollsSincePauseRequest += 1;
 		try {
 			const res = await robotSession().call('run.get', { rid: opentronsRunId }, {
 				signal: AbortSignal.timeout(POLL_TIMEOUT_MS)
@@ -223,10 +237,12 @@
 						}
 					} else if (TERMINAL.has(next)) {
 						pausePending = false;
-					} else if (pausePending && Date.now() - pauseRequestedAt > PAUSE_LAND_TIMEOUT_MS) {
+					} else if (pausePending && Date.now() - pauseRequestedAt > PAUSE_LAND_TIMEOUT_MS && pollsSincePauseRequest >= PAUSE_POLLS_BEFORE_WARNING) {
 						// Requested a pause, but the robot is still going well past the
-						// point where it should have hit a command boundary. Stop implying
-						// the pause is imminent and let them act on it.
+						// point where it should have hit a command boundary — and we have
+						// actually watched it keep going (a throttled or sleeping tab that
+						// simply missed a minute must not raise this). Stop implying the
+						// pause is imminent and let them act on it.
 						pausePending = false;
 						pauseWarning =
 							'The robot has not acknowledged the pause and is still running — '
@@ -246,6 +262,9 @@
 		// A few more polls after terminal so the operator sees the settled final
 		// state; then stop (see postTerminalPolls).
 		if (terminalFired) postTerminalPolls += 1;
+		// This poll is done; schedulePoll() may start the next one (it skips while
+		// one is still in flight — see pollInFlight).
+		pollInFlight = false;
 		schedulePoll();
 	}
 
@@ -259,6 +278,7 @@
 			operatorPaused = true;
 			pausePending = true;
 			pauseRequestedAt = Date.now();
+			pollsSincePauseRequest = 0;
 			// Whatever the initial off-deck pause did or didn't do, it is settled as
 			// far as this run is concerned — never auto-resume after a manual pause.
 			autoResumedInitial = true;
@@ -376,14 +396,18 @@
 	$effect(() => {
 		robotSession();
 		if (!pollHandle) poll();
+		// Back in front after being hidden: resync now, don't wait for the tick.
+		if (!unsubscribeVisible) unsubscribeVisible = onVisible(() => { if (!destroyed) pollNow(); });
 	});
 
 	onDestroy(() => {
 		destroyed = true;
 		if (pollHandle) {
-			clearTimeout(pollHandle);
+			pollHandle();
 			pollHandle = null;
 		}
+		unsubscribeVisible?.();
+		unsubscribeVisible = null;
 		// A session the page passed in is the page's to close.
 		unsubscribeShared?.();
 		if (session && session !== sharedSession) session.close();
