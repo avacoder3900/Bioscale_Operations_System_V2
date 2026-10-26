@@ -549,6 +549,43 @@ def run(protocol: protocol_api.ProtocolContext):
                     raise
         return False
 
+    # Limit-switch reads (2026-10-26). The calibrator's USB serial also carries
+    # the Particle board's system log ("0014455145 [system] INFO ..."). The probe
+    # used to read ONE byte per 0.1 mm step, so a queued log line (60+ bytes) hid
+    # the switch reply and the probe walked its full 5 mm with the lever pressed
+    # and the fixture's light on -> "NO TIP DETECTED" even with a tip on (R04,
+    # 2026-10-26, carrier 3: five attempts in a row). Now: drop whatever is queued
+    # right before arming, then read EVERY waiting byte each step. Log lines start
+    # with a timestamp, never with X/Y, so only a reply segment that starts with
+    # the target byte followed by nothing, whitespace or a digit counts as the
+    # switch (a bare reply glued to the next log line still matches).
+    def _serial_arm(ser, cmd):
+        try:
+            ser.reset_input_buffer()
+        except Exception:
+            pass
+        serial_write_with_retry(ser, cmd)
+
+    def _switch_hit(ser, target, pending):
+        original_timeout = ser.timeout
+        ser.timeout = 0.01
+        try:
+            waiting = ser.in_waiting
+            data = ser.read(waiting if waiting else 1)
+        finally:
+            ser.timeout = original_timeout
+        if data:
+            pending.extend(data)
+        t = target[0]
+        for seg in bytes(pending).split(b'\n'):
+            s = seg.strip(b'\r')
+            if s and s[0] == t and (len(s) == 1 or chr(s[1]).isdigit() or chr(s[1]).isspace()):
+                return True
+        last_nl = pending.rfind(b'\n')
+        if last_nl >= 0:
+            del pending[:last_nl + 1]
+        return False
+
     ser = None
     import os as _os_cal
 
@@ -777,24 +814,18 @@ def run(protocol: protocol_api.ProtocolContext):
                 limit_reached = False
                 shift = 0.1
                 try:
-                    serial_write_with_retry(ser, b'X')
+                    _serial_arm(ser, b'X')
                 except Exception as e:
                     protocol.comment(f'Error writing to serial during X calibration: {str(e)}')
                     return { 'x': 0.0, 'y': 0.0 }, False, 'serial write failed (X)'
 
+                _pending = bytearray()
                 while (not limit_reached):
                     pipette.move_to(types.Location(types.Point(x=x_pos - shift, y=y_pos, z=z_cal), carriage), force_direct=True, speed=5)
                     shift += 0.1
                     if (shift > 5):
                         break
-                    # Direct read with very short timeout for fast calibration
-                    original_timeout = ser.timeout
-                    ser.timeout = 0.01
-                    try:
-                        response = ser.read(1)
-                        limit_reached = response == b'X'
-                    finally:
-                        ser.timeout = original_timeout
+                    limit_reached = _switch_hit(ser, b'X', _pending)
                 x_ok = limit_reached
                 xOffset = round(offset['x'] - shift, 1)
 
@@ -807,23 +838,18 @@ def run(protocol: protocol_api.ProtocolContext):
                     limit_reached = False
                     shift = 0.1
                     try:
-                        serial_write_with_retry(ser, b'Y')
+                        _serial_arm(ser, b'Y')
                     except Exception as e:
                         protocol.comment(f'Error writing to serial during Y calibration: {str(e)}')
                         return { 'x': xOffset, 'y': 0.0 }, False, 'serial write failed (Y)'
 
+                    _pending = bytearray()
                     while (not limit_reached):
                         pipette.move_to(types.Location(types.Point(x=x_pos, y=y_pos - shift, z=z_cal), carriage), force_direct=True, speed=5)
                         shift += 0.1
                         if (shift > 5):
                             break
-                        original_timeout = ser.timeout
-                        ser.timeout = 0.01
-                        try:
-                            response = ser.read(1)
-                            limit_reached = response == b'Y'
-                        finally:
-                            ser.timeout = original_timeout
+                        limit_reached = _switch_hit(ser, b'Y', _pending)
                     y_ok = limit_reached
                     yOffset = round(offset['y'] - shift, 1)
 

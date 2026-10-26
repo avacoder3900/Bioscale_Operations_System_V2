@@ -2046,7 +2046,15 @@ def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
     """Step the tip 0.1mm/iter along `axis` (-x or -y) until the limit switch
     replies arm_byte, mirroring the .py. Returns (shift_at_limit, reached)."""
     move_to_coordinates(run_id, pipette_id, start_x, start_y, z, speed=CAL_APPROACH_SPEED)
+    # Same read rule as the fill protocols (2026-10-26): the calibrator's USB
+    # line also carries the Particle system log, so drop whatever is queued
+    # right before arming and scan every waiting byte for the reply.
+    try:
+        ser.reset_input_buffer()
+    except Exception:
+        pass
     _cal_write(ser, arm_byte)
+    pending = bytearray()
     shift = 0.1
     reached = False
     while not reached:
@@ -2058,13 +2066,34 @@ def _probe_axis(run_id: str, pipette_id: str, ser: "serial.Serial",
         if shift > 5:
             log.warning("calibrate_tip: %s axis hit 5mm travel without limit", axis)
             break
-        original = ser.timeout
-        ser.timeout = 0.01
-        try:
-            reached = ser.read(1) == arm_byte
-        finally:
-            ser.timeout = original
+        reached = _switch_hit(ser, arm_byte, pending)
     return shift, reached
+
+
+def _switch_hit(ser: "serial.Serial", target: bytes, pending: bytearray) -> bool:
+    """True once the calibrator has answered `target` (b'X' / b'Y'). Reads every
+    waiting byte, not one: a queued Particle system-log line (60+ bytes, starts
+    with a timestamp) used to hide the reply until the 5 mm walk ran out with
+    the lever pressed. Only a reply segment that STARTS with the target byte,
+    followed by nothing / whitespace / a digit, counts — log text never does."""
+    original = ser.timeout
+    ser.timeout = 0.01
+    try:
+        waiting = ser.in_waiting
+        data = ser.read(waiting if waiting else 1)
+    finally:
+        ser.timeout = original
+    if data:
+        pending.extend(data)
+    t = target[0]
+    for seg in bytes(pending).split(b"\n"):
+        s = seg.strip(b"\r")
+        if s and s[0] == t and (len(s) == 1 or chr(s[1]).isdigit() or chr(s[1]).isspace()):
+            return True
+    last_nl = pending.rfind(b"\n")
+    if last_nl >= 0:
+        del pending[:last_nl + 1]
+    return False
 
 
 def execute_calibrate_tip(command_id: str, payload: dict) -> None:
