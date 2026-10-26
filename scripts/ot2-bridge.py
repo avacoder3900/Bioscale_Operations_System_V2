@@ -16,7 +16,8 @@ Three loops (threads):
      /api/agent/scanner/triggers, serial scan, POST /api/agent/scanner/event)
      so per-slot rescans + teach test-scans keep working untouched.
   3. Heartbeat every HEARTBEAT_INTERVAL_S with metadata.health = the robot's
-     local GET /health snapshot.
+     local GET /health snapshot, and metadata.link = interface / tailscale /
+     poll telemetry (OT2-LOG-1; BIMS samples it into robot_link_samples).
   4. (OT2-TAILNET-5 S5, optional) the /bridge job server — a stdlib
      ThreadingHTTPServer on 127.0.0.1:31960 that Tailscale serves at
      https://ot2-<slot>.tailf65a70.ts.net/bridge/. A browser on the tailnet
@@ -48,6 +49,10 @@ Configuration (env vars; run.sh sources .env):
                             BRIDGE_DEVICE_ID is always checked).
   BRIDGE_JOB_SERVER_PORT    default 31960 (bound on 127.0.0.1 only)
   BRIDGE_ALLOWED_ORIGINS    optional comma list of extra exact CORS origins
+  BRIDGE_JOURNAL_DIR        default /data/ot2-bridge — journal.jsonl (ring of
+                            the last report attempts) + retry.jsonl (failed job
+                            reports), OT2-LOG-1. Unwritable = both off, logged
+                            once; the daemon runs exactly as before.
 
 Dependencies (Python 3.7+):
   pip install pyserial requests
@@ -64,6 +69,7 @@ import sys
 import glob
 import re
 import time
+import calendar
 import json
 import hmac
 import base64
@@ -93,7 +99,10 @@ except ImportError:
 
 # 1.1 = OT2-TAILNET-5 S5: the optional /bridge job server + the shared worker
 # queue. The long-poll, the handlers and every BIMS report are unchanged.
-VERSION = "ot2-bridge/1.2"
+# 1.3 = OT2-LOG-1 L3: heartbeat metadata.link (interface / tailscale / poll
+# telemetry) + the local report journal and job-report retry queue. The job
+# path and every report's return/error semantics are unchanged.
+VERSION = "ot2-bridge/1.3"
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -214,19 +223,442 @@ def require_env() -> None:
         sys.exit(2)
 
 
+# Link telemetry + report journal (OT2-LOG-1 L3) ------------------------------
+# Every outbound BIMS report (command poll, heartbeat, scanner event, job
+# progress/result) goes through _bims_post, which appends one line per attempt
+# to a local JSONL ring and keeps the counters the heartbeat ships in
+# metadata.link. Failed job progress/result posts (network error or 5xx) also
+# go to a retry queue that is replayed, in order, after the next heartbeat
+# that gets through (B7); polls and heartbeats are never queued. _bims_post
+# returns / raises exactly what requests.post did, so no report path changes.
+# The legacy 500 ms trigger poll is deliberately NOT journaled (it would churn
+# the ring in minutes).
+JOURNAL_DIR = os.environ.get("BRIDGE_JOURNAL_DIR", "/data/ot2-bridge")
+JOURNAL_PATH = os.path.join(JOURNAL_DIR, "journal.jsonl")
+RETRY_PATH = os.path.join(JOURNAL_DIR, "retry.jsonl")
+JOURNAL_KEEP = 2000          # lines kept when the ring is rewritten...
+JOURNAL_ROTATE_AT = 2500     # ...which happens once it grows past this
+RETRY_MAX_ATTEMPTS = 5       # replays per queued post before it is dropped
+RETRY_MAX_QUEUED = 300       # oldest queued posts dropped past this
+LINK_PROBE_CACHE_S = 30.0    # ip/iw/nmcli/tailscale results reused this long
+LINK_PROBE_TIMEOUT_S = 2.0   # per subprocess
+LINK_PROBE_BUDGET_S = 3.0    # all subprocess probes of one collection together
+TAILSCALE_BIN = "/data/tailscale/tailscale"
+TAILSCALE_SOCK = "/data/tailscale/tailscaled.sock"  # ot2-tailscale.service's --socket
+
+_DAEMON_STARTED_AT = time.time()
+_LINK_LOCK = threading.Lock()
+# pollRttMs = the last EMPTY long-poll's time beyond the server hold (see
+# _poll_command); the error counts are since the previous heartbeat was built.
+_LINK_COUNTERS = {"pollRttMs": None, "pollErrors": 0, "hbErrors": 0}
+_LINK_CACHE = {"at": None, "iface": None, "tailscale": None}
+_LINK_WORK = {"queue": None}  # main() drops the WorkQueue here; busy age + depth come from it
+_SCRIPT_SHA256 = {}           # {"v": hex | None} once computed
+
+
+def _url_path(url: str) -> str:
+    try:
+        return urllib.parse.urlsplit(url).path or url
+    except Exception:
+        return url
+
+
+class ReportJournal:
+    """Append-only JSONL ring of outbound report attempts. Thread-safe. A
+    directory that cannot be created or written turns it into a no-op after
+    one warning — a dev box without /data runs exactly as before."""
+
+    def __init__(self, path: str, keep: int, rotate_at: int):
+        self.path = path
+        self.keep = keep
+        self.rotate_at = rotate_at
+        self._lock = threading.Lock()
+        self._lines = None  # line count; None until the file is first opened
+        self._disabled = False
+
+    def _ready(self) -> bool:
+        if self._disabled:
+            return False
+        if self._lines is not None:
+            return True
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            n = 0
+            if os.path.exists(self.path):
+                with open(self.path, "rb") as f:
+                    n = sum(1 for _ in f)
+            with open(self.path, "a"):
+                pass
+            self._lines = n
+            return True
+        except Exception as e:
+            self._disabled = True
+            log.warning("report journal off (%s not writable: %s)", self.path, e)
+            return False
+
+    def append(self, entry: dict) -> None:
+        with self._lock:
+            if not self._ready():
+                return
+            try:
+                with open(self.path, "a") as f:
+                    f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+                self._lines += 1
+                if self._lines > self.rotate_at:
+                    self._rotate()
+            except Exception as e:
+                self._disabled = True
+                log.warning("report journal off (%s: %s)", self.path, e)
+
+    def _rotate(self) -> None:
+        with open(self.path, "r") as f:
+            tail = f.readlines()[-self.keep:]
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            f.writelines(tail)
+        os.replace(tmp, self.path)
+        self._lines = len(tail)
+
+
+class RetryQueue:
+    """Failed job progress/result posts, oldest first, replayed after the next
+    heartbeat that gets through. File-backed (one JSON line per post) so a
+    daemon restart keeps them; same no-op fallback as the journal."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self._lock = threading.Lock()
+        self._items = None  # None until the file is first read
+        self._disabled = False
+
+    def _ready(self) -> bool:
+        if self._disabled:
+            return False
+        if self._items is not None:
+            return True
+        try:
+            os.makedirs(os.path.dirname(self.path), exist_ok=True)
+            items = []
+            if os.path.exists(self.path):
+                with open(self.path, "r") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            try:
+                                items.append(json.loads(line))
+                            except Exception:
+                                pass
+            with open(self.path, "a"):
+                pass
+            self._items = items
+            if items:
+                log.info("retry queue: %d job report(s) queued before this start", len(items))
+            return True
+        except Exception as e:
+            self._disabled = True
+            log.warning("retry queue off (%s not writable: %s)", self.path, e)
+            return False
+
+    def _rewrite(self) -> None:
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            for it in self._items:
+                f.write(json.dumps(it, separators=(",", ":")) + "\n")
+        os.replace(tmp, self.path)
+
+    def push(self, kind: str, url: str, body: dict) -> None:
+        """Queue one post. The worker thread calls this right after its own
+        attempts failed, so the happy path is a single append."""
+        entry = {"t": round(time.time(), 3), "kind": kind, "url": _url_path(url), "body": body, "attempts": 0}
+        with self._lock:
+            if not self._ready():
+                return
+            try:
+                self._items.append(entry)
+                if len(self._items) > RETRY_MAX_QUEUED:
+                    for it in self._items[:-RETRY_MAX_QUEUED]:
+                        _journal_line(it["kind"], it["url"], None, 0.0, "dropped: retry queue full")
+                    del self._items[:-RETRY_MAX_QUEUED]
+                    self._rewrite()
+                else:
+                    with open(self.path, "a") as f:
+                        f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+            except Exception as e:
+                self._disabled = True
+                log.warning("retry queue off (%s: %s)", self.path, e)
+
+    def depth(self) -> int:
+        with self._lock:
+            return len(self._items) if self._ready() else 0
+
+    def replay(self) -> None:
+        """Heartbeat thread, right after a heartbeat got through. Oldest first;
+        the pass stops at the first network/5xx failure (the link is still bad)
+        so order is kept for the next pass. A 4xx means BIMS already has the
+        result or the job is gone — dropped, exactly as the helpers do."""
+        replayed = 0
+        while True:
+            with self._lock:
+                if not self._ready() or not self._items:
+                    break
+                item = self._items[0]  # only this thread removes items
+            status, retry = None, False
+            try:
+                r = _bims_post(item["kind"], BIMS_BASE_URL + item["url"], item["body"], timeout=10,
+                               replay=item.get("attempts", 0) + 1)
+                status = r.status_code
+                retry = status >= 500
+            except Exception:
+                retry = True
+            with self._lock:
+                try:
+                    if retry:
+                        item["attempts"] = item.get("attempts", 0) + 1
+                        if item["attempts"] >= RETRY_MAX_ATTEMPTS:
+                            log.warning("dropping queued %s %s after %d replay attempts",
+                                        item["kind"], item["url"], item["attempts"])
+                            _journal_line(item["kind"], item["url"], status, 0.0,
+                                          "dropped after {} replay attempts".format(item["attempts"]))
+                            self._items.pop(0)
+                    else:
+                        replayed += 1
+                        self._items.pop(0)
+                    self._rewrite()
+                except Exception as e:
+                    self._disabled = True
+                    log.warning("retry queue off (%s: %s)", self.path, e)
+                    break
+            if retry:
+                break
+        if replayed:
+            log.info("replayed %d queued job report(s)", replayed)
+
+
+_JOURNAL = ReportJournal(JOURNAL_PATH, JOURNAL_KEEP, JOURNAL_ROTATE_AT)
+_RETRY = RetryQueue(RETRY_PATH)
+
+
+def _journal_line(kind: str, url: str, status: Optional[int], ms: float, err: Optional[str],
+                  replay: Optional[int] = None) -> None:
+    entry = {"t": round(time.time(), 3), "kind": kind, "url": _url_path(url), "status": status,
+             "ms": ms, "err": err}
+    if replay:
+        entry["replay"] = replay
+    _JOURNAL.append(entry)
+
+
+def _bims_post(kind: str, url: str, body: dict, timeout: float, replay: Optional[int] = None):
+    """requests.post to BIMS with one journal line per attempt and the link
+    counters. Returns the Response or raises exactly like requests.post, so
+    every caller keeps its own retry/error rules."""
+    t0 = time.monotonic()
+    status, err = None, None
+    try:
+        r = requests.post(url, headers=_bims_headers(), data=json.dumps(body), timeout=timeout)
+        status = r.status_code
+        return r
+    except Exception as e:
+        err = "{}: {}".format(type(e).__name__, str(e)[:160])
+        raise
+    finally:
+        ms = round((time.monotonic() - t0) * 1000.0, 1)
+        failed = err is not None or (status is not None and status >= 400)
+        if failed and kind in ("poll", "heartbeat"):
+            with _LINK_LOCK:
+                _LINK_COUNTERS["pollErrors" if kind == "poll" else "hbErrors"] += 1
+        _journal_line(kind, url, status, ms, err, replay)
+
+
+def _quiet(fn, default=None):
+    """Run a probe; any failure (missing tool, odd output) yields default."""
+    try:
+        return fn()
+    except Exception:
+        return default
+
+
+def _run_probe(argv: list, deadline: float) -> Optional[str]:
+    """stdout of a probe command; None when the tool is missing, exits non-zero,
+    times out (LINK_PROBE_TIMEOUT_S) or the collection budget is already spent."""
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.05:
+        return None
+    try:
+        p = subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                           timeout=min(LINK_PROBE_TIMEOUT_S, remaining))
+    except Exception:
+        return None
+    if p.returncode != 0:
+        return None
+    return p.stdout.decode("utf-8", "replace")
+
+
+def _read_file(path: str) -> Optional[str]:
+    try:
+        with open(path, "r") as f:
+            return f.read()
+    except Exception:
+        return None
+
+
+def _null_iface() -> dict:
+    return {"default": None, "eth0": {"carrier": None, "ip": None},
+            "wlan0": {"ip": None, "rssi": None, "freq": None}}
+
+
+def _null_tailscale() -> dict:
+    return {"direct": None, "relay": None, "curAddr": None, "handshakeAgeS": None}
+
+
+def _probe_iface(deadline: float) -> dict:
+    out = _null_iface()
+    # BusyBox ip (no -br): "default via 192.168.1.1 dev wlan0  src 192.168.1.59 ..."
+    route = _run_probe(["ip", "route", "show", "default"], deadline)
+    if route:
+        m = re.search(r"\bdev\s+(\S+)", route)
+        if m:
+            out["default"] = m.group(1)
+    # "1" = cable up. The read fails (EINVAL) while the interface is admin-down.
+    carrier = _read_file("/sys/class/net/eth0/carrier")
+    if carrier is not None:
+        out["eth0"]["carrier"] = carrier.strip() == "1"
+    elif os.path.isdir("/sys/class/net/eth0"):
+        out["eth0"]["carrier"] = False
+    # "2: eth0: <...>" then "    inet 169.254.199.218/16 ..." — one call, both ifaces.
+    addrs = _run_probe(["ip", "-4", "addr", "show"], deadline)
+    if addrs:
+        cur = None
+        for line in addrs.splitlines():
+            m = re.match(r"^\d+:\s+([^:@\s]+)", line)
+            if m:
+                cur = m.group(1)
+                continue
+            m = re.match(r"^\s+inet\s+(\d+\.\d+\.\d+\.\d+)", line)
+            if m and cur in ("eth0", "wlan0") and out[cur]["ip"] is None:
+                out[cur]["ip"] = m.group(1)
+    # iw: "signal: -54 dBm" + "freq: 2462" in one call (nmcli's SIGNAL is a %).
+    link = _run_probe(["iw", "dev", "wlan0", "link"], deadline)
+    if link:
+        m = re.search(r"^\s*signal:\s*(-?\d+)\s*dBm", link, re.M)
+        if m:
+            out["wlan0"]["rssi"] = int(m.group(1))
+        m = re.search(r"^\s*freq:\s*(\d+)", link, re.M)
+        if m:
+            out["wlan0"]["freq"] = int(m.group(1))
+    if out["wlan0"]["rssi"] is None:
+        # " wlan0: 0000   56.  -54.  -256 ..." = status, link quality, level (dBm), noise
+        m = re.search(r"^\s*wlan0:\s*\S+\s+-?\d+\.?\s+(-?\d+)\.?", _read_file("/proc/net/wireless") or "", re.M)
+        if m:
+            out["wlan0"]["rssi"] = int(m.group(1))
+    if out["wlan0"]["freq"] is None:
+        # "*:72:2462 MHz" for the AP in use. --rescan no: never stall the radio.
+        wifi = _run_probe(["nmcli", "-t", "-f", "IN-USE,SIGNAL,FREQ", "dev", "wifi", "list", "--rescan", "no"],
+                          deadline)
+        for line in (wifi or "").splitlines():
+            m = re.match(r"^\*:\d*:(\d+)", line)
+            if m:
+                out["wlan0"]["freq"] = int(m.group(1))
+                break
+    return out
+
+
+_GO_TIME_RE = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d+)?(Z|[+-]\d{2}:\d{2})?$")
+
+
+def _go_time_to_epoch(s) -> Optional[float]:
+    """RFC 3339 as Go prints it (fractional seconds, Z or ±hh:mm). Go's zero
+    time (0001-01-01) means 'never' → None."""
+    m = _GO_TIME_RE.match(s or "")
+    if not m or s.startswith("0001-"):
+        return None
+    t = calendar.timegm(time.strptime(m.group(1), "%Y-%m-%dT%H:%M:%S"))
+    tz = m.group(2) or "Z"
+    if tz != "Z":
+        off = int(tz[1:3]) * 3600 + int(tz[4:6]) * 60
+        t -= off if tz[0] == "+" else -off
+    return float(t)
+
+
+def _probe_tailscale(deadline: float) -> dict:
+    out = _null_tailscale()
+    raw = _run_probe([TAILSCALE_BIN, "--socket=" + TAILSCALE_SOCK, "status", "--json"], deadline)
+    if not raw:
+        return out
+    st = _quiet(lambda: json.loads(raw)) or {}
+    me = st.get("Self") or {}
+    out["relay"] = me.get("Relay") or None  # home DERP region, e.g. "dfw"
+    # CurAddr / LastHandshake describe the path TO a node, so on Self they are
+    # always "" / zero. The live path is the Active peer with the newest
+    # handshake (the iMac, or a browser on the tailnet): CurAddr set = direct
+    # UDP, empty = through DERP.
+    best, best_t = None, None
+    for p in [me] + list((st.get("Peer") or {}).values()):
+        if not isinstance(p, dict) or (p is not me and not p.get("Active")):
+            continue
+        t = _go_time_to_epoch(p.get("LastHandshake"))
+        if t is not None and (best_t is None or t > best_t):
+            best, best_t = p, t
+    if best is not None:
+        out["curAddr"] = best.get("CurAddr") or None
+        out["direct"] = bool(best.get("CurAddr"))
+        out["handshakeAgeS"] = round(max(0.0, time.time() - best_t), 1)
+    return out
+
+
+def _script_sha256() -> Optional[str]:
+    """sha256 of this script as started (computed once) — the connectivity page
+    keys daemon changes on it, next to VERSION."""
+    if "v" not in _SCRIPT_SHA256:
+        def digest():
+            with open(os.path.abspath(__file__), "rb") as f:
+                return hashlib.sha256(f.read()).hexdigest()
+        _SCRIPT_SHA256["v"] = _quiet(digest)
+    return _SCRIPT_SHA256["v"]
+
+
+def collect_link_telemetry() -> dict:
+    """metadata.link for the heartbeat (OT2-LOG-1 §2/§3, source 'daemon').
+    Heartbeat thread only — never the worker. The subprocess probes (ip, iw,
+    nmcli, tailscale) share one LINK_PROBE_BUDGET_S budget and their result is
+    reused for LINK_PROBE_CACHE_S, so a 10 s heartbeat does not fork them every
+    time; the counters are fresh and reset here, i.e. they count since the
+    previous heartbeat was built. Every field degrades to null — a dev box
+    without NetworkManager / iw / tailscale yields nulls, never an exception."""
+    now = time.monotonic()
+    if _LINK_CACHE["at"] is None or now - _LINK_CACHE["at"] >= LINK_PROBE_CACHE_S:
+        deadline = now + LINK_PROBE_BUDGET_S
+        _LINK_CACHE["iface"] = _quiet(lambda: _probe_iface(deadline)) or _null_iface()
+        _LINK_CACHE["tailscale"] = _quiet(lambda: _probe_tailscale(deadline)) or _null_tailscale()
+        _LINK_CACHE["at"] = now
+    with _LINK_LOCK:
+        bims = dict(_LINK_COUNTERS)
+        _LINK_COUNTERS["pollErrors"] = 0
+        _LINK_COUNTERS["hbErrors"] = 0
+    work = _LINK_WORK["queue"]
+    worker = _quiet(work.link_stats) if work is not None else None
+    return {
+        "iface": _LINK_CACHE["iface"],
+        "tailscale": _LINK_CACHE["tailscale"],
+        "bims": bims,
+        "worker": worker or {"busyAgeS": None, "queueDepth": None},
+        "daemon": {
+            "version": VERSION,
+            "sha256": _script_sha256(),
+            "uptimeS": round(time.time() - _DAEMON_STARTED_AT, 1),
+            "journalBacklog": _quiet(_RETRY.depth, 0),
+        },
+    }
+
+
 # BIMS HTTP helpers -----------------------------------------------------------
 def _bims_headers() -> dict:
     return {"x-agent-api-key": API_KEY, "Content-Type": "application/json"}
 
 
 def _post_event(payload: dict) -> bool:
+    kind = "heartbeat" if payload.get("eventType") == "heartbeat" else "event"
     try:
-        r = requests.post(
-            "{}/api/agent/scanner/event".format(BIMS_BASE_URL),
-            headers=_bims_headers(),
-            data=json.dumps(payload),
-            timeout=10,
-        )
+        r = _bims_post(kind, "{}/api/agent/scanner/event".format(BIMS_BASE_URL), payload, timeout=10)
         if r.status_code >= 400:
             log.warning("event POST %s: %s", r.status_code, r.text[:200])
             return False
@@ -256,17 +688,25 @@ def _claim_triggers(max_n: int = 5) -> list:
 
 def _poll_command() -> Optional[dict]:
     """Long-poll BIMS for the next command. Raises on network failure."""
-    r = requests.post(
-        "{}/api/agent/ot2/poll".format(BIMS_BASE_URL),
-        headers=_bims_headers(),
-        data=json.dumps({"deviceId": BRIDGE_DEVICE_ID, "waitMs": POLL_WAIT_MS}),
-        timeout=POLL_HTTP_TIMEOUT_S,
-    )
+    t0 = time.monotonic()
+    r = _bims_post("poll", "{}/api/agent/ot2/poll".format(BIMS_BASE_URL),
+                   {"deviceId": BRIDGE_DEVICE_ID, "waitMs": POLL_WAIT_MS}, timeout=POLL_HTTP_TIMEOUT_S)
     if r.status_code >= 400:
         log.warning("command poll %s: %s", r.status_code, r.text[:200])
         return None
     body = r.json() or {}
-    return body.get("command")
+    cmd = body.get("command")
+    if cmd is None:
+        # An empty poll was held server-side for ~POLL_WAIT_MS, so what is
+        # left beyond the hold is the real round trip: network + Atlas + any
+        # cold start. The route re-checks every 250 ms and gives up within one
+        # step of its deadline, so the hold is waitMs - 125 ms ± 125 ms. A poll
+        # that returns a command ended at an unknown point in the hold, so it
+        # says nothing about the link and is not measured.
+        with _LINK_LOCK:
+            _LINK_COUNTERS["pollRttMs"] = round(
+                max(0.0, (time.monotonic() - t0) * 1000.0 - (POLL_WAIT_MS - 125)), 1)
+    return cmd
 
 
 def _post_result(command_id: str, payload: dict) -> bool:
@@ -281,7 +721,7 @@ def _post_result(command_id: str, payload: dict) -> bool:
     url = "{}/api/agent/ot2/commands/{}/result".format(BIMS_BASE_URL, command_id)
     for attempt in range(3):
         try:
-            r = requests.post(url, headers=_bims_headers(), data=json.dumps(payload), timeout=10)
+            r = _bims_post("job_result", url, payload, timeout=10)
             if r.status_code < 500:
                 if r.status_code >= 400:
                     # 404/409 = command already terminal (expired) — stop retrying.
@@ -290,6 +730,9 @@ def _post_result(command_id: str, payload: dict) -> bool:
         except Exception as e:
             log.warning("result POST failed (attempt %d): %s", attempt + 1, e)
         time.sleep(2)
+    # Every attempt was a network error or 5xx: queue it for replay after the
+    # next heartbeat that gets through (BIMS de-duplicates results).
+    _RETRY.push("job_result", url, payload)
     return False
 
 
@@ -302,17 +745,20 @@ def _post_progress(command_id: str, payload: dict) -> Tuple[bool, bool]:
         return _report_direct_progress(job, payload)
     url = "{}/api/agent/ot2/commands/{}/progress".format(BIMS_BASE_URL, command_id)
     try:
-        r = requests.post(url, headers=_bims_headers(), data=json.dumps(payload), timeout=10)
+        r = _bims_post("job_progress", url, payload, timeout=10)
         try:
             body = r.json() or {}
         except Exception:
             body = {}
         if r.status_code >= 400:
             log.warning("progress POST %s: %s", r.status_code, r.text[:200])
+            if r.status_code >= 500:
+                _RETRY.push("job_progress", url, payload)
             return bool(body.get("pauseRequested")), bool(body.get("cancelRequested", True))
         return bool(body.get("pauseRequested")), bool(body.get("cancelRequested"))
     except Exception as e:
         log.warning("progress POST failed: %s", e)
+        _RETRY.push("job_progress", url, payload)
         return False, False
 
 
@@ -2019,9 +2465,9 @@ def _report_direct_progress(job: DirectJob, payload: dict) -> Tuple[bool, bool]:
     if BIMS_BASE_URL:
         body = dict(payload)
         body.update({"deviceId": BRIDGE_DEVICE_ID, "kind": job.kind})
+        url = _jobs_url(job.id, "progress")
         try:
-            r = requests.post(_jobs_url(job.id, "progress"), headers=_bims_headers(),
-                              data=json.dumps(body), timeout=10)
+            r = _bims_post("job_progress", url, body, timeout=10)
             try:
                 rb = r.json() or {}
             except Exception:
@@ -2033,11 +2479,14 @@ def _report_direct_progress(job: DirectJob, payload: dict) -> Tuple[bool, bool]:
                 # deployment or down — the browser still drives and can cancel
                 # through /bridge/jobs/<id>/control, so keep scanning.
                 log.warning("job progress POST %s: %s", r.status_code, r.text[:200])
+                if r.status_code >= 500:
+                    _RETRY.push("job_progress", url, body)
                 bims_pause, bims_cancel = bool(rb.get("pauseRequested")), rb.get("cancelRequested") is True
             else:
                 bims_pause, bims_cancel = bool(rb.get("pauseRequested")), bool(rb.get("cancelRequested"))
         except Exception as e:
             log.warning("job progress POST failed: %s", e)
+            _RETRY.push("job_progress", url, body)
     if bims_cancel:
         job.cancel_requested = True
     return (job.pause_requested or bims_pause), (job.cancel_requested or bims_cancel)
@@ -2054,7 +2503,7 @@ def _report_direct_result(job: DirectJob, payload: dict) -> bool:
     url = _jobs_url(job.id, "result")
     for attempt in range(3):
         try:
-            r = requests.post(url, headers=_bims_headers(), data=json.dumps(body), timeout=10)
+            r = _bims_post("job_result", url, body, timeout=10)
             if r.status_code < 500:
                 if r.status_code >= 400:
                     log.warning("job result POST %s for %s: %s", r.status_code, job.id, r.text[:200])
@@ -2062,6 +2511,8 @@ def _report_direct_result(job: DirectJob, payload: dict) -> bool:
         except Exception as e:
             log.warning("job result POST failed (attempt %d): %s", attempt + 1, e)
         time.sleep(2)
+    # Same as _post_result: network error / 5xx throughout → replay later.
+    _RETRY.push("job_result", url, body)
     return False
 
 
@@ -2504,6 +2955,7 @@ class WorkQueue:
         self._cv = threading.Condition()
         self._items = deque()
         self._busy = None  # the item the worker is executing, or None
+        self._busy_since = None  # time.time() the worker took _busy (link telemetry)
 
     def put(self, item: dict) -> int:
         """Append; returns the 1-based position (1 = next to run)."""
@@ -2520,12 +2972,22 @@ class WorkQueue:
                 return None
             item = self._items.popleft()
             self._busy = item
+            self._busy_since = time.time()
             return item
 
     def task_done(self) -> None:
         with self._cv:
             self._busy = None
+            self._busy_since = None
             self._cv.notify_all()
+
+    def link_stats(self) -> dict:
+        """metadata.link.worker: how long the one worker has been on its current
+        item (None = idle) and how many items wait behind it."""
+        with self._cv:
+            since = self._busy_since
+            return {"busyAgeS": (round(time.time() - since, 1) if since is not None else None),
+                    "queueDepth": len(self._items)}
 
     def remove(self, predicate) -> Optional[dict]:
         """Remove (and return) the first WAITING item matching predicate. The
@@ -2638,6 +3100,7 @@ def command_worker_loop(port: ScannerPort, work: WorkQueue, stop: threading.Even
 def command_loop(port: ScannerPort, stop: threading.Event, work: Optional["WorkQueue"] = None) -> None:
     """1.0-compatible entry point: long-poll + one worker over one queue."""
     work = work or WorkQueue()
+    _LINK_WORK["queue"] = work
     poller = threading.Thread(target=command_poll_loop, args=(work, stop), name="command-poll", daemon=True)
     poller.start()
     command_worker_loop(port, work, stop)
@@ -2699,16 +3162,21 @@ def heartbeat_loop(port: ScannerPort, stop: threading.Event) -> None:
                 "engine": engine_health(),
                 "version": VERSION,
                 "serialOpen": port.is_open(),
-                "serialPort": port.port
+                "serialPort": port.port,
+                # OT2-LOG-1: link telemetry; BIMS samples it into robot_link_samples.
+                "link": collect_link_telemetry(),
             }
             # GET /bridge/health answers from this cache — instant, and the
             # same body BIMS sees — instead of re-probing the robot per request.
             _LAST_HEARTBEAT.update({"at": time.time(), "metadata": metadata})
-            _post_event({
+            if _post_event({
                 "deviceId": BRIDGE_DEVICE_ID,
                 "eventType": "heartbeat",
                 "metadata": metadata
-            })
+            }):
+                # A heartbeat got through = the link is back: drain the job
+                # report retry queue (no-op when empty).
+                _RETRY.replay()
         except Exception as e:
             log.warning("heartbeat loop error: %s", e)
         stop.wait(HEARTBEAT_INTERVAL)
@@ -2733,6 +3201,7 @@ def main() -> None:
     signal.signal(signal.SIGINT, _shutdown)
 
     work = WorkQueue()
+    _LINK_WORK["queue"] = work
     threads = [
         threading.Thread(target=command_poll_loop, args=(work, stop), name="command-poll", daemon=True),
         threading.Thread(target=command_worker_loop, args=(port, work, stop), name="command", daemon=True),
