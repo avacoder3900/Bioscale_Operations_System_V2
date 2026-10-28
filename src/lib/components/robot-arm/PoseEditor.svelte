@@ -241,7 +241,7 @@
 	function startLive() {
 		if (!canLive) return;
 		if (!atValues) {
-			note = { text: pose ? 'The arm is not at these values yet — Go to pose first, or start from where the arm is.' : 'Start from where the arm is first.', kind: 'warn' };
+			note = { text: pose ? 'The arm is not at these values yet — Go to pose first, or press Start From Arm.' : 'Press Start From Arm first.', kind: 'warn' };
 			return;
 		}
 		// The arm's goals are the slider values (Go to left them there), so only changes are sent.
@@ -302,7 +302,7 @@
 				<button type="button" class={btn} style={amber} disabled={!canLive} onclick={() => ongoto?.(pose!)}>Go to pose</button>
 			{/if}
 			<button type="button" class={btn} style={green} disabled={!canLive || !atValues} onclick={startLive} title={atValues ? 'Sliders drive the arm' : 'The arm is not at these values'}>Live</button>
-			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!canLive} onclick={startFromArm} title="Set the sliders to where the arm is and go live">start from the arm</button>
+			<button type="button" class={btn} style={cyan} disabled={!canLive} onclick={startFromArm} title="Set the sliders to where the arm is and go live">Start From Arm</button>
 		{/if}
 		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>close</button>{/if}
 		<label class="flex w-full items-center gap-1 text-[11px] sm:w-auto" style="color: var(--color-tron-text-secondary)" title="The green dot above each slider stays on this reference; hover a dot for its number and where the arm really is">
@@ -319,7 +319,7 @@
 		<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>
 	{:else if !live}
 		<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-			{atValues ? 'Press Live, then move a slider — the arm follows.' : pose ? 'Go to pose, then press Live.' : 'Press "start from the arm" to pose from where the arm is.'}
+			{atValues ? 'Press Live, then move a slider — the arm follows.' : pose ? 'Go to pose, then press Live.' : 'Press Start From Arm to pose from where the arm is.'}
 		</p>
 	{/if}
 
