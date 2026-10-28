@@ -23872,3 +23872,20 @@ Deployment: preview — via Vercel GitHub integration on the push (see the PR / 
 Source: branch feat/arm-wax-fill-loop @ the commit titled "docs(progress): arm wax fill pushed as feat/arm-wax-fill-loop" (git log feat/arm-wax-fill-loop --oneline)
 Retrieve this exact code: git checkout feat/arm-wax-fill-loop at that commit
 What this deployment is for: first look at the Robot Arm "Wax fill" tab (setup, locked animations, calibration teach panel, loop driver).
+
+
+================================================================================
+2026-10-28 — master — production deploy of the Robot Arm "Wax fill" tab (07cbc8c0)
+================================================================================
+Alejandro: "push to main". origin/main is a stale June branch; production builds from master, so
+feat/arm-wax-fill-loop was merged into master (--no-ff) in a fresh worktree (Bioscale_V2-wt-arm-wax-fill,
+branch master-arm-wax-merge) because the main checkout holds another session's uncommitted control-page
+work. Only progress.txt conflicted (two appended entries; both kept). svelte-check on the merge: 14 errors /
+435 warnings = baseline, none in touched files.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ commit 07cbc8c0 (merge of feat/arm-wax-fill-loop @ 6b56ee89)
+Retrieve this exact code: git checkout master at commit 07cbc8c0
+What this deployment is for: Robot Arm → Wax fill tab: setup (robot, deck, deck position), grab/withdraw
+animations chosen once and locked, calibration teach panel (scan position, cart location), N-run loop
+driver. Nothing has been played on the arm or run on an OT-2 from this page yet; the arm_cart_x/y/z
+protocol variant and ensure-indexes --apply for arm_wax_fill_runs are still to do.
