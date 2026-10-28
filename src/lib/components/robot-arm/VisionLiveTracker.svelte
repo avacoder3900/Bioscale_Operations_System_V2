@@ -39,9 +39,12 @@
 	const RATE_OPTIONS = [0.5, 1, 2];
 	/** Distinct captures the Pi averages each tag over per answer (2026-10-23). */
 	const FRAME_OPTIONS = [1, 3, 5];
+	/** Consecutive frames the Pi stacks into each image before detecting (2026-10-28): 5 = 1/6 s at 30 fps (what a step check uses, and each of a calibration's 5 detections). */
+	const AVERAGE_OPTIONS = [1, 5, 10, 30];
 
 	let running = $state(false);
 	let frames = $state(1);
+	let average = $state(1);
 	$effect(() => {
 		if (suspended) running = false;
 	});
@@ -87,7 +90,7 @@
 				const t0 = performance.now();
 				if (document.visibilityState === 'visible') {
 					try {
-						const d = await fetchDetections(cam, ctrl.signal, frames);
+						const d = await fetchDetections(cam, ctrl.signal, frames, average);
 						if (stopped) break;
 						det = d;
 						lastAt = Date.now();
@@ -138,8 +141,14 @@
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Frames the Pi averages each tag's corners over before answering. 1 = live; 3 or 5 = steadier numbers for a parked arm (each frame ~0.15 s). The jitter column shows what was averaged away.">
-				frames
+			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Consecutive frames the Pi stacks pixel by pixel into one image before the detector runs. Cuts sensor noise by about the square root of the count for 33 ms per frame at 30 fps and no extra detect. 5 = 1/6 s (what a step check uses; a calibration takes 5 detections of 5-frame stacks). The arm must hold still while the stack is captured.">
+				average
+				<select bind:value={average} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
+					{#each AVERAGE_OPTIONS as f}<option value={f}>{f}</option>{/each}
+				</select>
+			</label>
+			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Separate detections the Pi averages each tag's corners over before answering. 1 = live; 3 or 5 = steadier numbers for a parked arm (each detection ~0.6 s). The jitter column shows what was averaged away.">
+				detections
 				<select bind:value={frames} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
 					{#each FRAME_OPTIONS as f}<option value={f}>{f}</option>{/each}
 				</select>
@@ -250,7 +259,9 @@
 					Tilt is advisory: a square seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle (a "?" marks that coin toss; the pose agreeing with the calibration is used).
 					Distance marked D is the D415's depth: when both the calibration and this frame have a reading for a tag, its pose is slid along its sight line to that depth, so off mm no longer jitters with the tag's size on the picture. Without depth on both sides the tag falls back to the image distance; (brackets) = the unused depth reading.
 					Δdepth is the depth reading now minus at calibration (+ = further away).
-					{#if det?.frameSource}Detected on {det.frameSource === 'raw' ? 'the sensor\'s own pixels' : 'a decoded JPEG (older Pi software)'}{(det.framesUsed ?? 1) > 1 ? `, corners averaged over ${det.framesUsed} frames` : ''}.{/if}
+					{#if det?.frameSource}Detected on {det.frameSource === 'raw' ? 'the sensor\'s own pixels' : 'a decoded JPEG (older Pi software)'}{(det.framesAveraged ?? 1) > 1 ? `, ${det.framesAveraged} frames stacked per image${det.captureMs != null ? ` in ${det.captureMs} ms` : ''}${det.motionLuma != null ? `, motion ${det.motionLuma.toFixed(1)}` : ''}` : ''}{(det.framesUsed ?? 1) > 1 ? `, corners averaged over ${det.framesUsed} detections` : ''}.{/if}
+					{#if average > 1 && det && det.framesAveraged == null}The Pi did not stack frames (its software predates frame stacking).{/if}
+					{#if det?.framesAveraged != null && det.framesAveraged < average}Only {det.framesAveraged} of {average} frames were captured within the Pi's time budget (a slow shutter?).{/if}
 					{#if calibration.intrinsicsSource === 'nominal'}Nominal intrinsics — mm are approximate.{/if}
 				</p>
 			</div>

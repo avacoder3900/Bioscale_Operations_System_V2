@@ -31,7 +31,7 @@
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmPose, RobotArmPoseCalibration, RobotArmVerifiedRun } from '$lib/server/db/models';
 import { robotArm } from './robot-arm-client';
-import { detectTags, listTags, readServos, thumbnail, CALIBRATION_FRAMES, CHECK_FRAMES } from './robot-arm-vision';
+import { detectTags, listTags, readServos, thumbnail, CALIBRATION_FRAMES, CHECK_FRAMES, CALIBRATION_AVERAGE, CHECK_AVERAGE, CALIBRATION_FRAMES_NO_STACK, CHECK_FRAMES_NO_STACK } from './robot-arm-vision';
 import {
 	AnimateError,
 	poseSummary,
@@ -262,8 +262,9 @@ async function armNowIdle(): Promise<ArmNow> {
  * what a run lands, not what the sliders were nudged to.
  *
  *   1. Servos read (steps, load, temperature).
- *   2. One AprilTag detection with the frame, averaged over CALIBRATION_FRAMES
- *      like the home calibration (single frames lose the small arm tags).
+ *   2. One AprilTag detection with the frame, on a CALIBRATION_AVERAGE-frame
+ *      stack averaged over CALIBRATION_FRAMES detections like the home
+ *      calibration (single noisy frames lose the small arm tags).
  *   3. Servos read again; a joint that moved more than the pose tolerance
  *      between the reads means the frame and the encoders disagree — refused.
  *
@@ -293,7 +294,7 @@ export async function calibratePose(
 	const before = await readServos().catch((e) => {
 		throw servoErr(e);
 	});
-	const det = await detectTags(o.cameraName, { includeFrame: true, registry, frames: CALIBRATION_FRAMES });
+	const det = await detectTags(o.cameraName, { includeFrame: true, registry, frames: CALIBRATION_FRAMES, average: CALIBRATION_AVERAGE, framesIfNoStack: CALIBRATION_FRAMES_NO_STACK });
 	if (!det.available) throw new AnimateError(det.reason ?? 'the Pi could not detect tags', 502);
 	if (!det.frame) throw new AnimateError('the Pi did not return the frame it detected on', 502);
 	const servos = await readServos().catch((e) => {
@@ -442,7 +443,7 @@ async function checkAgainst(ref: any, stepName: string, tol: StepTolerances): Pr
 	if (!tags.length) warnings.push('This reference has no tags.');
 	else {
 		try {
-			const det = await detectTags(ref.cameraName, { includeFrame: true, frames: CHECK_FRAMES });
+			const det = await detectTags(ref.cameraName, { includeFrame: true, frames: CHECK_FRAMES, average: CHECK_AVERAGE, framesIfNoStack: CHECK_FRAMES_NO_STACK });
 			if (!det.available) warnings.push(`Camera check skipped: ${det.reason ?? 'no detection'}`);
 			else {
 				if (det.width !== ref.frameWidth || det.height !== ref.frameHeight) warnings.push(`The stream is ${det.width}×${det.height} but the reference was ${ref.frameWidth}×${ref.frameHeight} — retake the reference at the new resolution.`);

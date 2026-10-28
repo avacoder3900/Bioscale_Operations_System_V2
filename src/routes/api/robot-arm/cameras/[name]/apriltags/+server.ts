@@ -8,6 +8,9 @@
  *
  * `?frames=N` (1..10) asks the Pi to average each tag's corners over N
  * distinct captures; each tag then carries `jitterPx` and `framesSeen`.
+ * `?average=N` (1..60) asks it to stack N consecutive frames pixel by pixel
+ * into each image before detecting (2026-10-28); `framesAveraged`,
+ * `captureMs` and `motionLuma` come back with the answer.
  */
 import { error, json } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
@@ -19,9 +22,11 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	const framesRaw = Number(url.searchParams.get('frames') ?? 1);
 	const frames = Number.isFinite(framesRaw) ? Math.max(1, Math.min(10, Math.round(framesRaw))) : 1;
+	const averageRaw = Number(url.searchParams.get('average') ?? 1);
+	const average = Number.isFinite(averageRaw) ? Math.max(1, Math.min(60, Math.round(averageRaw))) : 1;
 
 	try {
-		const r = await detectTags(params.name, { includeFrame: true, frames });
+		const r = await detectTags(params.name, { includeFrame: true, frames, average });
 		return json(
 			{
 				available: r.available,
@@ -33,6 +38,9 @@ export const GET: RequestHandler = async ({ locals, params, url }) => {
 				tags: r.tags,
 				frameSource: r.frameSource,
 				framesUsed: r.framesUsed,
+				framesAveraged: r.framesAveraged,
+				captureMs: r.captureMs,
+				motionLuma: r.motionLuma,
 				frame: r.frame ? `data:image/jpeg;base64,${r.frame.toString('base64')}` : null
 			},
 			{ headers: { 'Cache-Control': 'no-store' } }

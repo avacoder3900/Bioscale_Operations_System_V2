@@ -10,7 +10,8 @@ full pose relative to the camera in millimetres.
 
 Endpoints (auth is applied by app.py when the router is included):
     GET  /cameras/{name}/apriltags          detector + intrinsics status
-    POST /cameras/{name}/apriltags/detect   {tag_sizes_mm?, default_size_mm?, include_frame?, depth?}
+    POST /cameras/{name}/apriltags/detect   {tag_sizes_mm?, default_size_mm?, include_frame?, depth?,
+                                             frames?, average?}
         -> {available, reason, family, detector, frame: {width, height},
             intrinsics: {fx, fy, cx, cy, dist, source},
             tags: [{id, center, corners, size_mm,
@@ -53,6 +54,23 @@ those frames, in pixels) come back per tag, so a caller can see the noise it
 is averaging away. Noise in a stationary tag's corners is the main source of
 pose jitter, so a parked arm (home check, calibration, verified pose) should
 ask for 3-5 frames; a live view keeps 1.
+
+Frame stacking (2026-10-28): `average` (1..60, default 1) averages that many
+DISTINCT consecutive raw frames PIXEL BY PIXEL into one grey image before
+each detection. This is the cheap way to cut sensor noise: the camera's
+read noise falls by sqrt(N) at the cost of N frame intervals (33 ms each at
+30 fps) and no extra detect, where `frames` costs a whole detect (~0.6 s at
+1080p, upscale 2) per frame. The two compose: `average` builds each image,
+`frames` averages the corners found in them. It cannot replace light: a
+long shutter saturates the sensor and no average brings clipped pixels
+back (measured 2026-10-28: gain 0 + 33 ms is the longest exposure that
+keeps the default brightness). The scene must hold still while the stack
+is captured; `motion_luma` (mean |last - first| frame, 0-255) comes back
+so a caller can tell a settled arm from one still moving (a parked scene
+reads under ~1). Capture stops early after AVERAGE_BUDGET_S so a slow
+shutter cannot hang a check; `frames_averaged` says how many frames went
+into each image (the smallest stack when `frames` > 1) and `capture_ms`
+how long the capture took.
 
 Intrinsics, best first:
     1. the RealSense colour stream profile at the frame's resolution (factory
@@ -158,6 +176,8 @@ def _env_float(key: str) -> Optional[float]:
 
 
 UPSCALE = min(4.0, max(1.0, _env_float("APRILTAG_UPSCALE") or 2.0))
+# Longest a frame stack may take to capture (s); a stack cut short reports the frames it got.
+AVERAGE_BUDGET_S = 4.0
 
 
 # ── detector ─────────────────────────────────────────────────────────────
@@ -293,6 +313,35 @@ def _grab(name: str, after_seq: Optional[int] = None, timeout_s: float = 5.0) ->
     return _Grab(img, None, "jpeg", jpeg=jpeg)
 
 
+def _grab_stack(name: str, after_seq: Optional[int], k: int) -> tuple[_Grab, dict]:
+    """``k`` DISTINCT consecutive frames averaged pixel by pixel into one
+    grey image (module doc, "Frame stacking"). The grab carries the LAST
+    frame's seq, source and JPEG; the dict is {frames, capture_ms, motion}.
+    Stops early at AVERAGE_BUDGET_S so a slow shutter cannot hang a check."""
+    t0 = time.monotonic()
+    first = _grab(name, after_seq)
+    if k <= 1:
+        return first, {"frames": 1, "capture_ms": round((time.monotonic() - t0) * 1000), "motion": None}
+    acc = first.gray.astype(np.float32)
+    last = first
+    count = 1
+    while count < k and (time.monotonic() - t0) < AVERAGE_BUDGET_S:
+        left = AVERAGE_BUDGET_S - (time.monotonic() - t0)
+        # seq is None on the loopback-JPEG path; -1 still makes _grab space the snapshots.
+        g = _grab(name, after_seq=last.seq if last.seq is not None else -1, timeout_s=max(0.5, left))
+        if g.gray.shape != acc.shape:
+            raise RuntimeError("the frame size changed while frames were being averaged")
+        acc += g.gray
+        last = g
+        count += 1
+    mean = np.rint(acc / count).clip(0, 255).astype(np.uint8)
+    # Mean |last - first| luma: ~0 for a parked scene; an arm still settling
+    # (or a hand in the picture) pushes it up and smears the stack.
+    motion = float(np.mean(np.abs(last.gray.astype(np.int16) - first.gray.astype(np.int16))))
+    stacked = _Grab(mean, last.seq, last.source, frame=last._frame, jpeg=last._jpeg)
+    return stacked, {"frames": count, "capture_ms": round((time.monotonic() - t0) * 1000), "motion": round(motion, 2)}
+
+
 def _grab_jpeg(name: str) -> bytes:
     key = os.environ.get("ROBOT_ARM_API_KEY", "")
     headers = {"x-api-key": key} if key else {}
@@ -318,6 +367,8 @@ class DetectRequest(BaseModel):
     depth: bool = True
     # Distinct consecutive frames to average each tag's corners over (see module doc).
     frames: int = Field(1, ge=1, le=10)
+    # Distinct consecutive frames averaged pixel by pixel into each image before detecting (see module doc).
+    average: int = Field(1, ge=1, le=60)
 
 
 def _pose(corners, size: float, K, dist):
@@ -408,13 +459,16 @@ def _sample_depth(name: str, found: Dict[int, "np.ndarray"], w: int, h: int, int
 def _detect(name: str, body: DetectRequest) -> dict:
     t0 = time.monotonic()
     n = max(1, int(body.frames or 1))
+    k = max(1, int(body.average or 1))
     per_frame: List[Dict[int, "np.ndarray"]] = []
     depth_per_frame: List[Dict[int, float]] = []
+    stacks: List[dict] = []
     grab: Optional[_Grab] = None
     label = ""
     intr: Optional[dict] = None
     for _ in range(n):
-        grab = _grab(name, after_seq=grab.seq if grab is not None else None)
+        grab, info = _grab_stack(name, grab.seq if grab is not None else None, k)
+        stacks.append(info)
         label, found = _detect_frame(grab.gray)
         per_frame.append(found)
         if intr is None:
@@ -463,6 +517,9 @@ def _detect(name: str, body: DetectRequest) -> dict:
         "frame": {"width": w, "height": h},
         "frame_source": grab.source,
         "frames_used": n,
+        "frames_averaged": min(s["frames"] for s in stacks),
+        "capture_ms": sum(s["capture_ms"] for s in stacks),
+        "motion_luma": max((s["motion"] for s in stacks if s["motion"] is not None), default=None),
         "intrinsics": intr,
         "tags": tags,
         "elapsed_ms": round((time.monotonic() - t0) * 1000),

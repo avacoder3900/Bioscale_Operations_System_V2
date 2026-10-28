@@ -11,7 +11,8 @@
 	 * are set above that jitter.
 	 *
 	 * Same steps as the Vision tab's home calibration: Detect tags previews
-	 * with the frame count Capture uses (CALIBRATION_FRAMES), so what it shows
+	 * with the frame stack Capture uses (CALIBRATION_AVERAGE frames averaged
+	 * pixel by pixel, CALIBRATION_FRAMES detections), so what it shows
 	 * is what Capture will see; Capture and Check average frames like Save
 	 * calibration and the home check do. Tags are registered on the Vision tab.
 	 */
@@ -19,7 +20,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import VisionStage, { type StageTag } from './VisionStage.svelte';
-	import { CALIBRATION_FRAMES } from '$lib/robot-arm/apriltags';
+	import { CALIBRATION_FRAMES, CALIBRATION_AVERAGE } from '$lib/robot-arm/apriltags';
 	import { fetchDetections, type LiveDetection } from '$lib/robot-arm/detect-client';
 	import { friendlyName } from '$lib/robot-arm/animation';
 	import { nearPose, worstOffset, AT_POSE_STEPS, MAX_ANGLE_DEG, MAX_POSITION_MM, MAX_TOLERANCE_STEPS } from '$lib/robot-arm/verified-poses';
@@ -79,7 +80,7 @@
 		detecting = true;
 		detectError = null;
 		try {
-			det = await fetchDetections(camera, undefined, CALIBRATION_FRAMES);
+			det = await fetchDetections(camera, undefined, CALIBRATION_FRAMES, CALIBRATION_AVERAGE);
 			if (!det.available) detectError = det.reason ?? 'The Pi could not detect tags.';
 		} catch (e) {
 			detectError = e instanceof Error ? e.message : 'Detection failed';
@@ -209,7 +210,7 @@
 		{#if note}<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>{/if}
 
 		<div class="mt-3 flex flex-wrap items-center gap-2">
-			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, averaged over the same {CALIBRATION_FRAMES} frames Capture uses">
+			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, the way Capture does: {CALIBRATION_FRAMES} detections, each on a {CALIBRATION_AVERAGE}-frame average (hold the arm still)">
 				{detecting ? 'Detecting…' : det ? 'Detect again' : 'Detect tags'}
 			</button>
 			{#if !atPose}

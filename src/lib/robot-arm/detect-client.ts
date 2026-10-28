@@ -23,17 +23,26 @@ export interface LiveDetection {
 	frame: string | null;
 	/** 'raw' when the Pi detected on the sensor's own pixels, 'jpeg' on an older Pi, null if it did not say. */
 	frameSource: 'raw' | 'jpeg' | null;
-	/** Frames the Pi averaged each tag over. */
+	/** Separate detections the Pi averaged each tag's corners over. */
 	framesUsed: number;
+	/** Frames the Pi stacked into each image before detecting; null on a Pi without frame stacking. */
+	framesAveraged: number | null;
+	/** Time the Pi spent capturing, ms; null on an older Pi. */
+	captureMs: number | null;
+	/** Mean |last - first| luma over the stack (0-255); ~0 when nothing moved. */
+	motionLuma: number | null;
 }
 
 /**
  * @param frames distinct captures the Pi averages each tag's corners over
- *   (1..10). More = steadier numbers, slower answer (~0.15 s per frame).
+ *   (1..10). More = steadier numbers, slower answer (~0.6 s per frame).
+ * @param average consecutive frames the Pi stacks pixel by pixel into each
+ *   image before detecting (1..60, ~33 ms per frame at 30 fps, no extra detect).
  */
-export async function fetchDetections(camera: string, signal?: AbortSignal, frames = 1): Promise<LiveDetection> {
+export async function fetchDetections(camera: string, signal?: AbortSignal, frames = 1, average = 1): Promise<LiveDetection> {
 	const n = Math.max(1, Math.min(10, Math.round(frames)));
-	const q = n > 1 ? `&frames=${n}` : '';
+	const k = Math.max(1, Math.min(60, Math.round(average)));
+	const q = (n > 1 ? `&frames=${n}` : '') + (k > 1 ? `&average=${k}` : '');
 	const res = await fetch(`/api/robot-arm/cameras/${encodeURIComponent(camera)}/apriltags?t=${Date.now()}${q}`, { cache: 'no-store', signal });
 	if (!res.ok) throw new Error(res.status === 502 ? 'Tag detection unavailable — is the arm reachable?' : `Detection failed (${res.status})`);
 	const body = await res.json();
@@ -59,6 +68,9 @@ export async function fetchDetections(camera: string, signal?: AbortSignal, fram
 			: [],
 		frame: body.frame ?? null,
 		frameSource: body.frameSource === 'raw' || body.frameSource === 'jpeg' ? body.frameSource : null,
-		framesUsed: typeof body.framesUsed === 'number' ? body.framesUsed : 1
+		framesUsed: typeof body.framesUsed === 'number' ? body.framesUsed : 1,
+		framesAveraged: typeof body.framesAveraged === 'number' ? body.framesAveraged : null,
+		captureMs: typeof body.captureMs === 'number' ? body.captureMs : null,
+		motionLuma: typeof body.motionLuma === 'number' ? body.motionLuma : null
 	};
 }

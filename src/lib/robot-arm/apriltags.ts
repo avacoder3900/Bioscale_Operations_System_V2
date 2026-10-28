@@ -74,17 +74,29 @@ export interface TagPose {
 }
 
 /**
- * Frames the Pi averages per tag when the arm is PARKED. Corner noise on a
+ * Frames the Pi uses per answer when the arm is PARKED. Corner noise on a
  * stationary tag is the main source of pose jitter (0.1-0.35 px at 1080p,
- * 2026-10-23 baseline), and averaging N frames cuts it by about sqrt(N) at
- * the cost of N detects (~0.15 s each). A calibration is taken once, so it
- * gets the most; a home check runs after every return and gets a little
- * less; the live view keeps 1 so it stays live. A pose reference (ARM-09)
- * uses the same counts as home: capture = CALIBRATION_FRAMES, check =
- * CHECK_FRAMES.
+ * 2026-10-23 baseline) and averaging N frames cuts it by about sqrt(N).
+ * Two ways to average, and they compose:
+ * - `*_AVERAGE` (2026-10-28): frames stacked pixel by pixel into ONE image
+ *   before the detector runs. Costs one frame interval each (33 ms at
+ *   30 fps) and no extra detect, so it is the cheap way to cut sensor noise.
+ * - `*_FRAMES` (2026-10-23): separate detections whose corners are averaged.
+ *   Costs a whole detect each (~0.6 s at 1080p, upscale 2).
+ * A calibration or pose reference is taken once and gets 5 detections of
+ * 5-frame stacks (Alejandro's pick 2026-10-28 from the measured table:
+ * corner sd 0.03 px vs 0.04 unstacked, ~0.8 s of capture + 5 detects); a
+ * check between animation steps gets one detection of a 5-frame stack
+ * (1/6 s) so a move set does not crawl; the live view keeps 1. Stacking
+ * needs the arm to hold still: the Pi reports motion_luma for that.
  */
+export const CALIBRATION_AVERAGE = 5;
+export const CHECK_AVERAGE = 5;
 export const CALIBRATION_FRAMES = 5;
-export const CHECK_FRAMES = 3;
+export const CHECK_FRAMES = 1;
+/** What a Pi WITHOUT frame stacking (before 2026-10-28) is asked for instead: the pre-stacking counts of separate detections. */
+export const CALIBRATION_FRAMES_NO_STACK = 5;
+export const CHECK_FRAMES_NO_STACK = 3;
 
 export type TagRole = 'fixed' | 'arm';
 
