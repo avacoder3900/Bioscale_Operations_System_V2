@@ -697,10 +697,18 @@ export async function startVerifiedRun(user: User, o: { kind: PlayKind; id: stri
 	if (running) throw new AnimateError(`A verified run ("${(running as any).name}") is still marked running — stop it first.`, 409);
 	const src = await resolveSource(o.kind, o.id);
 	if (!src.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
-	const refs = await listPoseCalibrations({ poseIds: [...new Set(src.keyframes.map((k) => k.poseId))], cameraName: o.cameraName });
+	const refs = await listPoseCalibrations({ poseIds: [...new Set(src.keyframes.filter((k) => !k.fire).map((k) => k.poseId))], cameraName: o.cameraName });
 	const refByPose = new Map(refs.map((r) => [r.poseId, r]));
 	const problems: string[] = [];
+	// A fire step holds where the arm is; it is stored with the pose before it
+	// (or the next one when it comes first) so the step record has positions.
+	const holdAt = (index: number): number[] =>
+		[...src.keyframes.slice(0, index)].reverse().find((k) => !k.fire)?.positions ?? src.keyframes.slice(index).find((k) => !k.fire)?.positions ?? [];
 	const steps = src.keyframes.map((k, index) => {
+		if (k.fire) {
+			// Never camera-checked: the trapdoors have no markers. Fired by the Pi inside its chunk's play.
+			return { index, poseId: '', name: k.name, positions: holdAt(index), holdS: k.holdS, durationS: 0, easing: 'linear', verify: false, calibrationId: null, tolerances: null, fire: k.fire };
+		}
 		const ref = refByPose.get(k.poseId) ?? null;
 		const verify = verifyWanted(k.verify, !!ref && !ref.stale);
 		if (verify && !ref) problems.push(`step ${index + 1} "${friendlyName(k.name)}" has no camera reference for ${o.cameraName}`);
@@ -763,14 +771,15 @@ async function endRun(doc: any, status: RunStatus, extra: Record<string, unknown
 
 function chunkKeyframes(doc: any, chunk: Chunk): ResolvedKeyframe[] {
 	return (doc.steps as any[]).slice(chunk.from, chunk.to + 1).map((s) => ({
-		poseId: s.poseId,
+		poseId: s.poseId ?? '',
 		name: s.name,
 		positions: (s.positions ?? []).map(Number),
 		...(Array.isArray(s.target) && s.target.length ? { target: s.target.map(Number) } : {}),
 		holdS: Number(s.holdS ?? 0),
 		durationS: Number(s.durationS ?? 1),
 		easing: s.easing ?? 'ease',
-		...(s.settle === false ? { settle: false } : {})
+		...(s.settle === false ? { settle: false } : {}),
+		...(s.fire?.solenoid ? { fire: { solenoid: s.fire.solenoid, pulseMs: Number(s.fire.pulseMs) } } : {})
 	}));
 }
 

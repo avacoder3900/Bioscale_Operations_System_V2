@@ -17,7 +17,8 @@ const tolerancesSchema = new Schema({ positionMm: Number, angleDeg: Number, step
 const stepSchema = new Schema(
 	{
 		index: { type: Number, required: true },
-		poseId: { type: String, required: true },
+		/** '' on a fire step. */
+		poseId: { type: String, default: '' },
 		name: { type: String, required: true },
 		/** The absolute goals the arm is sent (pose + offsets + trim, as resolved). */
 		positions: { type: [Number], required: true },
@@ -30,7 +31,9 @@ const stepSchema = new Schema(
 		/** Checked by the camera when this step is reached. */
 		verify: { type: Boolean, required: true },
 		calibrationId: { type: String, default: null },
-		tolerances: { type: tolerancesSchema, default: null }
+		tolerances: { type: tolerancesSchema, default: null },
+		/** A fire step (cartridge trapdoor): never verified, fired inside its chunk's play. */
+		fire: { type: new Schema({ solenoid: String, pulseMs: Number }, { _id: false }), default: undefined }
 	},
 	{ _id: false }
 );

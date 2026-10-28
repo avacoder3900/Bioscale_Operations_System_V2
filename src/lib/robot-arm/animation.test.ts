@@ -7,6 +7,10 @@ import {
 	cleanPoseIds,
 	cleanOffsets,
 	composeAnimationJsonl,
+	fireFrames,
+	newFireStep,
+	stepCountLabel,
+	MIN_FIRE_WAIT_S,
 	axisTicks,
 	ease,
 	friendlyName,
@@ -379,5 +383,96 @@ describe('bulkPoseMessage', () => {
 	it('counts and lists what was skipped', () => {
 		expect(bulkPoseMessage('Archived', 1, [])).toBe('Archived 1 pose.');
 		expect(bulkPoseMessage('Deleted', 2, [{ id: 'x', name: 'Used', reason: 'used by move set "Pick"' }])).toBe('Deleted 2 poses. Skipped 1: "Used" (used by move set "Pick").');
+	});
+});
+
+describe('fire steps (cartridge trapdoor solenoids)', () => {
+	function fire(solenoid: 'A' | 'B', o: Partial<ResolvedKeyframe> = {}): ResolvedKeyframe {
+		const k = newFireStep(solenoid);
+		return { ...k, name: `Fire ${solenoid}`, positions: [], ...o };
+	}
+
+	it('holds the arm on the previous pose for the pulse plus the wait, and fires at the start', () => {
+		const p = buildPath([kf('a', A, { holdS: 0.5 }), fire('A', { fire: { solenoid: 'A', pulseMs: 200 }, holdS: 1 }), kf('b', B, { durationS: 2 })], { rateHz: 10 });
+		const m = p.markers.find((x) => x.kind === 'fire')!;
+		expect(m.t).toBe(0.5);
+		expect(m.holdS).toBeCloseTo(1.2);
+		expect(m.positions).toEqual(A);
+		expect(m.fire).toEqual({ solenoid: 'A', pulseMs: 200, pin: 17 });
+		// Still on A until the fire step is over, then 2 s to B.
+		expect(p.goal[Math.round(1.6 * 10)]).toEqual(A);
+		expect(p.durationS).toBeCloseTo(0.5 + 1.2 + 2);
+		expect(p.goal[p.goal.length - 1]).toEqual(B);
+	});
+
+	it('a path that starts with a fire step fires where the arm is, then leads in', () => {
+		const p = buildPath([fire('B'), kf('a', A)], { rateHz: 10, leadIn: { from: B } });
+		expect(p.markers.map((m) => m.kind)).toEqual(['lead-in', 'fire', 'pose']);
+		expect(p.markers[1].positions).toEqual(B);
+		expect(p.markers[1].fire?.pin).toBe(27);
+	});
+
+	it('fire steps only: holds the arm where it is; without the arm there is nowhere to hold', () => {
+		const p = buildPath([fire('A'), fire('B')], { rateHz: 10, leadIn: { from: C } });
+		expect(p.goal.every((g) => g.join() === C.join())).toBe(true);
+		expect(() => buildPath([fire('A')], { rateHz: 10 })).toThrow(/arm's position/);
+	});
+
+	it('writes each fire on its frame, and counts them in the header', () => {
+		const p = buildPath([kf('a', A, { holdS: 1 }), fire('A'), fire('B'), kf('b', B, { durationS: 2 })], { rateHz: 30 });
+		const fires = fireFrames(p);
+		expect(fires.map((f) => [f.solenoid, f.pin, f.ms])).toEqual([['A', 17, 100], ['B', 27, 100]]);
+		// A fires when the pose hold ends; B one pulse + wait later.
+		expect(fires[0].t).toBeCloseTo(1);
+		expect(fires[1].t - fires[0].t).toBeCloseTo(1.1);
+		const out = composeAnimationJsonl(p, { jointNames: ['a', 'b', 'c', 'd', 'e', 'f'], title: 't' });
+		const lines = out.jsonl.trim().split('\n').map((l) => JSON.parse(l));
+		expect(lines[0].fires).toBe(2);
+		expect(out.fires).toBe(2);
+		expect(lines.filter((l) => l.fire).map((l) => l.fire)).toEqual([
+			{ pin: 17, ms: 100, solenoid: 'A' },
+			{ pin: 27, ms: 100, solenoid: 'B' }
+		]);
+	});
+
+	it('no fire steps → no fires field in the header (older recordings unchanged)', () => {
+		const out = composeAnimationJsonl(buildPath([kf('a', A), kf('b', B)]), { jointNames: [], title: 't' });
+		expect(JSON.parse(out.jsonl.split('\n')[0]).fires).toBeUndefined();
+	});
+
+	it('the last pose still settles at the end when fire steps follow it', () => {
+		const p = buildPath([kf('a', A), kf('b', B, { durationS: 2 }), fire('A')], { rateHz: 10 });
+		const flags = settleFrames(p);
+		expect(flags.map((f) => f.pose)).toEqual(['b']);
+		expect(flags[0].frame).toBe(p.goal.length - 1);
+	});
+
+	it('tooFast compares a pose with the pose before it, across fire steps', () => {
+		const far = A.map((v, i) => (i === 0 ? v + 1500 : v));
+		const problems = tooFast([kf('a', A), fire('A'), kf('far', far, { durationS: 0.2 })]);
+		expect(problems.map((p) => p.index)).toEqual([2]);
+	});
+
+	it('sequences: fire steps pass through, and the join runs from the last pose', () => {
+		const flat = flattenSequence([
+			{ name: 'Pick', keyframes: [kf('a', A)], join: { durationS: null, easing: 'ease' } },
+			{ name: 'Drop', keyframes: [fire('A'), fire('B')], join: { durationS: null, easing: 'ease' } },
+			{ name: 'Place', keyframes: [kf('b', B)], join: { durationS: 3, easing: 'linear' } }
+		]);
+		expect(flat.map((k) => k.name)).toEqual(['Pick · a', 'Drop · Fire A', 'Drop · Fire B', 'Place · b']);
+		expect(flat[3]).toMatchObject({ durationS: 3, easing: 'linear', kind: 'join' });
+	});
+
+	it('cleanKeyframes keeps a fire step and refuses one that would put two pulses too close', () => {
+		const [k] = cleanKeyframes([{ fire: { solenoid: 'B', pulseMs: 300 }, holdS: 0.8 }]);
+		expect(k).toEqual({ poseId: '', holdS: 0.8, durationS: 0, easing: 'linear', fire: { solenoid: 'B', pulseMs: 300 } });
+		expect(() => cleanKeyframes([{ fire: { solenoid: 'B', pulseMs: 300 }, holdS: MIN_FIRE_WAIT_S - 0.1 }])).toThrow(/wait/);
+		expect(() => cleanKeyframes([{ fire: { solenoid: 'C', pulseMs: 300 }, holdS: 1 }])).toThrow(/solenoid/);
+		expect(() => cleanKeyframes([{ fire: { solenoid: 'A', pulseMs: 5000 }, holdS: 1 }])).toThrow(/pulse/);
+	});
+
+	it('labels step counts', () => {
+		expect(stepCountLabel([kf('a', A)])).toBe('1 pose');
+		expect(stepCountLabel([kf('a', A), fire('A'), kf('b', B)])).toBe('2 poses · 1 fire');
 	});
 });

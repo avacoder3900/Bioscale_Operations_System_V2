@@ -16,3 +16,22 @@ export function announceBusFree(source: string): void {
 	if (typeof window === 'undefined') return;
 	window.dispatchEvent(new CustomEvent(ARM_BUS_FREE_EVENT, { detail: { source } }));
 }
+
+/**
+ * The background servo poll (servo temperatures + torque, every 10 s) skips a
+ * cycle while the pose editor is sending live slider moves, so the two never
+ * hit the Pi's servo bus at the same moment. PoseEditor sets `sending`.
+ */
+export const liveBus = { sending: false };
+
+/** Each servo poll's torque reading, for the Torque row (null: the servos did not answer). */
+export const ARM_SERVOS_EVENT = 'robot-arm:servos';
+
+export interface ArmServosDetail {
+	servos: { id: number; torque: boolean | null }[] | null;
+}
+
+export function announceServos(detail: ArmServosDetail): void {
+	if (typeof window === 'undefined') return;
+	window.dispatchEvent(new CustomEvent(ARM_SERVOS_EVENT, { detail }));
+}

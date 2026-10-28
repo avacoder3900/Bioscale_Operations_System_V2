@@ -27,6 +27,8 @@
  *   POST /servos/hold            goal := present, torque ON (no jump) — hold.py, if installed
  *   POST /recordings/restore     write the rendered path
  *   POST /replay/start           play it
+ *   GET  /gpio/status            before a path with fire steps: can this Pi's replay fire?
+ *   POST /gpio/pulse             Test fire from the editor
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
@@ -44,6 +46,7 @@ import {
 	planPoseDelete,
 	type PoseSkip,
 	composeAnimationJsonl,
+	fireFrames,
 	flattenSequence,
 	heatCheck,
 	isEasing,
@@ -51,9 +54,15 @@ import {
 	keyframePositions,
 	nextTrim,
 	pathStats,
+	solenoidLabel,
+	solenoidPin,
 	tooFast,
 	trimFromSettle,
 	DEFAULT_RATE_HZ,
+	MAX_PULSE_MS,
+	MIN_PULSE_MS,
+	type Solenoid,
+	type SolenoidStatus,
 	ENCODER_MAX,
 	JOG_CHUNK_STEPS,
 	MAX_OFFSET_STEPS,
@@ -632,7 +641,7 @@ export async function deleteArchivedPoses(user: User, rawIds: unknown[]): Promis
 	const plan = planPoseDelete(
 		ids,
 		docs.map((d) => ({ _id: String(d._id), name: d.name, archived: !!d.archivedAt })),
-		sets.map((s) => ({ name: s.name, poseIds: (s.keyframes ?? []).map((k: any) => String(k.poseId)) }))
+		sets.map((s) => ({ name: s.name, poseIds: (s.keyframes ?? []).map((k: any) => String(k.poseId ?? '')).filter(Boolean) }))
 	);
 	const byId = new Map(docs.map((d) => [String(d._id), d]));
 	const out: PoseBulkResult = { done: [], skipped: plan.skipped };
@@ -911,9 +920,19 @@ function moveSetSummary(d: any): MoveSetSummary {
 		name: d.name,
 		notes: d.notes ?? null,
 		keyframes: (d.keyframes ?? []).map((k: any): Keyframe => {
+			if (k.fire?.solenoid) {
+				return { poseId: '', holdS: Number(k.holdS ?? 0), durationS: 0, easing: 'linear', fire: { solenoid: k.fire.solenoid, pulseMs: Number(k.fire.pulseMs) } };
+			}
 			const out: Keyframe = { poseId: String(k.poseId), holdS: Number(k.holdS ?? 0), durationS: Number(k.durationS ?? 1), easing: isEasing(k.easing) ? k.easing : 'ease' };
 			const offsets = cleanOffsets(k.offsets, MAX_OFFSET_STEPS);
 			if (offsets) out.offsets = offsets;
+			// Kept so the editor round-trips them (they were dropped here before 2026-10-28,
+			// so a save from the editor cleared a step's verify / tolerances).
+			if (k.verify === true || k.verify === false) out.verify = k.verify;
+			if (k.tolerances) {
+				const t = { positionMm: k.tolerances.positionMm ?? null, angleDeg: k.tolerances.angleDeg ?? null, steps: k.tolerances.steps ?? null };
+				if (t.positionMm != null || t.angleDeg != null || t.steps != null) out.tolerances = t;
+			}
 			return out;
 		}),
 		rateHz: Number(d.rateHz) || DEFAULT_RATE_HZ,
@@ -955,11 +974,17 @@ export async function updateMoveSet(user: User, id: string, input: { name: unkno
 	} catch (e) {
 		throw new AnimateError((e as Error).message);
 	}
-	const poseIds = [...new Set(keyframes.map((k) => k.poseId))];
+	const poseIds = [...new Set(keyframes.filter((k) => !k.fire).map((k) => k.poseId))];
 	const found = await RobotArmPose.find({ _id: { $in: poseIds } }).select('_id').lean();
 	if (found.length !== poseIds.length) throw new AnimateError('A keyframe refers to a pose that no longer exists — reload the page.');
 	await RobotArmMoveSet.updateOne({ _id: id }, { $set: { name, notes: cleanNotes(input.notes), keyframes, updatedBy: opRef(user) } });
-	await audit(user, 'robot_arm.animate.move_set_update', 'robot_arm_move_sets', id, { name, keyframes: keyframes.length, before: { name: before.name, keyframes: before.keyframes?.length ?? 0 } });
+	const fires = keyframes.filter((k) => k.fire).map((k) => ({ solenoid: k.fire!.solenoid, pulseMs: k.fire!.pulseMs, waitS: k.holdS }));
+	await audit(user, 'robot_arm.animate.move_set_update', 'robot_arm_move_sets', id, {
+		name,
+		keyframes: keyframes.length,
+		...(fires.length ? { fires } : {}),
+		before: { name: before.name, keyframes: before.keyframes?.length ?? 0 }
+	});
 	return moveSetSummary(await RobotArmMoveSet.findById(id).lean());
 }
 
@@ -981,20 +1006,30 @@ export async function setMoveSetArchived(user: User, id: string, archived: boole
  */
 export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseSummary>, samples: TrimSample[] = []): ResolvedKeyframe[] {
 	const estimates = new Map<string, number[] | null>();
-	return keyframes.map((k, i) => {
-		const p = poses.get(k.poseId);
-		if (!p) throw new AnimateError(`Keyframe ${i + 1} refers to a pose that no longer exists.`);
-		// A goal pose is played exactly as set: no trim, and the Pi must not settle it.
-		if (p.basis === 'goal') return { ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets), settle: false };
-		let trim = p.trim;
-		if (!trim) {
-			if (!estimates.has(p._id)) estimates.set(p._id, estimateTrim(p.positions, samples));
-			trim = estimates.get(p._id) ?? null;
-		}
-		const target = keyframePositions(p.positions, k.offsets);
-		const positions = keyframePositions(p.positions, k.offsets, trim);
-		return { ...k, name: p.name, positions, ...(trim ? { target } : {}) };
+	// A fire step's positions are where the arm holds while it fires (the pose
+	// before it; [] when it comes first — buildPath works that out from the arm).
+	let here: number[] = [];
+	return keyframes.map((k, i): ResolvedKeyframe => {
+		if (k.fire) return { ...k, name: `Fire ${solenoidLabel(k.fire.solenoid)}`, positions: here };
+		const r = resolvePoseKeyframe(k, i, poses, samples, estimates);
+		here = r.positions;
+		return r;
 	});
+}
+
+function resolvePoseKeyframe(k: Keyframe, i: number, poses: Map<string, PoseSummary>, samples: TrimSample[], estimates: Map<string, number[] | null>): ResolvedKeyframe {
+	const p = poses.get(k.poseId);
+	if (!p) throw new AnimateError(`Keyframe ${i + 1} refers to a pose that no longer exists.`);
+	// A goal pose is played exactly as set: no trim, and the Pi must not settle it.
+	if (p.basis === 'goal') return { ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets), settle: false };
+	let trim = p.trim;
+	if (!trim) {
+		if (!estimates.has(p._id)) estimates.set(p._id, estimateTrim(p.positions, samples));
+		trim = estimates.get(p._id) ?? null;
+	}
+	const target = keyframePositions(p.positions, k.offsets);
+	const positions = keyframePositions(p.positions, k.offsets, trim);
+	return { ...k, name: p.name, positions, ...(trim ? { target } : {}) };
 }
 
 async function posesById(ids: string[]): Promise<Map<string, PoseSummary>> {
@@ -1005,7 +1040,7 @@ async function posesById(ids: string[]): Promise<Map<string, PoseSummary>> {
 export async function resolveMoveSet(id: string): Promise<{ summary: MoveSetSummary; keyframes: ResolvedKeyframe[] }> {
 	const summary = await getMoveSet(id);
 	if (!summary) throw new AnimateError('Move set not found.', 404);
-	const [poses, samples] = await Promise.all([posesById(summary.keyframes.map((k) => k.poseId)), trimSamples()]);
+	const [poses, samples] = await Promise.all([posesById(summary.keyframes.filter((k) => !k.fire).map((k) => k.poseId)), trimSamples()]);
 	return { summary, keyframes: resolveKeyframes(summary.keyframes, poses, samples) };
 }
 
@@ -1111,7 +1146,7 @@ export async function resolveSequence(id: string): Promise<{ summary: SequenceSu
 	if (!summary) throw new AnimateError('Sequence not found.', 404);
 	const sets = (await RobotArmMoveSet.find({ _id: { $in: summary.items.map((i) => i.moveSetId) } }).lean()) as any[];
 	const byId = new Map(sets.map((d) => [String(d._id), moveSetSummary(d)]));
-	const [poses, samples] = await Promise.all([posesById(sets.flatMap((d) => (d.keyframes ?? []).map((k: any) => String(k.poseId)))), trimSamples()]);
+	const [poses, samples] = await Promise.all([posesById(sets.flatMap((d) => (d.keyframes ?? []).map((k: any) => String(k.poseId ?? '')).filter(Boolean))), trimSamples()]);
 	const items: SequenceItem[] = summary.items.map((it, i) => {
 		const ms = byId.get(it.moveSetId);
 		if (!ms) throw new AnimateError(`Item ${i + 1} refers to a move set that no longer exists.`);
@@ -1155,9 +1190,12 @@ export async function writeAndPlay(
 ): Promise<PlayResult> {
 	if (!o.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
 	await requireIdle();
+	const fireSteps = o.keyframes.filter((k) => k.fire);
+	const gpio = fireSteps.length ? await requireReplayFire() : null;
 	const now = await readArm();
 	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
 	const warnings: string[] = requireCool(now);
+	if (gpio?.simulated) warnings.push('The Pi has no GPIO right now (simulated): the fire steps are timed but nothing is driven.');
 	const path = render(o.keyframes, now.positions, o.rateHz);
 	const stats = pathStats(path);
 	if (stats.tooFast.length) throw new AnimateError(`Servo(s) ${stats.tooFast.join(', ')} would move faster than the arm can — lengthen the transitions marked too fast.`);
@@ -1196,9 +1234,10 @@ export async function writeAndPlay(
 		const msg = (err as Error).message ?? String(err);
 		throw new AnimateError(msg.includes('409') ? `The Pi refused to start: ${msg}` : `Replay did not start: ${msg}`, 502);
 	}
-	// Where the play leaves the arm, so the page can settle it there afterwards (afterPlay).
-	const last = o.keyframes[o.keyframes.length - 1];
-	const end = { poseId: last.poseId, target: last.target ?? last.positions };
+	// Where the play leaves the arm, so the page can settle it there afterwards
+	// (afterPlay): the last pose — fire steps after it do not move the arm.
+	const last = [...o.keyframes].reverse().find((k) => !k.fire);
+	const end = last ? { poseId: last.poseId, target: last.target ?? last.positions } : { poseId: '', target: [] as number[] };
 	if (o.lastPlay !== false) await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
 	await audit(user, o.auditAction ?? (o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`), PLAY_TABLE[o.kind], o.id, {
 		...(o.auditExtra ?? {}),
@@ -1208,9 +1247,69 @@ export async function writeAndPlay(
 		frames: out.frames,
 		from: now.positions,
 		temps: now.temps,
-		maxStepsPerS: stats.maxStepsPerS
+		maxStepsPerS: stats.maxStepsPerS,
+		...(out.fires ? { fires: fireFrames(path).map((f) => ({ t: f.t, solenoid: f.solenoid, pin: f.pin, ms: f.ms })), gpioSimulated: !!gpio?.simulated } : {})
 	});
 	return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
+}
+
+/**
+ * A path with fire steps plays only on a Pi whose replay fires them: an older
+ * replay would ignore the `fire` frames and play the arm without a single
+ * trapdoor opening, which is worse than refusing. replay_fire comes from
+ * GET /gpio/status (services/robot-arm gpio.py, set by replay_settle.install).
+ */
+async function requireReplayFire(): Promise<{ simulated: boolean }> {
+	let s: { replay_fire?: boolean; simulated?: boolean };
+	try {
+		s = await robotArm.gpioStatus();
+	} catch (err) {
+		const msg = (err as Error).message ?? String(err);
+		if (/robot-arm 404/.test(msg)) throw new AnimateError('This move set fires solenoids, but the arm Pi has no GPIO routes. Install the solenoid module on the Pi first.', 409);
+		throw new AnimateError(`Could not check the Pi's solenoids before playing: ${msg}`, 502);
+	}
+	if (!s.replay_fire) throw new AnimateError("This move set fires solenoids, but the arm Pi's replay cannot fire them yet. Update replay_settle.py and gpio.py on the Pi and restart robot-arm.", 409);
+	return { simulated: !!s.simulated };
+}
+
+/** Solenoid status for the Animate pages (null when the Pi or its GPIO routes are not there). */
+export async function solenoidStatus(): Promise<SolenoidStatus | null> {
+	try {
+		const s = await robotArm.gpioStatus();
+		return { pins: s.pins ?? {}, simulated: !!s.simulated, busy: !!s.busy, replayFire: !!s.replay_fire };
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Test fire one solenoid from the Animate pages (the editor's Test fire, the
+ * Solenoids card). Same Pi route and audit table as the Control tab's buttons.
+ * Allowed while the arm plays, like the Control tab: the Pi's lock still
+ * refuses a pulse while another is on, so both trapdoors never open at once.
+ */
+export async function testFire(user: User, solenoid: Solenoid, pulseMs: number): Promise<{ simulated: boolean; elapsedMs: number }> {
+	if (!Number.isFinite(pulseMs) || pulseMs < MIN_PULSE_MS || pulseMs > MAX_PULSE_MS) throw new AnimateError(`The pulse must be ${MIN_PULSE_MS}–${MAX_PULSE_MS} ms.`);
+	const pin = solenoidPin(solenoid);
+	let r;
+	try {
+		r = await robotArm.pulseGpio({ pin, ms: Math.round(pulseMs) });
+	} catch (err) {
+		const msg = (err as Error).message ?? String(err);
+		if (/robot-arm 409/.test(msg)) throw new AnimateError('A solenoid is already firing on the Pi — wait for it to finish.', 409);
+		if (/robot-arm 404/.test(msg)) throw new AnimateError('The arm Pi has no GPIO routes yet.', 409);
+		throw new AnimateError(`Fire failed: ${msg}`, 502);
+	}
+	await connectDB();
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'robot_arm_gpio',
+		recordId: 'robot-arm-pi',
+		action: 'robot_arm.gpio.pulse',
+		newData: { pin, solenoid, ms: Math.round(pulseMs), simulated: r.simulated, from: 'animate', userId: user._id },
+		changedBy: user.username
+	});
+	return { simulated: !!r.simulated, elapsedMs: r.elapsed_ms ?? Math.round(pulseMs) };
 }
 
 /** The Pi's absolute path for a recording it just accepted; a clear error when it cannot see it. */

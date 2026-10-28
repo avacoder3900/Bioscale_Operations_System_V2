@@ -21,6 +21,15 @@ Safety rules, enforced here regardless of what the caller sends:
     carry two inrushes at once (bench finding, 2026-10-15).
   * Pulses use asyncio.sleep, never time.sleep, so the 30 Hz teleop thread and
     the webhook drainer are never blocked.
+  * One coil at a time, across EVERY caller (2026-10-28): the REST routes and
+    the replay's fire timer (BIMS Animate fire steps, replay_settle.py) share
+    _coil_lock, a threading.Lock. The asyncio lock alone could not see the
+    replay thread, and both trapdoors open together drops the whole cartridge
+    stack. REST callers get 409 while it is held; the replay waits its turn.
+
+Replay fire steps: replay_settle.install() sets REPLAY_FIRE_SUPPORTED, and
+GET /gpio/status reports it as replay_fire, so BIMS refuses to play a path
+with fire steps on a Pi whose replay would silently skip them.
 
 Hardware access goes through gpiozero (lgpio backend on Pi 5 / Bookworm). If
 gpiozero or the pin factory is unavailable (dev laptop, CI), the module runs
@@ -34,6 +43,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import threading
 import time
 from typing import Dict, List, Optional
 
@@ -151,6 +161,10 @@ class _Backend:
 
 _backend = _Backend()
 _lock = asyncio.Lock()
+#: Held while ANY coil is energised, by any caller (REST or the replay thread).
+_coil_lock = threading.Lock()
+#: Set by replay_settle.install(): the replay fires `fire` frames.
+REPLAY_FIRE_SUPPORTED = False
 
 
 def all_off() -> None:
@@ -176,12 +190,47 @@ def _check_ms(ms: int) -> None:
 
 
 async def _pulse_locked(pin: int, ms: int) -> None:
-    """Drive one pin high for ms, then low. Caller holds _lock."""
+    """Drive one pin high for ms, then low. Caller holds _lock and _coil_lock."""
     _backend.on(pin)
     try:
         await asyncio.sleep(ms / 1000.0)
     finally:
         _backend.off(pin)
+
+
+def _coil_busy() -> HTTPException:
+    return HTTPException(status_code=409, detail="a solenoid pulse is already in progress")
+
+
+def pulse_blocking(pin: int, ms: int, stop_event: Optional[threading.Event] = None, wait_s: float = 3.0) -> dict:
+    """Pulse one pin from a worker thread (the replay's fire timer).
+
+    Waits up to wait_s for any other pulse to finish (never overlaps one),
+    then drives the pin for ms. A set stop_event ends the pulse early. The
+    pin is always driven low again. Returns what happened; never raises for
+    a busy lock or a bad request, so a replay is never killed by a trapdoor.
+    """
+    if pin not in ALLOWED_PINS:
+        return {"ok": False, "pin": pin, "ms": ms, "error": f"pin must be one of {ALLOWED_PINS}"}
+    if not (MIN_PULSE_MS <= ms <= MAX_PULSE_MS):
+        return {"ok": False, "pin": pin, "ms": ms, "error": f"ms must be {MIN_PULSE_MS}..{MAX_PULSE_MS}"}
+    if not _coil_lock.acquire(timeout=wait_s):
+        return {"ok": False, "pin": pin, "ms": ms, "error": "another solenoid pulse did not finish in time"}
+    t0 = time.monotonic()
+    try:
+        _backend.on(pin)
+        try:
+            if stop_event is not None:
+                stop_event.wait(ms / 1000.0)
+            else:
+                time.sleep(ms / 1000.0)
+        finally:
+            _backend.off(pin)
+    except Exception as exc:  # hardware error: report it, the replay goes on
+        return {"ok": False, "pin": pin, "ms": ms, "error": str(exc), "simulated": _backend.simulated}
+    finally:
+        _coil_lock.release()
+    return {"ok": True, "pin": pin, "ms": ms, "simulated": _backend.simulated, "elapsed_ms": int((time.monotonic() - t0) * 1000)}
 
 
 # ---------------------------------------------------------------- models
@@ -206,7 +255,8 @@ async def gpio_status() -> dict:
         "allowed_pins": ALLOWED_PINS,
         "max_pulse_ms": MAX_PULSE_MS,
         "simulated": _backend.simulated,
-        "busy": _lock.locked(),
+        "busy": _lock.locked() or _coil_lock.locked(),
+        "replay_fire": REPLAY_FIRE_SUPPORTED,
     }
 
 
@@ -214,11 +264,16 @@ async def gpio_status() -> dict:
 async def gpio_pulse(req: PulseRequest) -> dict:
     _check_pin(req.pin)
     _check_ms(req.ms)
-    if _lock.locked():
-        raise HTTPException(status_code=409, detail="a solenoid pulse is already in progress")
+    if _lock.locked() or _coil_lock.locked():
+        raise _coil_busy()
     t0 = time.monotonic()
     async with _lock:
-        await _pulse_locked(req.pin, req.ms)
+        if not _coil_lock.acquire(blocking=False):
+            raise _coil_busy()
+        try:
+            await _pulse_locked(req.pin, req.ms)
+        finally:
+            _coil_lock.release()
     return {
         "pins": [req.pin],
         "ms": req.ms,
@@ -232,14 +287,19 @@ async def gpio_sequence(req: SequenceRequest) -> dict:
     for p in req.pins:
         _check_pin(p)
     _check_ms(req.ms)
-    if _lock.locked():
-        raise HTTPException(status_code=409, detail="a solenoid pulse is already in progress")
+    if _lock.locked() or _coil_lock.locked():
+        raise _coil_busy()
     t0 = time.monotonic()
     async with _lock:
-        for i, p in enumerate(req.pins):
-            if i > 0 and req.gap_ms > 0:
-                await asyncio.sleep(req.gap_ms / 1000.0)
-            await _pulse_locked(p, req.ms)
+        if not _coil_lock.acquire(blocking=False):
+            raise _coil_busy()
+        try:
+            for i, p in enumerate(req.pins):
+                if i > 0 and req.gap_ms > 0:
+                    await asyncio.sleep(req.gap_ms / 1000.0)
+                await _pulse_locked(p, req.ms)
+        finally:
+            _coil_lock.release()
     return {
         "pins": list(req.pins),
         "ms": req.ms,

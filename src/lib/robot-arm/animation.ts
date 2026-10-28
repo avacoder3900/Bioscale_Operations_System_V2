@@ -23,6 +23,12 @@
  *            flows; otherwise the pose is a stop.
  *
  * Positions are encoder steps, servo ids 1..6 at array index 0..5.
+ *
+ * Fire steps (2026-10-28): a move set step can fire one of the cartridge
+ * trapdoor solenoids instead of moving. The arm holds where it is for the
+ * pulse plus the wait after it, then the next step runs. The Pi fires it from
+ * the recording on a timer of its own (services/robot-arm replay_settle.py),
+ * so the trapdoors keep their timing whatever the arm's settle pass is doing.
  */
 import { cleanToleranceOverride } from './verified-poses';
 
@@ -64,6 +70,121 @@ export const MAX_OFFSET_STEPS = 1000;
  * first frame of a saved recording past Control's ±50-step replay preflight.
  */
 export const MAX_TRIM_STEPS = 50;
+
+// ── solenoids (cartridge trapdoors) ──────────────────────────────────────
+
+export type Solenoid = 'A' | 'B';
+
+/**
+ * The two trapdoor solenoids on the arm Pi's GPIO (BCM numbers, as in
+ * ~/solenoid.py and the Pi's SOLENOID_GPIO_PINS). Drop order: A first.
+ */
+export const SOLENOIDS: { id: Solenoid; pin: number; label: string }[] = [
+	{ id: 'A', pin: 17, label: 'Solenoid A' },
+	{ id: 'B', pin: 27, label: 'Solenoid B' }
+];
+/** Pulse range matches the Control tab's buttons (the Pi caps at 2000); default 100 ms (user, 2026-10-28). */
+export const DEFAULT_PULSE_MS = 100;
+export const MIN_PULSE_MS = 20;
+export const MAX_PULSE_MS = 2000;
+/**
+ * The wait after a pulse before the next step. Never shorter than this, so two
+ * fire steps in a row are always apart (both trapdoors open at once would drop
+ * the whole stack) — the same 0.5 s gap as the Control tab's sequence button.
+ */
+export const MIN_FIRE_WAIT_S = 0.5;
+export const DEFAULT_FIRE_WAIT_S = 1;
+
+/** The Pi's solenoid state as the Animate pages show it (GET /gpio/status). */
+export interface SolenoidStatus {
+	pins: Record<string, { state: number }>;
+	simulated: boolean;
+	busy: boolean;
+	/** The Pi's replay fires `fire` frames; false on a Pi without the 2026-10-28 replay. */
+	replayFire: boolean;
+}
+
+/** A fire step's solenoid and pulse; the wait after it is the step's holdS. */
+export interface FireSpec {
+	solenoid: Solenoid;
+	pulseMs: number;
+}
+
+export function isSolenoid(v: unknown): v is Solenoid {
+	return v === 'A' || v === 'B';
+}
+
+export function solenoidPin(s: Solenoid): number {
+	return SOLENOIDS.find((x) => x.id === s)!.pin;
+}
+
+export function solenoidLabel(s: Solenoid): string {
+	return SOLENOIDS.find((x) => x.id === s)!.label;
+}
+
+/** How long a fire step holds the arm: the pulse, then the wait. */
+export function fireStepS(k: { holdS: number; fire?: FireSpec }): number {
+	return k.fire ? k.fire.pulseMs / 1000 + k.holdS : 0;
+}
+
+/** A fresh fire step, as the editor adds it. */
+export function newFireStep(solenoid: Solenoid = 'A'): Keyframe {
+	return { poseId: '', holdS: DEFAULT_FIRE_WAIT_S, durationS: 0, easing: 'linear', fire: { solenoid, pulseMs: DEFAULT_PULSE_MS } };
+}
+
+/** How many pose steps and fire steps a step list has. */
+export function stepCounts(kfs: { fire?: FireSpec }[]): { poses: number; fires: number } {
+	const fires = kfs.filter((k) => k.fire).length;
+	return { poses: kfs.length - fires, fires };
+}
+
+/** "3 poses" or "3 poses · 1 fire". */
+export function stepCountLabel(kfs: { fire?: FireSpec }[]): string {
+	const c = stepCounts(kfs);
+	const poses = `${c.poses} pose${c.poses === 1 ? '' : 's'}`;
+	return c.fires ? `${poses} · ${c.fires} fire${c.fires === 1 ? '' : 's'}` : poses;
+}
+
+/**
+ * Steps → resolved keyframes for the editors' previews (no droop trim): a
+ * fire step keeps positions [] (buildPath holds it where the arm is). Null
+ * when a pose is missing. `offsets` false leaves timeline offsets out.
+ */
+export function resolveForPreview(
+	kfs: Keyframe[],
+	poseById: Map<string, { name: string; positions: number[] }>,
+	o: { offsets?: boolean } = {}
+): ResolvedKeyframe[] | null {
+	const out: ResolvedKeyframe[] = [];
+	for (const k of kfs) {
+		if (k.fire) {
+			out.push({ ...k, name: `Fire ${solenoidLabel(k.fire.solenoid)}`, positions: [] });
+			continue;
+		}
+		const p = poseById.get(k.poseId);
+		if (!p) return null;
+		out.push({ ...k, name: p.name, positions: o.offsets === false ? p.positions : keyframePositions(p.positions, k.offsets) });
+	}
+	return out;
+}
+
+/**
+ * The path an editor draws. A list of only fire steps has no pose to hold, so
+ * it is drawn at a stand-in position (only its timing matters on screen).
+ */
+export function previewPath(kfs: ResolvedKeyframe[], rateHz: number = DEFAULT_RATE_HZ): RenderedPath {
+	const anyPose = kfs.some((k) => !k.fire);
+	return buildPath(kfs, { rateHz, leadIn: anyPose ? null : { from: new Array(SERVO_COUNT).fill(2048) } });
+}
+
+/** First / last pose step (fire steps do not move the arm). */
+export function firstPose<T extends { fire?: FireSpec }>(kfs: T[]): T | null {
+	return kfs.find((k) => !k.fire) ?? null;
+}
+export function lastPose<T extends { fire?: FireSpec }>(kfs: T[]): T | null {
+	for (let i = kfs.length - 1; i >= 0; i--) if (!kfs[i].fire) return kfs[i];
+	return null;
+}
 
 // ── jog ──────────────────────────────────────────────────────────────────
 
@@ -108,6 +229,11 @@ export interface Keyframe {
 	verify?: boolean;
 	/** ARM-09: this step's tolerances on top of the pose reference's. */
 	tolerances?: { positionMm?: number | null; angleDeg?: number | null; steps?: number | null };
+	/**
+	 * Present: this step FIRES a solenoid instead of moving. poseId is '' and
+	 * holdS is the wait after the pulse; durationS and easing are unused.
+	 */
+	fire?: FireSpec;
 }
 
 export interface ResolvedKeyframe extends Keyframe {
@@ -126,7 +252,7 @@ export interface ResolvedKeyframe extends Keyframe {
 	settle?: boolean;
 }
 
-export type MarkerKind = 'pose' | 'lead-in' | 'join';
+export type MarkerKind = 'pose' | 'lead-in' | 'join' | 'fire';
 
 export interface PathMarker {
 	/** When the arm arrives at this pose. */
@@ -144,6 +270,8 @@ export interface PathMarker {
 	target?: number[];
 	/** false = a goal pose; the Pi must not settle here (ResolvedKeyframe.settle). */
 	settle?: boolean;
+	/** kind 'fire': the solenoid fired at `t` (holdS is pulse + wait). */
+	fire?: FireSpec & { pin: number };
 }
 
 export interface RenderedPath {
@@ -240,6 +368,7 @@ export function cleanKeyframes(input: unknown): Keyframe[] {
 	if (!Array.isArray(input)) throw new Error('keyframes must be a list');
 	if (input.length > MAX_KEYFRAMES) throw new Error(`at most ${MAX_KEYFRAMES} keyframes`);
 	return input.map((k: any, i) => {
+		if (k?.fire) return cleanFireStep(k, i);
 		const poseId = String(k?.poseId ?? '').trim();
 		if (!poseId) throw new Error(`keyframe ${i + 1}: no pose`);
 		const holdS = Number(k?.holdS ?? 0);
@@ -256,6 +385,18 @@ export function cleanKeyframes(input: unknown): Keyframe[] {
 		if (tol) out.tolerances = tol;
 		return out;
 	});
+}
+
+function cleanFireStep(k: any, i: number): Keyframe {
+	const solenoid = k.fire?.solenoid;
+	if (!isSolenoid(solenoid)) throw new Error(`step ${i + 1}: pick solenoid A or B`);
+	const pulseMs = Math.round(Number(k.fire?.pulseMs ?? DEFAULT_PULSE_MS));
+	if (!Number.isFinite(pulseMs) || pulseMs < MIN_PULSE_MS || pulseMs > MAX_PULSE_MS)
+		throw new Error(`step ${i + 1}: the pulse must be ${MIN_PULSE_MS}–${MAX_PULSE_MS} ms`);
+	const waitS = Number(k.holdS ?? DEFAULT_FIRE_WAIT_S);
+	if (!Number.isFinite(waitS) || waitS < MIN_FIRE_WAIT_S || waitS > MAX_HOLD_S)
+		throw new Error(`step ${i + 1}: the wait after firing must be ${MIN_FIRE_WAIT_S}–${MAX_HOLD_S} s`);
+	return { poseId: '', holdS: roundTenth(waitS), durationS: 0, easing: 'linear', fire: { solenoid, pulseMs } };
 }
 
 /**
@@ -359,10 +500,16 @@ export interface KeyframeProblem {
 /** Transitions that are faster than the arm can go. */
 export function tooFast(kfs: ResolvedKeyframe[]): KeyframeProblem[] {
 	const out: KeyframeProblem[] = [];
-	for (let i = 1; i < kfs.length; i++) {
-		const min = minDurationS(kfs[i - 1].positions, kfs[i].positions, MAX_STEPS_PER_S, kfs[i].easing);
-		if (kfs[i].durationS < min) out.push({ index: i, message: `${kfs[i].name}: ${kfs[i].durationS} s is too fast for this move — at least ${min} s.` });
-	}
+	// Fire steps do not move the arm: each pose is compared with the pose before it.
+	let prev: ResolvedKeyframe | null = null;
+	kfs.forEach((k, i) => {
+		if (k.fire) return;
+		if (prev) {
+			const min = minDurationS(prev.positions, k.positions, MAX_STEPS_PER_S, k.easing);
+			if (k.durationS < min) out.push({ index: i, message: `${k.name}: ${k.durationS} s is too fast for this move — at least ${min} s.` });
+		}
+		prev = k;
+	});
 	return out;
 }
 
@@ -380,6 +527,7 @@ interface Node {
 	poseId?: string;
 	target?: number[];
 	settle?: boolean;
+	fire?: FireSpec & { pin: number };
 }
 
 export interface BuildOptions {
@@ -393,11 +541,16 @@ export interface BuildOptions {
  * is held, that uses a stopping easing, or that is the first/last; Catmull-Rom
  * tangents (in time) elsewhere, so a run of `flow` poses is one continuous
  * sweep. Frames are at 1/rateHz; the last frame is exactly the last pose.
+ *
+ * A fire step is a node where the arm stays put (on the previous pose, or
+ * where the arm is when the path starts with one) for the pulse plus the
+ * wait; its marker's `t` is when the Pi fires. A list of only fire steps is a
+ * path that holds the arm where it is.
  */
 export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): RenderedPath {
 	const rate = o.rateHz && o.rateHz > 0 ? o.rateHz : DEFAULT_RATE_HZ;
-	if (!kfs.length) throw new Error('a move set needs at least one pose');
-	for (const k of kfs) if (k.positions.length !== SERVO_COUNT) throw new Error(`${k.name}: pose has ${k.positions.length} positions, not ${SERVO_COUNT}`);
+	if (!kfs.length) throw new Error('a move set needs at least one step');
+	for (const k of kfs) if (!k.fire && k.positions.length !== SERVO_COUNT) throw new Error(`${k.name}: pose has ${k.positions.length} positions, not ${SERVO_COUNT}`);
 
 	const nodes: Node[] = [];
 	const poseNode = (k: ResolvedKeyframe, index: number, durationS: number, easing: Easing): Node => ({
@@ -412,12 +565,30 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		target: k.target,
 		...(k.settle === false ? { settle: false } : {})
 	});
-	const first = kfs[0];
+	const first = kfs.find((k) => !k.fire) ?? null;
 	const from = o.leadIn && o.leadIn.from.length === SERVO_COUNT ? o.leadIn.from : null;
-	const leadS = from && maxDelta(from, first.positions) ? (o.leadIn?.durationS ?? autoDurationS(from, first.positions)) : 0;
-	if (from && leadS > 0) nodes.push({ positions: from, holdS: 0, durationS: 0, easing: 'ease', label: 'start (arm now)', kind: 'lead-in', index: -1 });
-	nodes.push(poseNode(first, 0, leadS, 'ease'));
-	for (let i = 1; i < kfs.length; i++) nodes.push(poseNode(kfs[i], i, kfs[i].durationS, kfs[i].easing));
+	const leadS = from && first && maxDelta(from, first.positions) ? (o.leadIn?.durationS ?? autoDurationS(from, first.positions)) : 0;
+	// Where the arm is while a fire step runs: the last pose, or the start.
+	let here = from ?? first?.positions ?? null;
+	if (!here) throw new Error("fire steps need the arm's position — add a pose, or play it on the arm");
+	if (from && (leadS > 0 || kfs[0].fire)) nodes.push({ positions: from, holdS: 0, durationS: 0, easing: 'ease', label: 'start (arm now)', kind: 'lead-in', index: -1 });
+	kfs.forEach((k, i) => {
+		if (k.fire) {
+			nodes.push({
+				positions: here!,
+				holdS: fireStepS(k),
+				durationS: 0,
+				easing: 'linear',
+				label: k.name,
+				kind: 'fire',
+				index: i,
+				fire: { ...k.fire, pin: solenoidPin(k.fire.solenoid) }
+			});
+			return;
+		}
+		nodes.push(k === first ? poseNode(k, i, leadS, 'ease') : poseNode(k, i, k.durationS, k.easing));
+		here = k.positions;
+	});
 
 	// Timing.
 	const arrive: number[] = [];
@@ -488,7 +659,8 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		positions: nd.positions.map(clampStep),
 		...(nd.poseId ? { poseId: nd.poseId } : {}),
 		...(nd.target ? { target: nd.target.map(clampStep) } : {}),
-		...(nd.settle === false ? { settle: false } : {})
+		...(nd.settle === false ? { settle: false } : {}),
+		...(nd.fire ? { fire: nd.fire } : {})
 	}));
 	return { rateHz: rate, t: tOut, goal, markers, durationS: round4(total) };
 }
@@ -537,17 +709,27 @@ export interface SequenceItem {
  */
 export function flattenSequence(items: SequenceItem[]): ResolvedKeyframe[] {
 	const out: (ResolvedKeyframe & { kind?: MarkerKind })[] = [];
+	// The last pose so far: a join runs from it (fire steps do not move the arm).
+	let lastPose: ResolvedKeyframe | null = null;
 	for (const item of items) {
 		if (!item.keyframes.length) continue;
-		item.keyframes.forEach((k, i) => {
+		const firstPose = item.keyframes.find((k) => !k.fire);
+		item.keyframes.forEach((k) => {
 			const labelled = { ...k, name: `${item.name} · ${k.name}` };
-			if (i === 0 && out.length) {
+			if (k.fire) {
+				out.push(labelled);
+				return;
+			}
+			const prevPose: ResolvedKeyframe | null = lastPose;
+			lastPose = labelled;
+			if (k === firstPose && prevPose) {
 				const prev = out[out.length - 1];
-				const d = item.join.durationS ?? autoDurationS(prev.positions, k.positions);
+				const d = item.join.durationS ?? autoDurationS(prevPose.positions, k.positions);
 				if (d > 0) out.push({ ...labelled, durationS: d, easing: item.join.easing, kind: 'join' });
 				else {
 					// Same pose as where the last set ended: just extend the hold.
 					prev.holdS = roundTenth(prev.holdS + k.holdS);
+					lastPose = prevPose;
 				}
 			} else {
 				out.push(labelled);
@@ -583,10 +765,12 @@ export interface SettleFlag {
 export function settleFrames(p: RenderedPath): SettleFlag[] {
 	const last = p.goal.length - 1;
 	const out = new Map<number, SettleFlag>();
+	// Fire steps after the last pose keep the arm on it, so that pose still settles at the end.
+	const lastPose = p.markers.reduce((acc, m, i) => (m.poseId ? i : acc), -1);
 	p.markers.forEach((m, i) => {
 		// Goal poses are played exactly as commanded; settling would push the arm past where the operator saw it.
 		if (!m.poseId || m.settle === false) return;
-		const isLast = i === p.markers.length - 1;
+		const isLast = i === lastPose;
 		if (m.holdS <= 0 && !isLast) return;
 		const frame = isLast && m.holdS <= 0 ? last : Math.min(last, Math.round(m.t * p.rateHz));
 		out.set(frame, { frame, pose: m.poseId, target: m.target ?? m.positions });
@@ -608,10 +792,32 @@ export function trimFromSettle(written: unknown, target: unknown): number[] | nu
 	});
 }
 
+/** What a fire frame carries: the Pi pulses `pin` for `ms` at this frame's time. */
+export interface FireFlag {
+	frame: number;
+	t: number;
+	pin: number;
+	ms: number;
+	solenoid: Solenoid;
+}
+
+/** The frames where fire steps fire (each marker's time, on the frame grid). */
+export function fireFrames(p: RenderedPath): FireFlag[] {
+	const last = p.goal.length - 1;
+	return p.markers
+		.filter((m) => m.fire)
+		.map((m) => {
+			const frame = Math.min(last, Math.round(m.t * p.rateHz));
+			return { frame, t: p.t[frame], pin: m.fire!.pin, ms: m.fire!.pulseMs, solenoid: m.fire!.solenoid };
+		});
+}
+
 /** The dense path as a recording the Pi replays (header / frame / footer JSONL). */
-export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jsonl: string; frames: number; durationS: number } {
+export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jsonl: string; frames: number; durationS: number; fires: number } {
 	const lines: string[] = [];
 	const flags = new Map(settleFrames(p).map((f) => [f.frame, f]));
+	const fires = fireFrames(p);
+	const fireAt = new Map(fires.map((f) => [f.frame, f]));
 	lines.push(
 		JSON.stringify({
 			...(o.extras ?? {}),
@@ -624,15 +830,23 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 			animated: o.title,
 			// replay_settle.py keeps torque on at the end when it sees this, so the
 			// arm holds the last pose instead of going limp (older Pi code ignores it).
-			hold_at_end: true
+			hold_at_end: true,
+			// How many frames fire a solenoid. BIMS plays a path with fires only on
+			// a Pi whose replay can fire them (GET /gpio/status → replay_fire).
+			...(fires.length ? { fires: fires.length } : {})
 		})
 	);
 	for (let i = 0; i < p.goal.length; i++) {
 		const f = flags.get(i);
-		lines.push(JSON.stringify(f ? { event: 'frame', t: p.t[i], goal: p.goal[i], settle: true, pose: f.pose, target: f.target } : { event: 'frame', t: p.t[i], goal: p.goal[i] }));
+		const fire = fireAt.get(i);
+		const frame: Record<string, unknown> = f
+			? { event: 'frame', t: p.t[i], goal: p.goal[i], settle: true, pose: f.pose, target: f.target }
+			: { event: 'frame', t: p.t[i], goal: p.goal[i] };
+		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid };
+		lines.push(JSON.stringify(frame));
 	}
 	lines.push(JSON.stringify({ event: 'footer', duration_s: p.durationS, frames: p.goal.length }));
-	return { jsonl: lines.join('\n') + '\n', frames: p.goal.length, durationS: p.durationS };
+	return { jsonl: lines.join('\n') + '\n', frames: p.goal.length, durationS: p.durationS, fires: fires.length };
 }
 
 export function cleanAnimationName(name: string): string | null {
