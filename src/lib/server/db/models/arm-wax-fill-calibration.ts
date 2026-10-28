@@ -49,7 +49,9 @@ const pointSchema = new Schema(
 		/** Cart location only: the robot's reported position at save time, before the adjust was removed. */
 		live: { x: Number, y: Number, z: Number },
 		/** Cart location only: the rack position the teaching tip came from. */
-		tipWell: String
+		tipWell: String,
+		/** Cart location only: 'wax' (p20, production) or 'reagent' (p300 — development on a robot without a p20). */
+		tipProfile: { type: String, enum: ['wax', 'reagent'] }
 	},
 	{ _id: false }
 );

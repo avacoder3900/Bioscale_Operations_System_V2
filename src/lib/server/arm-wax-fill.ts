@@ -254,6 +254,8 @@ export interface TaughtPoint {
 	 */
 	tipAdjust: { x: number; y: number } | null;
 	tipWell: string | null;
+	/** Cart location only: the tip it was taught with — 'wax' (p20) or 'reagent' (p300, development). */
+	tipProfile: 'wax' | 'reagent' | null;
 }
 
 export interface DispenseDepthView {
@@ -314,7 +316,8 @@ function point(d: any): TaughtPoint | null {
 		taughtBy: d.taughtBy?.username ?? null,
 		testScanBarcode: d.testScanBarcode ?? null,
 		tipAdjust: typeof d.tipAdjust?.x === 'number' && typeof d.tipAdjust?.y === 'number' ? { x: d.tipAdjust.x, y: d.tipAdjust.y } : null,
-		tipWell: d.tipWell ?? null
+		tipWell: d.tipWell ?? null,
+		tipProfile: d.tipProfile === 'reagent' ? 'reagent' : d.tipProfile === 'wax' ? 'wax' : null
 	};
 }
 
@@ -442,7 +445,7 @@ export async function saveScanPosition(user: User, robotId: string, input: Point
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
 }
 
-type CartLocationInput = PointInput & { hasTip?: unknown; adjustX?: unknown; adjustY?: unknown; tipWell?: unknown };
+type CartLocationInput = PointInput & { hasTip?: unknown; adjustX?: unknown; adjustY?: unknown; tipWell?: unknown; tipProfile?: unknown };
 
 /**
  * The cart location is saved TIP-NEUTRAL, the way the Deck Calibration Studio
@@ -471,12 +474,17 @@ export async function saveCartLocation(user: User, robotId: string, input: CartL
 	const mount = mountOf(input, prev?.pipetteMount ?? 'right');
 	const pipetteName = String(input.pipetteName ?? '').trim() || prev?.pipetteName || null;
 	const tipWell = String(input.tipWell ?? '').trim().toUpperCase() || null;
+	// Which tip taught it. 'reagent' = the p300, allowed for DEVELOPMENT on a robot
+	// that has no p20: the frame is the same (tip end on the rim, tip-neutral), but
+	// the two tips probe with different recipes, so readiness asks for a p20 re-teach
+	// before a production fill.
+	const tipProfile = input.tipProfile === 'reagent' ? 'reagent' : 'wax';
 	const now = new Date();
 	await ArmWaxFillCalibration.updateOne(
 		{ _id: robotId },
 		{
 			$set: {
-				cartLocation: { ...p, live, tipAdjust: { x: ax, y: ay }, tipWell, taughtAt: now, taughtBy: opRef(user) },
+				cartLocation: { ...p, live, tipAdjust: { x: ax, y: ay }, tipWell, tipProfile, taughtAt: now, taughtBy: opRef(user) },
 				pipetteMount: mount,
 				pipetteName,
 				updatedBy: opRef(user)
@@ -484,7 +492,7 @@ export async function saveCartLocation(user: User, robotId: string, input: CartL
 		},
 		{ upsert: true }
 	);
-	await audit(user, 'arm_wax_fill.cart_location', 'arm_wax_fill_calibrations', robotId, { ...p, live, tipAdjust: { x: ax, y: ay }, tipWell, before: point(prev?.cartLocation) });
+	await audit(user, 'arm_wax_fill.cart_location', 'arm_wax_fill_calibrations', robotId, { ...p, live, tipAdjust: { x: ax, y: ay }, tipWell, tipProfile, before: point(prev?.cartLocation) });
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
 }
 
@@ -636,8 +644,8 @@ export async function applyStageEdits(
 export async function saveStageCalibrator(
 	user: User,
 	robotId: string,
-	input: { x: unknown; y: unknown; z: unknown; zCalWax?: unknown; maxTipAdjust?: unknown }
-): Promise<{ position: { x: number; y: number; z: number }; zCalWax: number; maxTipAdjust: number | null }> {
+	input: { x: unknown; y: unknown; z: unknown; zCalWax?: unknown; zCalReagent?: unknown; maxTipAdjust?: unknown }
+): Promise<{ position: { x: number; y: number; z: number }; zCalWax: number; zCalReagent: number; maxTipAdjust: number | null }> {
 	await connectDB();
 	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
 	const x = num(input.x, 'calX');
@@ -654,6 +662,14 @@ export async function saveStageCalibrator(
 	} else {
 		zCalWax = plausibleZ(Number(prev?.zCalWax)) ?? TIP_PROFILE.wax.defaultZ;
 	}
+	let zCalReagent: number;
+	if (input.zCalReagent !== null && input.zCalReagent !== undefined && String(input.zCalReagent).trim() !== '') {
+		const v = plausibleZ(Number(input.zCalReagent));
+		if (v === undefined) throw new ArmWaxFillError(`Probe Z (p300) must be between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm.`);
+		zCalReagent = v;
+	} else {
+		zCalReagent = plausibleZ(Number(prev?.zCalReagent)) ?? TIP_PROFILE.reagent.defaultZ;
+	}
 	let maxTipAdjust: number | null = prev?.maxTipAdjust ?? null;
 	if (input.maxTipAdjust !== null && input.maxTipAdjust !== undefined && String(input.maxTipAdjust).trim() !== '') {
 		const v = Number(input.maxTipAdjust);
@@ -664,18 +680,19 @@ export async function saveStageCalibrator(
 	await TipCalibratorFixture.updateOne(
 		{ robotId, deckKey: null },
 		{
-			$set: { position: { x, y, z }, zCalWax, maxTipAdjust, capturedBy: opRef(user), capturedAt: now, deckLoadName: null },
-			$setOnInsert: { _id: generateId(), robotId, deckKey: null, zCalReagent: TIP_PROFILE.reagent.defaultZ }
+			$set: { position: { x, y, z }, zCalWax, zCalReagent, maxTipAdjust, capturedBy: opRef(user), capturedAt: now, deckLoadName: null },
+			$setOnInsert: { _id: generateId(), robotId, deckKey: null }
 		},
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.calibrator', 'tip_calibrator_fixtures', robotId, {
 		position: { x, y, z },
 		zCalWax,
+		zCalReagent,
 		maxTipAdjust,
-		before: prev ? { position: prev.position, zCalWax: prev.zCalWax, maxTipAdjust: prev.maxTipAdjust ?? null } : null
+		before: prev ? { position: prev.position, zCalWax: prev.zCalWax, zCalReagent: prev.zCalReagent, maxTipAdjust: prev.maxTipAdjust ?? null } : null
 	});
-	return { position: { x, y, z }, zCalWax, maxTipAdjust };
+	return { position: { x, y, z }, zCalWax, zCalReagent, maxTipAdjust };
 }
 
 /** The cart's rotation on the stage and the travel clearance over the rim. */
@@ -835,6 +852,7 @@ export function readiness(
 		if (!cl) blocking.push('Stage calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
 		else if (!cl.tipAdjust) blocking.push('Stage calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
 		if (cl && !calibration?.dispenseDepth) blocking.push('Stage calibration: teach the dispense depth — jog the tip to the height it should dispense at over the first wax hole and save it.');
+		if (cl?.tipProfile === 'reagent') notes.push('The cart location was taught with the p300 (development on a robot without a p20). Re-teach it with the p20 before a production fill — the two tips probe with different recipes.');
 		if (cl?.tipAdjust && calibration?.dispenseDepth) {
 			notes.push(
 				`The stage protocol fills the taught cart location (tip-neutral; cart rotation ${calibration.stageRotationDeg}°), dispensing ` +
@@ -860,7 +878,9 @@ export interface TeachAid {
 	tiprackLoadName: string;
 	nextTipWell: string;
 	nextTipSource: string;
-	calibrator: { x: number; y: number; approachZ: number; probeZ: number; source: string; maxTipAdjust: number | null; taughtAt: string | null; taughtBy: string | null };
+	/** The p300 / 200 µL rack, for development on a robot that has no p20. */
+	reagentTiprackLoadName: string;
+	calibrator: { x: number; y: number; approachZ: number; probeZ: number; probeZReagent: number; source: string; maxTipAdjust: number | null; taughtAt: string | null; taughtBy: string | null };
 	/** Whether the robot's current wax-filling protocol declares the per-hole hole_NN_dx/dy/dz RTPs. */
 	protocolDeclaresHoleOffsets: boolean;
 }
@@ -935,6 +955,7 @@ async function teachAid(robotId: string): Promise<TeachAid> {
 	const declared = new Set(((entry?.parametersSchema ?? []) as any[]).map((p) => p?.variableName));
 	return {
 		tiprackLoadName: TIP_PROFILE.wax.loadName,
+		reagentTiprackLoadName: TIP_PROFILE.reagent.loadName,
 		nextTipWell: tip.well,
 		nextTipSource: tip.source,
 		calibrator: {
@@ -944,6 +965,7 @@ async function teachAid(robotId: string): Promise<TeachAid> {
 			// falls back to 38.5 when none is taught. The probe Z is the point's z.
 			approachZ: plausibleZ(cal.fixture?.position?.z) ?? 38.5,
 			probeZ: cal.point.z,
+			probeZReagent: plausibleZ(cal.fixture?.zCalReagent) ?? TIP_PROFILE.reagent.defaultZ,
 			source: cal.source,
 			maxTipAdjust: typeof cal.fixture?.maxTipAdjust === 'number' ? cal.fixture.maxTipAdjust : null,
 			taughtAt: iso(cal.fixture?.capturedAt),

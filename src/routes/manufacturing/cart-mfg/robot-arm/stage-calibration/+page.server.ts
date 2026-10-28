@@ -89,9 +89,10 @@ export const actions: Actions = {
 				hasTip: field(d, 'hasTip'),
 				adjustX: field(d, 'adjustX'),
 				adjustY: field(d, 'adjustY'),
-				tipWell: field(d, 'tipWell')
+				tipWell: field(d, 'tipWell'),
+				tipProfile: field(d, 'tipProfile')
 			});
-			return { success: 'First hole saved (tip-neutral) — the 12 holes are laid out from it.', calibration: json(c) };
+			return { success: `First hole saved (tip-neutral${field(d, 'tipProfile') === 'reagent' ? ', taught with the p300 — development' : ''}) — the 12 holes are laid out from it.`, calibration: json(c) };
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -139,9 +140,10 @@ export const actions: Actions = {
 				y: field(d, 'y'),
 				z: field(d, 'z'),
 				zCalWax: field(d, 'zCalWax'),
+				zCalReagent: field(d, 'zCalReagent'),
 				maxTipAdjust: field(d, 'maxTipAdjust')
 			});
-			return { success: `Tip calibrator saved: approach (${r.position.x}, ${r.position.y}, ${r.position.z}), probe Z ${r.zCalWax}${r.maxTipAdjust != null ? `, max adjust ${r.maxTipAdjust}` : ''}.`, calibrator: r };
+			return { success: `Tip calibrator saved: approach (${r.position.x}, ${r.position.y}, ${r.position.z}), probe Z p20 ${r.zCalWax} / p300 ${r.zCalReagent}${r.maxTipAdjust != null ? `, max adjust ${r.maxTipAdjust}` : ''}.`, calibrator: r };
 		} catch (err) {
 			return failFrom(err);
 		}

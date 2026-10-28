@@ -416,7 +416,15 @@
 	// The run loaded something other than a p20 (a p300 on the other mount, say). A 20 µL tip
 	// pressed by it looks picked up but the robot refuses to model it (KeyError PipetteTipType.t20),
 	// and every probe / teach after that would be in the wrong tip frame — so tip work is blocked.
-	const wrongPipette = $derived(!!pipetteName && !/^p20/i.test(pipetteName));
+	// Tip profile, as in the Deck Studio: an OPERATOR CHOICE. 'wax' = the p20 and
+	// the 20 µL rack (production). 'reagent' = the p300 and the 200 µL rack, for
+	// DEVELOPMENT on a robot that is not kitted out with a p20: the frame is the
+	// same (tip end on the rim, saved tip-neutral) but the probe recipe and the
+	// probe depth differ, so a point taught this way is marked and must be
+	// re-taught with the p20 before a production fill.
+	let tipProfile = $state<'wax' | 'reagent'>('wax');
+	const expectedPipette = $derived(tipProfile === 'reagent' ? /^p300/i : /^p20/i);
+	const wrongPipette = $derived(!!pipetteName && !expectedPipette.test(pipetteName));
 	let connecting = $state(false);
 	let stepSize = $state(1);
 	let zAxis = $state<'leftZ' | 'rightZ'>(data.calibration?.pipetteMount === 'right' ? 'rightZ' : 'leftZ');
@@ -457,8 +465,11 @@
 			pipetteName = res.pipetteName ?? null;
 			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
 			msg = pipetteId ? `Run open: ${pipetteName} on ${pipetteMount}.` : 'Run opened but no pipette could be loaded — jog will fail.';
-			if (pipetteId && pipetteName && !/^p20/i.test(pipetteName)) {
-				msg = `Run open: ${pipetteName} on ${pipetteMount} — not a p20. The 20 µL wax tips only model on a p20 (anything else answers KeyError PipetteTipType.t20 and the robot never sees the tip). If the p20 is on the other mount, close the run and open it there; the fill follows the mount the stage is taught with.`;
+			if (pipetteId && pipetteName && /^p300/i.test(pipetteName) && tipProfile === 'wax') {
+				tipProfile = 'reagent';
+				msg = `Run open: ${pipetteName} on ${pipetteMount} — a p300, so the tip type switched to p300 · reagent (development). 20 µL wax tips cannot model on it (KeyError PipetteTipType.t20). Points taught now are marked as p300-taught; re-teach with the p20 before a production fill.`;
+			} else if (pipetteId && pipetteName && !expectedPipette.test(pipetteName)) {
+				msg = `Run open: ${pipetteName} on ${pipetteMount} — not a ${tipProfile === 'reagent' ? 'p300' : 'p20'}; the ${tipProfile === 'reagent' ? '200' : '20'} µL tips will not model on it. Switch the tip type or the mount.`;
 			}
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
@@ -719,14 +730,20 @@
 	let tipAdjust = $state<{ x: number; y: number } | null>(null);
 	let calibrating = $state(false);
 	let tipWell = $state<string>(data.teach?.nextTipWell ?? 'A1');
-	const tiprack = $derived(data.teach?.tiprackLoadName ?? 'cosmasanddamian_96_tiprack_20ul');
+	const tiprack = $derived(tipProfile === 'reagent' ? (data.teach?.reagentTiprackLoadName ?? 'cosmas_and_damian_biotix_96_200ul_tiprack') : (data.teach?.tiprackLoadName ?? 'cosmasanddamian_96_tiprack_20ul'));
 	const CAL_Z_MIN = 5,
 		CAL_Z_MAX = 200;
 	const CAL_AT_TOLERANCE_MM = 3;
 	let calX = $state(data.teach?.calibrator?.x ?? 125.181);
 	let calY = $state(data.teach?.calibrator?.y ?? 173.247);
 	let calZ = $state(data.teach?.calibrator?.approachZ ?? 38.5);
-	let probeZ = $state(data.teach?.calibrator?.probeZ ?? 34.491);
+	let probeZWax = $state(data.teach?.calibrator?.probeZ ?? 34.491);
+	let probeZReagent = $state(data.teach?.calibrator?.probeZReagent ?? 40.8);
+	const probeZ = $derived(tipProfile === 'reagent' ? probeZReagent : probeZWax);
+	function setProbeZ(v: number) {
+		if (tipProfile === 'reagent') probeZReagent = v;
+		else probeZWax = v;
+	}
 	let maxAdjust = $state<number | ''>(data.teach?.calibrator?.maxTipAdjust ?? '');
 	$effect(() => {
 		const c = data.teach?.calibrator;
@@ -734,7 +751,8 @@
 			calX = c.x;
 			calY = c.y;
 			calZ = c.approachZ;
-			probeZ = c.probeZ;
+			probeZWax = c.probeZ;
+			probeZReagent = c.probeZReagent;
 			maxAdjust = c.maxTipAdjust ?? '';
 		}
 	});
@@ -804,7 +822,7 @@
 			msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on)';
 			const res = await api('/api/scanner/calibrate-tip', {
 				method: 'POST',
-				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile: 'wax', tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } })
+				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } })
 			});
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
@@ -862,7 +880,7 @@
 	}
 	async function saveCalibratorPosition() {
 		if (checkedZ(calZ, 'Approach Z') === null || checkedZ(probeZ, 'Probe Z') === null) return;
-		const r = await postAction('saveCalibrator', { x: String(calX), y: String(calY), z: String(calZ), zCalWax: String(probeZ), maxTipAdjust: maxAdjust === '' ? '' : String(maxAdjust) });
+		const r = await postAction('saveCalibrator', { x: String(calX), y: String(calY), z: String(calZ), zCalWax: String(probeZWax), zCalReagent: String(probeZReagent), maxTipAdjust: maxAdjust === '' ? '' : String(maxAdjust) });
 		if (r) msg = r.success;
 	}
 
@@ -926,7 +944,8 @@
 				hasTip: 'true',
 				adjustX: String(tipAdjust.x),
 				adjustY: String(tipAdjust.y),
-				tipWell
+				tipWell,
+				tipProfile
 			});
 			if (r) {
 				msg = r.success;
@@ -1183,7 +1202,21 @@
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
-						<span>{hasTip ? '🟢 tip on' : 'no tip'} · p20 rack{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {tipProfile === 'reagent' ? 'p300 rack' : 'p20 rack'}{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+					</div>
+					<div class="mb-2">
+						<div class="mb-1 text-[10px] uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip type on {pipetteMount ?? desiredMount}</div>
+						<div class="grid grid-cols-2 gap-2">
+							{#each [['wax', 'p20 · wax'], ['reagent', 'p300 · reagent (dev)']] as [p, lbl] (p)}
+								<button type="button" onclick={() => (tipProfile = p as 'wax' | 'reagent')} disabled={busy || hasTip}
+									title={hasTip ? 'Drop the tip before changing tip type' : p === 'reagent' ? 'Development only: a robot without a p20. Points taught with the p300 are marked and must be re-taught with the p20 before a production fill.' : 'Production: the p20 and the 20 µL rack the stage fill uses'}
+									class="rounded border px-2 py-1.5 text-[11px] transition-colors disabled:opacity-40 {tipProfile === p ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]/60'}"
+									style={tipProfile === p ? '' : 'color: var(--color-tron-text-secondary)'}>{lbl}</button>
+							{/each}
+						</div>
+						{#if tipProfile === 'reagent'}
+							<p class="mt-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">Development mode: probing and teaching with the p300 and 200 µL tips. The stage fill itself needs a p20; everything taught now is marked p300-taught and the Wax fill tab will ask for a p20 re-teach before a production fill.</p>
+						{/if}
 					</div>
 					<div class="mb-2 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
 						<span>Pick from</span>
@@ -1195,7 +1228,7 @@
 						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point is taught for {robotName} — the probe would drive to the protocol's default. Teach it in the <strong>Tip calibrator</strong> panel below first.</p>
 					{/if}
 					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
-						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip (picks up a p20 tip first)'}
+						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : `Calibrate tip (picks up a ${tipProfile === 'reagent' ? 'p300' : 'p20'} tip first)`}
 					</button>
 					{#if !calibrating}
 						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
@@ -1245,8 +1278,8 @@
 					<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 				</div>
 				<div class="mt-2 grid grid-cols-2 gap-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-					<label class="block" title="Touch-off depth the limit-switch probe descends to — production z_cal for this robot">Probe Z — p20 · wax (zCalWax)
-						<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={probeZ} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
+					<label class="block" title="Touch-off depth the limit-switch probe descends to — production z_cal for this robot. Switching tip type swaps this field; the other keeps its value.">Probe Z — {tipProfile === 'reagent' ? 'p300 · reagent (zCalReagent)' : 'p20 · wax (zCalWax)'}
+						<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} value={Number.isFinite(probeZ) ? probeZ : ''} oninput={(e) => setProbeZ(e.currentTarget.valueAsNumber)} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
 					<label class="block" title="Largest probe adjust the fill accepts before it stops (raw, carries this fixture's baseline). Blank = the protocol's 4.0">Max tip adjust (mm)
 						<input type="number" step="0.1" min="0.3" max="12" bind:value={maxAdjust} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
@@ -1354,7 +1387,8 @@
 			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 				The rim of the cart's first wax hole (row 1, gate 4 — X2). Calibrate a tip, jog the <strong>tip end</strong> onto that rim, save: stored tip-neutral (live − this tip's adjust); the other 11 follow from it. Re-teaching it keeps the per-hole corrections.
 				{#if rim?.taughtAt}Taught {when(rim.taughtAt)}{rim.taughtBy ? ` by ${rim.taughtBy}` : ''}.{/if}
-				{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
+				{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>{rim.tipProfile === 'reagent' ? ' with the p300' : ''}.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
+				{#if rim?.tipProfile === 'reagent'}<span class="text-amber-300"> p300-taught (development) — re-teach with the p20 before a production fill.</span>{/if}
 			</p>
 			<button type="button" onclick={saveFirstHole} disabled={!pipetteId || busy || !hasTip || !tipAdjust || locked} class="w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={!hasTip || !tipAdjust ? 'Calibrate the tip first — the point is saved tip-neutral' : ''}>Save here as first hole</button>
 		</section>

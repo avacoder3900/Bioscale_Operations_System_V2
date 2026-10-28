@@ -24283,3 +24283,10 @@ Follow-up (same day): Alejandro wants to calibrate on the LEFT mount for now. Th
 (the mount is the operator's choice, as in the Deck Studio). The stage protocol gained pipette_mount (str RTP, right|left,
 default right) and loads the p20 on it; BIMS sends the calibration's pipetteMount, so the fill probes and dispenses with
 the side the stage was taught with. Re-upload the stage .py to the arm's OT-2 to activate (an older upload keeps 'right').
+
+Follow-up (same day): development on a robot that is not kitted out with a p20. The stage studio gained the Deck Studio's
+tip-type choice: 'p20 . wax' (production) or 'p300 . reagent (dev)' - the 200 uL rack in slot 11, the reagent probe recipe
+and zCalReagent; it auto-switches when the run opens on a p300. Points taught with the p300 are stored with tipProfile
+'reagent' (model + view), the first-hole card says so, and readiness notes that a p20 re-teach is needed before a
+production fill (the two tips probe with different recipes). saveStageCalibrator now writes both probe depths.
+svelte-check: 14-error baseline.
