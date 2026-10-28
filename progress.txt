@@ -23721,3 +23721,9 @@ with hidden/onshow; the separate collapsed bar is gone, so my dot on that bar wa
 
 Files: RobotArmCameraPanel.svelte, RobotArmConnectionPanel.svelte. npm run check: 14 errors
 (baseline 14, none in these files).
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/4cCg7NB9AnAoaaHCrMmYEtuvdvj7
+Source: branch master @ commit 9be76187
+Retrieve this exact code: git checkout master at commit 9be76187
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: blue-bordered Show on ARM CAMERA / ARM CONNECTION; status dot before ARM CONNECTION
