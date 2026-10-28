@@ -8,9 +8,13 @@ import mongoose, { Schema } from 'mongoose';
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 
+/** A fire step's solenoid and pulse (src/lib/robot-arm/animation.ts FireSpec). */
+const fireSchema = new Schema({ solenoid: { type: String, enum: ['A', 'B'], required: true }, pulseMs: { type: Number, required: true } }, { _id: false });
+
 const keyframeSchema = new Schema(
 	{
-		poseId: { type: String, required: true },
+		/** '' on a fire step. */
+		poseId: { type: String, default: '' },
 		holdS: { type: Number, default: 0 },
 		durationS: { type: Number, default: 1 },
 		easing: { type: String, enum: ['ease', 'linear', 'in', 'out', 'flow'], default: 'ease' },
@@ -23,7 +27,12 @@ const keyframeSchema = new Schema(
 		 */
 		verify: { type: Boolean, default: undefined },
 		/** ARM-09: this step's tolerances on top of the pose reference's (absent fields keep the reference's). */
-		tolerances: { type: new Schema({ positionMm: Number, angleDeg: Number, steps: Number }, { _id: false }), default: undefined }
+		tolerances: { type: new Schema({ positionMm: Number, angleDeg: Number, steps: Number }, { _id: false }), default: undefined },
+		/**
+		 * Present: the step fires a cartridge trapdoor solenoid instead of
+		 * moving (2026-10-28). holdS is then the wait after the pulse.
+		 */
+		fire: { type: fireSchema, default: undefined }
 	},
 	{ _id: false }
 );

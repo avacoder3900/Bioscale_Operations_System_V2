@@ -8,6 +8,9 @@
  * ARM-09 (verified poses) adds: a pose's camera reference (capture, check
  * without moving, tolerances, retire) and the verified run (start / next /
  * stop / read) — the page drives a run one `verifiedNext` at a time.
+ *
+ * Fire steps (2026-10-28) add `testFire` (pulse one trapdoor solenoid now,
+ * no arm motion) and `solenoids` (read-only GPIO status for the card).
  */
 import { fail, type RequestEvent } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
@@ -18,10 +21,12 @@ import {
 	holdArm,
 	playbackActive,
 	setPosePositions,
+	solenoidStatus,
 	stopPlayback,
+	testFire,
 	AnimateError
 } from '$lib/server/robot-arm-animation';
-import { friendlyName } from '$lib/robot-arm/animation';
+import { friendlyName, isSolenoid, solenoidLabel } from '$lib/robot-arm/animation';
 import {
 	calibratePose,
 	checkPose,
@@ -142,6 +147,30 @@ export const sharedAnimateActions = {
 		} catch (err) {
 			return fail(502, { error: (err as Error).message });
 		}
+	},
+
+	// ── fire steps: the cartridge trapdoor solenoids ───────────────────────
+
+	// Pulse one solenoid now. The arm does not move.
+	testFire: async ({ request, locals }: Ev) => {
+		if (!writer(locals)) return fail(401, { error: 'Unauthorized' });
+		const d = await request.formData();
+		const solenoid = field(d, 'solenoid');
+		if (!isSolenoid(solenoid)) return fail(400, { error: 'Pick solenoid A or B.' });
+		const pulseMs = Number(field(d, 'pulseMs'));
+		try {
+			const r = await testFire(who(locals), solenoid, pulseMs);
+			return { fired: { solenoid, pulseMs, simulated: r.simulated }, success: `${solenoidLabel(solenoid)} fired for ${pulseMs} ms${r.simulated ? ' (simulated — the Pi has no GPIO right now)' : ''}.` };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Read-only: pin states, busy, simulated, and whether the Pi's replay can fire steps.
+	solenoids: async ({ locals }: Ev) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:read');
+		return { solenoids: await solenoidStatus() };
 	},
 
 	// ── ARM-09: a pose's camera reference ──────────────────────────────────

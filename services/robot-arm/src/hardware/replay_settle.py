@@ -58,6 +58,7 @@ simulate_replay_settle.py); not yet run on the arm.
 from __future__ import annotations
 
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -80,6 +81,8 @@ WINDOW_MARGIN_S = 0.12
 #: The last frame has no next frame; give it this long at most.
 END_WINDOW_S = 2.5
 MAX_ROUNDS = 8
+#: After the frames end, how long the fire timer may take to finish a pulse.
+FIRE_JOIN_S = 3.0
 
 
 def _clamp(v: int, lo: int, hi: int) -> int:
@@ -90,7 +93,7 @@ def _clamp(v: int, lo: int, hi: int) -> int:
 
 
 def parse_frames(lines: list[dict]) -> list[dict]:
-    """Frames of a parsed recording as `{t, goal: {sid: steps}, settle, pose, target}`."""
+    """Frames of a parsed recording as `{t, goal: {sid: steps}, settle, pose, target, fire}`."""
     out: list[dict] = []
     for rec in lines:
         ev = rec.get("event")
@@ -109,9 +112,60 @@ def parse_frames(lines: list[dict]) -> list[dict]:
                 "settle": bool(rec.get("settle")),
                 "pose": rec.get("pose"),
                 "target": rec.get("target"),
+                "fire": rec.get("fire") if isinstance(rec.get("fire"), dict) else None,
             }
         )
     return out
+
+
+# ── fire steps (cartridge trapdoor solenoids) ───────────────────────────
+
+
+def fire_schedule(frames: list[dict]) -> list[dict]:
+    """`{t, pin, ms, solenoid}` for every frame that fires, in time order."""
+    out = [
+        {"t": f["t"], "pin": int(f["fire"]["pin"]), "ms": int(f["fire"]["ms"]), "solenoid": f["fire"].get("solenoid")}
+        for f in frames
+        if f.get("fire")
+    ]
+    return sorted(out, key=lambda x: x["t"])
+
+
+class FireTimer(threading.Thread):
+    """Fires a loop's fire steps at their times, off the frame loop.
+
+    BIMS Animate fire steps (2026-10-28). The frame loop blocks inside a
+    settle pass for a whole hold, so a fire handled there would be late by up
+    to that hold; this thread keeps the trapdoors on the recording's clock
+    instead. It fires one at a time, in order, through gpio.pulse_blocking,
+    which shares the coil lock with the REST routes: two coils are never on
+    together. `halt` (replay stopped) cancels whatever has not fired yet.
+    """
+
+    def __init__(self, fires: list[dict], t0: float, halt: threading.Event, pulse: Callable[..., dict], loop: int) -> None:
+        super().__init__(name="replay-fire", daemon=True)
+        self.fires = fires
+        self.t0 = t0
+        self.halt = halt
+        self.pulse = pulse
+        self.loop = loop
+        self.results: list[dict] = []
+
+    def run(self) -> None:
+        for f in self.fires:
+            wait = f["t"] - (time.perf_counter() - self.t0)
+            if wait > 0 and self.halt.wait(wait):
+                break
+            if self.halt.is_set():
+                break
+            late_ms = int(max(0.0, (time.perf_counter() - self.t0) - f["t"]) * 1000)
+            r = self.pulse(f["pin"], f["ms"], stop_event=self.halt)
+            r.update({"t": f["t"], "solenoid": f["solenoid"], "late_ms": late_ms, "loop": self.loop})
+            self.results.append(r)
+            print(f"[replay_settle] fire {f['solenoid'] or ''} pin {f['pin']} {f['ms']} ms at t={f['t']}: {'ok' if r.get('ok') else r.get('error')}", flush=True)
+        skipped = len(self.fires) - len(self.results)
+        if skipped:
+            self.results.append({"skipped": skipped, "loop": self.loop, "reason": "replay stopped"})
 
 
 def load_frames(source: str, recordings_dir: Optional[Path] = None) -> list[dict]:
@@ -233,14 +287,21 @@ def replay_session_settling(
     if not frames:
         raise ValueError(f"recording {source_path} has no frames")
     flagged = sum(1 for f in frames if f["settle"])
+    fires = fire_schedule(frames)
+    pulse = None
+    if fires:
+        # Refuse before anything moves rather than play the arm without its trapdoors.
+        from src.server import gpio as solenoid_gpio
+
+        pulse = solenoid_gpio.pulse_blocking
 
     arms.logger.log_event(
         "replay.start",
-        {"source_path": str(source_path), "loops": loops, "frames": len(frames), "settle_frames": flagged},
+        {"source_path": str(source_path), "loops": loops, "frames": len(frames), "settle_frames": flagged, "fires": len(fires)},
     )
     if arms.dry_run:
         arms.logger.log_event(
-            "replay.dry_run_skip", {"frames": len(frames), "loops": loops}
+            "replay.dry_run_skip", {"frames": len(frames), "loops": loops, "fires": len(fires)}
         )
         return
 
@@ -264,7 +325,24 @@ def replay_session_settling(
 
     offset: dict[int, int] = {sid: 0 for sid in SETTLE_SERVOS}
     results: list[dict] = []
+    fired: list[dict] = []
+    timer: Optional[FireTimer] = None
+    halt = threading.Event()
     n = len(frames)
+
+    def finish_fires(cancel: bool) -> None:
+        nonlocal timer
+        if timer is None:
+            return
+        if cancel:
+            halt.set()
+        timer.join(FIRE_JOIN_S)
+        if timer.is_alive():  # a pulse would not end: cut the coils
+            halt.set()
+            timer.join(1.0)
+        fired.extend(timer.results)
+        timer = None
+
     try:
         for loop_idx in range(loops):
             if stopped():
@@ -272,6 +350,10 @@ def replay_session_settling(
             arms.logger.log_event("replay.loop", {"index": loop_idx + 1, "of": loops})
             arms._ramp_follower_to(follower_neutral)
             t_loop_start = time.perf_counter()
+            if fires and pulse is not None:
+                halt.clear()
+                timer = FireTimer(fires, t_loop_start, halt, pulse, loop_idx + 1)
+                timer.start()
             for i, frame in enumerate(frames):
                 if stopped():
                     break
@@ -290,9 +372,18 @@ def replay_session_settling(
                 r = settle(read, write, goal, offset, deadline, cancelled)
                 r.update({"frame": i, "t": frame["t"], "pose": frame.get("pose"), "target": frame.get("target"), "loop": loop_idx + 1})
                 results.append(r)
+            # The path outlasts its last fire by that step's pulse + wait, so the
+            # timer is normally done; a stopped replay cancels what is left.
+            finish_fires(cancel=stopped())
     except KeyboardInterrupt:
         pass
     finally:
+        finish_fires(cancel=True)
+        if fires:
+            try:
+                arms.logger.log_event("replay.fire", {"fires": fired, "planned": len(fires) * loops})
+            except Exception as exc:  # the webhook must never fail the replay
+                print(f"[replay_settle] fire event not logged: {exc}")
         if results:
             try:
                 arms.logger.log_event(
@@ -324,9 +415,21 @@ def install() -> dict[str, Any]:
     sessions_mod = sys.modules.get(name) or importlib.import_module(name)
     current = getattr(sessions_mod, "replay_session", None)
     if current is replay_session_settling:
+        _mark_fire_supported()
         return {"installed": True, "already": True}
     if current is None:
         raise RuntimeError("src.server.sessions has no replay_session to replace")
     sessions_mod.replay_session_original = current  # type: ignore[attr-defined]
     sessions_mod.replay_session = replay_session_settling  # type: ignore[attr-defined]
+    _mark_fire_supported()
     return {"installed": True, "already": False}
+
+
+def _mark_fire_supported() -> None:
+    """Tell gpio.py (GET /gpio/status → replay_fire) that this replay fires `fire` frames."""
+    try:
+        from src.server import gpio as solenoid_gpio
+
+        solenoid_gpio.REPLAY_FIRE_SUPPORTED = True
+    except Exception as exc:  # no GPIO module: BIMS will refuse fire steps, which is right
+        print(f"[replay_settle] fire steps unavailable: {exc}", flush=True)

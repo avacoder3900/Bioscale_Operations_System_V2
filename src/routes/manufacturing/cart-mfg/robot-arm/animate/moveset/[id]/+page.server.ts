@@ -2,7 +2,8 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, setMoveSetArchived, updateMoveSet } from '$lib/server/robot-arm-animation';
+import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, setMoveSetArchived, solenoidStatus, updateMoveSet } from '$lib/server/robot-arm-animation';
+import { stepCountLabel } from '$lib/robot-arm/animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
@@ -11,13 +12,15 @@ import type { Actions, PageServerLoad } from './$types';
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
-	const [moveSet, poses, active, holder, poseCalibrations, verifiedRun] = await Promise.all([
+	const [moveSet, poses, active, holder, poseCalibrations, verifiedRun, solenoids] = await Promise.all([
 		getMoveSet(params.id),
 		listPoses(),
 		playbackActive().catch(() => null),
 		deriveArmHolder().catch(() => null),
 		listPoseCalibrations().catch(() => []),
-		activeVerifiedRun().catch(() => null)
+		activeVerifiedRun().catch(() => null),
+		// GPIO status never touches the servo bus, so it is read even mid-play.
+		solenoidStatus()
 	]);
 	if (!moveSet) error(404, 'Move set not found');
 	const homeSteps = await homeStepsByCamera().catch(() => ({}));
@@ -31,6 +34,7 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 		holder: JSON.parse(JSON.stringify(holder ?? null)),
 		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
 		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null)),
+		solenoids: JSON.parse(JSON.stringify(solenoids)),
 		homeSteps
 	};
 };
@@ -50,7 +54,7 @@ export const actions: Actions = {
 		}
 		try {
 			const m = await updateMoveSet(who(locals), params.id, { name: field(d, 'name'), notes: field(d, 'notes'), keyframes });
-			return { success: `"${m.name}" saved with ${m.keyframes.length} pose(s).` };
+			return { success: `"${m.name}" saved with ${stepCountLabel(m.keyframes)}.` };
 		} catch (err) {
 			return failFrom(err);
 		}

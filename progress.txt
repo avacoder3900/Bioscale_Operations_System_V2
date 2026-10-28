@@ -23706,3 +23706,33 @@ Source: branch master @ commit a6f5dd85
 Retrieve this exact code: git checkout master at commit a6f5dd85
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Pi/Servos/Torque lines in ARM CONNECTION; fast servo-temp return after plays
+
+================================================================================
+2026-10-28 — feat/arm-solenoid-steps — Fire steps: cartridge trapdoor solenoids as steps in Animate move sets
+================================================================================
+A move set step can now fire a trapdoor solenoid (A = GPIO 17, B = GPIO 27, as in
+~/solenoid.py) instead of moving: pulse 20–2000 ms (default 1000, same as the Control
+tab), then a wait (>= 0.5 s, default 1 s) while the arm holds where it is. Fire-only
+move sets work as reusable "drop a cartridge" items in sequences. No camera check on
+fire steps (user: no tags on the trapdoors).
+
+BIMS: animation.ts (FireSpec, fire nodes in buildPath, fire frames + header `fires` in
+composeAnimationJsonl, tooFast/flattenSequence/settleFrames skip fires), move-set and
+verified-run schemas (poseId default '', fire subdoc), robot-arm-animation.ts (resolve,
+requireReplayFire before any play with fires, testFire, solenoidStatus; also fixed
+moveSetSummary dropping each step's verify/tolerances so an editor save cleared them),
+robot-arm-verified.ts (fire steps never verified, fired inside their chunk). UI: move-set
+editor amber fire rows + ⚡ A/⚡ B add buttons (insert after the selected step), StepStrip
+time bar, SolenoidPanel (Test fire, pin state, replay_fire) on the editor and Animate page;
+sequence page and curves show fires.
+
+Pi (services/robot-arm): gpio.py — one threading _coil_lock shared by REST and the replay
+(never two coils on), pulse_blocking(), replay_fire in /gpio/status. replay_settle.py —
+FireTimer thread fires `fire` frames on the recording's clock (the settle pass blocks the
+frame loop for whole holds), Stop cancels unfired ones, replay.fire event. Simulated on the
+Pi in a scratch copy: fires at 0.5/1.5 s with 0 ms late, Stop skipped the second, two
+threads never overlapped. NOT yet deployed to the Pi (needs approval); until then BIMS
+refuses to play move sets with fire steps.
+
+npm run check: 14 errors (baseline 14). Tests: 633 passed (10 new fire-step tests).
+Local dev server for review: http://127.0.0.1:5180 (worktree). Not merged.

@@ -367,6 +367,10 @@ export interface GpioStatus {
 	pins: Record<string, { state: number }>;
 	simulated: boolean;
 	busy: boolean;
+	allowed_pins?: number[];
+	max_pulse_ms?: number;
+	/** The Pi's replay fires `fire` frames (replay_settle.py, 2026-10-28); absent on an older Pi. */
+	replay_fire?: boolean;
 }
 
 export interface ArmTask {

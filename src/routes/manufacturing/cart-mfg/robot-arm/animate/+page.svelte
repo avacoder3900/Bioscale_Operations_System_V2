@@ -8,6 +8,8 @@
 	 * and sequences. `?edit=<poseId>` opens that pose in the editor.
 	 * "select" in the library ticks many poses to archive at once; the
 	 * archived list restores many, or deletes unused ones for good.
+	 * Under the lists, the trapdoor solenoids: test fire A or B (fire steps
+	 * themselves are added in the move-set editor).
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
@@ -15,7 +17,21 @@
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import { onDestroy, onMount } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
-	import { buildPath, flattenSequence, friendlyName, heatCheck, heatLevel, poseGroup, DEFAULT_RATE_HZ, SERVO_TEMP_STOP_C, type ResolvedKeyframe } from '$lib/robot-arm/animation';
+	import {
+		flattenSequence,
+		friendlyName,
+		heatCheck,
+		heatLevel,
+		poseGroup,
+		previewPath,
+		resolveForPreview,
+		stepCountLabel,
+		DEFAULT_RATE_HZ,
+		SERVO_TEMP_STOP_C,
+		type ResolvedKeyframe,
+		type SolenoidStatus
+	} from '$lib/robot-arm/animation';
+	import SolenoidPanel from '$lib/components/robot-arm/SolenoidPanel.svelte';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
 	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
@@ -72,6 +88,7 @@
 		let total = 0;
 		for (const m of sets)
 			for (const k of m.keyframes) {
+				if (k.fire) continue; // fire steps are never camera-checked
 				total++;
 				const c = calFor(k.poseId);
 				if (c) c.stale ? stale++ : ok++;
@@ -147,7 +164,7 @@
 	// How many move sets (archived ones too) use each pose: those poses can be restored but never deleted.
 	const setsUsing = $derived.by(() => {
 		const n = new Map<string, number>();
-		for (const ms of moveSets) for (const id of new Set(ms.keyframes.map((k) => k.poseId))) n.set(id, (n.get(id) ?? 0) + 1);
+		for (const ms of moveSets) for (const id of new Set(ms.keyframes.filter((k) => !k.fire).map((k) => k.poseId))) n.set(id, (n.get(id) ?? 0) + 1);
 		return n;
 	});
 	const pickedDeletable = $derived(pickedOld.filter((id) => !setsUsing.has(id)));
@@ -191,19 +208,13 @@
 	}
 
 	function resolve(ms: MoveSetSummary): ResolvedKeyframe[] | null {
-		const out: ResolvedKeyframe[] = [];
-		for (const k of ms.keyframes) {
-			const p = poseById.get(k.poseId);
-			if (!p) return null;
-			out.push({ ...k, name: p.name, positions: p.positions });
-		}
-		return out;
+		return resolveForPreview(ms.keyframes, poseById, { offsets: false });
 	}
 	function moveSetDuration(ms: MoveSetSummary): string {
 		const kfs = resolve(ms);
 		if (!kfs || !kfs.length) return '';
 		try {
-			return `${buildPath(kfs, { rateHz: ms.rateHz || DEFAULT_RATE_HZ }).durationS.toFixed(1)} s`;
+			return `${previewPath(kfs, ms.rateHz || DEFAULT_RATE_HZ).durationS.toFixed(1)} s`;
 		} catch {
 			return '';
 		}
@@ -219,7 +230,7 @@
 		const flat = flattenSequence(items);
 		if (!flat.length) return '';
 		try {
-			return `${buildPath(flat).durationS.toFixed(1)} s`;
+			return `${previewPath(flat).durationS.toFixed(1)} s`;
 		} catch {
 			return '';
 		}
@@ -478,7 +489,7 @@
 						<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
 							<a href="/manufacturing/cart-mfg/robot-arm/animate/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
 							<span class="shrink-0 text-xs" style={muted}>
-								{ms ? `${ms.keyframes.length} poses` : `${sq!.items.length} sets`}{(ms ? moveSetDuration(ms) : sequenceDuration(sq!)) ? ` · ${ms ? moveSetDuration(ms) : sequenceDuration(sq!)}` : ''}
+								{ms ? stepCountLabel(ms.keyframes) : `${sq!.items.length} sets`}{(ms ? moveSetDuration(ms) : sequenceDuration(sq!)) ? ` · ${ms ? moveSetDuration(ms) : sequenceDuration(sq!)}` : ''}
 							</span>
 							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Play on the arm"
 								disabled={blocked || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
@@ -496,4 +507,7 @@
 			</section>
 		{/each}
 	</div>
+
+	<!-- The cartridge trapdoors. Fire steps go in a move set (open it → ⚡ A / ⚡ B); this tests them without the arm. -->
+	<SolenoidPanel status={(data.solenoids ?? null) as SolenoidStatus | null} {armReachable} />
 </div>

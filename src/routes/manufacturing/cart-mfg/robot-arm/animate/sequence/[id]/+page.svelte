@@ -2,7 +2,9 @@
 	/**
 	 * ARM-06 — sequence editor: move sets in order with the join between
 	 * each pair (automatic length unless set), the whole path drawn live,
-	 * Play, Stop, Save to Pi.
+	 * Play, Stop, Save to Pi. A move set's fire steps (trapdoor solenoids)
+	 * come along as amber lines; a move set of only fire steps works as a
+	 * reusable "drop a cartridge" item between other sets.
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
@@ -14,7 +16,25 @@
 	import { verifyWanted } from '$lib/robot-arm/verified-poses';
 	import type { PoseCalibrationSummary, VerifiedRunSummary } from '$lib/server/robot-arm-verified';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
-	import { autoDurationS, buildPath, flattenSequence, friendlyName, keyframePositions, pathStats, tooFast, EASINGS, MAX_TRANSITION_S, MIN_TRANSITION_S, type Easing, type RenderedPath, type ResolvedKeyframe, type SequenceItem } from '$lib/robot-arm/animation';
+	import {
+		autoDurationS,
+		firstPose,
+		flattenSequence,
+		friendlyName,
+		lastPose,
+		pathStats,
+		previewPath,
+		resolveForPreview,
+		stepCountLabel,
+		tooFast,
+		EASINGS,
+		MAX_TRANSITION_S,
+		MIN_TRANSITION_S,
+		type Easing,
+		type RenderedPath,
+		type ResolvedKeyframe,
+		type SequenceItem
+	} from '$lib/robot-arm/animation';
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import type { MoveSetSummary, PoseSummary, SequenceItemRecord, SequenceSummary } from '$lib/server/robot-arm-animation';
@@ -46,21 +66,18 @@
 	const dirty = $derived(JSON.stringify(items) + name + notes !== saved);
 
 	function resolveSet(ms: MoveSetSummary): ResolvedKeyframe[] | null {
-		const out: ResolvedKeyframe[] = [];
-		for (const k of ms.keyframes) {
-			const p = poseById.get(k.poseId);
-			if (!p) return null;
-			out.push({ ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets) });
-		}
-		return out;
+		return resolveForPreview(ms.keyframes, poseById);
 	}
 	const resolvedItems = $derived.by((): (SequenceItem & { missing?: boolean; autoJoinS: number })[] => {
 		let prevEnd: number[] | null = null;
 		return items.map((it) => {
 			const ms = moveSetById.get(it.moveSetId);
 			const kfs = (ms && resolveSet(ms)) ?? [];
-			const autoJoinS = prevEnd && kfs.length ? autoDurationS(prevEnd, kfs[0].positions) : 0;
-			if (kfs.length) prevEnd = kfs[kfs.length - 1].positions;
+			// Joins run pose to pose: fire steps at either end of a set do not move the arm.
+			const first = firstPose(kfs);
+			const autoJoinS = prevEnd && first ? autoDurationS(prevEnd, first.positions) : 0;
+			const last = lastPose(kfs);
+			if (last) prevEnd = last.positions;
 			return { name: ms?.name ?? '(missing)', keyframes: kfs, join: { durationS: it.joinDurationS, easing: it.joinEasing as Easing }, missing: !ms || !kfs.length, autoJoinS };
 		});
 	});
@@ -68,7 +85,7 @@
 	const render = $derived.by((): { path: RenderedPath | null; error: string | null } => {
 		if (!flat.length) return { path: null, error: null };
 		try {
-			return { path: buildPath(flat), error: null };
+			return { path: previewPath(flat), error: null };
 		} catch (e) {
 			return { path: null, error: e instanceof Error ? e.message : String(e) };
 		}
@@ -85,7 +102,7 @@
 	let chosenCamera = $state<string | null>(null);
 	const camera = $derived(pickCamera(cameraNames, chosenCamera, poseCals.map((c) => c.cameraName)));
 	const hasRef = (poseId: string) => poseCals.some((c) => c.poseId === poseId && c.cameraName === camera && !c.stale);
-	const anyVerified = $derived(flat.some((k) => verifyWanted(k.verify, hasRef(k.poseId))));
+	const anyVerified = $derived(flat.some((k) => !k.fire && verifyWanted(k.verify, hasRef(k.poseId))));
 	const vr = new VerifiedRun();
 	vr.onend = () => void invalidateAll();
 	onDestroy(() => vr.destroy());
@@ -181,7 +198,7 @@
 						<td class="py-1 pr-2 font-mono" style="color: var(--color-tron-text-secondary)">{i + 1}</td>
 						<td class="py-1 pr-2">
 							<select bind:value={it.moveSetId} class={input} style={inputStyle}>
-								{#each activeMoveSets as m (m._id)}<option value={m._id}>{friendlyName(m.name)} ({m.keyframes.length} poses)</option>{/each}
+								{#each activeMoveSets as m (m._id)}<option value={m._id}>{friendlyName(m.name)} ({stepCountLabel(m.keyframes)})</option>{/each}
 							</select>
 							{#if r?.missing}<span class="ml-1 text-red-300">missing or empty move set</span>{/if}
 						</td>

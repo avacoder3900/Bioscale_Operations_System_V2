@@ -25,6 +25,7 @@ import {
 	setPoseArchived,
 	setPosesArchived,
 	setSequenceArchived,
+	solenoidStatus,
 	startLeaderPosing,
 	stopLeaderPosing,
 	updatePose,
@@ -43,7 +44,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// The Pi's servo driver is not thread-safe and a running session owns the
 	// bus, so the follower is only read when nothing is running.
 	const active = await playbackActive().catch(() => null);
-	const [poses, moveSets, sequences, arm, holder, poseCalibrations, verifiedRun] = await Promise.all([
+	const [poses, moveSets, sequences, arm, holder, poseCalibrations, verifiedRun, solenoids] = await Promise.all([
 		listPoses().catch(() => null),
 		listMoveSets().catch(() => null),
 		listSequences().catch(() => null),
@@ -53,7 +54,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		deriveArmHolder().catch(() => null),
 		// ARM-09: every pose's active camera reference (no pictures) and a verified run still in progress (page reload resumes it).
 		listPoseCalibrations().catch(() => []),
-		activeVerifiedRun().catch(() => null)
+		activeVerifiedRun().catch(() => null),
+		// The trapdoor solenoids (GPIO, not the servo bus — fine to read mid-play).
+		solenoidStatus()
 	]);
 	// Home per camera (Vision tab calibration): the pose editor's default reference marker.
 	const homeSteps = await homeStepsByCamera().catch(() => ({}));
@@ -69,6 +72,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		holder: JSON.parse(JSON.stringify(holder ?? null)),
 		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
 		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null)),
+		solenoids: JSON.parse(JSON.stringify(solenoids)),
 		homeSteps
 	};
 };

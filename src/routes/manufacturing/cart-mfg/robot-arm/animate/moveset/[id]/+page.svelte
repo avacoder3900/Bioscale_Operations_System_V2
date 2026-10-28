@@ -4,6 +4,11 @@
 	 * (pose, how long the move into it takes, easing, hold) and, for the
 	 * selected keyframe, the pose editor — sliders that drive the real arm
 	 * live. Play, Stop and Save as a recording on the Pi.
+	 *
+	 * Fire steps (2026-10-28): a step can instead fire a cartridge trapdoor
+	 * solenoid (A or B). It sits in the list like a pose, in amber; the arm
+	 * holds where it is for the pulse plus the wait after it. The strip above
+	 * the list shows where each fire lands in the animation.
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
@@ -11,27 +16,40 @@
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
 	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
 	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
+	import SolenoidPanel from '$lib/components/robot-arm/SolenoidPanel.svelte';
+	import StepStrip from '$lib/components/robot-arm/StepStrip.svelte';
 	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
 	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
 	import { verifyWanted, MAX_ANGLE_DEG, MAX_POSITION_MM, MAX_TOLERANCE_STEPS } from '$lib/robot-arm/verified-poses';
 	import type { PoseCalibrationSummary, VerifiedRunSummary } from '$lib/server/robot-arm-verified';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
 	import {
-		buildPath,
+		fireStepS,
 		friendlyName,
 		heatCheck,
 		keyframePositions,
 		minDurationS,
+		newFireStep,
 		pathStats,
+		previewPath,
+		solenoidLabel,
+		solenoidPin,
+		stepCountLabel,
 		tooFast,
 		DEFAULT_RATE_HZ,
 		EASINGS,
 		MAX_HOLD_S,
+		MAX_PULSE_MS,
 		MAX_STEPS_PER_S,
 		MAX_TRANSITION_S,
+		MIN_FIRE_WAIT_S,
+		MIN_PULSE_MS,
 		MIN_TRANSITION_S,
+		SOLENOIDS,
 		type Keyframe,
-		type ResolvedKeyframe
+		type ResolvedKeyframe,
+		type Solenoid,
+		type SolenoidStatus
 	} from '$lib/robot-arm/animation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import type { MoveSetSummary, PoseSummary } from '$lib/server/robot-arm-animation';
@@ -44,6 +62,7 @@
 	const poseById = $derived(new Map(poses.map((p) => [p._id, p])));
 	const activePoses = $derived(poses.filter((p) => !p.archived));
 	const armNow = $derived((data.armNow ?? null) as ArmRead | null);
+	const solenoids = $derived((data.solenoids ?? null) as SolenoidStatus | null);
 
 	const flash = $derived(form as { success?: string; error?: string; createdPoseId?: string } | null);
 	const armReachable = $derived(!!data.arm?.reachable);
@@ -118,7 +137,12 @@
 	});
 	const dirty = $derived(JSON.stringify(kfs) + name + notes !== saved);
 	// ARM-09: at least one step would be checked (its own flag, or a reference exists for the camera).
-	const anyVerified = $derived(kfs.some((k) => verifyWanted(k.verify, hasRef(k.poseId))));
+	const anyVerified = $derived(kfs.some((k) => !k.fire && verifyWanted(k.verify, hasRef(k.poseId))));
+	// A move set with fire steps plays only on a Pi whose replay fires them (unknown status: let the server decide).
+	const hasFires = $derived(kfs.some((k) => k.fire));
+	const firesBlocked = $derived(hasFires && !!solenoids && !solenoids.replayFire);
+	// The first pose has no "move in": the play leads in to it from wherever the arm is.
+	const firstPoseIndex = $derived(kfs.findIndex((k) => !k.fire));
 
 	// "Save as new" in the editor while a keyframe is selected: that keyframe now uses the new pose.
 	let lastCreated = '';
@@ -134,6 +158,10 @@
 	const resolved = $derived.by((): ResolvedKeyframe[] => {
 		const out: ResolvedKeyframe[] = [];
 		for (const k of kfs) {
+			if (k.fire) {
+				out.push({ ...k, name: `Fire ${solenoidLabel(k.fire.solenoid)}`, positions: [] });
+				continue;
+			}
 			const p = poseById.get(k.poseId);
 			if (p) out.push({ ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets) });
 		}
@@ -142,21 +170,45 @@
 	const render = $derived.by(() => {
 		if (!resolved.length) return { path: null, error: null as string | null };
 		try {
-			return { path: buildPath(resolved, { rateHz: moveSet.rateHz || DEFAULT_RATE_HZ }), error: null };
+			return { path: previewPath(resolved, moveSet.rateHz || DEFAULT_RATE_HZ), error: null };
 		} catch (e) {
 			return { path: null, error: e instanceof Error ? e.message : String(e) };
 		}
 	});
 	const stats = $derived(render.path ? pathStats(render.path) : null);
 	const problems = $derived(tooFast(resolved));
-	const minFor = (i: number) => (i > 0 && resolved[i - 1] && resolved[i] ? minDurationS(resolved[i - 1].positions, resolved[i].positions, MAX_STEPS_PER_S, resolved[i].easing) : 0);
-	const selPose = $derived(selected != null && kfs[selected] ? (poseById.get(kfs[selected].poseId) ?? null) : null);
+	// Against the pose before it: fire steps in between do not move the arm.
+	const minFor = (i: number) => {
+		const k = resolved[i];
+		if (!k || k.fire) return 0;
+		for (let j = i - 1; j >= 0; j--) if (!resolved[j].fire) return minDurationS(resolved[j].positions, k.positions, MAX_STEPS_PER_S, k.easing);
+		return 0;
+	};
+	const selPose = $derived(selected != null && kfs[selected] && !kfs[selected].fire ? (poseById.get(kfs[selected].poseId) ?? null) : null);
+	const selFire = $derived(selected != null && kfs[selected]?.fire ? kfs[selected] : null);
+	// The pose a fire step holds on: the nearest pose before it (none = where the arm is when it starts).
+	function holdsOn(i: number): string {
+		for (let j = i - 1; j >= 0; j--) {
+			if (kfs[j].fire) continue;
+			const p = poseById.get(kfs[j].poseId);
+			return p ? `"${friendlyName(p.name)}"` : 'the pose before it';
+		}
+		return 'wherever the arm is when the play starts';
+	}
+	// The editor's path has no lead-in; the play's does.
+	const playheadS = $derived(playback.running ? Math.max(0, playback.elapsedS - playback.leadInS) : null);
 
 	function add() {
 		if (!addPoseId) return;
 		kfs = [...kfs, { poseId: addPoseId, holdS: 0.5, durationS: 1.5, easing: 'ease' }];
 		selected = kfs.length - 1;
 		addPoseId = '';
+	}
+	// A fire step goes right after the selected step (the pose it should fire at), else at the end.
+	function addFire(s: Solenoid) {
+		const at = selected != null ? selected + 1 : kfs.length;
+		kfs = [...kfs.slice(0, at), newFireStep(s), ...kfs.slice(at)];
+		selected = at;
 	}
 	function move(i: number, d: number) {
 		const j = i + d;
@@ -174,6 +226,7 @@
 		if (confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) void playback.play('goToPose', { id: p._id }, `Go to ${friendlyName(p.name)}`);
 	}
 	const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
+	const tenth = (v: number) => Math.round(v * 10) / 10;
 
 	const input = 'rounded border bg-black/40 px-2 py-1 text-sm';
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
@@ -198,10 +251,10 @@
 			{#if playback.running}
 				<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 			{:else}
-				<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length}
-					title={dirty ? 'Save first' : 'From where the arm is, through every pose'}
+				<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || firesBlocked}
+					title={dirty ? 'Save first' : firesBlocked ? "The Pi's replay cannot fire steps yet" : 'From where the arm is, through every step'}
 					onclick={() => { if (confirm(`The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
-				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified}
+				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}
 					title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No step has a camera reference — capture one below' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
 					onclick={playVerified}>◎ Play verified</button>
 			{/if}
@@ -221,6 +274,12 @@
 		{#if playback.warnings.length}<p class="text-xs" style="color: #f59e0b">{playback.warnings.join(' ')}</p>{/if}
 	{/if}
 	<VerifiedRunPanel {vr} />
+	{#if firesBlocked}
+		<p class="text-xs" style="color: #fbbf24">This move set fires solenoids, but the Pi's replay cannot fire steps yet — Play stays off until the Pi is updated. Test fire works.</p>
+	{/if}
+	{#if render.path && (hasFires || kfs.length > 1)}
+		<StepStrip path={render.path} selectedIndex={selected} {playheadS} onselect={(i) => (selected = i)} />
+	{/if}
 
 	<div class="grid gap-4 lg:grid-cols-[24rem_minmax(0,1fr)]">
 		<!-- keyframes -->
@@ -233,6 +292,43 @@
 				{#each kfs as k, i (i)}
 					{@const p = poseById.get(k.poseId)}
 					{@const min = minFor(i)}
+					{#if k.fire}
+						{@const f = k.fire}
+						<!-- A fire step: amber, so it never reads as a pose. -->
+						<li class="rounded border p-2" style="border-color: {selected === i ? '#f59e0b' : 'rgba(245,158,11,0.45)'}; background: {selected === i ? 'rgba(245,158,11,0.10)' : 'rgba(245,158,11,0.04)'}">
+							<div class="flex items-center gap-2">
+								<span class="w-5 font-mono text-xs" style={muted}>{i + 1}</span>
+								<button type="button" class="min-w-0 flex-1 truncate text-left text-sm font-semibold" style="color: #fbbf24" onclick={() => (selected = i)}>⚡ Fire {solenoidLabel(f.solenoid)}</button>
+								<button type="button" onclick={() => move(i, -1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Earlier">▲</button>
+								<button type="button" onclick={() => move(i, 1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Later">▼</button>
+								<button type="button" onclick={() => remove(i)} class="px-1 text-xs text-red-300" title="Remove">✕</button>
+							</div>
+							{#if selected === i}
+								<div class="mt-2 space-y-2 text-[11px]" style={muted}>
+									<label class="block">Solenoid
+										<select bind:value={f.solenoid} class="{input} mt-1 w-full" style={inputStyle}>
+											{#each SOLENOIDS as s (s.id)}<option value={s.id}>{s.label} · GPIO {s.pin}</option>{/each}
+										</select>
+									</label>
+									<label class="block">Pulse (ms)
+										<span class="mt-1 flex items-center gap-2">
+											<input type="range" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={f.pulseMs} oninput={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, MAX_PULSE_MS)))} class="min-w-0 flex-1" aria-label="Pulse length" />
+											<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={f.pulseMs} onchange={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, MAX_PULSE_MS)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
+										</span>
+									</label>
+									<label class="block">Wait after (s) — the cartridge drops; the arm waits
+										<span class="mt-1 flex items-center gap-2">
+											<input type="range" min={MIN_FIRE_WAIT_S} max="10" step="0.1" value={Math.min(10, k.holdS)} oninput={(e) => (k.holdS = tenth(clamp(Number(e.currentTarget.value), MIN_FIRE_WAIT_S, MAX_HOLD_S)))} class="min-w-0 flex-1" aria-label="Wait after firing" />
+											<input type="number" min={MIN_FIRE_WAIT_S} max={MAX_HOLD_S} step="0.1" value={k.holdS} onchange={(e) => (k.holdS = tenth(clamp(Number(e.currentTarget.value), MIN_FIRE_WAIT_S, MAX_HOLD_S)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Wait after firing in seconds" />
+										</span>
+									</label>
+									<p>Step takes {fireStepS(k).toFixed(1)} s. The arm holds on {holdsOn(i)}.</p>
+								</div>
+							{:else}
+								<div class="mt-0.5 pl-7 text-[11px]" style={muted}>GPIO {solenoidPin(f.solenoid)} · {f.pulseMs} ms pulse · then wait {k.holdS} s</div>
+							{/if}
+						</li>
+					{:else}
 					<li class="rounded border p-2" style="border-color: {selected === i ? 'var(--color-tron-cyan)' : 'var(--color-tron-border)'}; background: {selected === i ? 'rgba(56,189,248,0.06)' : 'transparent'}">
 						<div class="flex items-center gap-2">
 							<span class="w-5 font-mono text-xs" style={muted}>{i + 1}</span>
@@ -255,16 +351,16 @@
 						{#if selected === i}
 							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
 								<label>Move in (s)
-									{#if i === 0}<span class="mt-1 block py-1">start</span>
+									{#if i === firstPoseIndex}<span class="mt-1 block py-1">start</span>
 									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style="{inputStyle}; {k.durationS < min ? 'border-color: #ef4444' : ''}" />{/if}
 								</label>
 								<label>Easing
-									{#if i === 0}<span class="mt-1 block py-1">—</span>
+									{#if i === firstPoseIndex}<span class="mt-1 block py-1">—</span>
 									{:else}<select bind:value={k.easing} class="{input} mt-1 w-full" style={inputStyle} title={EASINGS.find((e) => e.id === k.easing)?.hint}>{#each EASINGS as e (e.id)}<option value={e.id}>{e.label}</option>{/each}</select>{/if}
 								</label>
 								<label>Hold (s)<input type="number" step="0.1" min="0" max={MAX_HOLD_S} value={k.holdS} oninput={(e) => (k.holdS = clamp(Number(e.currentTarget.value), 0, MAX_HOLD_S))} class="{input} mt-1 w-full" style={inputStyle} /></label>
 							</div>
-							{#if i > 0 && k.durationS < min}<p class="mt-1 text-[11px] text-red-300">Too fast for this move — at least {min} s.</p>{/if}
+							{#if i !== firstPoseIndex && k.durationS < min}<p class="mt-1 text-[11px] text-red-300">Too fast for this move — at least {min} s.</p>{/if}
 							<!-- ARM-09: this step's camera check and its own tolerances (blank = the pose reference's) -->
 							<div class="mt-2 grid grid-cols-4 gap-2 text-[11px]" style={muted}>
 								<label>Camera check
@@ -285,12 +381,13 @@
 								</p>
 							{/if}
 						{:else}
-							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === 0 ? 'start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}</div>
+							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === firstPoseIndex ? 'start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}</div>
 						{/if}
 					</li>
+					{/if}
 				{/each}
 			</ol>
-			{#if !kfs.length}<p class="text-xs" style={muted}>No poses yet — add one below.</p>{/if}
+			{#if !kfs.length}<p class="text-xs" style={muted}>No steps yet — add a pose or a fire step below.</p>{/if}
 
 			<div class="flex items-center gap-2">
 				<select bind:value={addPoseId} class="{input} min-w-0 flex-1" style={inputStyle} aria-label="Add pose">
@@ -299,12 +396,32 @@
 				</select>
 				<button type="button" onclick={add} disabled={!addPoseId} class="rounded px-3 py-1 text-sm font-semibold disabled:opacity-40" style={cyan}>Add</button>
 			</div>
+			<div class="flex flex-wrap items-center gap-2">
+				<span class="text-[11px]" style={muted}>Fire step {selected != null && kfs[selected] ? `after step ${selected + 1}` : 'at the end'}:</span>
+				{#each SOLENOIDS as s (s.id)}
+					<button type="button" onclick={() => addFire(s.id)} class="rounded px-3 py-1 text-sm font-semibold" style={amber} title="Add a step that fires {s.label} (GPIO {s.pin})">⚡ {s.id}</button>
+				{/each}
+			</div>
 			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save move set' : 'Saved'}</button>
 		</form>
 
-		<!-- pose editor for the selected keyframe -->
+		<!-- pose editor for the selected keyframe (or, for a fire step, the solenoids) -->
 		<div class="space-y-3">
-			{#if selPose}
+			{#if selFire?.fire}
+				<div class={card} style={cardStyle}>
+					<h2 class="text-sm font-semibold" style="color: #fbbf24">⚡ Step {selected! + 1}: fire {solenoidLabel(selFire.fire.solenoid)}</h2>
+					<p class="mt-1 text-xs" style={muted}>
+						When the play reaches this step the arm holds on {holdsOn(selected!)}. The Pi pulses {solenoidLabel(selFire.fire.solenoid)}
+						(GPIO {solenoidPin(selFire.fire.solenoid)}) for {selFire.fire.pulseMs} ms, then waits {selFire.holdS} s for the cartridge to drop
+						before the next step: {fireStepS(selFire).toFixed(1)} s in all.
+					</p>
+					<p class="mt-2 text-[11px]" style={muted}>
+						The Pi fires on the recording's clock, separately from the arm, so the arm settling into a pose never delays a trapdoor.
+						Two fire steps in a row are always at least {MIN_FIRE_WAIT_S} s apart, and the Pi never has both coils on at once.
+					</p>
+				</div>
+				<SolenoidPanel status={solenoids} {armReachable} step={selFire.fire} />
+			{:else if selPose}
 				{#key selPose._id}
 					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} {home} />
 					<PoseCameraCard pose={selPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(selPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
