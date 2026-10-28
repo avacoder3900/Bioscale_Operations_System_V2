@@ -290,7 +290,7 @@
 <section class="rounded border p-3 sm:p-4" style="border-color: {live ? '#4ade80' : 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
 	<div class="flex flex-wrap items-center gap-3">
 		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
-			{pose ? friendlyName(pose.name) : 'New pose'}
+			{pose ? friendlyName(pose.name) : 'New Pose'}
 		</h2>
 		{#if live}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(74,222,128,0.15); color: #4ade80">LIVE</span>{/if}
 		{#if dirty}<span class="text-[11px]" style="color: #fbbf24">unsaved changes</span>{/if}

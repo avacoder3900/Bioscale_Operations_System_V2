@@ -8,8 +8,8 @@
 	 * and sequences. `?edit=<poseId>` opens that pose in the editor.
 	 * "select" in the library ticks many poses to archive at once; the
 	 * archived list restores many, or deletes unused ones for good.
-	 * Under the lists, the trapdoor solenoids: test fire A or B (fire steps
-	 * themselves are added in the move-set editor).
+	 * Under the pose editor, the trapdoor solenoids: test fire A or B (fire
+	 * steps themselves are added in the move-set editor).
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
@@ -249,6 +249,8 @@
 	const card = 'rounded border p-3 sm:p-4';
 	const cardStyle = 'border-color: var(--color-tron-border); background: var(--color-tron-surface);';
 	const muted = 'color: var(--color-tron-text-secondary)';
+	// "replay" → "Replay", for the "Replay Running" chip.
+	const titleCase = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 	const chip = 'rounded border px-2 py-0.5 text-xs';
 	const heatColor = (t: number | null) => ({ stop: '#ef4444', hot: '#f97316', warm: '#fbbf24', ok: '#4ade80' })[heatLevel(t)];
 </script>
@@ -258,7 +260,6 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Animate</h1>
-			<p class="text-xs" style={muted}>Make poses with the sliders, chain them into move sets, chain move sets into sequences.</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if !armReachable}
@@ -276,7 +277,12 @@
 					</form>
 				{/if}
 			{:else if data.active}
-				<span class={chip} style="border-color: var(--color-tron-border); {muted}">{following ? 'Following the control arm' : `${data.active.kind} running`}</span>
+				{#if following}
+					<span class={chip} style="border-color: var(--color-tron-border); {muted}">Following the control arm</span>
+				{:else}
+					<!-- Yellow, so a session holding the arm (e.g. a replay) is hard to miss. -->
+					<span class="{chip} font-semibold" style="border-color: #f59e0b; background: rgba(245,158,11,0.18); color: #fbbf24">{titleCase(String(data.active.kind ?? 'session'))} Running</span>
+				{/if}
 			{/if}
 		</div>
 	</div>
@@ -334,9 +340,8 @@
 					</form>
 				{:else}
 					<form method="POST" action="?/poseWithLeader" use:enhance onsubmit={(e) => { if (!confirm('The follower will move to wherever the control arm is now, then follow it. Is the control arm roughly matching the follower and is the path clear?')) e.preventDefault(); }}>
-						<button type="submit" class={btn} style={cyan} disabled={blocked || !!heat?.tooHot.length}>Follow the control arm</button>
+						<button type="submit" class={btn} style={cyan} disabled={blocked || !!heat?.tooHot.length}>Follow Control Arm</button>
 					</form>
-					<span class="text-xs" style={muted}>for rough posing — then finish with the sliders.</span>
 				{/if}
 			</div>
 
@@ -356,6 +361,9 @@
 					<PoseCameraCard pose={editPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(editPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
 				{/if}
 			{/key}
+
+			<!-- The cartridge trapdoors, under the pose editor. Fire steps go in a move set (open it → ⚡ A / ⚡ B); this tests them without the arm. -->
+			<SolenoidPanel status={(data.solenoids ?? null) as SolenoidStatus | null} {armReachable} />
 		</div>
 
 		<!-- pose library -->
@@ -507,7 +515,4 @@
 			</section>
 		{/each}
 	</div>
-
-	<!-- The cartridge trapdoors. Fire steps go in a move set (open it → ⚡ A / ⚡ B); this tests them without the arm. -->
-	<SolenoidPanel status={(data.solenoids ?? null) as SolenoidStatus | null} {armReachable} />
 </div>
