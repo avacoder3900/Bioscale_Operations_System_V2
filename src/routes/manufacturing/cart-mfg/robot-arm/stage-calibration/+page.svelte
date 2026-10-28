@@ -956,6 +956,13 @@
 		const r = await postAction('saveStageGeometry', { rotationDeg: String(rotationDeg), jumpHeightMm: String(jumpHeightMm) });
 		if (r) msg = r.success;
 	}
+	/** Turn the whole cart a quarter turn about the taught first hole and save — the plane redraws from the result. */
+	async function rotateCart(deltaDeg: number) {
+		const next = (((rotation + deltaDeg) % 360) + 360) % 360;
+		rotationDeg = next;
+		const r = await postAction('saveStageGeometry', { rotationDeg: String(next), jumpHeightMm: String(jumpHeightMm) });
+		if (r) msg = `Cart rotated to ${next}° about the first hole — ${facing}. All 12 holes follow; per-hole corrections are kept.`;
+	}
 
 	const fmt3 = (n: number) => n.toFixed(2);
 	const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : '');
@@ -1025,6 +1032,11 @@
 				<div class="flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="4" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
+					<span class="ml-2 inline-flex overflow-hidden rounded border border-[var(--color-tron-cyan)]/50" title="Turn the whole cart a quarter turn about the taught first hole and save it (the stage protocol reads the rotation at run start)">
+						<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">⟲ Rotate cart</button>
+						<span class="border-x border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1 font-mono text-[var(--color-tron-cyan)]">{rotation}°</span>
+						<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Rotate cart ⟳</button>
+					</span>
 					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Reference grid (0.25mm fine · 1mm · 10mm bold)">Grid{showGrid ? ' ✓' : ''}</button>
 					<button type="button" onclick={() => (showRigid = !showRigid)} class="rounded border px-2 py-1 {showRigid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showRigid ? '' : 'color: var(--color-tron-text)'} title="Show where the rigid lattice puts each corrected hole">Lattice{showRigid ? ' ✓' : ''}</button>
 					<button type="button" onclick={selectAll} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all</button>
@@ -1171,6 +1183,9 @@
 						{#if data.teach?.nextTipWell}<span title="Where the robot's tip tracker / Studio cursor says the next fresh tip is">next fresh: <span class="font-mono">{data.teach.nextTipWell}</span> · {data.teach.nextTipSource}</span>{/if}
 						<button type="button" onclick={() => (tipWell = 'A1')} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 hover:border-[var(--color-tron-cyan)]/60" title="Rack was refilled — start from A1 again">Refilled → A1</button>
 					</div>
+					{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}
+						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point is taught for {robotName} — the probe would drive to the protocol's default. Teach it in the <strong>Tip calibrator</strong> panel below first.</p>
+					{/if}
 					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
 						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip (picks up a p20 tip first)'}
 					</button>
@@ -1187,31 +1202,6 @@
 					{#if tipAdjust}
 						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
 					{/if}
-					<details class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/20">
-						<summary class="cursor-pointer select-none px-2 py-1 text-[10px] uppercase tracking-wider hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Fixture point (teach) · {data.teach?.calibrator?.source ?? 'none'}</summary>
-						<div class="border-t border-[var(--color-tron-border)] p-2">
-							<div class="grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
-								<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-								<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-								<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
-							</div>
-							<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Approach Z is the pre-probe travel height only — "Calibrate tip" and "Go to calibrator" park there. The probe never reads it.</p>
-							<div class="mt-2 grid grid-cols-2 gap-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-								<label class="block">Probe Z — p20 · wax (zCalWax)
-									<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={probeZ} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
-								</label>
-								<label class="block">Max tip adjust (mm, blank = protocol default)
-									<input type="number" step="0.1" min="0.3" max="12" bind:value={maxAdjust} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
-								</label>
-							</div>
-							<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Touch-off depth the limit-switch probe descends to. "Calibrate tip" uses what is typed here immediately; Save writes it to this robot's production z_cal (robot-keyed — the arm's OT-2 has no deck).{#if data.teach?.calibrator?.taughtAt} Last saved {when(data.teach.calibrator.taughtAt)}{data.teach.calibrator.taughtBy ? ` by ${data.teach.calibrator.taughtBy}` : ''}.{/if}</p>
-							<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
-							<div class="mt-1 grid grid-cols-2 gap-2">
-								<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
-								<button type="button" onclick={saveCalibratorPosition} disabled={busy || !robotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robotName}</button>
-							</div>
-						</div>
-					</details>
 				</div>
 
 				<!-- Offset → selection -->
@@ -1226,6 +1216,39 @@
 					<button type="button" onclick={applyGlobalShift} disabled={busy || !taught} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">⤧ Shift whole cart by this offset</button>
 					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole → Capture → <strong>Shift whole cart</strong> moves the taught first hole (all 12 follow). Apply to a subset writes per-hole corrections (±{HOLE_OFFSET_LIMIT_MM} mm max).</p>
 					<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, whole cart, set-position or align)">↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}</button>
+				</div>
+			</section>
+
+			<!-- Tip calibrator: the fixture point the probe uses — taught here, robot-keyed (the arm's OT-2 has no deck). -->
+			<section class="rounded-lg border border-purple-400/40 bg-[var(--color-tron-surface)] p-3">
+				<div class="flex items-center justify-between">
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip calibrator</h2>
+					<span class="text-[10px] {data.teach?.calibrator?.source === 'default' ? 'text-amber-300' : ''}" style={data.teach?.calibrator?.source === 'default' ? '' : 'color: var(--color-tron-text-secondary)'}>
+						{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}not taught — protocol defaults{:else}{data.teach.calibrator.source}{data.teach.calibrator.taughtAt ? ` · ${when(data.teach.calibrator.taughtAt)}` : ''}{data.teach.calibrator.taughtBy ? ` · ${data.teach.calibrator.taughtBy}` : ''}{/if}
+					</span>
+				</div>
+				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+					The limit-switch fixture every tip is probed on. Its point is this robot's own (the arm's OT-2 has no deck) and becomes the fill's cal_x / cal_y / z_cal.
+					Teach it: <strong>Open run</strong> → <strong>Pick up tip (no probe)</strong> → <strong>Go to calibrator</strong> → jog the tip onto the fixture → <strong>From live</strong> → <strong>Save</strong>. Then <strong>Calibrate tip</strong> to confirm the probe reads.
+				</p>
+				<div class="mt-2 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+					<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+					<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+					<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+				</div>
+				<div class="mt-2 grid grid-cols-2 gap-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
+					<label class="block" title="Touch-off depth the limit-switch probe descends to — production z_cal for this robot">Probe Z — p20 · wax (zCalWax)
+						<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={probeZ} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
+					</label>
+					<label class="block" title="Largest probe adjust the fill accepts before it stops (raw, carries this fixture's baseline). Blank = the protocol's 4.0">Max tip adjust (mm)
+						<input type="number" step="0.1" min="0.3" max="12" bind:value={maxAdjust} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
+					</label>
+				</div>
+				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Approach Z is travel-only — "Calibrate tip" and "Go to calibrator" park there; the probe descends to Probe Z under its own protection. "Calibrate tip" uses what is typed here immediately; Save writes it to production.</p>
+				<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
+				<div class="mt-1 grid grid-cols-2 gap-2">
+					<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the calX / calY / Approach Z fields">From live ↧</button>
+					<button type="button" onclick={saveCalibratorPosition} disabled={busy || !robotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robotName}</button>
 				</div>
 			</section>
 
@@ -1346,7 +1369,11 @@
 				<label>Travel height (mm) <input type="number" step="1" min={STAGE_JUMP_LIMITS.min} max={STAGE_JUMP_LIMITS.max} bind:value={jumpHeightMm} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 			</div>
 			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Rotation: counter-clockwise from above, about the first hole, vs a carriage slot. <strong>90° = this stage</strong>: the cart turned a quarter turn so the gates run toward you (gate 4 at the back, gate 1 nearest you) and the rows run left → right. 270° (or −90°) = the same quarter turn the other way; 0° = as on a carriage. The plane's arrows show the result; save to redraw. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is tall.</p>
-			<button type="button" onclick={saveGeometry} disabled={busy || locked} class="w-full rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>
+			<div class="grid grid-cols-3 gap-2">
+				<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn counter-clockwise, saved immediately">⟲ 90°</button>
+				<button type="button" onclick={saveGeometry} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>
+				<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn clockwise, saved immediately">90° ⟳</button>
+			</div>
 		</section>
 
 		<section class="rounded-lg border {calibration?.scanPosition ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">

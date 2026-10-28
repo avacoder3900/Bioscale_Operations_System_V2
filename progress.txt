@@ -24261,3 +24261,9 @@ at the back) and the rows run left-right. The plane now marks front (toward you,
 row 1->3 arrows at the current rotation so the orientation can be checked at a glance; the pickers row says it in words.
 A calibration doc that already SAVED a rotation keeps its value - set 90 (or 270 if the cart faces the other way) in
 Stage - geometry and save. svelte-check: 14-error baseline; tests pass.
+
+Follow-up (same day): Tip calibrator teach promoted from the collapsed "Fixture point (teach)" disclosure to its own
+always-visible panel in the right rail (status + when/by, calX/calY/Approach Z, Probe Z, Max tip adjust, Go to calibrator,
+From live, Save -> robot, with the teach steps written out); the Tip panel warns when no point is taught. Rotate-cart
+buttons (quarter turn CCW/CW about the first hole, saved immediately) on the plane toolbar and beside Save geometry.
+svelte-check: 14-error baseline.
