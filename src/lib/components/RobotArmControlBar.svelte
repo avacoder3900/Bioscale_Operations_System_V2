@@ -19,6 +19,8 @@
 		userId: string | null;
 		since: string | null;
 		stale: boolean;
+		/** Replay runs: the loop in progress (from the Pi's replay.loop events). */
+		loop?: { index: number; of: number } | null;
 	}
 
 	interface ActiveSession {
@@ -136,6 +138,7 @@
 					<span class="font-semibold">RUNNING</span>
 					<span style="color: var(--color-tron-text-secondary)">
 						{active?.kind}
+						{#if holder?.loop}· loop {holder.loop.index} of {holder.loop.of}{/if}
 						{#if holder?.username}· held by {holder.username}{/if}
 						{#if holder?.since}· {elapsed(holder.since)}{/if}
 					</span>

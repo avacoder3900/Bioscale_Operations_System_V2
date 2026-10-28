@@ -262,9 +262,13 @@ class LeaderFollowerSession:
         self.follower.sync_write_positions(snap)
         self.follower.set_torque_all(True)
 
-        for _loop in range(max(self.loops, 1)):
+        total = max(self.loops, 1)
+        for loop_idx in range(total):
             if self._cancel.is_set():
                 return
+            # Same event replay_settle.py logs on the live Pi; BIMS's control
+            # page reads the latest one as "loop N of M".
+            self._emit("loop", extra={"index": loop_idx + 1, "of": total})
             loop_start = time.time()
             for frame in frames:
                 if self._cancel.is_set():
