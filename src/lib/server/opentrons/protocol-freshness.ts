@@ -78,10 +78,50 @@ export async function currentProtocolEntry(robotId: string, processType: Process
 	return entries[entries.length - 1] ?? null;
 }
 
-/** The stored .py to re-sync with; throws the operator-facing message when none. */
-export async function storedRunProtocol(processType: ProcessType, staleDetail: string): Promise<{ fileName: string; fileContent: string }> {
+/**
+ * The stored .py for a process ON A GIVEN ROBOT: the library row most recently
+ * DEPLOYED to that robot, else the newest active row of the process.
+ *
+ * Robots on different fixtures run different variants of the same process -
+ * the robot-arm's OT-2 runs protocols/Wax_Filling_GEN7_ArmStage.py (one cart
+ * at a taught point, no deck) as its 'wax-filling' protocol while the carriage
+ * robots run Wax_Filling_GEN7_Cartridge.py. A re-sync that took "the newest
+ * wax-filling row" would silently swap one for the other on whichever robot
+ * happened to be stale, so the robot's own deployment history decides.
+ */
+export async function storedProtocolForRobot(
+	processType: ProcessType,
+	robotId: string | null | undefined
+): Promise<{ fileName?: string; fileContent: string } | null> {
 	await connectDB();
+	if (robotId) {
+		const rows = (await OpentronProtocol.find({ processType, isActive: true, 'deployments.robotId': String(robotId) })
+			.select('fileName fileContent deployments.robotId deployments.deployedAt')
+			.lean()) as any[];
+		const latest = rows
+			.map((r) => ({
+				r,
+				at: Math.max(
+					0,
+					...((r.deployments ?? []) as any[])
+						.filter((d) => String(d.robotId) === String(robotId))
+						.map((d) => new Date(d.deployedAt ?? 0).getTime())
+				)
+			}))
+			.sort((a, b) => b.at - a.at)[0]?.r;
+		if (latest?.fileContent) return latest;
+	}
 	const proto = (await OpentronProtocol.findOne({ processType, isActive: true }).sort({ createdAt: -1 }).lean()) as any;
+	return proto?.fileContent ? proto : null;
+}
+
+/** The stored .py to re-sync with; throws the operator-facing message when none. */
+export async function storedRunProtocol(
+	processType: ProcessType,
+	staleDetail: string,
+	robotId?: string | null
+): Promise<{ fileName: string; fileContent: string }> {
+	const proto = await storedProtocolForRobot(processType, robotId);
 	if (!proto?.fileContent) {
 		throw new Error(
 			`Deck calibration is newer than the robot's ${processType} upload (${staleDetail}), ` +
@@ -94,7 +134,7 @@ export async function storedRunProtocol(processType: ProcessType, staleDetail: s
 
 /** The upload bundle for a re-sync (server half of 'run.uploadProtocol'). */
 export async function resyncBundle(robot: any, processType: ProcessType, staleDetail: string) {
-	const { fileName, fileContent } = await storedRunProtocol(processType, staleDetail);
+	const { fileName, fileContent } = await storedRunProtocol(processType, staleDetail, robot?._id ? String(robot._id) : null);
 	return assembleProtocolUpload(robot, fileName, fileContent);
 }
 

@@ -12,11 +12,10 @@
 	import { enhance, deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
-	import { RobotSession, openRobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { openRobotSession } from '$lib/opentrons/direct-client';
 	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
 	import type { RobotHealth } from '$lib/server/opentrons/health';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
-	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import type { LoopView, LoopCycleView, CalibrationView } from '$lib/server/arm-wax-fill';
 
 	let { data, form } = $props();
@@ -49,11 +48,13 @@
 	let log = $state<{ at: string; text: string; level: 'info' | 'warn' | 'error' }[]>([]);
 	let fillRun = $state<{ opentronsRunId: string; waxRunId: string } | null>(null);
 	let changingAnimations = $state(false);
-	let teaching = $state(false);
 
 	const currentCycle = $derived<LoopCycleView | null>(loop ? (loop.cycles[loop.cycles.length - 1] ?? null) : null);
 	const robotId = $derived(data.settings.robotId);
 	const anim = $derived(data.settings);
+	// The robot runs the stage protocol (Wax_Filling_GEN7_ArmStage.py: fills the taught,
+	// tip-neutral cart location, loads no deck) rather than the legacy carriage protocol.
+	const stage = $derived(!!data.protocol?.declaresCartLocation);
 	const animationOptions = $derived([
 		...data.moveSets.map((m: { _id: string; name: string; keyframes: number }) => ({ value: `move_set:${m._id}`, label: `${m.name} (move set, ${m.keyframes} poses)` })),
 		...data.sequences.map((s: { _id: string; name: string; items: number }) => ({ value: `sequence:${s._id}`, label: `${s.name} (sequence, ${s.items} move sets)` }))
@@ -178,7 +179,19 @@
 				const tag = `Cycle ${cycle.index}/${loop.requestedRuns}`;
 				if (cycle.step === 'grab') {
 					if (stopAsked) break;
-					note(`${tag}: grab — playing "${loop.grabAnimation?.name ?? ''}".`);
+					// The OT-2 gantry must be home before the arm swings in over the stage; the
+					// server refuses cycleGrab without this stamp, so a failure here ends the loop.
+					note(`${tag}: homing the OT-2 gantry before the arm moves.`);
+					const h = await post('homeGantry', { loopId: loop._id, before: 'grab' });
+					if (stopAsked) {
+						await refreshLoop();
+						break;
+					}
+					if (!h.ok) {
+						await fail('grab', `the OT-2 did not report home: ${h.error}`);
+						break;
+					}
+					note(`${tag}: OT-2 home — grab — playing "${loop.grabAnimation?.name ?? ''}".`);
 					const p = await playStep('cycleGrab', `Grab (cycle ${cycle.index})`);
 					if (stopAsked) {
 						// Stop ended the loop on the server while the arm was moving.
@@ -217,7 +230,7 @@
 				} else if (cycle.step === 'fill') {
 					let run = cycle.opentronsRunId && cycle.waxRunId ? { opentronsRunId: cycle.opentronsRunId, waxRunId: cycle.waxRunId } : null;
 					if (!run) {
-						note(`${tag}: starting the wax fill for ${cycle.barcode} (deck position ${loop.cartPosition}).`);
+						note(`${tag}: starting the wax fill for ${cycle.barcode} (${stage ? 'at the taught stage location' : `deck position ${loop.cartPosition}`}).`);
 						const r = await post('cycleFill', { loopId: loop._id });
 						if (!r.ok) {
 							await fail('fill', r.error);
@@ -245,7 +258,19 @@
 					}
 					loop = r.data.loop;
 				} else if (cycle.step === 'withdraw') {
-					note(`${tag}: withdraw — playing "${loop.withdrawAnimation?.name ?? ''}".`);
+					// The fill's protocol homes at its end too; this is the stamp the server insists on.
+					note(`${tag}: homing the OT-2 gantry before the arm moves.`);
+					const h = await post('homeGantry', { loopId: loop._id, before: 'withdraw' });
+					if (!h.ok) {
+						if (stopAsked) {
+							// A Reset while homing ended the loop on the server; nothing to fail.
+							await refreshLoop();
+							if (loop?.status !== 'running') break;
+						}
+						await fail('withdraw', `the OT-2 did not report home: ${h.error}`);
+						break;
+					}
+					note(`${tag}: OT-2 home — withdraw — playing "${loop.withdrawAnimation?.name ?? ''}".`);
 					const p = await playStep('cycleWithdraw', `Withdraw (cycle ${cycle.index})`);
 					if (stopAsked) {
 						// Stop pressed while the arm was withdrawing ends the loop on the server; a Stop
@@ -509,183 +534,10 @@
 	const ctl = 'rounded border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50';
 	const ctlPlain = `${ctl} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]`;
 
-	// ── calibration: teach panel (maintenance run + jog, as the scanner pages) ──
-	let robotSession: RobotSession | null = null;
-	let robotConn = $state<RobotSessionState | null>(null);
-	$effect(() => {
-		const id = robotId;
-		if (!id) return;
-		const s = new RobotSession(id);
-		robotSession = s;
-		s.subscribe((st) => (robotConn = st));
-		void s.open();
-		return () => {
-			s.close();
-			robotSession = null;
-		};
-	});
-
-	let maintRunId = $state<string | null>(null);
-	let pipetteId = $state<string | null>(null);
-	let pipetteMount = $state<string | null>(null);
-	let pipetteName = $state<string | null>(null);
-	let connecting = $state(false);
-	let teachBusy = $state(false);
-	let teachError = $state<string | null>(null);
-	let teachInfo = $state<string | null>(null);
-	let stepSize = $state(1);
-	let zAxis = $state<'leftZ' | 'rightZ'>(data.calibration?.pipetteMount === 'right' ? 'rightZ' : 'leftZ');
-	let liveX = $state<number | null>(null);
-	let liveY = $state<number | null>(null);
-	let liveZ = $state<number | null>(null);
-	let testScanInFlight = $state(false);
-	let testScanError = $state<string | null>(null);
-	let testScanLatest = $state<string | null>(null);
-
-	async function api(path: string, init?: RequestInit): Promise<any> {
-		const doFetch = robotSession ? robotSession.fetchRoute.bind(robotSession) : fetch;
-		const res = await doFetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
-		const text = await res.text();
-		let body: any = null;
-		try {
-			body = text ? JSON.parse(text) : null;
-		} catch {
-			body = text;
-		}
-		if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} → HTTP ${res.status}: ${body?.message ?? (typeof body === 'string' ? body : JSON.stringify(body))}`);
-		return body;
-	}
-
-	async function openMaintenance() {
-		teachError = null;
-		connecting = true;
-		try {
-			const body: Record<string, unknown> = {};
-			if (calibration?.pipetteMount) body.mount = calibration.pipetteMount;
-			if (calibration?.pipetteName) body.pipetteName = calibration.pipetteName;
-			const res = await api(`/api/opentrons-lab/robots/${robotId}/maintenance`, { method: 'POST', body: JSON.stringify(body) });
-			maintRunId = res.runId ?? null;
-			pipetteId = res.pipetteId ?? null;
-			pipetteMount = res.mount ?? null;
-			pipetteName = res.pipetteName ?? null;
-			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
-			teachInfo = pipetteId ? `Connected: pipette ${pipetteName} on ${pipetteMount}.` : 'Maintenance run opened but no pipette could be loaded — jog will fail.';
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			connecting = false;
-		}
-	}
-
-	async function closeMaintenance() {
-		if (!maintRunId) return;
-		teachBusy = true;
-		try {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}`, { method: 'DELETE' });
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			maintRunId = pipetteId = pipetteMount = pipetteName = null;
-			liveX = liveY = liveZ = null;
-			teachBusy = false;
-		}
-	}
-
-	async function refreshPosition() {
-		if (!maintRunId || !pipetteId) return;
-		const res = await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/position`, { method: 'POST', body: JSON.stringify({ pipetteId }) });
-		if (res?.position) {
-			liveX = res.position.x;
-			liveY = res.position.y;
-			liveZ = res.position.z;
-		}
-	}
-
-	async function teach(fn: () => Promise<void>) {
-		if (!maintRunId || !pipetteId) {
-			teachError = 'Open a maintenance run first.';
-			return;
-		}
-		teachError = null;
-		teachBusy = true;
-		try {
-			await fn();
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			teachBusy = false;
-		}
-	}
-
-	const home = () =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/home`, { method: 'POST', body: JSON.stringify({}) });
-			await refreshPosition();
-		});
-	const jog = (axis: string, distance: number) =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/jog`, { method: 'POST', body: JSON.stringify({ pipetteId, axis, distance }) });
-			await refreshPosition();
-		});
-	const moveTo = (p: { x: number; y: number; z: number }, label: string) =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/move-to`, { method: 'POST', body: JSON.stringify({ pipetteId, x: p.x, y: p.y, z: p.z }) });
-			teachInfo = `Moved to the ${label}.`;
-			await refreshPosition();
-		});
-
-	async function fireTestScan() {
-		testScanError = null;
-		testScanLatest = null;
-		testScanInFlight = true;
-		try {
-			const res = await api('/api/scanner/trigger', { method: 'POST', body: JSON.stringify({ deviceId: data.scannerDeviceId, source: 'test', contextRef: 'arm-wax-fill:teach' }) });
-			const triggerId = res?.triggerId;
-			const started = Date.now();
-			while (Date.now() - started < 15000) {
-				await sleep(400);
-				const url = new URL('/api/scanner/events', window.location.origin);
-				url.searchParams.set('deviceId', data.scannerDeviceId);
-				url.searchParams.set('limit', '20');
-				const r = await fetch(url, { credentials: 'same-origin' });
-				if (!r.ok) continue;
-				const evs: any[] = (await r.json())?.events ?? [];
-				const match = evs.find((e) => e?.metadata?.triggerId === triggerId);
-				if (match) {
-					if (match.eventType === 'scan' && match.barcode) testScanLatest = match.barcode;
-					else testScanError = match.errorMessage || 'scanner returned error';
-					return;
-				}
-			}
-			testScanError = 'Timed out waiting for the scanner (15 s).';
-		} catch (e) {
-			testScanError = e instanceof Error ? e.message : String(e);
-		} finally {
-			testScanInFlight = false;
-		}
-	}
-
-	async function savePoint(which: 'saveScanPosition' | 'saveCartLocation') {
-		await teach(async () => {
-			await refreshPosition();
-			if (liveX === null || liveY === null || liveZ === null) throw new Error('Could not read the position from the robot.');
-			const r = await post(which, {
-				x: String(liveX),
-				y: String(liveY),
-				z: String(liveZ),
-				pipetteMount: pipetteMount ?? '',
-				pipetteName: pipetteName ?? '',
-				...(which === 'saveScanPosition' && testScanLatest ? { testScanBarcode: testScanLatest } : {})
-			});
-			if (!r.ok) throw new Error(r.error);
-			calibration = r.data.calibration;
-			teachInfo = `${r.data.success} x=${liveX.toFixed(2)} y=${liveY.toFixed(2)} z=${liveZ.toFixed(2)}`;
-			await invalidateAll();
-		});
-	}
-
-	const dis = $derived(!maintRunId || !pipetteId || teachBusy);
-	const btn = 'rounded border border-[var(--color-tron-border)] px-3 py-3 text-sm hover:border-[var(--color-tron-cyan)] disabled:opacity-40';
+	// The calibration for this robot's wax fill (scan position, tip-neutral cart
+	// location, dispense depth, stage geometry) is taught on its own tab, the arm
+	// line's Stage calibration studio; this page only shows what is taught.
+	const STAGE_CALIBRATION_HREF = '/manufacturing/cart-mfg/robot-arm/stage-calibration';
 
 	const fmt = (p: { x: number; y: number; z: number } | null) => (p ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · z ${p.z.toFixed(2)}` : 'not taught');
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '');
@@ -704,10 +556,11 @@
 	<div>
 		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax fill</h2>
 		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			The arm feeds one cart at a time: <span class="font-semibold">grab</span> → <span class="font-semibold">scan</span> at the taught
-			position → <span class="font-semibold">fill</span> with the robot's wax-filling protocol (one cart, deck position
-			{data.settings.cartPosition}) → <span class="font-semibold">withdraw</span>, for as many runs as you ask. The cart-drop unit
-			will slot in before the grab once it is ready.
+			The arm feeds one cart at a time onto its stage: OT-2 gantry <span class="font-semibold">home</span> → <span class="font-semibold">grab</span> →
+			<span class="font-semibold">scan</span> at the taught position → <span class="font-semibold">fill</span>
+			{#if stage}at the taught cart location with the stage protocol{:else}with the robot's carriage protocol (one cart, deck position {data.settings.cartPosition}){/if}
+			→ gantry <span class="font-semibold">home</span> → <span class="font-semibold">withdraw</span>, for as many runs as you ask. The arm never
+			moves until the OT-2 confirms its gantry is home. The cart-drop unit will slot in before the grab once it is ready.
 		</p>
 	</div>
 
@@ -732,6 +585,11 @@
 					{/if}
 				</div>
 				<div class="flex flex-wrap items-center gap-1">
+					<a href={STAGE_CALIBRATION_HREF}
+						title="This robot's wax-fill calibration: scan position, tip-neutral cart location, dispense depth, stage geometry (its own tab)"
+						class="{ctl} border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">
+						Stage calibration
+					</a>
 					<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
 						{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
 					</button>
@@ -739,8 +597,8 @@
 						class="{ctl} {lightsOn ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
 						{lightsOn === null ? 'Lights' : lightsOn ? 'Lights on' : 'Lights off'}
 					</button>
-					<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || loop?.status === 'running' || !!maintRunId}
-						title={loop?.status === 'running' ? 'Not while a loop is running' : maintRunId ? 'Use Home in the teach panel while its maintenance run is open' : 'Home all axes'} class={ctlPlain}>
+					<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || loop?.status === 'running'}
+						title={loop?.status === 'running' ? 'Not while a loop is running' : 'Home all axes'} class={ctlPlain}>
 						{robotBusy === 'home' ? 'Homing…' : 'Home'}
 					</button>
 					<button type="button" onclick={restartServer} disabled={!robotId || robotBusy !== null} title="Restart the robot server (clears a hung engine, ~90 s)"
@@ -878,11 +736,18 @@
 					</select>
 				</label>
 				<div class="grid grid-cols-2 gap-3">
-					<label class="block">
-						<span style="color: var(--color-tron-text-secondary)">Deck position filled (1–24)</span>
-						<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
-							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-					</label>
+					{#if stage}
+						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
+							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
+							<span class="mt-1 block">Cart rotation, dispense depth and travel height are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab.</span>
+						</div>
+					{:else}
+						<label class="block">
+							<span style="color: var(--color-tron-text-secondary)">Deck position filled (1–24)</span>
+							<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
+								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
+						</label>
+					{/if}
 					<label class="block">
 						<span style="color: var(--color-tron-text-secondary)">Wax lot (optional)</span>
 						<input name="waxSourceLot" value={data.settings.waxSourceLot ?? ''} placeholder="stamped on each wax run"
@@ -897,7 +762,7 @@
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
 							Protocol on {data.robotName}: <span class="font-mono">{data.protocol.protocolName}</span>
-							{data.protocol.declaresCartLocation ? '· reads arm_cart_x/y/z' : '· fills the deck position; arm_cart_x/y/z not declared'}
+							{data.protocol.declaresCartLocation ? '· stage protocol: fills the taught cart location (arm_cart_x/y/z)' : '· carriage protocol: fills the deck position; arm_cart_x/y/z not declared'}
 						{:else if data.settings.robotId}
 							<span class="text-amber-300">No wax-filling protocol on this robot.</span>
 						{/if}
@@ -956,141 +821,45 @@
 		</section>
 	</div>
 
-	<!-- ── Calibration ───────────────────────────────────────────────── -->
+	<!-- ── Calibration summary (taught on the Stage calibration tab) ────── -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Calibration{#if data.robotName} · {data.robotName}{/if}</h3>
-				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Two taught points on this OT-2, the way the barcode-positions page teaches scanner slots: open a maintenance run, jog, save the robot's own XYZ.
-				</p>
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
+				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">What this robot's wax fill runs on. Taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab — the arm line's own studio for the single-cart stage.</p>
 			</div>
-			<div class="flex items-center gap-2">
-				{#if robotId}<TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} />{/if}
-				<button type="button" onclick={() => (teaching = !teaching)} disabled={!robotId || loop?.status === 'running'}
-					class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
-					{teaching ? 'Close teach panel' : 'Teach'}
-				</button>
-			</div>
+			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage calibration</a>
 		</div>
-
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
+		<div class="grid grid-cols-1 gap-3 text-xs md:grid-cols-2 xl:grid-cols-4">
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Scan position</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
 				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Where the gantry scanner reads the cart the arm placed.
+					Where the gantry scanner reads the cart.
 					{#if calibration?.scanPosition?.taughtAt}Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}.{/if}
-					{#if calibration?.scanPosition?.testScanBarcode}Test read: <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}
 				</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Cart location</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
 				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					The pipette over the cart's first well. Sent to the protocol as arm_cart_x/y/z when it declares them.
-					{#if calibration?.cartLocation?.taughtAt}Taught {when(calibration.cartLocation.taughtAt)}{calibration.cartLocation.taughtBy ? ` by ${calibration.cartLocation.taughtBy}` : ''}.{/if}
+					First wax hole rim, tip-neutral.
+					{#if calibration?.cartLocation?.tipAdjust}Probe at teach <span class="font-mono">{calibration.cartLocation.tipAdjust.x}, {calibration.cartLocation.tipAdjust.y}</span>.{:else if calibration?.cartLocation}<span class="text-amber-300">Taught without a probed tip — teach again.</span>{/if}
 				</div>
+			</div>
+			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
+				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense depth</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">
+					{#if calibration?.dispenseDepth}{Math.abs(calibration.dispenseDepth.mm)} mm {calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim{:else}not taught{/if}
+				</div>
+				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Where the tip end sits when wax is dispensed.{#if !calibration?.dispenseDepth} <span class="text-amber-300">Required before a stage fill.</span>{/if}</div>
+			</div>
+			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
+				<div class="font-semibold" style="color: var(--color-tron-text)">Stage geometry</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}° · travel {calibration?.stageJumpHeightMm ?? 60} mm</div>
+				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">How the stage holds the cart; the clearance over the rim.</div>
 			</div>
 		</div>
-
-		{#if teaching && robotId}
-			<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-4 space-y-4">
-				{#if teachError}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{teachError}</div>{/if}
-				{#if teachInfo}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{teachInfo}</div>{/if}
-
-				<div class="flex flex-wrap items-center justify-between gap-3">
-					<div class="text-xs" style="color: var(--color-tron-text-secondary)">
-						{#if maintRunId}Maintenance run <span class="font-mono">{maintRunId}</span>{#if pipetteName} · {pipetteName} ({pipetteMount}){/if}{:else}No maintenance run open.{/if}
-					</div>
-					<div class="flex gap-2">
-						{#if !maintRunId}
-							<button type="button" onclick={openMaintenance} disabled={connecting}
-								class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
-								{connecting ? 'Opening…' : 'Open maintenance run'}
-							</button>
-						{:else}
-							<button type="button" onclick={home} disabled={teachBusy} class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Home</button>
-							<button type="button" onclick={closeMaintenance} disabled={teachBusy} class="rounded border border-amber-500/40 bg-amber-900/15 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/25 disabled:opacity-40">Close run</button>
-						{/if}
-					</div>
-				</div>
-
-				<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-					<div class="space-y-3 lg:col-span-2">
-						<div class="flex flex-wrap items-center gap-3 text-xs" style="color: var(--color-tron-text-secondary)">
-							<label class="flex items-center gap-2">Step
-								<select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-									<option value={0.1}>0.1 mm</option><option value={1}>1 mm</option><option value={5}>5 mm</option><option value={10}>10 mm</option><option value={25}>25 mm</option>
-								</select>
-							</label>
-							<label class="flex items-center gap-2">Z axis
-								<select bind:value={zAxis} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-									<option value="leftZ">leftZ</option><option value="rightZ">rightZ</option>
-								</select>
-							</label>
-						</div>
-						<div class="grid grid-cols-3 gap-2">
-							<div></div>
-							<button type="button" disabled={dis} onclick={() => jog('y', stepSize)} class={btn} style="color: var(--color-tron-text)">Y +</button>
-							<div></div>
-							<button type="button" disabled={dis} onclick={() => jog('x', -stepSize)} class={btn} style="color: var(--color-tron-text)">X −</button>
-							<div class="flex items-center justify-center text-[10px]" style="color: var(--color-tron-text-secondary)">deck XY</div>
-							<button type="button" disabled={dis} onclick={() => jog('x', stepSize)} class={btn} style="color: var(--color-tron-text)">X +</button>
-							<div></div>
-							<button type="button" disabled={dis} onclick={() => jog('y', -stepSize)} class={btn} style="color: var(--color-tron-text)">Y −</button>
-							<div></div>
-						</div>
-						<div class="grid grid-cols-2 gap-2">
-							<button type="button" disabled={dis} onclick={() => jog(zAxis, stepSize)} class={btn} style="color: var(--color-tron-text)">Z + (up)</button>
-							<button type="button" disabled={dis} onclick={() => jog(zAxis, -stepSize)} class={btn} style="color: var(--color-tron-text)">Z − (down)</button>
-						</div>
-						<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-							<div class="flex items-center justify-between">
-								<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Live position</span>
-								<button type="button" onclick={() => void teach(refreshPosition)} disabled={dis} class="text-[11px] underline disabled:opacity-40" style="color: var(--color-tron-cyan)">Refresh</button>
-							</div>
-							<div class="mt-2 grid grid-cols-3 gap-2 font-mono text-sm" style="color: var(--color-tron-text)">
-								<span>x: {liveX !== null ? liveX.toFixed(2) : '—'}</span><span>y: {liveY !== null ? liveY.toFixed(2) : '—'}</span><span>z: {liveZ !== null ? liveZ.toFixed(2) : '—'}</span>
-							</div>
-						</div>
-					</div>
-
-					<div class="space-y-3">
-						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3 space-y-2">
-							<div class="flex items-center justify-between">
-								<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Scan position</span>
-								<button type="button" onclick={fireTestScan} disabled={testScanInFlight}
-									class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test scan'}</button>
-							</div>
-							{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>
-							{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>
-							{:else}<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Fires the gantry scanner where it is now ({data.scannerDeviceId}).</p>{/if}
-							<div class="flex gap-2">
-								<button type="button" onclick={() => void savePoint('saveScanPosition')} disabled={dis}
-									class="flex-1 rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">Save here as scan position</button>
-								{#if calibration?.scanPosition}
-									<button type="button" onclick={() => void moveTo(calibration!.scanPosition!, 'scan position')} disabled={dis}
-										class="rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs disabled:opacity-40" style="color: var(--color-tron-text)">Move to</button>
-								{/if}
-							</div>
-						</div>
-						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3 space-y-2">
-							<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cart location</span>
-							<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Jog the pipette over the cart's first well.</p>
-							<div class="flex gap-2">
-								<button type="button" onclick={() => void savePoint('saveCartLocation')} disabled={dis}
-									class="flex-1 rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">Save here as cart location</button>
-								{#if calibration?.cartLocation}
-									<button type="button" onclick={() => void moveTo(calibration!.cartLocation!, 'cart location')} disabled={dis}
-										class="rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs disabled:opacity-40" style="color: var(--color-tron-text)">Move to</button>
-								{/if}
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
 	</section>
 
 	<!-- ── History ───────────────────────────────────────────────────── -->

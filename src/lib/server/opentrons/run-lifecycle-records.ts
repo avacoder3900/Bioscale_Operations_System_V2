@@ -830,7 +830,7 @@ export async function startRecordResync(
 	const processType = K[kind].processType;
 	let fileName: string;
 	try {
-		fileName = (await storedRunProtocol(processType, reason)).fileName;
+		fileName = (await storedRunProtocol(processType, reason, ctx.robotId)).fileName;
 	} catch (e) {
 		return actionFail(502, e instanceof Error ? e.message : 'unknown');
 	}

@@ -30,6 +30,13 @@ const cycleSchema = new Schema(
 		opentronsRunId: String,
 		opentronsRunFinalStatus: String,
 		withdrawArmRunId: String,
+		/**
+		 * When the OT-2 reported its gantry home before each arm move. cycleGrab /
+		 * cycleWithdraw refuse to play the arm without a fresh stamp, so the arm
+		 * never swings in over a gantry that is still out on the deck.
+		 */
+		gantryHomedForGrabAt: Date,
+		gantryHomedForWithdrawAt: Date,
 		error: String
 	},
 	{ _id: false }

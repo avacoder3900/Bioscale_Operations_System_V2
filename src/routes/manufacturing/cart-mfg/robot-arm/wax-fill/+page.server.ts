@@ -1,14 +1,18 @@
 /**
  * Robot Arm — Wax fill: the arm feeds one cart at a time to an OT-2 running
- * the ordinary wax-filling protocol. Setup (robot, deck, deck position), the
- * grab / withdraw animations (chosen once, changed only on request), the
- * two taught points (scan position, cart location) and the loop itself.
+ * the stage wax-filling protocol (Wax_Filling_GEN7_ArmStage.py). Setup
+ * (robot; deck + deck position only for the legacy carriage protocol), the
+ * grab / withdraw animations (chosen once, changed only on request) and the
+ * loop itself. The stage calibration (scan position, tip-neutral cart
+ * location, dispense depth, stage geometry) is taught on the sibling
+ * stage-calibration route.
  *
- * The browser drives a cycle one action at a time: cycleGrab → (playback
- * poll, settle) → cycleGrabDone → scan over /api/scanner/sweep → cycleScanned
- * → cycleFill → (EmbeddedRunController) → cycleFillDone → cycleWithdraw →
- * (playback poll, settle) → cycleWithdrawDone, and round again. All logic is
- * in $lib/server/arm-wax-fill; this file only maps form fields to it.
+ * The browser drives a cycle one action at a time: homeGantry → cycleGrab →
+ * (playback poll, settle) → cycleGrabDone → scan over /api/scanner/sweep →
+ * cycleScanned → cycleFill → (EmbeddedRunController) → cycleFillDone →
+ * homeGantry → cycleWithdraw → (playback poll, settle) → cycleWithdrawDone,
+ * and round again. All logic is in $lib/server/arm-wax-fill; this file only
+ * maps form fields to it.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
@@ -19,25 +23,24 @@ import {
 	cycleFillDone,
 	cycleGrab,
 	cycleGrabDone,
+	cycleHomeGantry,
 	cycleScanned,
 	cycleWithdraw,
 	cycleWithdrawDone,
 	failLoop,
 	getLoop,
-	getSettings,
 	loadArmWaxFill,
 	resetLoop,
 	saveAnimations,
-	saveCartLocation,
-	saveScanPosition,
 	saveSetup,
 	startLoop,
 	stopLoop
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
 
-// The fill step runs the whole OT-2 start (freshness gate, create, play) in one action.
-export const config = { maxDuration: 60 };
+// The fill step runs the whole OT-2 start (freshness gate, create, play) in one
+// action, and homeGantry waits for the OT-2 to finish homing (30–60 s cold).
+export const config = { maxDuration: 120 };
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -98,41 +101,6 @@ export const actions: Actions = {
 		}
 	},
 
-	saveScanPosition: async (ev) => {
-		const { d, user } = await writer(ev);
-		try {
-			const robotId = (await getSettings()).robotId ?? '';
-			const c = await saveScanPosition(user, robotId, {
-				x: field(d, 'x'),
-				y: field(d, 'y'),
-				z: field(d, 'z'),
-				pipetteMount: field(d, 'pipetteMount'),
-				pipetteName: field(d, 'pipetteName'),
-				testScanBarcode: field(d, 'testScanBarcode')
-			});
-			return { success: 'Scan position saved.', calibration: json(c) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	saveCartLocation: async (ev) => {
-		const { d, user } = await writer(ev);
-		try {
-			const robotId = (await getSettings()).robotId ?? '';
-			const c = await saveCartLocation(user, robotId, {
-				x: field(d, 'x'),
-				y: field(d, 'y'),
-				z: field(d, 'z'),
-				pipetteMount: field(d, 'pipetteMount'),
-				pipetteName: field(d, 'pipetteName')
-			});
-			return { success: 'Cart location saved.', calibration: json(c) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
 	startLoop: async (ev) => {
 		const { d, user } = await writer(ev, true);
 		try {
@@ -149,6 +117,19 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		const loop = await getLoop(id);
 		return loop ? { loop: json(loop) } : fail(404, { error: 'Loop not found.' });
+	},
+
+	// Home the OT-2 gantry before an arm move and stamp the cycle; cycleGrab /
+	// cycleWithdraw refuse to play the arm without it. Synchronous on the robot.
+	homeGantry: async (ev) => {
+		const { d, user } = await writer(ev);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await cycleHomeGantry(user, id, field(d, 'before')));
+		} catch (err) {
+			return failFrom(err);
+		}
 	},
 
 	// The arm MOVES (grab animation). The page's Playback helper polls ?/playback and settles.
