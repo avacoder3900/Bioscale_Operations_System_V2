@@ -635,16 +635,6 @@
 						{#each data.robots as r (r._id)}<option value={r._id} selected={r._id === data.settings.robotId}>{r.name}</option>{/each}
 					</select>
 				</label>
-				<label class="block">
-					<span style="color: var(--color-tron-text-secondary)">Deck the single-cart fixture is registered as</span>
-					<select name="deckId" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
-						<option value="">— pick a deck —</option>
-						{#each data.decks as d (d._id)}
-							<option value={d._id} selected={d._id === data.settings.deckId}>{d.name}{d.deckLoadName ? ` · ${d.deckLoadName}` : ' · not bound to a labware definition'}</option>
-						{/each}
-					</select>
-					<span class="mt-1 block text-[11px]" style="color: var(--color-tron-text-secondary)">The protocol picks the deck definition by the Particle id it reads at run start, so the fixture must be a registered, bound deck.</span>
-				</label>
 				<div class="grid grid-cols-2 gap-3">
 					<label class="block">
 						<span style="color: var(--color-tron-text-secondary)">Deck position filled (1–24)</span>

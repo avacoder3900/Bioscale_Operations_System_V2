@@ -25,8 +25,6 @@ const armWaxFillSettingsSchema = new Schema(
 		_id: { type: String, default: 'default' },
 		/** OpentronsRobot._id of the OT-2 the arm feeds. */
 		robotId: String,
-		/** Equipment deck (`equipmentType: 'deck'`) the single-cart fixture is registered as. */
-		deckId: String,
 		/** 1-based deck position the protocol fills (`resume_cartridge`), default 1. */
 		cartPosition: { type: Number, default: 1 },
 		/** Optional wax lot stamped on every cycle's wax run (traceability only). */

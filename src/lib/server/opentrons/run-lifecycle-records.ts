@@ -597,7 +597,11 @@ async function startContext(
 		// ever pointed at, so nothing could mark them wax_filled. A run may only
 		// start without them as an EXPLICIT test fill (calibration/tuning).
 		const testFill = form.get('testFillNoCartridges')?.toString() === 'true';
-		if (!testFill && (!run.deckId || !run.cartridgeIds?.length)) {
+		// Robot-arm wax fill (2026-10-28): one cart the arm placed at a taught location —
+		// there is no deck to identify, but the cart must still be on the run.
+		const armFill = !!run.armWaxFill?.loopId;
+		if (armFill && !run.cartridgeIds?.length) return actionFail(400, 'This arm wax fill run has no scanned cartridge.');
+		if (!testFill && !armFill && (!run.deckId || !run.cartridgeIds?.length)) {
 			return actionFail(
 				400,
 				'This run has no scanned deck/cartridges — starting now would fill carts no record points at ' +

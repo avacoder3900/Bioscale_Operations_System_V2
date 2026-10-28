@@ -39,7 +39,6 @@ const armWaxFillRunSchema = new Schema(
 	{
 		_id: { type: String, default: () => generateId() },
 		robot: { _id: String, name: String },
-		deckId: String,
 		cartPosition: Number,
 		requestedRuns: { type: Number, required: true },
 		completedRuns: { type: Number, default: 0 },
