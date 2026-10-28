@@ -23934,3 +23934,29 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ commit 874c4669 (merge of feat/arm-wax-fill-no-deck @ 4b699897)
 Retrieve this exact code: git checkout master at commit 874c4669
 What this deployment is for: arm wax fill Setup without a deck; arm wax runs start with a cart and no deck.
+
+
+================================================================================
+2026-10-28 — master — Arm wax fill: the OT-2 controls the wax and reagent filling sides have
+================================================================================
+Alejandro: "all traditional robot control features present on the usual wax and reagent filling sides
+to be present on the robot arm wax fill page — start, reset, etc." The Robots board's card for ONE
+robot now sits at the top of the Wax fill tab's Run section, for the OT-2 the arm feeds:
+  - Health dot + label (ready / busy / hung / offline) from the bridge heartbeat: read in the page load
+    (getRobotsHealth, keyed by the OT-2 id) and polled every 10 s from /api/opentrons-lab/robots/health,
+    as the board does, so it stays fresh without an invalidateAll mid-loop.
+  - Restart: the robot server, bridge-aware like the board (restartServerOverBridge on the tailnet line,
+    else POST /restart-server), the board's confirm text plus a warning when a loop is live.
+  - Reset: force back to idle. New ?/resetLoop → arm-wax-fill.ts resetLoop: ends the running loop now
+    (stops the arm's play if it is moving, torque back on), then the page calls the ordinary
+    /force-reset route (aborts the one-cart WaxFillingRun, clears the robot's run + stale maintenance
+    run). The driver notices a Reset that lands while the OT-2 is filling and winds down instead of
+    posting cycleFillDone.
+  - Home, Lights on/off, Identify: the devices-page utilities. Home is disabled while a loop runs or the
+    teach panel's maintenance run is open (that panel has its own Home).
+Start / Resume / Stop for the loop and the embedded run controller's Play / Pause / Stop during the
+fill were already there. Files: src/lib/server/arm-wax-fill.ts, robot-arm/wax-fill/+page.server.ts,
+robot-arm/wax-fill/+page.svelte. Committed straight to master (Alejandro, 2026-10-28: "commit all
+changes to main automatically"), in a master worktree — the main checkout is on feat/arm-wax-fill-loop
+with another session's uncommitted ArmStage work, left untouched. Not pushed.
+svelte-check: 14 errors / 436 warnings = baseline, none in touched files. No unit tests cover this module.

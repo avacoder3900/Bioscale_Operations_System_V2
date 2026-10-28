@@ -41,6 +41,7 @@ import {
 	WaxFillingRun
 } from '$lib/server/db';
 import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
+import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry } from '$lib/server/opentrons/protocol-freshness';
 import {
@@ -495,9 +496,16 @@ export async function loadArmWaxFill() {
 		settings.robotId ? checkRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null)
 	]);
 	const robotName = (robots as any[]).find((r) => String(r._id) === settings.robotId)?.name ?? null;
+	// Bridge-heartbeat health of the OT-2 the arm feeds (ready / busy / hung /
+	// offline), the same read the Robots board makes; the page polls
+	// /api/opentrons-lab/robots/health for the same shape afterwards.
+	const health: RobotHealth | null = settings.robotId
+		? ((await getRobotsHealth([{ _id: settings.robotId, name: robotName }]).catch(() => ({}) as Record<string, RobotHealth>))[settings.robotId] ?? null)
+		: null;
 	return {
 		settings,
 		robotName,
+		health,
 		scannerDeviceId: scannerDeviceIdForRobot(robotName),
 		robots: (robots as any[]).map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id) })),
 		moveSets: moveSets.filter((m) => !m.archived).map((m) => ({ _id: m._id, name: m.name, keyframes: m.keyframes.length })),
@@ -850,6 +858,36 @@ export async function stopLoop(user: User, loopId: string): Promise<{ loop: Loop
 	}
 	await audit(user, 'arm_wax_fill.stop', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn });
 	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn };
+}
+
+/**
+ * Force reset (the Robots board's "Reset" for this line). Ends the running
+ * loop NOW whatever step it is at — the arm's play is stopped if it is moving
+ * — so the page can then force the OT-2 back to idle over the ordinary
+ * /force-reset route (which aborts the one-cart WaxFillingRun and clears the
+ * robot's own run). Nothing to end is not an error: the OT-2 side still runs.
+ */
+export async function resetLoop(user: User): Promise<{ loop: LoopView | null; stoppedArm: boolean; torqueOn: boolean | null }> {
+	await connectDB();
+	const d = (await ArmWaxFillRun.findOne({ status: 'running' }).sort({ createdAt: -1 }).lean()) as any;
+	let stoppedArm = false;
+	let torqueOn: boolean | null = null;
+	const active = await playbackActive().catch(() => null);
+	if (active) {
+		const s = await stopPlayback(user);
+		stoppedArm = true;
+		torqueOn = s.torqueOn;
+	}
+	if (!d) return { loop: null, stoppedArm, torqueOn };
+	const loopId = String(d._id);
+	const cycle = d.cycles?.[d.cycles.length - 1];
+	const now = new Date();
+	if (cycle && !['done', 'failed', 'stopped'].includes(cycle.step)) {
+		await patchCycle(loopId, cycle.index, { step: 'stopped', error: 'force reset to idle', endedAt: now });
+	}
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', stopRequested: true, error: 'force reset to idle', endedAt: now } });
+	await audit(user, 'arm_wax_fill.force_reset', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step: cycle?.step ?? null, stoppedArm, torqueOn });
+	return { loop: await getLoop(loopId), stoppedArm, torqueOn };
 }
 
 /** A step failed in the browser (or here): the loop stops with the reason on the cycle. */

@@ -26,6 +26,7 @@ import {
 	getLoop,
 	getSettings,
 	loadArmWaxFill,
+	resetLoop,
 	saveAnimations,
 	saveCartLocation,
 	saveScanPosition,
@@ -236,6 +237,17 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
 			return json(await stopLoop(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Force reset (the Robots board's "Reset"): end the running loop now, stopping the arm if it
+	// moves; the page then forces the OT-2 back to idle over /api/opentrons-lab/robots/:id/force-reset.
+	resetLoop: async (ev) => {
+		const { user } = await writer(ev);
+		try {
+			return json(await resetLoop(user));
 		} catch (err) {
 			return failFrom(err);
 		}
