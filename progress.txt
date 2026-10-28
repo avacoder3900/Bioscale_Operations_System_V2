@@ -23664,3 +23664,15 @@ Source: branch fix/arm-diagnosis-hide @ commit a6c3d709 (fast-forwarded onto mas
 Retrieve this exact code: git checkout fix/arm-diagnosis-hide at commit a6c3d709
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: collapsible preflight warning on the Robot Arm page
+
+================================================================================
+2026-10-28 — master — Robot Arm warning chip label corrected to "Show Warning"
+================================================================================
+The collapsed preflight-warning button shipped in a6c3d709 read "Show warning"; the user asked for
+"Show Warning" (capital W). src/routes/manufacturing/cart-mfg/robot-arm/+layout.svelte label + comment.
+npm run check: 14 errors, the existing baseline, none in the edited file.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/E7FrpRJqb6mbBS3gFNVscLLNEU57
+Source: branch master @ commit 305dc8c3
+Retrieve this exact code: git checkout 305dc8c3
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: "Show Warning" label on the collapsed Robot Arm warning
