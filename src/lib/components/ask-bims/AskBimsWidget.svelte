@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/stores';
+	import { afterNavigate } from '$app/navigation';
 
 	type ModelId = 'claude-haiku-4-5' | 'claude-sonnet-4-6' | 'claude-opus-4-7';
 	type Confidence = 'high' | 'partial' | 'degraded';
@@ -130,6 +131,14 @@
 	});
 
 	let isOpen = $state(false);
+	// The header X hides the widget (pill and panel) for the current page view
+	// only. It is plain component state, never persisted: a full refresh
+	// remounts the component, and a client-side move to a different pathname
+	// resets it below, so the pill comes back on any other page.
+	let dismissed = $state(false);
+	afterNavigate((nav) => {
+		if (nav.from?.url.pathname !== nav.to?.url.pathname) dismissed = false;
+	});
 	let messages = $state<Message[]>([]);
 	let input = $state('');
 	let submitting = $state(false);
@@ -479,9 +488,9 @@
 		}
 	}
 
-	function toggleBookmarksView() {
-		viewingBookmarks = !viewingBookmarks;
-		if (viewingBookmarks) loadBookmarks();
+	function dismiss() {
+		isOpen = false;
+		dismissed = true;
 	}
 
 	// L.1 — page-aware quick-action chips. Each chip is a one-shot question
@@ -713,7 +722,7 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-{#if visible}
+{#if visible && !dismissed}
 	{#if !isOpen}
 		<!-- Collapsed pill -->
 		<button
@@ -726,7 +735,7 @@
 			<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-5 w-5">
 				<path stroke-linecap="round" stroke-linejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
 			</svg>
-			<span>Ask BIMS</span>
+			<span class="ask-bims-pill-label">Ask BIMS</span>
 		</button>
 	{:else}
 		<!-- Expanded panel -->
@@ -755,17 +764,6 @@
 					{/if}
 				</div>
 				<div class="flex items-center gap-1">
-					<button
-						type="button"
-						onclick={toggleBookmarksView}
-						class="rounded p-1 text-xs hover:text-[var(--color-tron-cyan)] {viewingBookmarks ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}"
-						title={viewingBookmarks ? 'Back to chat' : 'Bookmarks'}
-						aria-label="Toggle bookmarks"
-					>
-						<svg viewBox="0 0 24 24" fill={viewingBookmarks ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" class="h-4 w-4">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-						</svg>
-					</button>
 					{#if messages.length > 0 && !viewingBookmarks}
 						<button
 							type="button"
@@ -781,13 +779,13 @@
 					{/if}
 					<button
 						type="button"
-						onclick={toggleOpen}
+						onclick={dismiss}
 						class="rounded p-1 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
-						title="Minimize"
-						aria-label="Minimize Ask BIMS"
+						title="Close (hidden until you reload or open another page)"
+						aria-label="Close Ask BIMS"
 					>
 						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
-							<path stroke-linecap="round" stroke-linejoin="round" d="M19 13H5" />
+							<path stroke-linecap="round" stroke-linejoin="round" d="M6 6l12 12M18 6L6 18" />
 						</svg>
 					</button>
 				</div>
@@ -1235,8 +1233,11 @@
 		z-index: 40;
 		display: inline-flex;
 		align-items: center;
-		gap: 0.5rem;
-		padding: 0.625rem 1rem;
+		gap: 0;
+		/* Rests as a 2.75rem circle (icon only) so it stops covering table
+		   cells; hovering or keyboard-focusing it slides the "Ask BIMS" label
+		   out into the old full pill. */
+		padding: 0.75rem;
 		border-radius: 999px;
 		border: 1px solid rgba(186, 230, 253, 0.6);
 		background: linear-gradient(135deg, #ffffff 0%, #cffafe 100%);
@@ -1248,7 +1249,25 @@
 			0 4px 10px -3px rgba(0, 0, 0, 0.3),
 			0 0 0 1px rgba(34, 211, 238, 0.15);
 		cursor: pointer;
-		transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+		transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, padding 0.25s ease;
+	}
+	.ask-bims-pill-label {
+		display: inline-block;
+		max-width: 0;
+		opacity: 0;
+		overflow: hidden;
+		white-space: nowrap;
+		transition: max-width 0.25s ease, opacity 0.2s ease, margin-left 0.25s ease;
+	}
+	.ask-bims-pill:hover .ask-bims-pill-label,
+	.ask-bims-pill:focus-visible .ask-bims-pill-label {
+		max-width: 6rem;
+		opacity: 1;
+		margin-left: 0.5rem;
+	}
+	.ask-bims-pill:hover,
+	.ask-bims-pill:focus-visible {
+		padding-right: 1rem;
 	}
 	.ask-bims-pill:hover {
 		transform: translateY(-2px);
@@ -1407,7 +1426,6 @@
 		.ask-bims-pill {
 			bottom: calc(1rem + env(safe-area-inset-bottom, 0));
 			right: 1rem;
-			padding: 0.5rem 0.875rem;
 			font-size: 0.75rem;
 		}
 		.ask-bims-messages { padding: 1rem; }

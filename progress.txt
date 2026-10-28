@@ -23666,6 +23666,30 @@ Retrieve this exact code: git checkout fix/arm-diagnosis-hide at commit a6c3d709
 What this deployment is for: collapsible preflight warning on the Robot Arm page
 
 ================================================================================
+2026-10-28 — feat/ask-bims-compact-launcher → master — Ask BIMS: circle launcher that expands on hover; header X hides it per page
+================================================================================
+User: the Ask BIMS pill was too big and got in the way. The collapsed launcher is now a
+2.75rem circle showing only the chat-bubble icon; hovering it (or keyboard focus) slides
+the "Ask BIMS" label out so it becomes the old full pill. CSS only: the label span has
+max-width 0 / opacity 0 and transitions to max-width 6rem on :hover / :focus-visible; the
+button padding animates with it. The mobile override that set pill padding is dropped so
+the circle stays a circle on phones.
+
+The panel header lost its Bookmark-view toggle and the Minimize (−) button; in their
+place is one X (Close). The X sets a `dismissed` component state that hides both the
+panel and the launcher for the current page view only. Nothing is persisted: a reload
+remounts the component (so it comes back), and afterNavigate() clears `dismissed` when
+the pathname changes (so moving to another page brings it back). Same-pathname
+navigations (query-string changes) keep it hidden. Escape still collapses the open panel
+back to the circle. Note: the saved-answers (bookmarks) list is now unreachable from the
+header; per-answer bookmark buttons still save to localStorage and the list view's
+template is left in place in case a toggle is wanted elsewhere.
+
+Files: src/lib/components/ask-bims/AskBimsWidget.svelte. npm run check: 14 errors
+(baseline 14); the one in this file (feedbackState comparison, line ~1045) pre-exists on
+master and is untouched.
+
+================================================================================
 2026-10-28 — master — Robot Arm warning chip label corrected to "Show Warning"
 ================================================================================
 The collapsed preflight-warning button shipped in a6c3d709 read "Show warning"; the user asked for
