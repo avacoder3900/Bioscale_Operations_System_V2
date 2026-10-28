@@ -569,7 +569,11 @@ async function startContext(
 		// ever pointed at, so nothing could mark them wax_filled. A run may only
 		// start without them as an EXPLICIT test fill (calibration/tuning).
 		const testFill = form.get('testFillNoCartridges')?.toString() === 'true';
-		if (!testFill && (!run.deckId || !run.cartridgeIds?.length)) {
+		// The robot-arm stage line (run.armWaxFill) fills ONE scanned cart at a
+		// taught point, not on a deck: it carries cartridgeIds but, by design, no
+		// deckId. It still may not start untracked.
+		const armStage = !!run.armWaxFill?.loopId;
+		if (!testFill && (!run.cartridgeIds?.length || (!run.deckId && !armStage))) {
 			return actionFail(
 				400,
 				'This run has no scanned deck/cartridges — starting now would fill carts no record points at ' +
@@ -795,7 +799,7 @@ export async function startRecordResync(
 	const processType = K[kind].processType;
 	let fileName: string;
 	try {
-		fileName = (await storedRunProtocol(processType, reason)).fileName;
+		fileName = (await storedRunProtocol(processType, reason, ctx.robotId)).fileName;
 	} catch (e) {
 		return actionFail(502, e instanceof Error ? e.message : 'unknown');
 	}

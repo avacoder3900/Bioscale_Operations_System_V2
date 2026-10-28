@@ -1,11 +1,12 @@
 /**
  * Robot-arm wax fill line (/manufacturing/cart-mfg/robot-arm/wax-fill).
  *
- * One cart at a time: the arm plays its GRAB animation (an Animate move set or
- * sequence) to put a cart on the OT-2, the gantry scanner reads the cart at
- * the taught scan position (a one-slot scanner sweep), the OT-2 runs the
- * ordinary wax-filling protocol with `cartridges = 1` at the configured deck
- * position, and the arm plays its WITHDRAW animation. The browser drives each
+ * One cart at a time: the OT-2 gantry is homed, the arm plays its GRAB
+ * animation (an Animate move set or sequence) to put a cart on the arm's
+ * single-cart stage, the gantry scanner reads the cart at the taught scan
+ * position (a one-slot scanner sweep), the OT-2 runs its wax-filling protocol
+ * on that one cart, the gantry is homed again and the arm plays its WITHDRAW
+ * animation. The browser drives each
  * step through the page's actions (the same pattern as the Animate verified
  * run and the two-phase OT-2 start), so every step's ids are on the
  * ArmWaxFillRun before the next one starts and a reload resumes the cycle.
@@ -20,8 +21,17 @@
  * only re-asks after an explicit "Change animations". Calibration is per
  * OT-2 (ArmWaxFillCalibration): the scan position is mirrored into a
  * one-slot OpentronsScannerPositionSet so the sweep code reads it unchanged;
- * the cart location is sent to the protocol as arm_cart_x/y/z when its
- * parameter schema declares them.
+ * the cart location — the rim of the cart's first wax hole, taught
+ * TIP-NEUTRAL (live minus the teaching tip's calibrator probe) — is sent to
+ * the stage protocol (protocols/Wax_Filling_GEN7_ArmStage.py) as
+ * arm_cart_x/y/z plus the stage's cart rotation. A robot still running the
+ * 24-slot carriage protocol (no arm_cart_* in its schema) falls back to the
+ * legacy deck-position stopgap.
+ *
+ * Collision rule: the arm never moves while the gantry may be out over the
+ * stage. cycleHomeGantry homes the OT-2 (POST /robot/home, synchronous) and
+ * stamps the cycle; cycleGrab / cycleWithdraw refuse to play without a fresh
+ * stamp. The stage protocol also homes itself at the end of every fill.
  *
  * Later: the cart-drop unit that dispenses carts for the arm will slot in
  * before the grab step; nothing here assumes where the arm picks a cart up.
@@ -42,8 +52,12 @@ import {
 	WaxFillingRun
 } from '$lib/server/db';
 import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
+import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry } from '$lib/server/opentrons/protocol-freshness';
+import { getRobot, robotPost } from '$lib/server/opentrons/proxy';
+import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
+import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
 	isActionFail,
 	recordRunFinishedQueue,
@@ -131,6 +145,8 @@ export interface SettingsView {
 	robotId: string | null;
 	deckId: string | null;
 	cartPosition: number;
+	/** How the stage holds the cart vs a carriage slot (degrees CCW from above about the first wax hole); sent as arm_cart_rotation_deg. */
+	stageRotationDeg: number;
 	waxSourceLot: string | null;
 	testMode: boolean;
 	grabAnimation: AnimationRef | null;
@@ -148,6 +164,7 @@ function settingsView(d: any): SettingsView {
 		robotId: d?.robotId ?? null,
 		deckId: d?.deckId ?? null,
 		cartPosition: Number(d?.cartPosition) || 1,
+		stageRotationDeg: Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : 0,
 		waxSourceLot: d?.waxSourceLot ?? null,
 		testMode: !!d?.testMode,
 		grabAnimation: animRef(d?.grabAnimation),
@@ -164,25 +181,31 @@ export async function getSettings(): Promise<SettingsView> {
 
 export async function saveSetup(
 	user: User,
-	input: { robotId: unknown; deckId: unknown; cartPosition: unknown; waxSourceLot: unknown; testMode: boolean }
+	input: { robotId: unknown; deckId: unknown; cartPosition: unknown; stageRotationDeg?: unknown; waxSourceLot: unknown; testMode: boolean }
 ): Promise<SettingsView> {
 	await connectDB();
 	const robotId = String(input.robotId ?? '').trim();
-	const deckId = String(input.deckId ?? '').trim();
+	// The deck is only meaningful for the carriage protocol (readiness asks for it
+	// then); the stage protocol loads no deck, so none is required here.
+	const deckId = String(input.deckId ?? '').trim() || null;
 	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds.');
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
-	if (!deckId) throw new ArmWaxFillError('Pick the deck the single-cart fixture is registered as.');
-	const deck = (await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).select('_id archivedAt').lean()) as any;
-	if (!deck) throw new ArmWaxFillError('That deck is not in the equipment registry.', 404);
-	if (deck.archivedAt) throw new ArmWaxFillError('That deck is archived.');
-	const cartPosition = Math.round(num(input.cartPosition, 'Cart position'));
+	if (deckId) {
+		const deck = (await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).select('_id archivedAt').lean()) as any;
+		if (!deck) throw new ArmWaxFillError('That deck is not in the equipment registry.', 404);
+		if (deck.archivedAt) throw new ArmWaxFillError('That deck is archived.');
+	}
+	const cartPosition = input.cartPosition === null || input.cartPosition === undefined || String(input.cartPosition).trim() === '' ? 1 : Math.round(num(input.cartPosition, 'Cart position'));
 	if (cartPosition < 1 || cartPosition > 24) throw new ArmWaxFillError('Cart position must be 1–24.');
+	const stageRotationDeg =
+		input.stageRotationDeg === null || input.stageRotationDeg === undefined || String(input.stageRotationDeg).trim() === '' ? 0 : num(input.stageRotationDeg, 'Cart rotation');
+	if (stageRotationDeg < -360 || stageRotationDeg > 360) throw new ArmWaxFillError('Cart rotation must be between −360° and 360°.');
 	const waxSourceLot = String(input.waxSourceLot ?? '').trim().slice(0, 100) || null;
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, deckId, cartPosition, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
+		{ $set: { robotId, deckId, cartPosition, stageRotationDeg, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -190,9 +213,17 @@ export async function saveSetup(
 		robotName: robot.name,
 		deckId,
 		cartPosition,
+		stageRotationDeg,
 		waxSourceLot,
 		testMode: !!input.testMode,
-		before: { robotId: before.robotId, deckId: before.deckId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode }
+		before: {
+			robotId: before.robotId,
+			deckId: before.deckId,
+			cartPosition: before.cartPosition,
+			stageRotationDeg: before.stageRotationDeg,
+			waxSourceLot: before.waxSourceLot,
+			testMode: before.testMode
+		}
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -226,6 +257,13 @@ export interface TaughtPoint {
 	taughtAt: string | null;
 	taughtBy: string | null;
 	testScanBarcode: string | null;
+	/**
+	 * Cart location only: the calibrator probe adjust of the tip it was taught
+	 * with. x/y above are tip-neutral (live − this). Null = taught raw, which the
+	 * stage protocol must not be run on (readiness blocks it).
+	 */
+	tipAdjust: { x: number; y: number } | null;
+	tipWell: string | null;
 }
 
 export interface CalibrationView {
@@ -245,7 +283,9 @@ function point(d: any): TaughtPoint | null {
 		z: d.z,
 		taughtAt: d.taughtAt ? new Date(d.taughtAt).toISOString() : null,
 		taughtBy: d.taughtBy?.username ?? null,
-		testScanBarcode: d.testScanBarcode ?? null
+		testScanBarcode: d.testScanBarcode ?? null,
+		tipAdjust: typeof d.tipAdjust?.x === 'number' && typeof d.tipAdjust?.y === 'number' ? { x: d.tipAdjust.x, y: d.tipAdjust.y } : null,
+		tipWell: d.tipWell ?? null
 	};
 }
 
@@ -346,20 +386,49 @@ export async function saveScanPosition(user: User, robotId: string, input: Point
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
 }
 
-export async function saveCartLocation(user: User, robotId: string, input: PointInput): Promise<CalibrationView> {
+type CartLocationInput = PointInput & { hasTip?: unknown; adjustX?: unknown; adjustY?: unknown; tipWell?: unknown };
+
+/**
+ * The cart location is saved TIP-NEUTRAL, the way the Deck Calibration Studio
+ * saves deck holes: the operator teaches with a tip that was just probed on the
+ * calibrator, and what is stored is (live − that tip's probe adjust). The stage
+ * protocol probes its own tip and adds that adjust back, so the wax lands in the
+ * hole whichever tip is on. A point taught without a probed tip would carry the
+ * teaching tip's bend into every fill, so it is refused here.
+ */
+export async function saveCartLocation(user: User, robotId: string, input: CartLocationInput): Promise<CalibrationView> {
 	await connectDB();
 	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
-	const p = cleanPoint(input);
+	const live = cleanPoint(input);
+	const hasTip = String(input.hasTip ?? '') === 'true';
+	const ax = Number(input.adjustX);
+	const ay = Number(input.adjustY);
+	if (!hasTip || !Number.isFinite(ax) || !Number.isFinite(ay)) {
+		throw new ArmWaxFillError(
+			'Pick up a tip and calibrate it on the tip calibrator before saving the cart location. ' +
+				'The fill probes every tip the same way and adds that adjust back, so the saved point has to be ' +
+				'tip-neutral (live minus the probe adjust); a point taught without a probed tip would put the wax beside the hole.'
+		);
+	}
+	const p = { x: +(live.x - ax).toFixed(3), y: +(live.y - ay).toFixed(3), z: live.z };
 	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
 	const mount = mountOf(input, prev?.pipetteMount ?? 'left');
 	const pipetteName = String(input.pipetteName ?? '').trim() || prev?.pipetteName || null;
+	const tipWell = String(input.tipWell ?? '').trim().toUpperCase() || null;
 	const now = new Date();
 	await ArmWaxFillCalibration.updateOne(
 		{ _id: robotId },
-		{ $set: { cartLocation: { ...p, taughtAt: now, taughtBy: opRef(user) }, pipetteMount: mount, pipetteName, updatedBy: opRef(user) } },
+		{
+			$set: {
+				cartLocation: { ...p, live, tipAdjust: { x: ax, y: ay }, tipWell, taughtAt: now, taughtBy: opRef(user) },
+				pipetteMount: mount,
+				pipetteName,
+				updatedBy: opRef(user)
+			}
+		},
 		{ upsert: true }
 	);
-	await audit(user, 'arm_wax_fill.cart_location', 'arm_wax_fill_calibrations', robotId, { ...p, before: point(prev?.cartLocation) });
+	await audit(user, 'arm_wax_fill.cart_location', 'arm_wax_fill_calibrations', robotId, { ...p, live, tipAdjust: { x: ax, y: ay }, tipWell, before: point(prev?.cartLocation) });
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
 }
 
@@ -384,6 +453,9 @@ export interface LoopCycleView {
 	opentronsRunId: string | null;
 	opentronsRunFinalStatus: string | null;
 	withdrawArmRunId: string | null;
+	/** When the OT-2 confirmed its gantry home before each arm move (cycleHomeGantry). */
+	gantryHomedForGrabAt: string | null;
+	gantryHomedForWithdrawAt: string | null;
 	error: string | null;
 }
 
@@ -432,6 +504,8 @@ function loopView(d: any): LoopView {
 				opentronsRunId: c.opentronsRunId ?? null,
 				opentronsRunFinalStatus: c.opentronsRunFinalStatus ?? null,
 				withdrawArmRunId: c.withdrawArmRunId ?? null,
+				gantryHomedForGrabAt: iso(c.gantryHomedForGrabAt),
+				gantryHomedForWithdrawAt: iso(c.gantryHomedForWithdrawAt),
 				error: c.error ?? null
 			})
 		),
@@ -476,27 +550,66 @@ export function readiness(
 ): { blocking: string[]; notes: string[] } {
 	const blocking: string[] = [];
 	const notes: string[] = [];
+	// The stage protocol (arm_cart_x/y/z declared) fills the taught point and loads
+	// no deck; only the legacy carriage protocol needs a deck + deck position.
+	const stage = !!protocol?.declaresCartLocation;
 	if (!settings.robotId) blocking.push('Setup: pick the OT-2 the arm feeds.');
-	if (!settings.deckId) blocking.push('Setup: pick the deck the single-cart fixture is registered as.');
+	if (!settings.deckId && protocol && !stage) blocking.push('Setup: pick the deck the single-cart fixture is registered as (this protocol fills a deck position).');
 	if (!settings.grabAnimation) blocking.push('Animations: choose the grab animation.');
 	if (!settings.withdrawAnimation) blocking.push('Animations: choose the withdraw animation.');
-	if (settings.robotId && !protocol) blocking.push('The robot has no wax-filling protocol uploaded — upload it on /opentrons first.');
-	if (settings.robotId && !calibration?.scanPosition) blocking.push('Calibration: teach the scan position.');
-	if (settings.robotId && !calibration?.cartLocation) {
-		if (protocol?.declaresCartLocation) blocking.push('Calibration: teach the cart location (the protocol reads arm_cart_x/y/z).');
-		else notes.push(`Cart location is not taught. The current protocol does not read it; it fills deck position ${settings.cartPosition} from the deck calibration.`);
-	} else if (calibration?.cartLocation && protocol && !protocol.declaresCartLocation) {
-		notes.push(`The current protocol does not declare arm_cart_x/y/z, so the taught cart location is kept but not sent; it fills deck position ${settings.cartPosition}.`);
+	if (settings.robotId && !protocol) {
+		blocking.push(
+			'The robot has no wax-filling protocol uploaded — upload protocols/Wax_Filling_GEN7_ArmStage.py on /opentrons (Robots → Protocols, process wax-filling) and deploy it to this robot first.'
+		);
 	}
+	if (settings.robotId && !calibration?.scanPosition) blocking.push('Calibration: teach the scan position.');
+	if (settings.robotId && stage) {
+		const cl = calibration?.cartLocation ?? null;
+		if (!cl) blocking.push('Calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
+		else if (!cl.tipAdjust) blocking.push('Calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
+		else notes.push(`The stage protocol fills the taught cart location (tip-neutral; cart rotation ${settings.stageRotationDeg}°). No deck or deck position is used.`);
+	} else if (settings.robotId && protocol) {
+		if (!calibration?.cartLocation) notes.push(`Cart location is not taught. The current protocol does not read it; it fills deck position ${settings.cartPosition} from the deck calibration.`);
+		else notes.push(`The current protocol does not declare arm_cart_x/y/z, so the taught cart location is kept but not sent; it fills deck position ${settings.cartPosition}. Upload protocols/Wax_Filling_GEN7_ArmStage.py to fill the stage.`);
+	}
+	if (settings.robotId) notes.push('Before every arm move (grab and withdraw) the OT-2 gantry is homed and the arm waits until the robot confirms it.');
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
 	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
 	return { blocking, notes };
 }
 
+/**
+ * What the teach panel needs to pick up and probe a tip the way the Deck
+ * Calibration Studio does: the p20 rack to press from, the next fresh rack
+ * position, and this robot's tip-calibrator point (approach height + probe Z).
+ */
+export interface TeachAid {
+	tiprackLoadName: string;
+	nextTipWell: string;
+	calibrator: { x: number; y: number; approachZ: number; probeZ: number; source: string };
+}
+
+async function teachAid(robotId: string): Promise<TeachAid> {
+	const [cal, tip] = await Promise.all([resolveCalibratorPoint(robotId, 'wax', {}), nextStudioTipWell(robotId, 'wax')]);
+	return {
+		tiprackLoadName: TIP_PROFILE.wax.loadName,
+		nextTipWell: tip.well,
+		calibrator: {
+			x: cal.point.x,
+			y: cal.point.y,
+			// The fixture's `position.z` is the approach (park) height; the Studio
+			// falls back to 38.5 when none is taught. The probe Z is the point's z.
+			approachZ: plausibleZ(cal.fixture?.position?.z) ?? 38.5,
+			probeZ: cal.point.z,
+			source: cal.source
+		}
+	};
+}
+
 export async function loadArmWaxFill() {
 	await connectDB();
 	const settings = await getSettings();
-	const [robots, decks, moveSets, sequences, calibration, protocol, active, recent, robotConflict] = await Promise.all([
+	const [robots, decks, moveSets, sequences, calibration, protocol, active, recent, robotConflict, teach] = await Promise.all([
 		OpentronsRobot.find({ isActive: { $ne: false } }).select('_id name').sort({ name: 1 }).lean(),
 		Equipment.find({ equipmentType: 'deck', archivedAt: null }).select('_id name deckLoadName particleDeviceId status').sort({ name: 1 }).lean(),
 		listMoveSets().catch(() => []),
@@ -505,12 +618,20 @@ export async function loadArmWaxFill() {
 		protocolFor(settings.robotId).catch(() => null),
 		activeLoop(),
 		ArmWaxFillRun.find({ status: { $ne: 'running' } }).sort({ createdAt: -1 }).limit(8).lean(),
-		settings.robotId ? checkRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null)
+		settings.robotId ? checkRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null),
+		settings.robotId ? teachAid(settings.robotId).catch((): TeachAid | null => null) : Promise.resolve<TeachAid | null>(null)
 	]);
 	const robotName = (robots as any[]).find((r) => String(r._id) === settings.robotId)?.name ?? null;
+	// Bridge-heartbeat health of the OT-2 the arm feeds (ready / busy / hung /
+	// offline), the same read the Robots board makes; the page polls
+	// /api/opentrons-lab/robots/health for the same shape afterwards.
+	const health: RobotHealth | null = settings.robotId
+		? ((await getRobotsHealth([{ _id: settings.robotId, name: robotName }]).catch(() => ({}) as Record<string, RobotHealth>))[settings.robotId] ?? null)
+		: null;
 	return {
 		settings,
 		robotName,
+		health,
 		scannerDeviceId: scannerDeviceIdForRobot(robotName),
 		robots: (robots as any[]).map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id) })),
 		decks: (decks as any[]).map((d) => ({
@@ -524,6 +645,7 @@ export async function loadArmWaxFill() {
 		sequences: sequences.filter((s) => !s.archived).map((s) => ({ _id: s._id, name: s.name, items: s.items.length })),
 		calibration,
 		protocol,
+		teach,
 		activeLoop: active,
 		recentLoops: (recent as any[]).map(loopView),
 		readiness: readiness(settings, calibration, protocol, active, robotConflict)
@@ -604,11 +726,63 @@ async function play(user: User, ref: AnimationRef | null, what: string): Promise
 	}
 }
 
-/** Step 1: the arm MOVES through the grab animation. */
+// ── OT-2 gantry home before every arm move ───────────────────────────────
+
+/** A home is trusted for this long; older than that, the step homes again before the arm moves. */
+const GANTRY_HOME_FRESH_MS = 15 * 60_000;
+
+function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHomedForWithdrawAt', what: string) {
+	const at = cycle?.[key] ? new Date(cycle[key]).getTime() : 0;
+	if (!at || Date.now() - at > GANTRY_HOME_FRESH_MS) {
+		throw new ArmWaxFillError(
+			`The OT-2 gantry has not been homed for the ${what} (or that home is older than 15 minutes). ` +
+				'The arm does not move until the robot confirms it is home — press Resume to home it and carry on.',
+			409
+		);
+	}
+}
+
+/**
+ * Home the OT-2 gantry and stamp the cycle, BEFORE the arm plays the grab or
+ * the withdraw. The robot's legacy POST /robot/home is synchronous (it answers
+ * once all axes are home) and needs no maintenance run, so it leaves whatever
+ * run the robot holds untouched. cycleGrab / cycleWithdraw refuse to play the
+ * arm without a fresh stamp, so a browser that skipped this step cannot swing
+ * the arm in over a gantry that is still out on the deck.
+ */
+export async function cycleHomeGantry(user: User, loopId: string, rawBefore: unknown): Promise<{ homedAt: string; cycle: number; before: 'grab' | 'withdraw' }> {
+	const before = rawBefore === 'withdraw' ? 'withdraw' : rawBefore === 'grab' ? 'grab' : null;
+	if (!before) throw new ArmWaxFillError('before must be grab or withdraw.');
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, before);
+	if (before === 'grab' && loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
+	const robotId = String(loop.robot?._id ?? '');
+	const robot = await getRobot(robotId);
+	if (!robot) throw new ArmWaxFillError('The OT-2 is not registered or not active — the arm will not move.', 409);
+	let res: Response;
+	try {
+		res = await robotPost(robot, '/robot/home', { target: 'robot' }, { timeoutMs: 90_000 });
+	} catch (e) {
+		throw new ArmWaxFillError(`The OT-2 could not be homed (${e instanceof Error ? e.message : String(e)}) — the arm will not move.`, 502);
+	}
+	if (!res.ok) {
+		const body: any = await res.json().catch(() => ({}));
+		const detail = body?.message ?? body?.errors?.[0]?.detail ?? body?.error ?? `HTTP ${res.status}`;
+		throw new ArmWaxFillError(`The OT-2 refused to home (${detail}) — the arm will not move. If a run is still active on the robot, finish or reset it first.`, 502);
+	}
+	const at = new Date();
+	const key = before === 'grab' ? 'gantryHomedForGrabAt' : 'gantryHomedForWithdrawAt';
+	await patchCycle(loopId, cycle.index, { [key]: at });
+	await audit(user, 'arm_wax_fill.gantry_home', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before, robotId });
+	return { homedAt: at.toISOString(), cycle: cycle.index, before };
+}
+
+/** Step 1: the arm MOVES through the grab animation — only after the gantry reported home. */
 export async function cycleGrab(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'grab');
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
+	assertGantryHomed(cycle, 'gantryHomedForGrabAt', 'grab');
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
 	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date() });
 	await audit(user, 'arm_wax_fill.cycle_grab', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
@@ -712,7 +886,9 @@ async function revertUnstartedWaxRun(user: User, waxRunId: string, barcode: stri
 /**
  * Step 3: the OT-2 fills the cart. A WaxFillingRun for this one cart, then
  * the ordinary start (freshness gate, create, play) on the robot's current
- * wax-filling protocol with cartridges = 1 at the configured position. The
+ * wax-filling protocol. With the stage protocol the taught, tip-neutral cart
+ * location goes in as arm_cart_x/y/z (+ the stage rotation); with the legacy
+ * carriage protocol it is cartridges = 1 at the configured deck position. The
  * browser then watches the robot run (EmbeddedRunController) and reports
  * its end to cycleFillDone. A retry after a reload returns the run already
  * started for this cycle.
@@ -728,6 +904,13 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 	const protocol = await protocolFor(robotId);
 	if (!protocol) throw new ArmWaxFillError('The robot has no wax-filling protocol uploaded.', 409);
 	const calibration = await getCalibration(robotId);
+	const stage = protocol.declaresCartLocation;
+	if (stage && !calibration?.cartLocation?.tipAdjust) {
+		throw new ArmWaxFillError('The cart location is not taught tip-neutral (pick up a tip, calibrate it, then save it) — the stage protocol will not be started without it.', 409);
+	}
+	if (!stage && !loop.deckId) {
+		throw new ArmWaxFillError('This robot runs the carriage protocol, which fills a deck position: pick the deck in Setup (or upload the stage protocol).', 409);
+	}
 
 	let waxRunId: string = cycle.waxRunId ?? '';
 	if (!waxRunId) {
@@ -748,7 +931,7 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 			notes: [
 				{
 					_id: generateId(),
-					body: `Robot-arm wax fill: cycle ${cycle.index} of loop ${loopId}, one cart at deck position ${loop.cartPosition}.`,
+					body: `Robot-arm wax fill: cycle ${cycle.index} of loop ${loopId}, one cart ${stage ? 'at the taught stage location' : `at deck position ${loop.cartPosition}`}.`,
 					phase: 'wax_run',
 					author: opRef(user),
 					createdAt: new Date()
@@ -770,13 +953,20 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 	const form = new FormData();
 	form.set('runId', waxRunId);
 	form.set('opentronsProtocolId', protocol.opentronsProtocolId);
-	form.set('param_cartridges', '1');
-	form.set('param_resume_cartridge', String(loop.cartPosition));
-	form.set('param_resume_hole', '1');
-	if (protocol.declaresCartLocation && calibration?.cartLocation) {
-		form.set('param_arm_cart_x', String(calibration.cartLocation.x));
-		form.set('param_arm_cart_y', String(calibration.cartLocation.y));
-		form.set('param_arm_cart_z', String(calibration.cartLocation.z));
+	if (stage) {
+		// The stage protocol: the taught tip-neutral rim of the first wax hole and
+		// how the stage turns the cart. (computeRunParameters only reads the RTPs
+		// the robot's schema declares, so nothing else is sent.)
+		const cl = calibration!.cartLocation!;
+		form.set('param_arm_cart_x', String(cl.x));
+		form.set('param_arm_cart_y', String(cl.y));
+		form.set('param_arm_cart_z', String(cl.z));
+		form.set('param_arm_cart_rotation_deg', String(settings.stageRotationDeg));
+	} else {
+		// Legacy carriage protocol: one cart at the configured deck position.
+		form.set('param_cartridges', '1');
+		form.set('param_resume_cartridge', String(loop.cartPosition));
+		form.set('param_resume_hole', '1');
 	}
 	const r = await startRunQueue('wax', form, user);
 	if (isActionFail(r)) {
@@ -821,10 +1011,11 @@ export async function cycleFillDone(user: User, loopId: string, rawStatus: unkno
 	return (await getLoop(loopId))!;
 }
 
-/** Step 4: the arm MOVES through the withdraw animation. */
+/** Step 4: the arm MOVES through the withdraw animation — only after the gantry reported home. */
 export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
+	assertGantryHomed(cycle, 'gantryHomedForWithdrawAt', 'withdraw');
 	const p = await play(user, animRef(loop.withdrawAnimation), 'withdraw');
 	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId });
 	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
@@ -873,6 +1064,36 @@ export async function stopLoop(user: User, loopId: string): Promise<{ loop: Loop
 	}
 	await audit(user, 'arm_wax_fill.stop', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn });
 	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn };
+}
+
+/**
+ * Force reset (the Robots board's "Reset" for this line). Ends the running
+ * loop NOW whatever step it is at — the arm's play is stopped if it is moving
+ * — so the page can then force the OT-2 back to idle over the ordinary
+ * /force-reset route (which aborts the one-cart WaxFillingRun and clears the
+ * robot's own run). Nothing to end is not an error: the OT-2 side still runs.
+ */
+export async function resetLoop(user: User): Promise<{ loop: LoopView | null; stoppedArm: boolean; torqueOn: boolean | null }> {
+	await connectDB();
+	const d = (await ArmWaxFillRun.findOne({ status: 'running' }).sort({ createdAt: -1 }).lean()) as any;
+	let stoppedArm = false;
+	let torqueOn: boolean | null = null;
+	const active = await playbackActive().catch(() => null);
+	if (active) {
+		const s = await stopPlayback(user);
+		stoppedArm = true;
+		torqueOn = s.torqueOn;
+	}
+	if (!d) return { loop: null, stoppedArm, torqueOn };
+	const loopId = String(d._id);
+	const cycle = d.cycles?.[d.cycles.length - 1];
+	const now = new Date();
+	if (cycle && !['done', 'failed', 'stopped'].includes(cycle.step)) {
+		await patchCycle(loopId, cycle.index, { step: 'stopped', error: 'force reset to idle', endedAt: now });
+	}
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', stopRequested: true, error: 'force reset to idle', endedAt: now } });
+	await audit(user, 'arm_wax_fill.force_reset', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step: cycle?.step ?? null, stoppedArm, torqueOn });
+	return { loop: await getLoop(loopId), stoppedArm, torqueOn };
 }
 
 /** A step failed in the browser (or here): the loop stops with the reason on the cycle. */

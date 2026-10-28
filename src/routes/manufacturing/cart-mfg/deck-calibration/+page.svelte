@@ -29,9 +29,13 @@
 	const wellByName = $derived(new Map(wells.map((w) => [w.name, w] as const)));
 
 	// ── Pickers ───────────────────────────────────────────────────────────────
+	// `?robot=<id>` preselects a robot (the robot-arm wax-fill page links here to
+	// this robot's tip calibrator); otherwise the first active one.
 	let selectedRobotId = $state<string>('');
 	$effect(() => {
-		if (!selectedRobotId && robots.length) selectedRobotId = robots.find((r) => r.isActive)?._id ?? robots[0]._id;
+		if (selectedRobotId || !robots.length) return;
+		const wanted = $page.url.searchParams.get('robot');
+		selectedRobotId = (wanted && robots.find((r) => r._id === wanted)?._id) || robots.find((r) => r.isActive)?._id || robots[0]._id;
 	});
 	const robot = $derived(robots.find((r) => r._id === selectedRobotId) ?? null);
 

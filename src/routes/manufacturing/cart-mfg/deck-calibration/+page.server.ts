@@ -13,6 +13,8 @@
  * (/api/opentrons-lab/robots/[id]/maintenance/...). This file owns load + the
  * batch-apply and sync server actions.
  */
+import { storedProtocolForRobot } from '$lib/server/opentrons/protocol-freshness';
+import type { ProcessType } from '$lib/opentrons/ot2-protocol';
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
@@ -783,7 +785,7 @@ export const actions: Actions = {
 		const { types, results, publishedVersions } = await syncFreeze(robot, robotId, which, locals.user);
 
 		for (const pt of types) {
-			const proto = await storedSyncProtocol(pt);
+			const proto = await storedSyncProtocol(pt, robotId);
 			if (!proto) {
 				results.push(noStoredProtocol(pt));
 				continue;
@@ -822,7 +824,7 @@ export const actions: Actions = {
 		const { types, results, publishedVersions } = await syncFreeze(robot, robotId, which, locals.user);
 		const uploads: { processType: string; fileName: string; bundle: unknown }[] = [];
 		for (const pt of types) {
-			const proto = await storedSyncProtocol(pt);
+			const proto = await storedSyncProtocol(pt, robotId);
 			if (!proto) {
 				results.push(noStoredProtocol(pt));
 				continue;
@@ -919,9 +921,11 @@ function noStoredProtocol(pt: string): SyncResult {
 	};
 }
 
-async function storedSyncProtocol(pt: string): Promise<{ fileName?: string; fileContent: string } | null> {
-	const proto = (await OpentronProtocol.findOne({ processType: pt, isActive: true }).sort({ createdAt: -1 }).lean()) as any;
-	return proto?.fileContent ? proto : null;
+// Robot-aware (2026-10-28): the row last DEPLOYED to this robot, else the newest.
+// The robot-arm's OT-2 runs the stage variant as its wax-filling protocol; a
+// Sync must not replace it with the carriage .py (or the reverse).
+async function storedSyncProtocol(pt: string, robotId: string): Promise<{ fileName?: string; fileContent: string } | null> {
+	return storedProtocolForRobot(pt as ProcessType, robotId);
 }
 
 /**

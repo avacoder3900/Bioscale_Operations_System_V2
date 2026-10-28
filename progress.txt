@@ -23477,3 +23477,80 @@ Deployment: preview — via Vercel GitHub integration on the push (see the PR / 
 Source: branch feat/arm-wax-fill-loop @ the commit titled "docs(progress): arm wax fill pushed as feat/arm-wax-fill-loop" (git log feat/arm-wax-fill-loop --oneline)
 Retrieve this exact code: git checkout feat/arm-wax-fill-loop at that commit
 What this deployment is for: first look at the Robot Arm "Wax fill" tab (setup, locked animations, calibration teach panel, loop driver).
+
+
+================================================================================
+2026-10-28 — feat/arm-wax-fill-loop — Robot Arm wax fill: single-cart STAGE protocol (arm_cart_x/y/z), tip-neutral cart location, OT-2 homed before every arm move
+================================================================================
+Alejandro: the arm rig does not use the 24-well carriage — there is one elevated platform stage for the
+cart — so "deck position 1–24" means nothing there; do option 1 (a protocol variant that reads the taught
+cart location). And: make sure the OT-2 gantry is always back at home before the arm moves, so the two
+cannot collide.
+Why option 1: the 10-28 page sent the taught cart location only when the robot's wax-filling protocol declared
+arm_cart_x/y/z; Wax_Filling_GEN7_Cartridge.py does not, so the page fell back to `resume_cartridge` on a
+registered deck — a slot of a carriage that is not there, at a carriage Z, under a raised stage.
+Protocol: protocols/Wax_Filling_GEN7_ArmStage.py (new; the carriage .py is untouched).
+  - RTPs arm_cart_x / arm_cart_y / arm_cart_z (deck mm; default 0 = not taught → the run raises before any
+    motion, never guesses), arm_cart_rotation_deg (how the stage turns the cart vs a carriage slot, CCW about
+    the first hole), stage_jump_height (travel clearance over the rim, 10–60; the stage is raised so 60 may
+    be out of reach). No `cartridges` / resume_* / row patterns / carrier pauses — one cart.
+  - Geometry: the 12 wax holes laid out from the taught FIRST hole (row 1, gate 4 = deck well X2) with the
+    cartridge's own pitch from gen4deck_gen7cartridge_001 (6.0 mm per gate along −x, 9.0 mm per row along
+    −y), names X2…V8 so logs/gates read like cartridge 1 of a deck. stage_targets() is module-level and pure;
+    protocols/tests/test_arm_stage_geometry.py covers order, pitch, 90/180° rotation (stubs opentrons/serial;
+    `python -I protocols/tests/test_arm_stage_geometry.py`).
+  - Carried over verbatim: tip tracker, calibrator serial + 'C' baseline, pick_up_and_calibrate_tip (no
+    nominal fallback), max_tip_adjust, bims_native/offset_*/cal_*/z_cal RTP names (calibrationRtpValues
+    injects unchanged; offsets only touch the tube + tip racks — the taught point is already in the robot's
+    frame), aspirate height model + min_tip_clearance, gate volumes, dispense_depth, mid-run tip swap,
+    run_calibration_check (now the cart's 4 corners). NO Particle-id read, no deck labware.
+  - Motion at the stage is explicit: arrive via the jump height with minimum_z_height (the planner cannot see
+    the stage), force_direct hops within a row, move then dispense IN PLACE (a dispense given a bare deck
+    point plans a deck-high arc), lift to the jump height before every trip back to the tube / tip swap.
+    protocol.home() at the end of the fill so the gantry is parked before the arm withdraws.
+  - Teaching convention (enforced by BIMS): the cart location is TIP-NEUTRAL like Studio-taught deck holes —
+    taught with a probed tip, stored as live − that tip's adjust; the fill adds its own tip's adjust back.
+BIMS (src/lib/server/arm-wax-fill.ts + models + the page):
+  - Calibration teach panel: "Pick up tip (<well>) + calibrate" (pick-up-tip on slot 11 from the Studio tip
+    cursor's next well, move to the robot's calibrator approach point, POST /api/scanner/calibrate-tip
+    attached to the maintenance run — queue line), tip/probe state shown, "Drop tip". Save cart location
+    REQUIRES a probed tip (server refuses otherwise) and stores x/y = live − adjust plus `live`, `tipAdjust`,
+    `tipWell` for audit. Save scan position REFUSES with a tip on (the sweep runs without one; a point taught
+    with a tip would park the scanner a tip length lower). "Move to" the cart location = tip-neutral point +
+    this tip's adjust, 2 mm above the rim, high arc. Close run drops a modelled tip first.
+  - Setup: with the stage protocol the deck is optional (provenance only) and the deck-position field is
+    replaced by "Cart rotation on the stage (°)" (ArmWaxFillSettings.stageRotationDeg → arm_cart_rotation_deg).
+    The legacy carriage path (deck + position) remains for a robot that still runs the carriage .py.
+  - cycleFill: stage protocol → arm_cart_x/y/z (+ rotation) only, refused unless the cart location is
+    tip-neutral; carriage protocol → cartridges=1/resume_* as before. Readiness blocks a raw-taught cart
+    location and names the .py to upload. run-lifecycle-records startContext: a run with `armWaxFill` may
+    start with cartridgeIds but no deckId (resolveDeckBinding already only warns on a missing deck).
+  - COLLISION RULE: new cycleHomeGantry (page action `homeGantry`, before 'grab' | 'withdraw'): POST
+    /robot/home {target:'robot'} on the OT-2 (synchronous, no maintenance run, leaves the robot's run alone),
+    stamps cycles.$.gantryHomedForGrabAt / gantryHomedForWithdrawAt, audit arm_wax_fill.gantry_home.
+    cycleGrab / cycleWithdraw REFUSE to play the arm without a stamp younger than 15 min, so no browser
+    can skip it. The driver homes before both arm moves and fails the loop if the robot does not confirm.
+    +page.server.ts maxDuration 60 → 120 (a cold home can take 30–60 s).
+Protocol library safety (found while wiring this): the run-start freshness gate re-synced from "the newest
+active wax-filling row" (storedRunProtocol) and the Studio's Sync did the same (storedSyncProtocol). With a
+second 'wax-filling' row in the library (the stage .py) either path could push the stage protocol onto a
+carriage robot or the carriage protocol onto the arm's OT-2. Both now resolve the row most recently
+DEPLOYED TO THAT ROBOT (new storedProtocolForRobot in protocol-freshness.ts), falling back to the newest
+only when the robot has no deployment. scripts/refresh-protocol-source.ts matches the row by fileName too and
+gained --type wax-filling-arm-stage.
+To bring up on the hardware: (1) upload protocols/Wax_Filling_GEN7_ArmStage.py on /opentrons (Robots →
+Protocols, process wax-filling) and deploy it to the ARM's OT-2 only — the page then switches to the stage
+flow by itself (it checks the robot's schema for arm_cart_x/y/z); (2) teach the tip calibrator for that robot
+in the Deck Calibration Studio if it has none; (3) on the Wax fill tab: Setup (robot, rotation), Teach → scan
+position with no tip, then Pick up tip + calibrate → jog onto the first wax hole rim → Save; (4) first fill
+with RUN CALIBRATION CHECK on from the Opentrons app or a 1-run loop and watch the 4 corners. Nothing here has
+been run on a robot; the arc height for teach travel (TEACH_ARC_Z = 120) and stage_jump_height may need
+lowering for a tall stage.
+svelte-check (portable node): 14 errors / 437 warnings — the 14-error baseline, none in touched files.
+Unit: protocol-freshness.test.ts 5 + run-lifecycle-records.test.ts 29 pass; geometry test passes; .py compiles.
+Branch note: this checkout is shared with another session (robot-arm-lock / control-page work is uncommitted
+in the same tree); nothing committed here.
+Follow-up (same day): "Calibrate wax fill" button in the OT-2 controls row of the Wax fill tab — opens the teach panel and
+scrolls to this robot's calibration card (now titled with the robot + its wax-fill protocol); the card links to
+"Tip calibrator (Studio)" = /manufacturing/cart-mfg/deck-calibration?kind=calibrator&robot=<id>. The Studio gained
+the `?robot=` preselect for that. svelte-check: still the 14-error baseline.

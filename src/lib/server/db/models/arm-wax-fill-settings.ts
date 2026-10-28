@@ -4,11 +4,13 @@ import mongoose, { Schema } from 'mongoose';
  * ArmWaxFillSettings — one document (`_id: 'default'`) for the robot-arm wax
  * fill line (/manufacturing/cart-mfg/robot-arm/wax-fill).
  *
- * The arm feeds ONE cartridge at a time to an OT-2 that runs the ordinary
- * wax-filling protocol with `cartridges = 1` at `cartPosition`. The grab and
- * withdraw animations are Animate move sets or sequences, chosen once and
- * kept: the page only lets them change after an explicit "Change animations",
- * so a run never asks for them again.
+ * The arm feeds ONE cartridge at a time to an OT-2. With the stage protocol
+ * (protocols/Wax_Filling_GEN7_ArmStage.py, which declares arm_cart_x/y/z)
+ * the fill lands on the taught cart location turned by `stageRotationDeg`;
+ * with the ordinary carriage protocol it fills `cartPosition` on `deckId`
+ * (the legacy stopgap). The grab and withdraw animations are Animate move
+ * sets or sequences, chosen once and kept: the page only lets them change
+ * after an explicit "Change animations", so a run never asks for them again.
  */
 const animationRefSchema = new Schema(
 	{
@@ -25,10 +27,12 @@ const armWaxFillSettingsSchema = new Schema(
 		_id: { type: String, default: 'default' },
 		/** OpentronsRobot._id of the OT-2 the arm feeds. */
 		robotId: String,
-		/** Equipment deck (`equipmentType: 'deck'`) the single-cart fixture is registered as. */
+		/** Equipment deck (`equipmentType: 'deck'`) — only for the carriage protocol; the stage protocol needs none. */
 		deckId: String,
-		/** 1-based deck position the protocol fills (`resume_cartridge`), default 1. */
+		/** 1-based deck position the carriage protocol fills (`resume_cartridge`), default 1. Unused by the stage protocol. */
 		cartPosition: { type: Number, default: 1 },
+		/** How the stage holds the cart vs a carriage slot, degrees CCW from above about the first wax hole (arm_cart_rotation_deg). */
+		stageRotationDeg: { type: Number, default: 0 },
 		/** Optional wax lot stamped on every cycle's wax run (traceability only). */
 		waxSourceLot: String,
 		/** Unknown barcodes become synthetic backed carts (same as the wax wizard's test mode). */

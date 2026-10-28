@@ -9,6 +9,11 @@
  * Usage:
  *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type wax-filling [--apply]
  *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type reagent-filling --apply
+ *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type wax-filling-arm-stage --apply
+ *
+ * The row is matched by processType AND fileName: two 'wax-filling' rows live
+ * side by side (the carriage .py and the robot-arm stage .py), and refreshing
+ * "the newest wax-filling row" would write one file's source into the other's row.
  */
 import fs from 'node:fs';
 import crypto from 'node:crypto';
@@ -24,13 +29,16 @@ const arg = (n: string) => {
 const MODE: 'plan' | 'apply' = argv.includes('--apply') ? 'apply' : 'plan';
 const processType = arg('type');
 
-const FILE_FOR: Record<string, string> = {
-	'wax-filling': 'protocols/Wax_Filling_GEN7_Cartridge.py',
-	'reagent-filling': 'protocols/Reagent_Filling_GEN7.py'
+const FILE_FOR: Record<string, { processType: string; path: string }> = {
+	'wax-filling': { processType: 'wax-filling', path: 'protocols/Wax_Filling_GEN7_Cartridge.py' },
+	'reagent-filling': { processType: 'reagent-filling', path: 'protocols/Reagent_Filling_GEN7.py' },
+	// The robot-arm stage variant is ALSO processType 'wax-filling' (the arm's OT-2
+	// runs it as its wax-filling protocol); its row is told apart by fileName.
+	'wax-filling-arm-stage': { processType: 'wax-filling', path: 'protocols/Wax_Filling_GEN7_ArmStage.py' }
 };
 
 if (!processType || !FILE_FOR[processType]) {
-	console.error('Usage: --type wax-filling|reagent-filling [--apply]');
+	console.error('Usage: --type wax-filling|reagent-filling|wax-filling-arm-stage [--apply]');
 	process.exit(1);
 }
 
@@ -41,14 +49,15 @@ async function main() {
 	const db = mongoose.connection.db!;
 	console.log(`[${MODE}] ${db.databaseName}\n`);
 
-	const path = FILE_FOR[processType!];
+	const { processType: rowType, path } = FILE_FOR[processType!];
+	const fileName = path.split('/').pop()!;
 	const local = fs.readFileSync(path, 'utf8');
 	const localHash = crypto.createHash('sha256').update(local).digest('hex');
 
 	const rows = await db.collection('opentrons_protocols')
-		.find({ processType, isActive: true }).sort({ createdAt: -1 }).limit(1).toArray();
+		.find({ processType: rowType, fileName, isActive: true }).sort({ createdAt: -1 }).limit(1).toArray();
 	const p = rows[0] as any;
-	if (!p) { console.error(`No active ${processType} protocol row. Refusing.`); process.exit(1); }
+	if (!p) { console.error(`No active ${rowType} protocol row with fileName ${fileName}. Upload it on /opentrons (Robots -> Protocols) first. Refusing.`); process.exit(1); }
 
 	const storedHash = crypto.createHash('sha256').update(String(p.fileContent ?? '')).digest('hex');
 	console.log(`processType   ${processType}`);
@@ -73,7 +82,7 @@ async function main() {
 		recordId: String(p._id),
 		action: 'refresh_protocol_source',
 		oldData: { fileHash: storedHash },
-		newData: { fileHash: localHash, processType },
+		newData: { fileHash: localHash, processType: rowType, fileName },
 		changedAt: new Date(),
 		changedBy: 'system-refresh-protocol-source'
 	} as any);
