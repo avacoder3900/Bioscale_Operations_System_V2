@@ -23930,3 +23930,7 @@ resolveDeckBinding already tolerates no deckId. Deck position (1–24 → resume
 vitest run-lifecycle-records.test.ts: 32 passed. svelte-check: 14 errors / 435 warnings = baseline.
 Not yet pushed: the push to master was blocked by the auto-mode permission classifier; Alejandro pushes
 master-arm-wax-merge:master (and feat/arm-wax-fill-no-deck) by hand.
+Deployment: production — via Vercel GitHub integration on the push to master (pushed by hand after the classifier block)
+Source: branch master @ commit 874c4669 (merge of feat/arm-wax-fill-no-deck @ 4b699897)
+Retrieve this exact code: git checkout master at commit 874c4669
+What this deployment is for: arm wax fill Setup without a deck; arm wax runs start with a cart and no deck.
