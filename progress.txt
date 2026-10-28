@@ -23554,3 +23554,7 @@ Follow-up (same day): "Calibrate wax fill" button in the OT-2 controls row of th
 scrolls to this robot's calibration card (now titled with the robot + its wax-fill protocol); the card links to
 "Tip calibrator (Studio)" = /manufacturing/cart-mfg/deck-calibration?kind=calibrator&robot=<id>. The Studio gained
 the `?robot=` preselect for that. svelte-check: still the 14-error baseline.
+Deployment: preview — via Vercel GitHub integration on the push (see the PR / Deployments tab for the URL)
+Source: branch feat/arm-wax-fill-loop @ commit bf563ba8
+Retrieve this exact code: git checkout feat/arm-wax-fill-loop at commit bf563ba8
+What this deployment is for: the single-cart STAGE wax-fill protocol + tip-neutral teach panel + OT-2 home before every arm move + "Calibrate wax fill" button.
