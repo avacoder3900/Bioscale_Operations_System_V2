@@ -540,6 +540,8 @@ export interface AprilTagDetectRequest {
 	depth?: boolean;
 	/** Distinct consecutive frames to average each tag's corners over (1..10; the Pi's default is 1). */
 	frames?: number;
+	/** Distinct consecutive frames averaged pixel by pixel into each image before detecting (1..60; 2026-10-28, ignored by an older Pi). */
+	average?: number;
 }
 
 export interface AprilTagDetectResponse {
@@ -554,6 +556,12 @@ export interface AprilTagDetectResponse {
 	/** 'raw' = detected on the sensor's own luma (cameras.current()); 'jpeg' = decoded from the snapshot route (older Pi). */
 	frame_source?: 'raw' | 'jpeg';
 	frames_used?: number;
+	/** Frames stacked into each detected image (the smallest stack when frames_used > 1); absent from a Pi before 2026-10-28. */
+	frames_averaged?: number;
+	/** Time spent capturing the stacks, ms. */
+	capture_ms?: number;
+	/** Mean |last - first| luma over a stack (0-255); ~0 when the scene held still. null with one frame. */
+	motion_luma?: number | null;
 	intrinsics?: { fx: number; fy: number; cx: number; cy: number; dist?: number[]; source: 'realsense' | 'env' | 'nominal' };
 	tags: {
 		id: number;

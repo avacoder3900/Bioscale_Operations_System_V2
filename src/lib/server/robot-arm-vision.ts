@@ -28,6 +28,10 @@ import {
 	sheetSizeMm,
 	CALIBRATION_FRAMES,
 	CHECK_FRAMES,
+	CALIBRATION_AVERAGE,
+	CHECK_AVERAGE,
+	CALIBRATION_FRAMES_NO_STACK,
+	CHECK_FRAMES_NO_STACK,
 	DEFAULT_TOLERANCES,
 	MAX_TAG_ID,
 	SHEET_MAX_ID,
@@ -217,12 +221,18 @@ export interface DetectResult {
 	frame: Buffer | null;
 	/** 'raw' = the Pi detected on the sensor's own pixels; 'jpeg' = an older Pi decoding its snapshot; null = unknown. */
 	frameSource: 'raw' | 'jpeg' | null;
-	/** Frames the Pi averaged each tag over for this answer. */
+	/** Separate detections the Pi averaged each tag's corners over for this answer. */
 	framesUsed: number;
+	/** Frames the Pi stacked pixel by pixel into each image before detecting; null = a Pi without frame stacking (before 2026-10-28). */
+	framesAveraged: number | null;
+	/** Time the Pi spent capturing frames, ms; null on an older Pi. */
+	captureMs: number | null;
+	/** Mean |last - first| luma over the stack (0-255): ~0 when the scene held still; null with one frame or an older Pi. */
+	motionLuma: number | null;
 }
 
 // Defined beside the tag maths so the browser (the Animate pose card) uses the same counts.
-export { CALIBRATION_FRAMES, CHECK_FRAMES } from '$lib/robot-arm/apriltags';
+export { CALIBRATION_FRAMES, CHECK_FRAMES, CALIBRATION_AVERAGE, CHECK_AVERAGE, CALIBRATION_FRAMES_NO_STACK, CHECK_FRAMES_NO_STACK } from '$lib/robot-arm/apriltags';
 
 /**
  * Sizes sent to the Pi: the registry's (as measured), falling back to the
@@ -257,18 +267,28 @@ function toDetection(t: AprilTagDetectResponse['tags'][number]): TagDetection {
 
 export async function detectTags(
 	cameraName: string,
-	o: { includeFrame?: boolean; registry?: TagSummary[]; frames?: number } = {}
+	o: { includeFrame?: boolean; registry?: TagSummary[]; frames?: number; average?: number; framesIfNoStack?: number } = {}
 ): Promise<DetectResult> {
 	if (!cameraName) throw new Error('No camera selected.');
 	const registry = (o.registry ?? (await listTags())).filter((t) => !t.archived);
 	const byTagId = new Map(registry.map((t) => [t.tagId, t]));
 	const frames = Math.max(1, Math.min(10, Math.round(o.frames ?? 1)));
-	const r = await robotArm.detectAprilTags(cameraName, {
-		tag_sizes_mm: sizeMap(registry),
-		include_frame: !!o.includeFrame,
-		depth: true,
-		...(frames > 1 ? { frames } : {})
+	const average = Math.max(1, Math.min(60, Math.round(o.average ?? 1)));
+	const base = { tag_sizes_mm: sizeMap(registry), include_frame: !!o.includeFrame, depth: true };
+	let r = await robotArm.detectAprilTags(cameraName, {
+		...base,
+		...(frames > 1 ? { frames } : {}),
+		...(average > 1 ? { average } : {})
 	});
+	// A Pi without frame stacking (before 2026-10-28) ignores `average` and
+	// answers without frames_averaged. A parked-arm caller that asked for a
+	// stack then gets its pre-stacking number of separate detections instead,
+	// so a calibration or check taken before the Pi is updated keeps the
+	// noise level it had, at the old cost.
+	const noStack = Math.max(1, Math.min(10, Math.round(o.framesIfNoStack ?? 1)));
+	if (average > 1 && r.available && typeof r.frames_averaged !== 'number' && noStack > frames) {
+		r = await robotArm.detectAprilTags(cameraName, { ...base, frames: noStack });
+	}
 	const tags: DetectedTag[] = (r.tags ?? []).map((t) => {
 		const reg = byTagId.get(t.id);
 		return { ...toDetection(t), registered: reg ? { _id: reg._id, name: reg.name, group: reg.group, role: reg.role } : null };
@@ -284,7 +304,10 @@ export async function detectTags(
 		tags,
 		frame: r.frame_jpeg_b64 ? Buffer.from(r.frame_jpeg_b64, 'base64') : null,
 		frameSource: r.frame_source === 'raw' || r.frame_source === 'jpeg' ? r.frame_source : null,
-		framesUsed: typeof r.frames_used === 'number' ? r.frames_used : 1
+		framesUsed: typeof r.frames_used === 'number' ? r.frames_used : 1,
+		framesAveraged: typeof r.frames_averaged === 'number' ? r.frames_averaged : null,
+		captureMs: typeof r.capture_ms === 'number' ? r.capture_ms : null,
+		motionLuma: typeof r.motion_luma === 'number' ? r.motion_luma : null
 	};
 }
 
@@ -588,7 +611,7 @@ export async function saveCalibration(
 	const before = await readServos().catch((e) => {
 		throw servoErr(e);
 	});
-	const det = await detectTags(o.cameraName, { includeFrame: true, registry, frames: CALIBRATION_FRAMES });
+	const det = await detectTags(o.cameraName, { includeFrame: true, registry, frames: CALIBRATION_FRAMES, average: CALIBRATION_AVERAGE, framesIfNoStack: CALIBRATION_FRAMES_NO_STACK });
 	if (!det.available) throw new Error(det.reason ?? 'the Pi could not detect tags');
 	if (!det.frame) throw new Error('the Pi did not return the frame it detected on');
 	const servos = await readServos().catch((e) => {
@@ -778,7 +801,7 @@ async function visionCheck(doc: any): Promise<{ vision: VisionAssessment | null;
 	if (!summary.tags.length) return { vision: null, snapshotDataUrl: null, warnings: ['This calibration has no tags.'] };
 	let det: DetectResult;
 	try {
-		det = await detectTags(summary.cameraName, { includeFrame: true, frames: CHECK_FRAMES });
+		det = await detectTags(summary.cameraName, { includeFrame: true, frames: CHECK_FRAMES, average: CHECK_AVERAGE, framesIfNoStack: CHECK_FRAMES_NO_STACK });
 	} catch (e) {
 		return { vision: null, snapshotDataUrl: null, warnings: [`Camera check skipped: ${e instanceof Error ? e.message : String(e)}`] };
 	}

@@ -55,7 +55,8 @@ APP = SERVER / "app.py"
 # repo's vendored copies at the time, except depth.py which was re-vendored from the Pi).
 KNOWN_BEFORE = {
     "cameras.py": {"036d01e5bdd0cce71e50d71ad9df1ae0"},
-    "apriltags.py": {"ecbd96c225886e926785c4b8a5b83d08"},
+    # second hash: the 2026-10-23 raw-frames version (installed by this script); frame stacking 2026-10-28 replaces it
+    "apriltags.py": {"ecbd96c225886e926785c4b8a5b83d08", "d204c414bd8fd5bf852d042606bcb663"},
     # second hash: the first 2026-10-23 version (before the sampler's hole/edge gate)
     "depth.py": {"344326c7058dc24f6be4dcd9ef77c8d6", "c4f46771b999180091ae168808fc3fcb"},
 }
