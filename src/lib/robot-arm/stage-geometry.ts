@@ -50,6 +50,14 @@ export const STAGE_PREJUMP_MM = 5;
 /** Largest per-hole correction the protocol's hole_NN_dx/dy/dz RTPs accept, mm. */
 export const HOLE_OFFSET_LIMIT_MM = 5;
 
+/**
+ * Where the taught cart location (the first wax hole, deck mm) may sit: the
+ * protocol's arm_cart_x / arm_cart_y / arm_cart_z RTP bounds. A whole-cart shift
+ * is a re-teach of that point, so it is bounded by these, not by the per-hole
+ * ±HOLE_OFFSET_LIMIT_MM correction cap.
+ */
+export const CART_LOCATION_LIMITS = { xy: { min: 0, max: 400 }, z: { min: 0, max: 200 } } as const;
+
 export interface HoleOffset {
 	dx: number;
 	dy: number;

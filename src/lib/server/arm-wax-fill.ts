@@ -60,6 +60,7 @@ import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
 	DISPENSE_DEPTH_LIMITS,
+	CART_LOCATION_LIMITS,
 	HOLE_OFFSET_LIMIT_MM,
 	STAGE_JUMP_DEFAULT_MM,
 	STAGE_JUMP_LIMITS,
@@ -529,11 +530,15 @@ type StageEditInput = { wellName: string; dx: number; dy: number; dz: number };
  *
  *   • every hole, same delta  → the whole cart moved: the taught cart location
  *     (the rigid lattice's origin) is translated and the per-hole corrections
- *     are left alone — "Shift whole grid";
+ *     are left alone — "Shift whole cart". This is a re-teach of the first
+ *     hole, so the delta is not capped: a cart taught 10–20 mm off is exactly
+ *     what it corrects. The only bound is the protocol's arm_cart_x/y/z range
+ *     (CART_LOCATION_LIMITS) — the point has to be sendable;
  *   • anything else           → each hole's correction grows by its delta, so the
  *     lattice stays where it was taught and only those holes move. Corrections
  *     are capped at HOLE_OFFSET_LIMIT_MM (the protocol's RTP bound); an edit
- *     that would exceed it is skipped and reported, never clamped.
+ *     that would exceed it is skipped and reported, never clamped — the report
+ *     says to shift the whole cart instead.
  *
  * Every hole moved gets a "Recent edits" entry (delta + position after), so the
  * Studio's history table and client-side undo (apply the inverse) work as on a deck.
@@ -559,7 +564,6 @@ export async function applyStageEdits(
 		const dx = Number(e?.dx ?? 0), dy = Number(e?.dy ?? 0), dz = Number(e?.dz ?? 0);
 		if (!STAGE_WELL_NAMES.includes(wellName)) throw new ArmWaxFillError(`${wellName || '(blank)'} is not one of the cart's wax holes.`);
 		if (![dx, dy, dz].every(Number.isFinite)) throw new ArmWaxFillError(`Delta for ${wellName} must be numbers.`);
-		if (Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) > 10) throw new ArmWaxFillError(`Delta for ${wellName} is over 10 mm — that is not a correction.`);
 		if (edits.some((x) => x.wellName === wellName)) throw new ArmWaxFillError(`${wellName} appears twice.`);
 		edits.push({ wellName, dx, dy, dz });
 	}
@@ -578,6 +582,13 @@ export async function applyStageEdits(
 		const d = edits[0];
 		if (d.dx === 0 && d.dy === 0 && d.dz === 0) throw new ArmWaxFillError('Zero delta — nothing to apply.');
 		cart = { x: +(rim.x + d.dx).toFixed(3), y: +(rim.y + d.dy).toFixed(3), z: +(rim.z + d.dz).toFixed(3) };
+		const { xy, z } = CART_LOCATION_LIMITS;
+		if (cart.x < xy.min || cart.x > xy.max || cart.y < xy.min || cart.y > xy.max || cart.z < z.min || cart.z > z.max) {
+			throw new ArmWaxFillError(
+				`Shifting the whole cart by (${d.dx}, ${d.dy}, ${d.dz}) would put the first hole at (${cart.x}, ${cart.y}, ${cart.z}), ` +
+					`outside the protocol's ${xy.min}–${xy.max} mm (x, y) / ${z.min}–${z.max} mm (z) range.`
+			);
+		}
 		moved = edits;
 	} else {
 		for (const e of edits) {
