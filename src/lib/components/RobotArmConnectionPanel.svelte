@@ -163,8 +163,8 @@
 			class="inline-flex items-center gap-2 text-sm font-semibold tracking-wide"
 			style="color: var(--color-tron-text)"
 		>
-			ARM CONNECTION
 			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}" title={label}></span>
+			ARM CONNECTION
 		</h2>
 		<div class="flex items-center gap-2">
 			<button
@@ -181,7 +181,7 @@
 					type="button"
 					onclick={onshow}
 					class="min-h-[44px] rounded border px-3 text-xs"
-					style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
+					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
 					title="Show the arm connection details"
 				>
 					Show
