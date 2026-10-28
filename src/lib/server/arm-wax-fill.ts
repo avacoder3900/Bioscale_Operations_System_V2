@@ -1300,6 +1300,8 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		form.set('param_arm_cart_rotation_deg', String(calibration!.stageRotationDeg));
 		form.set('param_dispense_depth', String(calibration!.dispenseDepth!.mm));
 		form.set('param_stage_jump_height', String(calibration!.stageJumpHeightMm));
+		// The mount the stage was taught with (a str RTP; an older upload without it is left alone).
+		form.set('param_pipette_mount', calibration!.pipetteMount);
 		// Per-hole corrections from the Stage Calibration Studio (only the RTPs the
 		// robot's schema declares are read, so an older stage .py ignores them).
 		for (const h of calibration!.holes ?? []) {

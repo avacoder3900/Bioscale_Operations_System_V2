@@ -99,7 +99,7 @@ def main():
     # The RTP surface: the taught point, rotation, travel height and 36 per-hole corrections.
     p = _Params()
     m.add_parameters(p)
-    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'stage_jump_height', 'dispense_depth'):
+    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'stage_jump_height', 'dispense_depth', 'pipette_mount'):
         assert name in p.names, name
     hole_params = [n for n in p.names if n.startswith('hole_')]
     assert len(hole_params) == 36 and hole_params[0] == 'hole_01_dx' and hole_params[-1] == 'hole_12_dz', hole_params[:3]

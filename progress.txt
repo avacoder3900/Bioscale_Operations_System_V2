@@ -24278,3 +24278,8 @@ it physically pressed). The wax p20 rides the RIGHT mount (the stage protocol lo
 ArmWaxFillCalibration.pipetteMount now defaults to right (model, view fallback, saves) and the studio opens on the
 right; when the run's pipette is not a p20 the Jog header turns red, an error names the fix, and Calibrate / Swap /
 Pick up tip are disabled. Recovery for the stray tip: pull it off by hand (Drop tip cannot see it).
+
+Follow-up (same day): Alejandro wants to calibrate on the LEFT mount for now. The non-p20 guard is a warning, not a lock
+(the mount is the operator's choice, as in the Deck Studio). The stage protocol gained pipette_mount (str RTP, right|left,
+default right) and loads the p20 on it; BIMS sends the calibration's pipetteMount, so the fill probes and dispenses with
+the side the stage was taught with. Re-upload the stage .py to the arm's OT-2 to activate (an older upload keeps 'right').

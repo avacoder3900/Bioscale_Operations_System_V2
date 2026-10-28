@@ -121,6 +121,17 @@ def add_parameters(parameters: protocol_api.Parameters):
         default=True
     )
 
+    # Which mount carries the p20. The carriage protocol hardcodes 'right'; on the
+    # arm's OT-2 the operator may calibrate on either side, and BIMS sends the mount
+    # the stage was taught with so the fill probes and dispenses with that pipette.
+    parameters.add_str(
+        variable_name="pipette_mount",
+        display_name="p20 mount",
+        description="Mount the p20 is on. BIMS sends the mount the stage calibration was taught with.",
+        choices=[{"display_name": "Right", "value": "right"}, {"display_name": "Left", "value": "left"}],
+        default="right",
+    )
+
     # ── The cart on the arm's stage ───────────────────────────────────────────
     # BIMS sends the taught, TIP-NEUTRAL rim of the cart's first wax hole (row 1,
     # gate 4). Defaults are 0 = "not taught" and the run refuses to move on them.
@@ -290,7 +301,9 @@ def run(protocol: protocol_api.ProtocolContext):
     offset = { 'x': 0, 'y': 0 }
     tuberack = protocol.load_labware('cosmas_and_damian_drybath_tuberack', 10)
     tiprack = protocol.load_labware('cosmasanddamian_96_tiprack_20ul', 11)
-    pipette = protocol.load_instrument('p20_single_gen2', mount='right', tip_racks=[tiprack])
+    p20_mount = 'left' if str(protocol.params.pipette_mount).strip().lower() == 'left' else 'right'
+    pipette = protocol.load_instrument('p20_single_gen2', mount=p20_mount, tip_racks=[tiprack])
+    protocol.comment(f'ARM STAGE: p20 on the {p20_mount} mount')
 
     if bims_native:
         tuberack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
