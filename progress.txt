@@ -23912,3 +23912,7 @@ patch applied --3way (all six files clean) plus the two untracked files. What it
     `held: true` on replay.stop and is left alone.
 vitest robot-arm-lock.test.ts + robot-arm-client.routes.test.ts: 15 passed. svelte-check: 14 errors / 435
 warnings = baseline, none in touched files.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch feat/arm-replay-loop-progress (merged into master; git log master --oneline for the merge commit)
+Retrieve this exact code: git checkout feat/arm-replay-loop-progress
+What this deployment is for: Control tab loop counter during multi-loop replays + the replay.stop torque backstop, together with the deploy log for the Wax fill tab (a24cb29f).
