@@ -210,7 +210,7 @@
 		{#if note}<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>{/if}
 
 		<div class="mt-3 flex flex-wrap items-center gap-2">
-			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, on the same {CALIBRATION_AVERAGE}-frame average Capture uses (about {Math.round(CALIBRATION_AVERAGE / 30 * 10) / 10} s at 30 fps; hold the arm still)">
+			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, the way Capture does: {CALIBRATION_FRAMES} detections, each on a {CALIBRATION_AVERAGE}-frame average (hold the arm still)">
 				{detecting ? 'Detecting…' : det ? 'Detect again' : 'Detect tags'}
 			</button>
 			{#if !atPose}

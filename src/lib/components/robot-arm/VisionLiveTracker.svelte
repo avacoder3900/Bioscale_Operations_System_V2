@@ -39,7 +39,7 @@
 	const RATE_OPTIONS = [0.5, 1, 2];
 	/** Distinct captures the Pi averages each tag over per answer (2026-10-23). */
 	const FRAME_OPTIONS = [1, 3, 5];
-	/** Consecutive frames the Pi stacks into each image before detecting (2026-10-28): 5 = 1/6 s at 30 fps (a step check), 30 = 1 s (a calibration). */
+	/** Consecutive frames the Pi stacks into each image before detecting (2026-10-28): 5 = 1/6 s at 30 fps (what a step check uses, and each of a calibration's 5 detections). */
 	const AVERAGE_OPTIONS = [1, 5, 10, 30];
 
 	let running = $state(false);
@@ -141,7 +141,7 @@
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Consecutive frames the Pi stacks pixel by pixel into one image before the detector runs. Cuts sensor noise by about the square root of the count for 33 ms per frame at 30 fps and no extra detect. 5 = 1/6 s (what a step check uses), 30 = 1 s (what a calibration uses). The arm must hold still while the stack is captured.">
+			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Consecutive frames the Pi stacks pixel by pixel into one image before the detector runs. Cuts sensor noise by about the square root of the count for 33 ms per frame at 30 fps and no extra detect. 5 = 1/6 s (what a step check uses; a calibration takes 5 detections of 5-frame stacks). The arm must hold still while the stack is captured.">
 				average
 				<select bind:value={average} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
 					{#each AVERAGE_OPTIONS as f}<option value={f}>{f}</option>{/each}

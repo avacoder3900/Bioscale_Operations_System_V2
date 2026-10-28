@@ -83,14 +83,16 @@ export interface TagPose {
  *   30 fps) and no extra detect, so it is the cheap way to cut sensor noise.
  * - `*_FRAMES` (2026-10-23): separate detections whose corners are averaged.
  *   Costs a whole detect each (~0.6 s at 1080p, upscale 2).
- * A calibration or pose reference is taken once and gets a 1 s stack
- * (30 frames at 30 fps); a check between animation steps gets 5 frames
+ * A calibration or pose reference is taken once and gets 5 detections of
+ * 5-frame stacks (Alejandro's pick 2026-10-28 from the measured table:
+ * corner sd 0.03 px vs 0.04 unstacked, ~0.8 s of capture + 5 detects); a
+ * check between animation steps gets one detection of a 5-frame stack
  * (1/6 s) so a move set does not crawl; the live view keeps 1. Stacking
  * needs the arm to hold still: the Pi reports motion_luma for that.
  */
-export const CALIBRATION_AVERAGE = 30;
+export const CALIBRATION_AVERAGE = 5;
 export const CHECK_AVERAGE = 5;
-export const CALIBRATION_FRAMES = 1;
+export const CALIBRATION_FRAMES = 5;
 export const CHECK_FRAMES = 1;
 /** What a Pi WITHOUT frame stacking (before 2026-10-28) is asked for instead: the pre-stacking counts of separate detections. */
 export const CALIBRATION_FRAMES_NO_STACK = 5;
