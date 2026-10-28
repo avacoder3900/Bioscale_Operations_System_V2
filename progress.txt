@@ -24249,3 +24249,7 @@ The protocol must be RE-UPLOADED to the arm's OT-2 for the per-hole corrections 
 robot panel says so); an older upload simply ignores them (computeRunParameters only sends declared RTPs).
 svelte-check (portable node, worktree with a node_modules junction): 14-error baseline, none in touched files.
 Unit: stage-geometry (5) + run-lifecycle-records (29) pass; python test passes; .py compiles. Not run on a robot.
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-calibration-studio @ commit d6965997 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy d6965997 (Stage Calibration Studio)"
+What this deployment is for: the Stage Calibration Studio (Deck Studio layout + functions, 2D plane, per-hole corrections, robot-keyed calibrator) and the stage protocol's per-hole RTPs - re-upload Wax_Filling_GEN7_ArmStage.py to the arm's OT-2 to activate them.
