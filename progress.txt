@@ -23889,3 +23889,26 @@ What this deployment is for: Robot Arm → Wax fill tab: setup (robot, deck, dec
 animations chosen once and locked, calibration teach panel (scan position, cart location), N-run loop
 driver. Nothing has been played on the arm or run on an OT-2 from this page yet; the arm_cart_x/y/z
 protocol variant and ensure-indexes --apply for arm_wax_fill_runs are still to do.
+
+
+================================================================================
+2026-10-28 — feat/arm-replay-loop-progress — Control tab: "loop N of M" while a replay runs; torque backstop on replay.stop
+================================================================================
+Alejandro: "merge the control-page work as well" — the uncommitted work another session left in the main
+checkout (it was never on a branch; nothing in origin contained it). Carried onto master unchanged, as a
+patch applied --3way (all six files clean) plus the two untracked files. What it is:
+  - robot-arm-lock.ts: ArmHolder.loop {index, of} for replay runs, from the run's `replay.loop` events
+    (replayLoopFromEvents; falls back to 1 of `loops` from replay.start). A second, projected read so the
+    cheap holder query every arm page runs stays cheap. robot-arm-lock.test.ts covers it.
+  - GET /api/robot-arm/session (new): {active, activeError, holder} for the control page to poll every 2 s
+    while a run is in progress, instead of re-running the whole control load.
+  - control/+page.svelte: polls that route while running, shows "Loop N of M" with a bar for replays, and
+    one invalidateAll() when the run ends. RobotArmControlBar: "· loop N of M" in the RUNNING line.
+  - services/robot-arm/src/arm/leader_follower.py (vendored copy): emits the `loop` event per loop.
+  - robot-arm-animation.ts holdAfterReplayStop + webhook: on the Pi's replay.stop for an Animate play
+    (the scratch recording), wait for the bus to free, and if torque is off turn it back on — a backstop
+    that does not need the page open (18 of 19 Go-to plays on 2026-10-26 were found limp by afterPlay).
+    Runs after the webhook response via Vercel's request-context waitUntil. A Pi with hold_at_end says
+    `held: true` on replay.stop and is left alone.
+vitest robot-arm-lock.test.ts + robot-arm-client.routes.test.ts: 15 passed. svelte-check: 14 errors / 435
+warnings = baseline, none in touched files.

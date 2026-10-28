@@ -1,6 +1,7 @@
 <script lang="ts">
 	import RobotArmControlBar from '$lib/components/RobotArmControlBar.svelte';
 	import { enhance } from '$app/forms';
+	import { invalidateAll } from '$app/navigation';
 
 	let { data, form } = $props();
 
@@ -33,22 +34,6 @@
 		return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
 	}
 
-	// ARM-01 §7.4 — this build is accepted against dry-run only, so the Start
-	// control refuses to submit when the Pi reports live motion. The server
-	// re-checks at submit time; this is the UI half of the same gate.
-	const dryRun = $derived(data.preflight?.checks?.dry_run?.value);
-	const armReachable = $derived(data.preflight != null);
-	const taskStartBlocked = $derived(!armReachable || dryRun !== true || data.holder != null);
-	const taskBlockReason = $derived(
-		!armReachable
-			? 'The arm is unreachable — check the connection panel.'
-			: dryRun !== true
-				? 'Run Task is validated for dry-run only (ARM-01 §7.4). The arm is in live motion: set DRY_RUN=true in ~/robot-arm/.env on the Pi and restart the robot-arm service to re-enable it.'
-				: data.holder != null
-					? 'The arm is already running something. If the session bar reads STALE, that run was never closed out and will keep blocking this until it is resolved.'
-					: ''
-	);
-
 	let selectedTask = $state('');
 	const selectedTaskMeta = $derived(
 		(data.tasks ?? []).find((t: { name: string }) => t.name === selectedTask) ?? null
@@ -56,7 +41,83 @@
 
 	// `active` and `activeError` now arrive pre-separated from the server, so the
 	// hand-written union guards this page used to carry are gone.
-	const active = $derived(data.active ?? null);
+	//
+	// While something is running, /api/robot-arm/session is polled so the
+	// session bar follows the run — in particular which loop a multi-loop
+	// replay is on, which only changes while the page sits open. The poll
+	// result overrides the page data until the next full load; when the run
+	// ends, one invalidateAll() restores the forms and the holder row.
+	type LiveSession = {
+		active: { run_id: string; kind: string } | null;
+		activeError: string | null;
+		holder: (typeof data)['holder'];
+	};
+	let live = $state<LiveSession | null>(null);
+	const active = $derived(live?.active ?? data.active ?? null);
+	const activeError = $derived(live ? live.activeError : (data.activeError ?? null));
+	const holder = $derived(live?.holder ?? data.holder ?? null);
+	const replayLoop = $derived(
+		active?.kind === 'replay' && holder?.type === 'replay' ? (holder.loop ?? null) : null
+	);
+
+	// ARM-01 §7.4 — this build is accepted against dry-run only, so the Start
+	// control refuses to submit when the Pi reports live motion. The server
+	// re-checks at submit time; this is the UI half of the same gate.
+	const dryRun = $derived(data.preflight?.checks?.dry_run?.value);
+	const armReachable = $derived(data.preflight != null);
+	const taskStartBlocked = $derived(!armReachable || dryRun !== true || holder != null);
+	const taskBlockReason = $derived(
+		!armReachable
+			? 'The arm is unreachable — check the connection panel.'
+			: dryRun !== true
+				? 'Run Task is validated for dry-run only (ARM-01 §7.4). The arm is in live motion: set DRY_RUN=true in ~/robot-arm/.env on the Pi and restart the robot-arm service to re-enable it.'
+				: holder != null
+					? 'The arm is already running something. If the session bar reads STALE, that run was never closed out and will keep blocking this until it is resolved.'
+					: ''
+	);
+
+	const SESSION_POLL_MS = 2000;
+	// Boolean on purpose: each poll replaces `active`, and an effect keyed on
+	// the object would tear down and restart the interval every tick.
+	const running = $derived(active != null);
+	$effect(() => {
+		// A fresh page load is authoritative again; drop the stale override.
+		void data;
+		live = null;
+	});
+	$effect(() => {
+		if (!running) return;
+		let cancelled = false;
+		let inFlight = false;
+		const tick = async () => {
+			if (inFlight || document.hidden) return;
+			inFlight = true;
+			try {
+				const res = await fetch('/api/robot-arm/session', { cache: 'no-store' });
+				if (!res.ok || cancelled) return;
+				const body = (await res.json()) as LiveSession;
+				if (cancelled) return;
+				if (body.active == null && body.activeError == null) {
+					// The run ended (or was stopped elsewhere): reload the page data
+					// once so the start buttons re-enable and the holder row settles.
+					clearInterval(id);
+					live = body;
+					await invalidateAll();
+					return;
+				}
+				live = body;
+			} catch {
+				// A missed poll is not an outage; the next tick tries again.
+			} finally {
+				inFlight = false;
+			}
+		};
+		const id = setInterval(tick, SESSION_POLL_MS);
+		return () => {
+			cancelled = true;
+			clearInterval(id);
+		};
+	});
 
 	function logTime(iso: string): string {
 		return new Date(iso).toLocaleString();
@@ -89,9 +150,9 @@
 			and the separate inline banner that used to duplicate it.
 		-->
 		<RobotArmControlBar
-			holder={data.holder}
-			active={data.active}
-			connectError={data.activeError}
+			{holder}
+			{active}
+			connectError={activeError}
 			currentUserId={data.currentUserId}
 		/>
 
@@ -240,6 +301,36 @@
 						Drive follower from a recording. Leader is not used.
 					</p>
 				</div>
+				{#if active?.kind === 'replay'}
+					<!--
+						Loop progress while a replay runs. The Pi logs a replay.loop
+						event at the top of each loop; the session poll above picks up
+						the latest one. No event yet means the first loop is ramping in.
+					-->
+					<div
+						class="rounded border px-3 py-2 text-xs"
+						style="border-color: var(--color-tron-accent, #38bdf8); background: rgba(56,189,248,0.08); color: var(--color-tron-text)"
+						aria-live="polite"
+					>
+						{#if replayLoop}
+							<div class="flex items-center justify-between gap-2">
+								<span class="font-semibold">Loop {replayLoop.index} of {replayLoop.of}</span>
+								<span style="color: var(--color-tron-text-secondary)">
+									{replayLoop.of - replayLoop.index} left after this one
+								</span>
+							</div>
+							<div class="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-black/40">
+								<div
+									class="h-full rounded-full transition-[width] duration-500"
+									style="width: {Math.round((replayLoop.index / replayLoop.of) * 100)}%; background: var(--color-tron-accent, #38bdf8)"
+								></div>
+							</div>
+						{:else}
+							<span class="font-semibold">Replaying…</span>
+							<span style="color: var(--color-tron-text-secondary)">loop count not reported yet</span>
+						{/if}
+					</div>
+				{/if}
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 					Recording (Pi path)
 					<select

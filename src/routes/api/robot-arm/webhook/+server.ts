@@ -15,6 +15,19 @@ import type { RequestHandler } from './$types';
 import { connectDB } from '$lib/server/db/connection';
 import { RobotArmRun } from '$lib/server/db/models';
 import { requireAgentApiKey } from '$lib/server/api-auth';
+import { holdAfterReplayStop } from '$lib/server/robot-arm-animation';
+
+/**
+ * Keep `p` running after the response. On Vercel this is the runtime's
+ * waitUntil (what @vercel/functions reads, without the dependency), bounded
+ * by the adapter's maxDuration; elsewhere the promise simply runs on.
+ */
+function runAfterResponse(p: Promise<unknown>) {
+	const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[
+		Symbol.for('@vercel/request-context')
+	]?.get?.();
+	ctx?.waitUntil?.(p);
+}
 
 interface IncomingEvent {
 	type: string;
@@ -123,6 +136,14 @@ export const POST: RequestHandler = async ({ request }) => {
 	if (Object.keys(set).length > 0) update.$set = set;
 
 	await RobotArmRun.findOneAndUpdate({ runId }, update);
+
+	// Torque backstop for Animate plays. After the response: the Pi may be
+	// waiting on this request inside the session, which still owns the bus.
+	if (eventType === 'replay.stop') {
+		runAfterResponse(
+			holdAfterReplayStop(runId, event).catch((err) => console.error(`[robot-arm webhook] torque backstop for ${runId}:`, err))
+		);
+	}
 
 	return json({ ok: true, runId, finalized: isTerminal });
 };

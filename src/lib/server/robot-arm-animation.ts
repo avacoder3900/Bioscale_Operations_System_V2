@@ -893,6 +893,48 @@ export async function afterPlay(user: User, runId: string): Promise<AfterPlayRes
 	}
 }
 
+/** How long the backstop waits for the Pi to release the bus after `replay.stop`. */
+const HOLD_IDLE_WAIT_MS = 10000;
+const HOLD_IDLE_POLL_MS = 250;
+
+/**
+ * Backstop for torque after an Animate play, run from the webhook on the
+ * Pi's `replay.stop` — so it does not depend on the page being open and
+ * watching the play end. The live Pi's replay (2026-10-26: replay_settle.py
+ * without `hold_at_end` was never re-copied to arm-pi) writes torque OFF at
+ * the end of every play; 18 of 19 Go to pose plays that day were found limp
+ * by afterPlay. Torque-on sends each servo to its last goal, the last frame,
+ * so the arm lifts back onto the pose. Waits for the session to release the
+ * bus first and never touches it while any session is active. Only Animate
+ * plays (the scratch recording); Control-tab replays are left as they are.
+ */
+export async function holdAfterReplayStop(runId: string, stop: Record<string, unknown>): Promise<void> {
+	// A Pi with the hold_at_end replay says so on replay.stop and never dropped torque.
+	if (stop.held === true) return;
+	await connectDB();
+	const run = (await RobotArmRun.findOne({ runId }).select('events triggeredBy').lean()) as any;
+	const start = run?.events?.find((e: any) => e?.type === 'replay.start');
+	const source = String(start?.payload?.source_path ?? '');
+	if (recordingStem(source.split(/[\\/]/).pop() ?? '') !== PREVIEW_RECORDING) return;
+	const user: User = run.triggeredBy?._id ? { _id: run.triggeredBy._id, username: run.triggeredBy.username } : { _id: 'robot-arm', username: 'robot-arm' };
+
+	const deadline = Date.now() + HOLD_IDLE_WAIT_MS;
+	for (;;) {
+		try {
+			if (!(await robotArm.getActive()).active) break;
+		} catch {
+			// Pi unreachable for a moment; keep trying until the deadline.
+		}
+		// Still this session winding down, or the next play already started: either way, hands off.
+		if (Date.now() >= deadline) return;
+		await sleep(HOLD_IDLE_POLL_MS);
+	}
+	const now = await readArm();
+	if (now.torqueOn !== false) return;
+	const t = await torqueBackOn();
+	await audit(user, 'robot_arm.animate.torque_after_replay_stop', 'robot_arm_runs', runId, { ok: t.ok, error: t.error, positions: now.positions });
+}
+
 export async function clearPoseDroop(user: User, poseId: string): Promise<void> {
 	await connectDB();
 	const pose = (await RobotArmPose.findById(poseId).lean()) as any;
