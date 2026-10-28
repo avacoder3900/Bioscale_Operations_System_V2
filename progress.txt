@@ -23650,3 +23650,17 @@ audit torque_after_play. Rollback: restore the .bak file and restart when idle.
 Still open (small, not done): torqueBackOn treats any 200 from /torque as success even when the Pi lists
 failed_ids, so one joint could stay limp silently.
 No deployment created for this entry. npm run check not run (no source change).
+
+================================================================================
+2026-10-28 — fix/arm-diagnosis-hide → master — Robot Arm: Hide button on the preflight warning
+================================================================================
+The Pi's preflight diagnosis (e.g. "leader BusLinker not present") was a full-width amber box on every
+Robot Arm tab. src/routes/manufacturing/cart-mfg/robot-arm/+layout.svelte: the box gets a Hide button;
+hidden, it becomes a small "Show warning" button sized to its text. The hidden warning TEXT is kept in
+localStorage (robot-arm:diagnosis-hidden), so a new or different warning shows again; storage failures
+default to shown. npm run check: 14 errors, the existing baseline, none in the edited file.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/D2KT8Ekcoirei6dR3rnx1CxVMKoh
+Source: branch fix/arm-diagnosis-hide @ commit a6c3d709 (fast-forwarded onto master)
+Retrieve this exact code: git checkout fix/arm-diagnosis-hide at commit a6c3d709
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: collapsible preflight warning on the Robot Arm page
