@@ -12,11 +12,10 @@
 	import { enhance, deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
-	import { RobotSession, openRobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { openRobotSession } from '$lib/opentrons/direct-client';
 	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
 	import type { RobotHealth } from '$lib/server/opentrons/health';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
-	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import type { LoopView, LoopCycleView, CalibrationView } from '$lib/server/arm-wax-fill';
 
 	let { data, form } = $props();
@@ -49,7 +48,6 @@
 	let log = $state<{ at: string; text: string; level: 'info' | 'warn' | 'error' }[]>([]);
 	let fillRun = $state<{ opentronsRunId: string; waxRunId: string } | null>(null);
 	let changingAnimations = $state(false);
-	let teaching = $state(false);
 
 	const currentCycle = $derived<LoopCycleView | null>(loop ? (loop.cycles[loop.cycles.length - 1] ?? null) : null);
 	const robotId = $derived(data.settings.robotId);
@@ -536,332 +534,10 @@
 	const ctl = 'rounded border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50';
 	const ctlPlain = `${ctl} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]`;
 
-	/**
-	 * "Calibrate wax fill" in the robot row: the calibration for THIS robot's
-	 * wax-fill protocol lives on this page (scan position + tip-neutral cart
-	 * location, per OT-2), so the button opens the teach panel and scrolls to it.
-	 * The tip-calibrator point the probe uses is taught in the Studio; the card
-	 * links there with this robot preselected.
-	 */
-	function goToCalibration() {
-		if (!robotId || loop?.status === 'running') return;
-		teaching = true;
-		requestAnimationFrame(() => document.getElementById('wax-fill-calibration')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-	}
-	const studioCalibratorHref = $derived(robotId ? `/manufacturing/cart-mfg/deck-calibration?kind=calibrator&robot=${encodeURIComponent(robotId)}` : '/manufacturing/cart-mfg/deck-calibration?kind=calibrator');
-
-	// ── calibration: teach panel (maintenance run + jog, as the scanner pages) ──
-	let robotSession: RobotSession | null = null;
-	let robotConn = $state<RobotSessionState | null>(null);
-	$effect(() => {
-		const id = robotId;
-		if (!id) return;
-		const s = new RobotSession(id);
-		robotSession = s;
-		s.subscribe((st) => (robotConn = st));
-		void s.open();
-		return () => {
-			s.close();
-			robotSession = null;
-		};
-	});
-
-	let maintRunId = $state<string | null>(null);
-	let pipetteId = $state<string | null>(null);
-	let pipetteMount = $state<string | null>(null);
-	let pipetteName = $state<string | null>(null);
-	let connecting = $state(false);
-	let teachBusy = $state(false);
-	let teachError = $state<string | null>(null);
-	let teachInfo = $state<string | null>(null);
-	let stepSize = $state(1);
-	let zAxis = $state<'leftZ' | 'rightZ'>(data.calibration?.pipetteMount === 'right' ? 'rightZ' : 'leftZ');
-	let liveX = $state<number | null>(null);
-	let liveY = $state<number | null>(null);
-	let liveZ = $state<number | null>(null);
-	let testScanInFlight = $state(false);
-	let testScanError = $state<string | null>(null);
-	let testScanLatest = $state<string | null>(null);
-
-	// Tip state for the cart location. The fill probes every tip on the calibrator
-	// and adds that tip's adjust to the taught point, so the point has to be saved
-	// TIP-NEUTRAL: teach with a probed tip on and store live − adjust (the Deck
-	// Calibration Studio's rule). The scan position is the opposite: taught with
-	// NO tip, because the sweep runs the gantry without one.
-	let hasTip = $state(false);
-	let tipAdjust = $state<{ x: number; y: number } | null>(null);
-	let tipWell = $state<string>(data.teach?.nextTipWell ?? 'A1');
-	let calibrating = $state(false);
-	// Arc height for teach-panel travel over the raised stage (the planner only
-	// knows the labware on the deck, not the stage). Well inside a p20's reach.
-	const TEACH_ARC_Z = 120;
-
-	async function apiRaw(path: string, init?: RequestInit): Promise<{ status: number; ok: boolean; body: any }> {
-		const doFetch = robotSession ? robotSession.fetchRoute.bind(robotSession) : fetch;
-		const res = await doFetch(path, { ...init, credentials: 'same-origin', headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) } });
-		const text = await res.text();
-		let body: any = null;
-		try {
-			body = text ? JSON.parse(text) : null;
-		} catch {
-			body = text;
-		}
-		return { status: res.status, ok: res.ok, body };
-	}
-
-	async function api(path: string, init?: RequestInit): Promise<any> {
-		const { status, ok, body } = await apiRaw(path, init);
-		if (!ok) throw new Error(`${init?.method ?? 'GET'} ${path} → HTTP ${status}: ${body?.message ?? (typeof body === 'string' ? body : JSON.stringify(body))}`);
-		return body;
-	}
-
-	async function openMaintenance() {
-		teachError = null;
-		connecting = true;
-		try {
-			const body: Record<string, unknown> = {};
-			if (calibration?.pipetteMount) body.mount = calibration.pipetteMount;
-			if (calibration?.pipetteName) body.pipetteName = calibration.pipetteName;
-			const res = await api(`/api/opentrons-lab/robots/${robotId}/maintenance`, { method: 'POST', body: JSON.stringify(body) });
-			maintRunId = res.runId ?? null;
-			pipetteId = res.pipetteId ?? null;
-			pipetteMount = res.mount ?? null;
-			pipetteName = res.pipetteName ?? null;
-			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
-			teachInfo = pipetteId ? `Connected: pipette ${pipetteName} on ${pipetteMount}.` : 'Maintenance run opened but no pipette could be loaded — jog will fail.';
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			connecting = false;
-		}
-	}
-
-	async function closeMaintenance() {
-		if (!maintRunId) return;
-		teachBusy = true;
-		try {
-			// Leave the pipette clean: a tip still on would be carried into the next
-			// run's tip-length model. Best effort — the close happens regardless.
-			if (hasTip && pipetteId) {
-				await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/drop-tip`, { method: 'POST', body: JSON.stringify({ pipetteId }) }).catch(() => null);
-			}
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}`, { method: 'DELETE' });
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			maintRunId = pipetteId = pipetteMount = pipetteName = null;
-			liveX = liveY = liveZ = null;
-			// The tip and its probe die with the run.
-			hasTip = false;
-			tipAdjust = null;
-			teachBusy = false;
-		}
-	}
-
-	async function refreshPosition() {
-		if (!maintRunId || !pipetteId) return;
-		const res = await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/position`, { method: 'POST', body: JSON.stringify({ pipetteId }) });
-		if (res?.position) {
-			liveX = res.position.x;
-			liveY = res.position.y;
-			liveZ = res.position.z;
-		}
-	}
-
-	async function teach(fn: () => Promise<void>) {
-		if (!maintRunId || !pipetteId) {
-			teachError = 'Open a maintenance run first.';
-			return;
-		}
-		teachError = null;
-		teachBusy = true;
-		try {
-			await fn();
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			teachBusy = false;
-		}
-	}
-
-	const home = () =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/home`, { method: 'POST', body: JSON.stringify({}) });
-			await refreshPosition();
-		});
-	const jog = (axis: string, distance: number) =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/jog`, { method: 'POST', body: JSON.stringify({ pipetteId, axis, distance }) });
-			await refreshPosition();
-		});
-	const moveTo = (p: { x: number; y: number; z: number }, label: string) =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/move-to`, { method: 'POST', body: JSON.stringify({ pipetteId, x: p.x, y: p.y, z: p.z }) });
-			teachInfo = `Moved to the ${label}.`;
-			await refreshPosition();
-		});
-
-	/**
-	 * Move to the taught cart location the way the fill arrives: tip-neutral point
-	 * + THIS tip's probe adjust, 2 mm above the rim, via a high arc (the planner
-	 * cannot see the stage). Needs a tip on: the point is the tip end on the rim.
-	 */
-	const moveToCart = () =>
-		teach(async () => {
-			const p = calibration?.cartLocation;
-			if (!p) throw new Error('No cart location is taught.');
-			if (!hasTip) throw new Error('Pick up a tip (and calibrate it) before moving to the cart location — it was taught with the tip end on the rim.');
-			const ax = tipAdjust?.x ?? 0;
-			const ay = tipAdjust?.y ?? 0;
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/move-to`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, x: p.x + ax, y: p.y + ay, z: p.z + 2, minimumZHeight: TEACH_ARC_Z, forceDirect: false })
-			});
-			teachInfo = `2 mm above the taught first wax hole${tipAdjust ? ` with this tip's adjust (${ax}, ${ay}) applied` : ' — tip NOT probed, so expect it off by this tip\'s bend'}.`;
-			await refreshPosition();
-		});
-
-	/** Load the p20 rack in slot 11 and press a tip at the cursor's well; the server's cursor answer wins. */
-	async function doPickUpTip(allowRecover = true): Promise<void> {
-		const r = await apiRaw(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/pick-up-tip`, {
-			method: 'POST',
-			body: JSON.stringify({ pipetteId, tiprackLoadName: data.teach?.tiprackLoadName, slot: '11', tipWell })
-		});
-		if (r.ok) {
-			if (r.body?.nextTipWell) tipWell = r.body.nextTipWell;
-			hasTip = true;
-			tipAdjust = null;
-			return;
-		}
-		if (r.status === 409 && r.body?.code === 'TIP_ALREADY_ATTACHED' && allowRecover) {
-			// The run still models a tip (one swapped by hand, say): trash it, then press again.
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/drop-tip`, { method: 'POST', body: JSON.stringify({ pipetteId }) });
-			return doPickUpTip(false);
-		}
-		throw new Error(r.body?.message ?? (typeof r.body === 'string' ? r.body : `pick-up-tip HTTP ${r.status}`));
-	}
-
-	/**
-	 * Pick up a p20 tip and probe it on the tip calibrator — the same sequence the
-	 * Deck Calibration Studio runs before a hole is captured. The probe runs over
-	 * the queue line (/api/scanner/calibrate-tip, attached to this maintenance run
-	 * so the tip stays on) and its adjust is what makes the saved cart location
-	 * tip-neutral. Travels to the calibrator's approach point first, as the Studio does.
-	 */
-	async function pickUpAndCalibrateTip() {
-		if (!maintRunId || !pipetteId) {
-			teachError = 'Open a maintenance run first.';
-			return;
-		}
-		const cal = data.teach?.calibrator;
-		if (!cal) {
-			teachError = 'No tip-calibrator point is known for this robot — teach it in the Deck Calibration Studio first.';
-			return;
-		}
-		if (pipetteMount !== 'left' && pipetteMount !== 'right') {
-			teachError = 'The maintenance run reported no pipette mount — reopen it.';
-			return;
-		}
-		teachError = null;
-		teachBusy = true;
-		calibrating = true;
-		try {
-			if (!hasTip) {
-				teachInfo = `Picking up a tip (${data.teach?.tiprackLoadName} ${tipWell})…`;
-				await doPickUpTip();
-			}
-			teachInfo = `Moving to the tip calibrator (${cal.x}, ${cal.y}, ${cal.approachZ})…`;
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/move-to`, {
-				method: 'POST',
-				body: JSON.stringify({ pipetteId, x: cal.x, y: cal.y, z: cal.approachZ, minimumZHeight: TEACH_ARC_Z, forceDirect: false })
-			});
-			teachInfo = 'Probing the tip on the calibrator (slow limit-switch probe, 1–2 min)…';
-			const res = await api('/api/scanner/calibrate-tip', {
-				method: 'POST',
-				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile: 'wax', tipWell, runId: maintRunId, pipetteId })
-			});
-			if (res?.adjust && typeof res.adjust.x === 'number' && typeof res.adjust.y === 'number') {
-				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
-				teachInfo = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Now jog the tip end onto the rim of the cart's first wax hole and save.`;
-			} else {
-				teachError = typeof res?.error === 'string' && res.error ? res.error : 'The probe returned no adjust — nothing taught. Calibrate again before saving.';
-			}
-			await refreshPosition();
-		} catch (e) {
-			teachError = e instanceof Error ? e.message : String(e);
-		} finally {
-			teachBusy = false;
-			calibrating = false;
-		}
-	}
-
-	const dropTip = () =>
-		teach(async () => {
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/drop-tip`, { method: 'POST', body: JSON.stringify({ pipetteId }) });
-			hasTip = false;
-			tipAdjust = null;
-			teachInfo = 'Tip dropped in the trash.';
-			await refreshPosition();
-		});
-
-	async function fireTestScan() {
-		testScanError = null;
-		testScanLatest = null;
-		testScanInFlight = true;
-		try {
-			const res = await api('/api/scanner/trigger', { method: 'POST', body: JSON.stringify({ deviceId: data.scannerDeviceId, source: 'test', contextRef: 'arm-wax-fill:teach' }) });
-			const triggerId = res?.triggerId;
-			const started = Date.now();
-			while (Date.now() - started < 15000) {
-				await sleep(400);
-				const url = new URL('/api/scanner/events', window.location.origin);
-				url.searchParams.set('deviceId', data.scannerDeviceId);
-				url.searchParams.set('limit', '20');
-				const r = await fetch(url, { credentials: 'same-origin' });
-				if (!r.ok) continue;
-				const evs: any[] = (await r.json())?.events ?? [];
-				const match = evs.find((e) => e?.metadata?.triggerId === triggerId);
-				if (match) {
-					if (match.eventType === 'scan' && match.barcode) testScanLatest = match.barcode;
-					else testScanError = match.errorMessage || 'scanner returned error';
-					return;
-				}
-			}
-			testScanError = 'Timed out waiting for the scanner (15 s).';
-		} catch (e) {
-			testScanError = e instanceof Error ? e.message : String(e);
-		} finally {
-			testScanInFlight = false;
-		}
-	}
-
-	async function savePoint(which: 'saveScanPosition' | 'saveCartLocation') {
-		await teach(async () => {
-			// Frames must match how each point is used: the sweep runs with no tip (a
-			// point taught with one would park the scanner a tip length lower); the fill
-			// runs with a probed tip and adds its adjust to the saved, tip-neutral point.
-			if (which === 'saveScanPosition' && hasTip) throw new Error('Drop the tip before saving the scan position — the scanner sweep runs without one.');
-			if (which === 'saveCartLocation' && (!hasTip || !tipAdjust)) throw new Error('Pick up a tip and calibrate it first — the cart location is saved tip-neutral (live − that tip\'s probe adjust).');
-			await refreshPosition();
-			if (liveX === null || liveY === null || liveZ === null) throw new Error('Could not read the position from the robot.');
-			const r = await post(which, {
-				x: String(liveX),
-				y: String(liveY),
-				z: String(liveZ),
-				pipetteMount: pipetteMount ?? '',
-				pipetteName: pipetteName ?? '',
-				...(which === 'saveScanPosition' && testScanLatest ? { testScanBarcode: testScanLatest } : {}),
-				...(which === 'saveCartLocation' && tipAdjust ? { hasTip: 'true', adjustX: String(tipAdjust.x), adjustY: String(tipAdjust.y), tipWell } : {})
-			});
-			if (!r.ok) throw new Error(r.error);
-			calibration = r.data.calibration;
-			teachInfo = `${r.data.success} x=${liveX.toFixed(2)} y=${liveY.toFixed(2)} z=${liveZ.toFixed(2)}`;
-			await invalidateAll();
-		});
-	}
-
-	const dis = $derived(!maintRunId || !pipetteId || teachBusy);
-	const btn = 'rounded border border-[var(--color-tron-border)] px-3 py-3 text-sm hover:border-[var(--color-tron-cyan)] disabled:opacity-40';
+	// The calibration for this robot's wax fill (scan position, tip-neutral cart
+	// location, dispense depth, stage geometry) is taught on its own tab, the arm
+	// line's Stage calibration studio; this page only shows what is taught.
+	const STAGE_CALIBRATION_HREF = '/manufacturing/cart-mfg/robot-arm/stage-calibration';
 
 	const fmt = (p: { x: number; y: number; z: number } | null) => (p ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · z ${p.z.toFixed(2)}` : 'not taught');
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '');
@@ -909,11 +585,11 @@
 					{/if}
 				</div>
 				<div class="flex flex-wrap items-center gap-1">
-					<button type="button" onclick={goToCalibration} disabled={!robotId || loop?.status === 'running'}
-						title={loop?.status === 'running' ? 'Not while a loop is running' : "Open the calibration for this robot's wax-fill protocol: scan position, tip-neutral cart location, tip calibrator"}
+					<a href={STAGE_CALIBRATION_HREF}
+						title="This robot's wax-fill calibration: scan position, tip-neutral cart location, dispense depth, stage geometry (its own tab)"
 						class="{ctl} border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">
-						Calibrate wax fill
-					</button>
+						Stage calibration
+					</a>
 					<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
 						{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
 					</button>
@@ -921,8 +597,8 @@
 						class="{ctl} {lightsOn ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
 						{lightsOn === null ? 'Lights' : lightsOn ? 'Lights on' : 'Lights off'}
 					</button>
-					<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || loop?.status === 'running' || !!maintRunId}
-						title={loop?.status === 'running' ? 'Not while a loop is running' : maintRunId ? 'Use Home in the teach panel while its maintenance run is open' : 'Home all axes'} class={ctlPlain}>
+					<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || loop?.status === 'running'}
+						title={loop?.status === 'running' ? 'Not while a loop is running' : 'Home all axes'} class={ctlPlain}>
 						{robotBusy === 'home' ? 'Homing…' : 'Home'}
 					</button>
 					<button type="button" onclick={restartServer} disabled={!robotId || robotBusy !== null} title="Restart the robot server (clears a hung engine, ~90 s)"
@@ -1077,12 +753,10 @@
 				</label>
 				<div class="grid grid-cols-2 gap-3">
 					{#if stage}
-						<label class="block">
-							<span style="color: var(--color-tron-text-secondary)">Cart rotation on the stage (°)</span>
-							<input name="stageRotationDeg" type="number" step="0.5" min="-360" max="360" value={data.settings.stageRotationDeg}
-								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-							<span class="mt-1 block text-[10px]" style="color: var(--color-tron-text-secondary)">Counter-clockwise from above, about the first wax hole. 0 = as in a carriage slot (gates toward −x, rows toward −y); 180 = turned end for end.</span>
-						</label>
+						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
+							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
+							<span class="mt-1 block">Cart rotation, dispense depth and travel height are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab.</span>
+						</div>
 					{:else}
 						<label class="block">
 							<span style="color: var(--color-tron-text-secondary)">Deck position filled (1–24)</span>
@@ -1163,179 +837,45 @@
 		</section>
 	</div>
 
-	<!-- ── Calibration ───────────────────────────────────────────────── -->
-	<section id="wax-fill-calibration" class="scroll-mt-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
+	<!-- ── Calibration summary (taught on the Stage calibration tab) ────── -->
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
-				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Two taught points on this OT-2, from a maintenance run: the <span class="font-semibold">scan position</span> with no tip on (the sweep runs without one),
-					and the <span class="font-semibold">cart location</span> with a probed tip on — it is saved tip-neutral (live − that tip's calibrator adjust), the Deck
-					Calibration Studio's convention, so every fill lands with its own tip's adjust applied.
-				</p>
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
+				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">What this robot's wax fill runs on. Taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab — the arm line's own studio for the single-cart stage.</p>
 			</div>
-			<div class="flex items-center gap-2">
-				{#if robotId}<TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} />{/if}
-				<a href={studioCalibratorHref} class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)"
-					title="This robot's tip-calibrator point (approach XY, probe Z) in the Deck Calibration Studio — what the stage protocol's probe and the teach probe here both use">
-					Tip calibrator (Studio)
-				</a>
-				<button type="button" onclick={() => (teaching = !teaching)} disabled={!robotId || loop?.status === 'running'}
-					class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
-					{teaching ? 'Close teach panel' : 'Teach'}
-				</button>
-			</div>
+			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage calibration</a>
 		</div>
-
-		<div class="grid grid-cols-1 gap-3 md:grid-cols-2 text-xs">
+		<div class="grid grid-cols-1 gap-3 text-xs md:grid-cols-2 xl:grid-cols-4">
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Scan position</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
 				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Where the gantry scanner reads the cart the arm placed.
+					Where the gantry scanner reads the cart.
 					{#if calibration?.scanPosition?.taughtAt}Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}.{/if}
-					{#if calibration?.scanPosition?.testScanBarcode}Test read: <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}
 				</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Cart location</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
 				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					The rim of the cart's first wax hole (row 1, gate 4) on the stage, tip-neutral. Sent to the stage protocol as arm_cart_x/y/z.
-					{#if calibration?.cartLocation?.taughtAt}Taught {when(calibration.cartLocation.taughtAt)}{calibration.cartLocation.taughtBy ? ` by ${calibration.cartLocation.taughtBy}` : ''}.{/if}
-					{#if calibration?.cartLocation?.tipAdjust}
-						Probe adjust at teach <span class="font-mono">{calibration.cartLocation.tipAdjust.x}, {calibration.cartLocation.tipAdjust.y}</span>{calibration.cartLocation.tipWell ? ` (tip ${calibration.cartLocation.tipWell})` : ''}.
-					{:else if calibration?.cartLocation}
-						<span class="text-amber-300">Taught without a probed tip — teach it again (pick up a tip, calibrate, save) before a stage fill.</span>
-					{/if}
+					First wax hole rim, tip-neutral.
+					{#if calibration?.cartLocation?.tipAdjust}Probe at teach <span class="font-mono">{calibration.cartLocation.tipAdjust.x}, {calibration.cartLocation.tipAdjust.y}</span>.{:else if calibration?.cartLocation}<span class="text-amber-300">Taught without a probed tip — teach again.</span>{/if}
 				</div>
+			</div>
+			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
+				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense depth</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">
+					{#if calibration?.dispenseDepth}{Math.abs(calibration.dispenseDepth.mm)} mm {calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim{:else}not taught{/if}
+				</div>
+				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Where the tip end sits when wax is dispensed.{#if !calibration?.dispenseDepth} <span class="text-amber-300">Required before a stage fill.</span>{/if}</div>
+			</div>
+			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
+				<div class="font-semibold" style="color: var(--color-tron-text)">Stage geometry</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}° · travel {calibration?.stageJumpHeightMm ?? 60} mm</div>
+				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">How the stage holds the cart; the clearance over the rim.</div>
 			</div>
 		</div>
-
-		{#if teaching && robotId}
-			<div class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-4 space-y-4">
-				{#if teachError}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{teachError}</div>{/if}
-				{#if teachInfo}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{teachInfo}</div>{/if}
-
-				<div class="flex flex-wrap items-center justify-between gap-3">
-					<div class="text-xs" style="color: var(--color-tron-text-secondary)">
-						{#if maintRunId}
-							Maintenance run <span class="font-mono">{maintRunId}</span>{#if pipetteName} · {pipetteName} ({pipetteMount}){/if}
-							· <span class={hasTip ? 'text-green-300' : ''}>{hasTip ? (tipAdjust ? `tip on, probed (${tipAdjust.x}, ${tipAdjust.y})` : 'tip on, NOT probed') : 'no tip'}</span>
-						{:else}No maintenance run open.{/if}
-					</div>
-					<div class="flex gap-2">
-						{#if !maintRunId}
-							<button type="button" onclick={openMaintenance} disabled={connecting}
-								class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
-								{connecting ? 'Opening…' : 'Open maintenance run'}
-							</button>
-						{:else}
-							<button type="button" onclick={home} disabled={teachBusy} class="rounded border border-[var(--color-tron-border)] px-4 py-2 text-sm hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Home</button>
-							<button type="button" onclick={closeMaintenance} disabled={teachBusy} class="rounded border border-amber-500/40 bg-amber-900/15 px-4 py-2 text-sm text-amber-300 hover:bg-amber-900/25 disabled:opacity-40">Close run</button>
-						{/if}
-					</div>
-				</div>
-
-				<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-					<div class="space-y-3 lg:col-span-2">
-						<div class="flex flex-wrap items-center gap-3 text-xs" style="color: var(--color-tron-text-secondary)">
-							<label class="flex items-center gap-2">Step
-								<select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-									<option value={0.1}>0.1 mm</option><option value={1}>1 mm</option><option value={5}>5 mm</option><option value={10}>10 mm</option><option value={25}>25 mm</option>
-								</select>
-							</label>
-							<label class="flex items-center gap-2">Z axis
-								<select bind:value={zAxis} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-									<option value="leftZ">leftZ</option><option value="rightZ">rightZ</option>
-								</select>
-							</label>
-						</div>
-						<div class="grid grid-cols-3 gap-2">
-							<div></div>
-							<button type="button" disabled={dis} onclick={() => jog('y', stepSize)} class={btn} style="color: var(--color-tron-text)">Y +</button>
-							<div></div>
-							<button type="button" disabled={dis} onclick={() => jog('x', -stepSize)} class={btn} style="color: var(--color-tron-text)">X −</button>
-							<div class="flex items-center justify-center text-[10px]" style="color: var(--color-tron-text-secondary)">deck XY</div>
-							<button type="button" disabled={dis} onclick={() => jog('x', stepSize)} class={btn} style="color: var(--color-tron-text)">X +</button>
-							<div></div>
-							<button type="button" disabled={dis} onclick={() => jog('y', -stepSize)} class={btn} style="color: var(--color-tron-text)">Y −</button>
-							<div></div>
-						</div>
-						<div class="grid grid-cols-2 gap-2">
-							<button type="button" disabled={dis} onclick={() => jog(zAxis, stepSize)} class={btn} style="color: var(--color-tron-text)">Z + (up)</button>
-							<button type="button" disabled={dis} onclick={() => jog(zAxis, -stepSize)} class={btn} style="color: var(--color-tron-text)">Z − (down)</button>
-						</div>
-						<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-							<div class="flex items-center justify-between">
-								<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Live position</span>
-								<button type="button" onclick={() => void teach(refreshPosition)} disabled={dis} class="text-[11px] underline disabled:opacity-40" style="color: var(--color-tron-cyan)">Refresh</button>
-							</div>
-							<div class="mt-2 grid grid-cols-3 gap-2 font-mono text-sm" style="color: var(--color-tron-text)">
-								<span>x: {liveX !== null ? liveX.toFixed(2) : '—'}</span><span>y: {liveY !== null ? liveY.toFixed(2) : '—'}</span><span>z: {liveZ !== null ? liveZ.toFixed(2) : '—'}</span>
-							</div>
-						</div>
-					</div>
-
-					<div class="space-y-3">
-						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3 space-y-2">
-							<div class="flex items-center justify-between">
-								<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Scan position</span>
-								<button type="button" onclick={fireTestScan} disabled={testScanInFlight}
-									class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test scan'}</button>
-							</div>
-							{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>
-							{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>
-							{:else}<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Fires the gantry scanner where it is now ({data.scannerDeviceId}). Save with no tip on.</p>{/if}
-							<div class="flex gap-2">
-								<button type="button" onclick={() => void savePoint('saveScanPosition')} disabled={dis || hasTip} title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}
-									class="flex-1 rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">Save here as scan position</button>
-								{#if calibration?.scanPosition}
-									<button type="button" onclick={() => void moveTo(calibration!.scanPosition!, 'scan position')} disabled={dis}
-										class="rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs disabled:opacity-40" style="color: var(--color-tron-text)">Move to</button>
-								{/if}
-							</div>
-						</div>
-						<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-3 space-y-2">
-							<div class="flex items-center justify-between">
-								<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cart location</span>
-								<span class="font-mono text-[10px] {hasTip && tipAdjust ? 'text-green-300' : ''}" style={hasTip && tipAdjust ? '' : 'color: var(--color-tron-text-secondary)'}>
-									{hasTip ? (tipAdjust ? `probed ${tipAdjust.x}, ${tipAdjust.y}` : 'tip on · not probed') : 'no tip'}
-								</span>
-							</div>
-							<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-								1. Pick up + calibrate a tip. 2. Jog the tip end onto the rim of the cart's <span class="font-semibold">first wax hole</span> (row 1, gate 4 — the hole a full deck
-								calls X2; the other 11 follow from it, 6 mm per gate and 9 mm per row, turned by the cart rotation in Setup). 3. Save — stored tip-neutral (live − adjust).
-							</p>
-							{#if data.teach?.calibrator}
-								<p class="text-[10px]" style="color: var(--color-tron-text-secondary)">Calibrator ({data.teach.calibrator.source}): x {data.teach.calibrator.x} · y {data.teach.calibrator.y} · approach z {data.teach.calibrator.approachZ} · probe z {data.teach.calibrator.probeZ}. Next tip {tipWell} from {data.teach.tiprackLoadName} in slot 11.</p>
-							{:else}
-								<p class="text-[10px] text-amber-300">No tip-calibrator point for this robot — teach it in the Deck Calibration Studio before calibrating a tip here.</p>
-							{/if}
-							<div class="flex gap-2">
-								<button type="button" onclick={() => void pickUpAndCalibrateTip()} disabled={dis || calibrating || !data.teach?.calibrator}
-									class="flex-1 rounded border border-purple-400/50 bg-purple-900/20 px-3 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40"
-									title="Picks up a p20 tip from slot 11, travels to the tip calibrator and runs the slow limit-switch probe. Keeps the tip on.">
-									{calibrating ? 'Calibrating…' : hasTip ? 'Re-probe this tip' : `Pick up tip (${tipWell}) + calibrate`}
-								</button>
-								<button type="button" onclick={() => void dropTip()} disabled={dis || !hasTip}
-									class="rounded border border-amber-500/40 bg-amber-900/15 px-3 py-2 text-xs text-amber-300 hover:bg-amber-900/25 disabled:opacity-40">Drop tip</button>
-							</div>
-							<div class="flex gap-2">
-								<button type="button" onclick={() => void savePoint('saveCartLocation')} disabled={dis || !hasTip || !tipAdjust}
-									title={!hasTip || !tipAdjust ? 'Pick up and calibrate a tip first — the point is saved tip-neutral' : ''}
-									class="flex-1 rounded bg-[var(--color-tron-cyan)] px-3 py-2 text-xs font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">Save here as cart location</button>
-								{#if calibration?.cartLocation}
-									<button type="button" onclick={() => void moveToCart()} disabled={dis || !hasTip}
-										title={hasTip ? '2 mm above the taught rim, with this tip\'s adjust applied' : 'Pick up a tip first — the point is the tip end on the rim'}
-										class="rounded border border-[var(--color-tron-border)] px-3 py-2 text-xs disabled:opacity-40" style="color: var(--color-tron-text)">Move to</button>
-								{/if}
-							</div>
-						</div>
-					</div>
-				</div>
-			</div>
-		{/if}
 	</section>
 
 	<!-- ── History ───────────────────────────────────────────────────── -->

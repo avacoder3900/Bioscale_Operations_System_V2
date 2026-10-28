@@ -6,7 +6,8 @@ import mongoose, { Schema } from 'mongoose';
  *
  * The arm feeds ONE cartridge at a time to an OT-2. With the stage protocol
  * (protocols/Wax_Filling_GEN7_ArmStage.py, which declares arm_cart_x/y/z)
- * the fill lands on the taught cart location turned by `stageRotationDeg`;
+ * the fill lands on the taught cart location (ArmWaxFillCalibration, taught
+ * on the Stage calibration tab);
  * with the ordinary carriage protocol it fills `cartPosition` on `deckId`
  * (the legacy stopgap). The grab and withdraw animations are Animate move
  * sets or sequences, chosen once and kept: the page only lets them change
@@ -31,8 +32,6 @@ const armWaxFillSettingsSchema = new Schema(
 		deckId: String,
 		/** 1-based deck position the carriage protocol fills (`resume_cartridge`), default 1. Unused by the stage protocol. */
 		cartPosition: { type: Number, default: 1 },
-		/** How the stage holds the cart vs a carriage slot, degrees CCW from above about the first wax hole (arm_cart_rotation_deg). */
-		stageRotationDeg: { type: Number, default: 0 },
 		/** Optional wax lot stamped on every cycle's wax run (traceability only). */
 		waxSourceLot: String,
 		/** Unknown barcodes become synthetic backed carts (same as the wax wizard's test mode). */

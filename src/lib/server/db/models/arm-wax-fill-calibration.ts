@@ -17,8 +17,16 @@ import mongoose, { Schema } from 'mongoose';
  *                 Sent to the stage protocol as arm_cart_x / y / z, which adds
  *                 its own tip's probe adjust back.
  *
- * Taught the same way as the barcode-positions page: a maintenance run, jog,
- * save the robot's own XYZ (plus the tip probe for the cart location).
+ *   dispenseDepth how far BELOW that rim the tip end sits when wax is dispensed
+ *                 (negative = hover above it) — the stage protocol's
+ *                 `dispense_depth`. Taught by jogging a tip to the height over
+ *                 the first hole and saving; stored as rim z − live z.
+ *   stageRotationDeg / stageJumpHeightMm  the cart's rotation on the stage and the
+ *                 travel clearance over the rim (`arm_cart_rotation_deg`,
+ *                 `stage_jump_height`).
+ *
+ * All taught on the Robot Arm → Stage calibration tab from a maintenance run:
+ * jog, save the robot's own XYZ (plus the tip probe for the cart location).
  */
 const pointSchema = new Schema(
 	{
@@ -45,6 +53,14 @@ const armWaxFillCalibrationSchema = new Schema(
 		scanPosition: pointSchema,
 		scanPositionSetId: String,
 		cartLocation: pointSchema,
+		dispenseDepth: {
+			mm: Number, // positive = below the rim, negative = hover
+			liveZ: Number, // the tip end's reported Z when it was taught
+			taughtAt: Date,
+			taughtBy: { _id: String, username: String }
+		},
+		stageRotationDeg: { type: Number, default: 0 },
+		stageJumpHeightMm: { type: Number, default: 60 },
 		pipetteMount: { type: String, enum: ['left', 'right'], default: 'left' },
 		pipetteName: String,
 		updatedBy: { _id: String, username: String }

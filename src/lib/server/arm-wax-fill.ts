@@ -59,6 +59,15 @@ import { getRobot, robotPost } from '$lib/server/opentrons/proxy';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
+	DISPENSE_DEPTH_LIMITS,
+	STAGE_JUMP_DEFAULT_MM,
+	STAGE_JUMP_LIMITS,
+	WAX_HOLE_DEPTH_MM,
+	depthFromLive,
+	stageTargets,
+	type StageHole
+} from '$lib/robot-arm/stage-geometry';
+import {
 	isActionFail,
 	recordRunFinishedQueue,
 	startRunQueue,
@@ -145,8 +154,6 @@ export interface SettingsView {
 	robotId: string | null;
 	deckId: string | null;
 	cartPosition: number;
-	/** How the stage holds the cart vs a carriage slot (degrees CCW from above about the first wax hole); sent as arm_cart_rotation_deg. */
-	stageRotationDeg: number;
 	waxSourceLot: string | null;
 	testMode: boolean;
 	grabAnimation: AnimationRef | null;
@@ -164,7 +171,6 @@ function settingsView(d: any): SettingsView {
 		robotId: d?.robotId ?? null,
 		deckId: d?.deckId ?? null,
 		cartPosition: Number(d?.cartPosition) || 1,
-		stageRotationDeg: Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : 0,
 		waxSourceLot: d?.waxSourceLot ?? null,
 		testMode: !!d?.testMode,
 		grabAnimation: animRef(d?.grabAnimation),
@@ -181,7 +187,7 @@ export async function getSettings(): Promise<SettingsView> {
 
 export async function saveSetup(
 	user: User,
-	input: { robotId: unknown; deckId: unknown; cartPosition: unknown; stageRotationDeg?: unknown; waxSourceLot: unknown; testMode: boolean }
+	input: { robotId: unknown; deckId: unknown; cartPosition: unknown; waxSourceLot: unknown; testMode: boolean }
 ): Promise<SettingsView> {
 	await connectDB();
 	const robotId = String(input.robotId ?? '').trim();
@@ -198,14 +204,11 @@ export async function saveSetup(
 	}
 	const cartPosition = input.cartPosition === null || input.cartPosition === undefined || String(input.cartPosition).trim() === '' ? 1 : Math.round(num(input.cartPosition, 'Cart position'));
 	if (cartPosition < 1 || cartPosition > 24) throw new ArmWaxFillError('Cart position must be 1–24.');
-	const stageRotationDeg =
-		input.stageRotationDeg === null || input.stageRotationDeg === undefined || String(input.stageRotationDeg).trim() === '' ? 0 : num(input.stageRotationDeg, 'Cart rotation');
-	if (stageRotationDeg < -360 || stageRotationDeg > 360) throw new ArmWaxFillError('Cart rotation must be between −360° and 360°.');
 	const waxSourceLot = String(input.waxSourceLot ?? '').trim().slice(0, 100) || null;
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, deckId, cartPosition, stageRotationDeg, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
+		{ $set: { robotId, deckId, cartPosition, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -213,17 +216,9 @@ export async function saveSetup(
 		robotName: robot.name,
 		deckId,
 		cartPosition,
-		stageRotationDeg,
 		waxSourceLot,
 		testMode: !!input.testMode,
-		before: {
-			robotId: before.robotId,
-			deckId: before.deckId,
-			cartPosition: before.cartPosition,
-			stageRotationDeg: before.stageRotationDeg,
-			waxSourceLot: before.waxSourceLot,
-			testMode: before.testMode
-		}
+		before: { robotId: before.robotId, deckId: before.deckId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -266,11 +261,27 @@ export interface TaughtPoint {
 	tipWell: string | null;
 }
 
+export interface DispenseDepthView {
+	/** mm below the first hole's rim the tip end dispenses at; negative = hover above it. */
+	mm: number;
+	liveZ: number | null;
+	taughtAt: string | null;
+	taughtBy: string | null;
+}
+
 export interface CalibrationView {
 	robotId: string;
 	scanPosition: TaughtPoint | null;
 	scanPositionSetId: string | null;
 	cartLocation: TaughtPoint | null;
+	/** Null = not taught; the stage protocol's default (hover 1 mm above the rim) would apply, so readiness blocks. */
+	dispenseDepth: DispenseDepthView | null;
+	/** The cart's rotation on the stage, degrees CCW from above about the first hole (arm_cart_rotation_deg). */
+	stageRotationDeg: number;
+	/** Travel clearance over the rim when arriving at / leaving the cart (stage_jump_height). */
+	stageJumpHeightMm: number;
+	/** The 12 wax-hole rims laid out from the taught cart location (tip-neutral), or null until it is taught. */
+	holes: StageHole[] | null;
 	pipetteMount: 'left' | 'right';
 	pipetteName: string | null;
 }
@@ -290,11 +301,22 @@ function point(d: any): TaughtPoint | null {
 }
 
 function calibrationView(robotId: string, d: any): CalibrationView {
+	const cartLocation = point(d?.cartLocation);
+	const stageRotationDeg = Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : 0;
+	const jump = Number(d?.stageJumpHeightMm);
+	const dd = d?.dispenseDepth;
 	return {
 		robotId,
 		scanPosition: point(d?.scanPosition),
 		scanPositionSetId: d?.scanPositionSetId ?? null,
-		cartLocation: point(d?.cartLocation),
+		cartLocation,
+		dispenseDepth:
+			typeof dd?.mm === 'number'
+				? { mm: dd.mm, liveZ: typeof dd.liveZ === 'number' ? dd.liveZ : null, taughtAt: iso(dd.taughtAt), taughtBy: dd.taughtBy?.username ?? null }
+				: null,
+		stageRotationDeg,
+		stageJumpHeightMm: Number.isFinite(jump) && jump >= STAGE_JUMP_LIMITS.min && jump <= STAGE_JUMP_LIMITS.max ? jump : STAGE_JUMP_DEFAULT_MM,
+		holes: cartLocation ? stageTargets(cartLocation.x, cartLocation.y, cartLocation.z, stageRotationDeg) : null,
 		pipetteMount: d?.pipetteMount === 'right' ? 'right' : 'left',
 		pipetteName: d?.pipetteName ?? null
 	};
@@ -432,6 +454,63 @@ export async function saveCartLocation(user: User, robotId: string, input: CartL
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
 }
 
+/**
+ * The dispense depth: how far below the first hole's rim the TIP END sits when
+ * wax is dispensed (the stage protocol's `dispense_depth`; negative = hover).
+ * Taught by jogging a tip to the wanted height over the first hole — the rim
+ * is the taught cart location's Z, so the depth is rim − live. The tip's X/Y
+ * probe does not enter into it (Z is not probed), but a tip must be on: the
+ * number is about the tip end, not the nozzle.
+ */
+export async function saveDispenseDepth(user: User, robotId: string, input: { z: unknown; hasTip: unknown }): Promise<CalibrationView> {
+	await connectDB();
+	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
+	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
+	const rim = point(prev?.cartLocation);
+	if (!rim) throw new ArmWaxFillError("Teach the cart location (the first wax hole's rim) first — the dispense depth is measured down from it.");
+	if (String(input.hasTip ?? '') !== 'true') throw new ArmWaxFillError('Pick up a tip first — the dispense depth is where the TIP END sits when wax is dispensed.');
+	const liveZ = num(input.z, 'z');
+	const mm = depthFromLive(rim.z, liveZ);
+	if (mm < DISPENSE_DEPTH_LIMITS.min || mm > DISPENSE_DEPTH_LIMITS.max) {
+		throw new ArmWaxFillError(
+			`The tip is ${Math.abs(mm)} mm ${mm >= 0 ? 'below' : 'above'} the taught rim (z ${rim.z}). The protocol accepts ` +
+				`${DISPENSE_DEPTH_LIMITS.min} (hover ${Math.abs(DISPENSE_DEPTH_LIMITS.min)} mm above) to ${DISPENSE_DEPTH_LIMITS.max} mm into the ${WAX_HOLE_DEPTH_MM} mm-deep hole; deeper snaps tips.`
+		);
+	}
+	const now = new Date();
+	await ArmWaxFillCalibration.updateOne(
+		{ _id: robotId },
+		{ $set: { dispenseDepth: { mm, liveZ, taughtAt: now, taughtBy: opRef(user) }, updatedBy: opRef(user) } },
+		{ upsert: true }
+	);
+	await audit(user, 'arm_wax_fill.dispense_depth', 'arm_wax_fill_calibrations', robotId, { mm, liveZ, rimZ: rim.z, before: prev?.dispenseDepth?.mm ?? null });
+	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
+}
+
+/** The cart's rotation on the stage and the travel clearance over the rim. */
+export async function saveStageGeometry(user: User, robotId: string, input: { rotationDeg: unknown; jumpHeightMm: unknown }): Promise<CalibrationView> {
+	await connectDB();
+	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
+	const rotationDeg = input.rotationDeg === null || String(input.rotationDeg).trim() === '' ? 0 : num(input.rotationDeg, 'Cart rotation');
+	if (rotationDeg < -360 || rotationDeg > 360) throw new ArmWaxFillError('Cart rotation must be between −360° and 360°.');
+	const jumpHeightMm = input.jumpHeightMm === null || String(input.jumpHeightMm).trim() === '' ? STAGE_JUMP_DEFAULT_MM : num(input.jumpHeightMm, 'Travel height');
+	if (jumpHeightMm < STAGE_JUMP_LIMITS.min || jumpHeightMm > STAGE_JUMP_LIMITS.max) {
+		throw new ArmWaxFillError(`Travel height must be ${STAGE_JUMP_LIMITS.min}–${STAGE_JUMP_LIMITS.max} mm above the rim.`);
+	}
+	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
+	await ArmWaxFillCalibration.updateOne(
+		{ _id: robotId },
+		{ $set: { stageRotationDeg: rotationDeg, stageJumpHeightMm: jumpHeightMm, updatedBy: opRef(user) } },
+		{ upsert: true }
+	);
+	await audit(user, 'arm_wax_fill.stage_geometry', 'arm_wax_fill_calibrations', robotId, {
+		rotationDeg,
+		jumpHeightMm,
+		before: { rotationDeg: prev?.stageRotationDeg ?? null, jumpHeightMm: prev?.stageJumpHeightMm ?? null }
+	});
+	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
+}
+
 // ── page load ────────────────────────────────────────────────────────────
 
 export interface ProtocolView {
@@ -565,9 +644,15 @@ export function readiness(
 	if (settings.robotId && !calibration?.scanPosition) blocking.push('Calibration: teach the scan position.');
 	if (settings.robotId && stage) {
 		const cl = calibration?.cartLocation ?? null;
-		if (!cl) blocking.push('Calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
-		else if (!cl.tipAdjust) blocking.push('Calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
-		else notes.push(`The stage protocol fills the taught cart location (tip-neutral; cart rotation ${settings.stageRotationDeg}°). No deck or deck position is used.`);
+		if (!cl) blocking.push('Stage calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
+		else if (!cl.tipAdjust) blocking.push('Stage calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
+		if (cl && !calibration?.dispenseDepth) blocking.push('Stage calibration: teach the dispense depth — jog the tip to the height it should dispense at over the first wax hole and save it.');
+		if (cl?.tipAdjust && calibration?.dispenseDepth) {
+			notes.push(
+				`The stage protocol fills the taught cart location (tip-neutral; cart rotation ${calibration.stageRotationDeg}°), dispensing ` +
+					`${Math.abs(calibration.dispenseDepth.mm)} mm ${calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim, travelling ${calibration.stageJumpHeightMm} mm over it. No deck or deck position is used.`
+			);
+		}
 	} else if (settings.robotId && protocol) {
 		if (!calibration?.cartLocation) notes.push(`Cart location is not taught. The current protocol does not read it; it fills deck position ${settings.cartPosition} from the deck calibration.`);
 		else notes.push(`The current protocol does not declare arm_cart_x/y/z, so the taught cart location is kept but not sent; it fills deck position ${settings.cartPosition}. Upload protocols/Wax_Filling_GEN7_ArmStage.py to fill the stage.`);
@@ -587,6 +672,67 @@ export interface TeachAid {
 	tiprackLoadName: string;
 	nextTipWell: string;
 	calibrator: { x: number; y: number; approachZ: number; probeZ: number; source: string };
+}
+
+/** The Stage calibration tab's checklist: what the stage protocol needs from this OT-2, and what is taught. */
+export function stageChecklist(calibration: CalibrationView | null, protocol: ProtocolView | null): { key: string; label: string; ok: boolean; detail: string }[] {
+	const cl = calibration?.cartLocation ?? null;
+	const dd = calibration?.dispenseDepth ?? null;
+	return [
+		{
+			key: 'protocol',
+			label: 'Stage protocol on the robot',
+			ok: !!protocol?.declaresCartLocation,
+			detail: !protocol
+				? 'No wax-filling protocol — upload protocols/Wax_Filling_GEN7_ArmStage.py on /opentrons and deploy it to this robot.'
+				: protocol.declaresCartLocation
+					? protocol.protocolName
+					: `${protocol.protocolName} is the carriage protocol (no arm_cart_x/y/z) — upload Wax_Filling_GEN7_ArmStage.py to this robot.`
+		},
+		{
+			key: 'scan',
+			label: 'Scan position (no tip)',
+			ok: !!calibration?.scanPosition,
+			detail: calibration?.scanPosition ? `x ${calibration.scanPosition.x} · y ${calibration.scanPosition.y} · z ${calibration.scanPosition.z}` : 'Where the gantry scanner reads the cart. Taught with no tip on.'
+		},
+		{
+			key: 'cart',
+			label: 'Cart location (first wax hole rim, tip-neutral)',
+			ok: !!cl?.tipAdjust,
+			detail: !cl ? 'Pick up + calibrate a tip, jog the tip end onto the rim of the first wax hole, save.' : cl.tipAdjust ? `x ${cl.x} · y ${cl.y} · z ${cl.z} (probe ${cl.tipAdjust.x}, ${cl.tipAdjust.y})` : 'Taught without a probed tip — teach again with one.'
+		},
+		{
+			key: 'depth',
+			label: 'Dispense depth',
+			ok: !!dd,
+			detail: dd ? `${Math.abs(dd.mm)} mm ${dd.mm >= 0 ? 'below' : 'above'} the rim (tip end at z ${cl ? (cl.z - dd.mm).toFixed(2) : '?'})` : 'Jog the tip to the height it should dispense at over the first hole and save; without it the protocol hovers 1 mm above the rim.'
+		}
+	];
+}
+
+/** Everything the Stage calibration tab shows for the OT-2 the arm feeds. */
+export async function loadStageCalibration() {
+	await connectDB();
+	const settings = await getSettings();
+	const robotId = settings.robotId;
+	const [robot, calibration, protocol, teach, active] = await Promise.all([
+		robotId ? (OpentronsRobot.findById(robotId).select('_id name').lean() as Promise<any>) : Promise.resolve(null),
+		getCalibration(robotId),
+		protocolFor(robotId).catch(() => null),
+		robotId ? teachAid(robotId).catch((): TeachAid | null => null) : Promise.resolve<TeachAid | null>(null),
+		activeLoop()
+	]);
+	const robotName: string | null = robot?.name ?? null;
+	return {
+		robotId,
+		robotName,
+		scannerDeviceId: scannerDeviceIdForRobot(robotName),
+		calibration,
+		protocol,
+		teach,
+		loopRunning: !!active,
+		checklist: stageChecklist(calibration, protocol)
+	};
 }
 
 async function teachAid(robotId: string): Promise<TeachAid> {
@@ -908,6 +1054,9 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 	if (stage && !calibration?.cartLocation?.tipAdjust) {
 		throw new ArmWaxFillError('The cart location is not taught tip-neutral (pick up a tip, calibrate it, then save it) — the stage protocol will not be started without it.', 409);
 	}
+	if (stage && !calibration?.dispenseDepth) {
+		throw new ArmWaxFillError('The dispense depth is not taught (Stage calibration tab) — the stage protocol will not be started without it.', 409);
+	}
 	if (!stage && !loop.deckId) {
 		throw new ArmWaxFillError('This robot runs the carriage protocol, which fills a deck position: pick the deck in Setup (or upload the stage protocol).', 409);
 	}
@@ -961,7 +1110,9 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		form.set('param_arm_cart_x', String(cl.x));
 		form.set('param_arm_cart_y', String(cl.y));
 		form.set('param_arm_cart_z', String(cl.z));
-		form.set('param_arm_cart_rotation_deg', String(settings.stageRotationDeg));
+		form.set('param_arm_cart_rotation_deg', String(calibration!.stageRotationDeg));
+		form.set('param_dispense_depth', String(calibration!.dispenseDepth!.mm));
+		form.set('param_stage_jump_height', String(calibration!.stageJumpHeightMm));
 	} else {
 		// Legacy carriage protocol: one cart at the configured deck position.
 		form.set('param_cartridges', '1');

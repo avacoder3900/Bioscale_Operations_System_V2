@@ -23558,3 +23558,40 @@ Deployment: preview — via Vercel GitHub integration on the push (see the PR / 
 Source: branch feat/arm-wax-fill-loop @ commit bf563ba8
 Retrieve this exact code: git checkout feat/arm-wax-fill-loop at commit bf563ba8
 What this deployment is for: the single-cart STAGE wax-fill protocol + tip-neutral teach panel + OT-2 home before every arm move + "Calibrate wax fill" button.
+
+
+================================================================================
+2026-10-28 — feat/arm-wax-fill-loop — Robot Arm "Stage calibration" tab: the arm line's own calibration studio (single elevated stage, dispense depth)
+================================================================================
+Alejandro: the robot arm should have its own calibration studio for the stage — keep the essential parts of
+the Deck Calibration Studio, but calibrate to a single elevated stage instead of a 24-slot deck, and also
+calibrate the depth the tip goes to when dispensing wax. Its own page, so calibration does not clutter the
+Wax fill tab.
+New tab /manufacturing/cart-mfg/robot-arm/stage-calibration (robot-arm layout, after "Wax fill"):
+  - Fixed to the OT-2 the arm feeds (Wax fill → Setup); TransportPill; links to the Wax fill tab and to this
+    robot's tip calibrator in the Studio (?kind=calibrator&robot=).
+  - Checklist of what the stage protocol needs: stage protocol on the robot, scan position, tip-neutral cart
+    location, dispense depth — each with its taught values (stageChecklist()).
+  - Studio essentials kept: maintenance run open/close/home, "Pick up tip (<well>) + calibrate" (p20 from slot
+    11 at the Studio tip cursor's well → calibrator approach point → /api/scanner/calibrate-tip attached to the
+    run), "Pick up tip (no probe)", drop tip, jog pad (0.1–25 mm, leftZ/rightZ), live XYZ with the live depth
+    vs the taught rim, a 12-hole STAGE MAP (3 rows × gates 4…1, laid out from the taught first hole + rotation
+    by $lib/robot-arm/stage-geometry.ts — the TS twin of the protocol's stage_targets(), same test numbers) with
+    move-to-hole (2 mm above the rim, this tip's adjust applied, high arc), and "Run fill motion" at any hole =
+    the protocol's exact approach (travel height → pre-jump 5 → dispense height → dwell → retract, no dispense).
+  - Taught here, per OT-2 (ArmWaxFillCalibration): 1 scan position (refused with a tip on), 2 cart location
+    (refused without a probed tip; stored live − adjust), 3 DISPENSE DEPTH (new): with a tip on, "Go to
+    dispense height" parks the tip end at the current value over the first hole, jog Z to where the wax should
+    land, save → dispenseDepth.mm = rim z − live z, bounded to the protocol's dispense_depth range (−2.0 hover …
+    2.5 into the 3.75 mm hole), 4 stage geometry: cart rotation (moved here from Setup) + travel height
+    (stageJumpHeightMm, 10–60).
+  - cycleFill now sends arm_cart_rotation_deg, dispense_depth and stage_jump_height from the calibration doc;
+    readiness + cycleFill block a stage fill until the dispense depth is taught.
+Wax fill tab: the teach panel and the calibration card are gone (−330 lines); a 4-tile summary (scan position,
+cart location, dispense depth, stage geometry) + "Open Stage calibration"; the robot-row button is now a link
+"Stage calibration"; Setup lost the rotation field (it points at the new tab); its server lost the two save
+actions. ArmWaxFillSettings.stageRotationDeg removed (never deployed — added earlier today).
+Motion over the stage still uses TEACH_ARC_Z = 120 for arcs (the planner cannot see the stage); nothing has
+run on a robot.
+svelte-check (portable node): 14-error baseline, none in touched files. Unit: stage-geometry.test.ts + the
+protocol's python geometry test + run-lifecycle-records (29) + protocol-freshness (5) pass.

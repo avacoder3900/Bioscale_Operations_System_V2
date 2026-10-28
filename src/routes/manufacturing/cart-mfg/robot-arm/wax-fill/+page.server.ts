@@ -1,10 +1,11 @@
 /**
  * Robot Arm — Wax fill: the arm feeds one cart at a time to an OT-2 running
  * the stage wax-filling protocol (Wax_Filling_GEN7_ArmStage.py). Setup
- * (robot, stage rotation; deck + deck position only for the legacy carriage
- * protocol), the grab / withdraw animations (chosen once, changed only on
- * request), the two taught points (scan position, tip-neutral cart location)
- * and the loop itself.
+ * (robot; deck + deck position only for the legacy carriage protocol), the
+ * grab / withdraw animations (chosen once, changed only on request) and the
+ * loop itself. The stage calibration (scan position, tip-neutral cart
+ * location, dispense depth, stage geometry) is taught on the sibling
+ * stage-calibration route.
  *
  * The browser drives a cycle one action at a time: homeGantry → cycleGrab →
  * (playback poll, settle) → cycleGrabDone → scan over /api/scanner/sweep →
@@ -28,12 +29,9 @@ import {
 	cycleWithdrawDone,
 	failLoop,
 	getLoop,
-	getSettings,
 	loadArmWaxFill,
 	resetLoop,
 	saveAnimations,
-	saveCartLocation,
-	saveScanPosition,
 	saveSetup,
 	startLoop,
 	stopLoop
@@ -84,7 +82,6 @@ export const actions: Actions = {
 				robotId: field(d, 'robotId'),
 				deckId: field(d, 'deckId'),
 				cartPosition: field(d, 'cartPosition'),
-				stageRotationDeg: field(d, 'stageRotationDeg'),
 				waxSourceLot: field(d, 'waxSourceLot'),
 				testMode: field(d, 'testMode') === 'on' || field(d, 'testMode') === 'true'
 			});
@@ -100,47 +97,6 @@ export const actions: Actions = {
 		try {
 			const s = await saveAnimations(user, { grab: field(d, 'grab'), withdraw: field(d, 'withdraw') });
 			return { success: `Animations saved: grab "${s.grabAnimation?.name}", withdraw "${s.withdrawAnimation?.name}".` };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	saveScanPosition: async (ev) => {
-		const { d, user } = await writer(ev);
-		try {
-			const robotId = (await getSettings()).robotId ?? '';
-			const c = await saveScanPosition(user, robotId, {
-				x: field(d, 'x'),
-				y: field(d, 'y'),
-				z: field(d, 'z'),
-				pipetteMount: field(d, 'pipetteMount'),
-				pipetteName: field(d, 'pipetteName'),
-				testScanBarcode: field(d, 'testScanBarcode')
-			});
-			return { success: 'Scan position saved.', calibration: json(c) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	saveCartLocation: async (ev) => {
-		const { d, user } = await writer(ev);
-		try {
-			const robotId = (await getSettings()).robotId ?? '';
-			// Saved tip-neutral: the page sends the live position plus the probe
-			// adjust of the tip it was taught with; the server stores live − adjust.
-			const c = await saveCartLocation(user, robotId, {
-				x: field(d, 'x'),
-				y: field(d, 'y'),
-				z: field(d, 'z'),
-				pipetteMount: field(d, 'pipetteMount'),
-				pipetteName: field(d, 'pipetteName'),
-				hasTip: field(d, 'hasTip'),
-				adjustX: field(d, 'adjustX'),
-				adjustY: field(d, 'adjustY'),
-				tipWell: field(d, 'tipWell')
-			});
-			return { success: 'Cart location saved (tip-neutral).', calibration: json(c) };
 		} catch (err) {
 			return failFrom(err);
 		}
