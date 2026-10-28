@@ -24271,3 +24271,10 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-calibration-studio @ commit 1203e651 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1203e651 (stage rotation 90, Tip calibrator panel, rotate buttons)"
 What this deployment is for: stage rotation defaults to 90 deg with front/back markers and direction arrows on the plane; rotate-cart buttons; the Tip calibrator teach as its own panel.
+
+Follow-up (same day): Alejandro opened the run on the LEFT mount (the model's default), pressed a 20 uL tip with the
+p300 and the robot answered KeyError PipetteTipType.t20 (a p300 cannot model a 20 uL tip; the engine never saw the tip
+it physically pressed). The wax p20 rides the RIGHT mount (the stage protocol loads p20_single_gen2 on 'right'), so
+ArmWaxFillCalibration.pipetteMount now defaults to right (model, view fallback, saves) and the studio opens on the
+right; when the run's pipette is not a p20 the Jog header turns red, an error names the fix, and Calibrate / Swap /
+Pick up tip are disabled. Recovery for the stray tip: pull it off by hand (Drop tip cannot see it).

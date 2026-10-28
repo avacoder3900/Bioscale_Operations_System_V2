@@ -350,7 +350,8 @@ function calibrationView(robotId: string, d: any): CalibrationView {
 		holes: cartLocation ? stageTargets(cartLocation.x, cartLocation.y, cartLocation.z, stageRotationDeg, holeOffsets) : null,
 		holeOffsets,
 		edits,
-		pipetteMount: d?.pipetteMount === 'right' ? 'right' : 'left',
+		// The wax p20 rides the RIGHT mount (the stage protocol loads it there): default right.
+		pipetteMount: d?.pipetteMount === 'left' ? 'left' : 'right',
 		pipetteName: d?.pipetteName ?? null
 	};
 }
@@ -419,7 +420,7 @@ export async function saveScanPosition(user: User, robotId: string, input: Point
 	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
 	const p = cleanPoint(input);
 	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
-	const mount = mountOf(input, prev?.pipetteMount ?? 'left');
+	const mount = mountOf(input, prev?.pipetteMount ?? 'right');
 	const pipetteName = String(input.pipetteName ?? '').trim() || prev?.pipetteName || null;
 	const testScanBarcode = String(input.testScanBarcode ?? '').trim() || null;
 	const setId = await upsertScanSet(user, robotId, prev?.scanPositionSetId ?? null, p, mount, pipetteName, testScanBarcode);
@@ -467,7 +468,7 @@ export async function saveCartLocation(user: User, robotId: string, input: CartL
 	}
 	const p = { x: +(live.x - ax).toFixed(3), y: +(live.y - ay).toFixed(3), z: live.z };
 	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
-	const mount = mountOf(input, prev?.pipetteMount ?? 'left');
+	const mount = mountOf(input, prev?.pipetteMount ?? 'right');
 	const pipetteName = String(input.pipetteName ?? '').trim() || prev?.pipetteName || null;
 	const tipWell = String(input.tipWell ?? '').trim().toUpperCase() || null;
 	const now = new Date();

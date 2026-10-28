@@ -411,7 +411,12 @@
 	let pipetteId = $state<string | null>(null);
 	let pipetteMount = $state<string | null>(null);
 	let pipetteName = $state<string | null>(null);
-	let desiredMount = $state<'left' | 'right'>(data.calibration?.pipetteMount === 'right' ? 'right' : 'left');
+	// The stage protocol fills with the p20 on the RIGHT mount, so the studio probes with that pipette.
+	let desiredMount = $state<'left' | 'right'>(data.calibration?.pipetteMount === 'left' ? 'left' : 'right');
+	// The run loaded something other than a p20 (a p300 on the other mount, say). A 20 µL tip
+	// pressed by it looks picked up but the robot refuses to model it (KeyError PipetteTipType.t20),
+	// and every probe / teach after that would be in the wrong tip frame — so tip work is blocked.
+	const wrongPipette = $derived(!!pipetteName && !/^p20/i.test(pipetteName));
 	let connecting = $state(false);
 	let stepSize = $state(1);
 	let zAxis = $state<'leftZ' | 'rightZ'>(data.calibration?.pipetteMount === 'right' ? 'rightZ' : 'leftZ');
@@ -452,6 +457,9 @@
 			pipetteName = res.pipetteName ?? null;
 			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
 			msg = pipetteId ? `Run open: ${pipetteName} on ${pipetteMount}.` : 'Run opened but no pipette could be loaded — jog will fail.';
+			if (pipetteId && pipetteName && !/^p20/i.test(pipetteName)) {
+				errMsg = `${pipetteName} on the ${pipetteMount} mount is not the p20 the stage fill uses. Close the run and open it on the ${pipetteMount === 'left' ? 'right' : 'left'} mount before picking up a 20 µL tip — this pipette cannot model one (the robot answers KeyError PipetteTipType.t20).`;
+			}
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -1136,7 +1144,7 @@
 						</div>
 					{/if}
 				</div>
-				{#if runId}<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">pipette {pipetteName} ({pipetteMount})</p>{/if}
+				{#if runId}<p class="mt-1 text-[11px] {wrongPipette ? 'text-red-300' : ''}" style={wrongPipette ? '' : 'color: var(--color-tron-text-secondary)'}>pipette {pipetteName} ({pipetteMount}){wrongPipette ? ' — not a p20: close the run and open it on the other mount' : ''}</p>{/if}
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
 						<option value={0.1}>0.1</option><option value={0.5}>0.5</option><option value={1}>1</option><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option>
@@ -1186,7 +1194,7 @@
 					{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}
 						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point is taught for {robotName} — the probe would drive to the protocol's default. Teach it in the <strong>Tip calibrator</strong> panel below first.</p>
 					{/if}
-					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || wrongPipette} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
 						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip (picks up a p20 tip first)'}
 					</button>
 					{#if !calibrating}
@@ -1196,8 +1204,8 @@
 							{:else}Moves to ({calX}, {calY}, {calZ}), then probes at z {probeZ}.{/if}
 						</p>
 					{/if}
-					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap tip — drop it, take a fresh one from the rack</button>
-					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}</button>
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy || wrongPipette} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap tip — drop it, take a fresh one from the rack</button>
+					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || wrongPipette} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}</button>
 					<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop tip (for the scan position)</button>
 					{#if tipAdjust}
 						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>

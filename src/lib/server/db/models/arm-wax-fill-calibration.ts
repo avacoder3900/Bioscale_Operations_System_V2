@@ -90,7 +90,8 @@ const armWaxFillCalibrationSchema = new Schema(
 			],
 			default: []
 		},
-		pipetteMount: { type: String, enum: ['left', 'right'], default: 'left' },
+		/** The wax p20 is on the right mount — the stage protocol loads it there — so that is the default. */
+		pipetteMount: { type: String, enum: ['left', 'right'], default: 'right' },
 		pipetteName: String,
 		updatedBy: { _id: String, username: String }
 	},
