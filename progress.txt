@@ -23676,3 +23676,33 @@ Source: branch master @ commit 305dc8c3
 Retrieve this exact code: git checkout 305dc8c3
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: "Show Warning" label on the collapsed Robot Arm warning
+
+================================================================================
+2026-10-28 — master — Pi/Wi-Fi, Servos and Torque move to ARM CONNECTION; servo temps return right after a play
+================================================================================
+Robot Arm right rail rearranged (user request). The Pi heat + Wi-Fi line, the servo
+temperature line and the Torque row moved from the ARM CAMERA card to the top of the
+ARM CONNECTION panel, same order as before, and stay visible when that panel is hidden
+(Hide now folds away only the connection details under them; the separate collapsed
+"ARM CONNECTION · Show" bar in the layout is gone, the panel takes hidden/onshow). The
+status dot moved next to the ARM CONNECTION title so it shows while hidden.
+
+Servo temps were "unavailable" for up to 30 s after a play: the Pi answers /servos with
+409 "A session is currently active … single-owner" during any session (confirmed in the
+Pi's app.py _require_bus_free), and the chip polled every 30 s. Now: a 409 reads
+"Servos: paused · arm is moving" and the chip re-checks every 3 s (and for 15 s after);
+new src/lib/robot-arm/bus-free.ts window event is fired by Playback after settle / Stop,
+and by the servo row when the servos answer again after a session; PiThermalChip and
+TorqueControl re-read on it (Torque was read only on mount, so it could show OFF after a
+Go to pose that left torque on).
+
+Files: RobotArmConnectionPanel.svelte, RobotArmCameraPanel.svelte, robot-arm/+layout.svelte,
+robot-arm/PiThermalChip.svelte, robot-arm/TorqueControl.svelte, robot-arm/playback.svelte.ts,
+robot-arm/bus-free.ts (new). npm run check: 14 errors (baseline 14). Robot-arm unit tests
+217/217. No Pi change. Not yet verified on the arm.
+
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/AqY2Ew9fU48RuCZM9Wmopi2hB7NG
+Source: branch master @ commit a6f5dd85
+Retrieve this exact code: git checkout master at commit a6f5dd85
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Pi/Servos/Torque lines in ARM CONNECTION; fast servo-temp return after plays
