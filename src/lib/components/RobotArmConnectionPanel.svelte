@@ -5,7 +5,15 @@
 	// The Pi's `diagnosis` string already names the concrete fix ("Update
 	// LEADER_PORT=... and restart the server"); re-implementing that logic in
 	// TypeScript would guarantee the two drift.
+	//
+	// Since 2026-10-28 the top of the panel also carries the Pi heat / Wi-Fi
+	// line, the servo temperatures and the Torque row (moved here from the
+	// camera card). Those stay visible when the panel is hidden; Hide only
+	// folds away the connection details under them.
 	import { invalidateAll } from '$app/navigation';
+	import type { ArmThermal } from '$lib/server/robot-arm-client';
+	import PiThermalChip from './robot-arm/PiThermalChip.svelte';
+	import TorqueControl from './robot-arm/TorqueControl.svelte';
 
 	interface PreflightCheck {
 		ok: boolean;
@@ -33,7 +41,11 @@
 		baseUrl = null,
 		lastConnected = null,
 		variant = 'full',
-		onhide
+		armReachable = false,
+		thermal = null,
+		hidden = false,
+		onhide,
+		onshow
 	}: {
 		preflight?: Preflight | null;
 		preflightError?: string | null;
@@ -46,8 +58,16 @@
 		 * same derived state below so they can never disagree.
 		 */
 		variant?: 'full' | 'compact';
+		/** Full panel only: drives the always-visible Pi / servo / torque lines. */
+		armReachable?: boolean;
+		/** The Pi's temperature / throttle state at page load; the chip polls from there. */
+		thermal?: ArmThermal | null;
+		/** Full panel only: fold the connection details away, keeping the header lines. */
+		hidden?: boolean;
 		/** When given, the full panel shows a Hide button that calls this. */
 		onhide?: () => void;
+		/** When given, the hidden panel shows a Show button that calls this. */
+		onshow?: () => void;
 	} = $props();
 
 	let refreshing = $state(false);
@@ -139,8 +159,12 @@
 		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
 	>
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
+		<h2
+			class="inline-flex items-center gap-2 text-sm font-semibold tracking-wide"
+			style="color: var(--color-tron-text)"
+		>
 			ARM CONNECTION
+			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}" title={label}></span>
 		</h2>
 		<div class="flex items-center gap-2">
 			<button
@@ -152,7 +176,17 @@
 			>
 				{refreshing ? 'Refreshing…' : 'Refresh'}
 			</button>
-			{#if onhide}
+			{#if hidden && onshow}
+				<button
+					type="button"
+					onclick={onshow}
+					class="min-h-[44px] rounded border px-3 text-xs"
+					style="border-color: var(--color-tron-border); color: var(--color-tron-cyan)"
+					title="Show the arm connection details"
+				>
+					Show
+				</button>
+			{:else if onhide}
 				<button
 					type="button"
 					onclick={onhide}
@@ -166,11 +200,20 @@
 		</div>
 	</div>
 
+	<!--
+		Always visible, hidden panel or not, in the order they had on the camera
+		card: Pi heat + Wi-Fi, the servo temperatures, then Torque.
+	-->
+	<div class="mt-2 space-y-1.5">
+		<PiThermalChip initial={thermal} {armReachable} />
+	</div>
+	<div class="-mx-3 mt-2 sm:-mx-4">
+		<TorqueControl {armReachable} />
+	</div>
+
+	{#if !hidden}
 	<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-		<span class="inline-flex items-center gap-2 text-sm" style="color: var(--color-tron-text)">
-			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}"></span>
-			{label}
-		</span>
+		<span class="text-sm" style="color: var(--color-tron-text)">{label}</span>
 
 		{#if reachable}
 			<span class="text-xs" style="color: var(--color-tron-text-secondary)">
@@ -266,5 +309,6 @@
 	>
 		Last connected <span style="color: var(--color-tron-text)">{relativeTime(lastConnected)}</span>
 	</p>
+	{/if}
 	</section>
 {/if}

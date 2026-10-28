@@ -42,19 +42,16 @@
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
 	import RotatedFrame from '$lib/components/robot-arm/RotatedFrame.svelte';
 	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
-	import TorqueControl from './robot-arm/TorqueControl.svelte';
-	import PiThermalChip from './robot-arm/PiThermalChip.svelte';
-	import type { ArmThermal } from '$lib/server/robot-arm-client';
 
 	interface Props {
 		cameras: CameraStatus[];
 		camerasError: string | null;
 		armReachable: boolean;
-		/** The Pi's temperature / throttle state at page load; the chip polls from there. */
-		thermal?: ArmThermal | null;
 	}
 
-	let { cameras, camerasError, armReachable, thermal = null }: Props = $props();
+	// Pi heat / Wi-Fi, servo temperatures and Torque moved to the ARM
+	// CONNECTION panel on 2026-10-28; this card is the picture only.
+	let { cameras, camerasError, armReachable }: Props = $props();
 
 	// Deliberately not `as const`: these are compared against and bound to
 	// values that arrive as plain number/string from localStorage and <select>,
@@ -545,10 +542,8 @@
 	class="rounded-lg border"
 	style="border-color: var(--color-tron-border); background: var(--color-tron-surface)"
 >
-	<!-- Header: always visible, so a collapsed panel still reports health.
-	     Three lines: ARM CAMERA + status; Pi heat and Wi-Fi; servo temperatures. -->
-	<div class="space-y-1.5 px-3 py-2">
-	<div class="flex items-center justify-between gap-2">
+	<!-- Header: always visible, so a collapsed panel still reports feed health. -->
+	<div class="flex items-center justify-between gap-2 px-3 py-2">
 		<div class="flex items-center gap-2 min-w-0">
 			<svg
 				class="h-4 w-4 shrink-0"
@@ -594,12 +589,6 @@
 			{collapsed ? 'Show' : 'Hide'}
 		</button>
 	</div>
-	<!-- Pi heat / Wi-Fi, then servo temperatures, each on its own line: visible on every arm tab, collapsed or not. -->
-	<PiThermalChip initial={thermal} {armReachable} />
-	</div>
-
-	<!-- Torque on/off follows the operator to every tab; visible even when the picture is collapsed. -->
-	<TorqueControl {armReachable} />
 
 	{#if !collapsed}
 		<div class="px-3 pb-3">

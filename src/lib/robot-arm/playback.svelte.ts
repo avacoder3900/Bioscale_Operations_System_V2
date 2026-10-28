@@ -14,6 +14,7 @@
  * after Stop — the arm is mid-path then. `onend` lets the page refresh.
  */
 import { deserialize } from '$app/forms';
+import { announceBusFree } from './bus-free';
 
 export interface PlayStarted {
 	runId: string;
@@ -116,6 +117,7 @@ export class Playback {
 				const s = r.data.stop as { torqueOn: boolean; error: string | null };
 				this.finish(s.torqueOn ? 'stopped — the arm is holding its position' : `stopped, but torque could NOT be re-enabled (${s.error}) — the arm may be limp`);
 			} else this.finish('stopped');
+			announceBusFree('playback');
 			this.onend?.();
 		} catch (e) {
 			this.error = `Stop failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -160,6 +162,7 @@ export class Playback {
 		} catch (e) {
 			this.settled = `After-play check failed: ${e instanceof Error ? e.message : String(e)}`;
 		}
+		announceBusFree('playback');
 		this.onend?.();
 	}
 

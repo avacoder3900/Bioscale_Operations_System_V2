@@ -1,10 +1,15 @@
 <script lang="ts">
 	/**
-	 * Follower torque on/off, shown on the camera card of every Robot Arm tab
-	 * (the card lives in the arm +layout, so this follows the operator across
-	 * tabs). Reads the state once on mount and after every change; nothing
+	 * Follower torque on/off, shown at the top of the ARM CONNECTION panel on
+	 * every Robot Arm tab (the panel lives in the arm +layout, so this follows
+	 * the operator across tabs, and stays visible when the panel is hidden).
+	 * Reads the state on mount, after every change, and when the arm bus
+	 * frees up after a play or session (ARM_BUS_FREE_EVENT): a Go to pose
+	 * leaves torque on, and a value read before it would be stale. Nothing
 	 * polls, since each read touches the servo bus.
 	 */
+	import { ARM_BUS_FREE_EVENT } from '$lib/robot-arm/bus-free';
+
 	interface Props {
 		armReachable: boolean;
 	}
@@ -33,6 +38,12 @@
 	$effect(() => {
 		void armReachable;
 		void refresh();
+	});
+
+	$effect(() => {
+		const onBusFree = () => void refresh();
+		window.addEventListener(ARM_BUS_FREE_EVENT, onBusFree);
+		return () => window.removeEventListener(ARM_BUS_FREE_EVENT, onBusFree);
 	});
 
 	async function set(enable: boolean) {

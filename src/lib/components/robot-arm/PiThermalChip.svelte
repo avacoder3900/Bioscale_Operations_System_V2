@@ -1,7 +1,8 @@
 <script lang="ts">
 	/**
-	 * Arm Pi temperature / throttle chip for the camera card header, so every
-	 * Robot Arm tab shows it even with the picture collapsed.
+	 * Arm Pi temperature / throttle chip for the top of the ARM CONNECTION
+	 * panel, so every Robot Arm tab shows it even with that panel hidden.
+	 * (It lived in the camera card header until 2026-10-28.)
 	 *
 	 * Shows the SoC temperature always (muted when fine) and turns it into a
 	 * warning when the Raspberry Pi firmware is holding the chip back: amber
@@ -24,8 +25,14 @@
 	 * is visible next to the Pi's on every tab.
 	 *
 	 * Polls /api/robot-arm/thermal every 30 s while the tab is visible, and
-	 * once right away (the layout load deliberately does not read the servo
-	 * bus, so the servo row has nothing until the first poll); the server side
+	 * once right away. While a session holds the arm bus (a play, teleop) the
+	 * Pi refuses /servos with a 409, so the row says "paused · arm is moving"
+	 * and re-checks every 3 s until the numbers return (they used to wait up
+	 * to 30 s after an animation, 2026-10-28). It also re-reads at once on
+	 * ARM_BUS_FREE_EVENT (a play has fully ended), and fires that event itself
+	 * when the servos answer again after a session, so Torque re-reads too.
+	 * The poll on mount is still needed: the layout load deliberately does
+	 * not read the servo bus, so the servo row has nothing until it. The server side
 	 * logs Pi episodes to device_events. The Pi rows render nothing when the
 	 * Pi is unreachable or the thermal route is not installed on it; the servo
 	 * row says why when the Pi answers but the servos do not (arm power off,
@@ -34,6 +41,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import type { ArmThermal, ServoState } from '$lib/server/robot-arm-client';
+	import { ARM_BUS_FREE_EVENT, announceBusFree } from '$lib/robot-arm/bus-free';
 
 	interface Props {
 		initial: ArmThermal | null;
@@ -42,6 +50,11 @@
 	let { initial, armReachable }: Props = $props();
 
 	const POLL_MS = 30_000;
+	/** While the arm bus is busy, and for a while after, so the servo row comes back fast. */
+	const FAST_POLL_MS = 3_000;
+	const FAST_WINDOW_MS = 15_000;
+	/** Source tag for the bus-free events this component fires, so it ignores its own. */
+	const BUS_FREE_SOURCE = 'servo-row';
 
 	let thermal = $state<ArmThermal | null>(initial);
 	let installed = $state(initial !== null);
@@ -50,6 +63,10 @@
 	let servoFailures = $state(0);
 	/** The Pi's reason when it answered but the servos did not (e.g. "No follower motor answered…"). */
 	let servosError = $state<string | null>(null);
+	/** The Pi's 409: a session (play, teleop, recording) owns the bus right now. */
+	let busBusy = $derived(!!servosError && /robot-arm 409/.test(servosError));
+	// Plain, not $state: scheduling only, never rendered.
+	let fastUntil = 0;
 
 	const FLAG_TEXT: Record<string, string> = {
 		throttled: 'throttled',
@@ -168,6 +185,9 @@
 				failures++;
 			}
 			if (body.servos?.length) {
+				// Back from a session nobody announced (teleop, a Control-tab replay):
+				// tell Torque to re-read as well.
+				if (busBusy) announceBusFree(BUS_FREE_SOURCE);
 				servos = body.servos;
 				servoFailures = 0;
 				servosError = null;
@@ -178,6 +198,7 @@
 				servos = null;
 				servoFailures = 0;
 				servosError = body.servosError;
+				if (/robot-arm 409/.test(body.servosError)) fastUntil = Date.now() + FAST_WINDOW_MS;
 			} else {
 				servoFailures++;
 			}
@@ -196,35 +217,65 @@
 	// Short label for the common servo failures; the full Pi message is the tooltip.
 	let servoErrorLabel = $derived.by(() => {
 		if (!servosError) return '';
+		if (busBusy) return 'Servos: paused · arm is moving';
 		if (/No follower motor answered/i.test(servosError)) return 'Servos: no answer · arm power or follower USB';
 		if (/follower arm not connected/i.test(servosError)) return 'Servos: follower not connected';
 		if (/robot-arm 5\d\d/.test(servosError)) return 'Servos: Pi could not read the bus';
 		return 'Servos: unavailable';
 	});
 	let servoErrorTitle = $derived(
-		servosError
+		busBusy
+			? 'A play, teleop or recording owns the servo bus, and the Pi answers no other reads until it ends. Re-checks every 3 s; the temperatures come back as soon as the arm is free.'
+			: servosError
 			? `${servosError.replace(/^robot-arm \d+:\s*/, '')}\nThe Pi is up (its own temperature is above) but no servo answered on the follower bus. Usually the arm's 12 V supply is off or the servo chain is unplugged from the BusLinker. Re-checks every 30 s.`
 			: ''
 	);
 
 	onMount(() => {
 		if (!armReachable) return;
-		const tick = () => {
-			if (document.visibilityState === 'visible') void poll();
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let inFlight = false;
+		let stopped = false;
+		// A setTimeout chain rather than an interval: the gap depends on whether
+		// the bus was busy at the last answer.
+		const tick = async () => {
+			clearTimeout(timer);
+			if (stopped) return;
+			if (document.visibilityState === 'visible' && !inFlight) {
+				inFlight = true;
+				try {
+					await poll();
+				} finally {
+					inFlight = false;
+				}
+			}
+			if (stopped) return;
+			const fast = busBusy || Date.now() < fastUntil;
+			timer = setTimeout(tick, fast ? FAST_POLL_MS : POLL_MS);
 		};
+		const onBusFree = (e: Event) => {
+			if ((e as CustomEvent<{ source?: string }>).detail?.source === BUS_FREE_SOURCE) return;
+			// Keep the fast cadence briefly too: the first read can still collide
+			// with the after-play torque write and come back as a bus error.
+			fastUntil = Date.now() + FAST_WINDOW_MS;
+			void tick();
+		};
+		const onVisible = () => void tick();
 		// Right away for the servo row (the layout load never reads the servo bus).
-		tick();
-		const id = setInterval(tick, POLL_MS);
-		document.addEventListener('visibilitychange', tick);
+		void tick();
+		document.addEventListener('visibilitychange', onVisible);
+		window.addEventListener(ARM_BUS_FREE_EVENT, onBusFree);
 		return () => {
-			clearInterval(id);
-			document.removeEventListener('visibilitychange', tick);
+			stopped = true;
+			clearTimeout(timer);
+			document.removeEventListener('visibilitychange', onVisible);
+			window.removeEventListener(ARM_BUS_FREE_EVENT, onBusFree);
 		};
 	});
 </script>
 
 {#if thermal && installed}
-	<!-- Line 2 of the camera header: the Pi's heat, then the Wi-Fi it is on. -->
+	<!-- First line: the Pi's heat, then the Wi-Fi it is on. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
 			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight {level === 'critical' ? 'animate-pulse' : ''}"
@@ -247,7 +298,7 @@
 	</div>
 {/if}
 {#if joints.length}
-	<!-- Line 3: every follower servo's temperature, servo 1 first. -->
+	<!-- Second line: every follower servo's temperature, servo 1 first. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
 			class="inline-flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight {servoLevel === 'hot' ? 'animate-pulse' : ''}"
@@ -263,7 +314,7 @@
 		</span>
 	</div>
 {:else if servosError}
-	<!-- Line 3 when the Pi answered but the servos did not: say why instead of showing nothing. -->
+	<!-- Second line when the Pi answered but the servos did not: say why instead of showing nothing. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
 			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight"

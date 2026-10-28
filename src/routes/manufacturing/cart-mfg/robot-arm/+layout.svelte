@@ -95,9 +95,10 @@
 	let version = $derived(data.arm.preflight?.version ?? null);
 	let diagnosis = $derived(data.arm.preflight?.diagnosis ?? null);
 
-	// ARM CONNECTION panel sits above the camera in the right rail. It can be
-	// hidden to give the camera the full rail; the choice is a per-browser
-	// convenience, remembered so it survives a reload.
+	// ARM CONNECTION panel sits above the camera in the right rail. Hiding it
+	// folds away the connection details to give the camera more of the rail;
+	// its header, the Pi / servo lines and Torque stay. The choice is a
+	// per-browser convenience, remembered so it survives a reload.
 	const CONNECTION_HIDDEN_KEY = 'robot-arm:connection-panel-hidden';
 	let connectionHidden = $state(false);
 	$effect(() => {
@@ -250,30 +251,22 @@
 		</div>
 		<div class="xl:order-2">
 			<div class="space-y-4 xl:sticky xl:top-4">
-				{#if connectionHidden}
-					<button
-						type="button"
-						onclick={() => setConnectionHidden(false)}
-						class="flex w-full items-center justify-between rounded border px-3 py-2 text-xs"
-						style="border-color: var(--color-tron-border); background: var(--color-tron-surface); color: var(--color-tron-text-secondary)"
-					>
-						<span class="font-semibold tracking-wide">ARM CONNECTION</span>
-						<span style="color: var(--color-tron-cyan)">Show</span>
-					</button>
-				{:else}
-					<RobotArmConnectionPanel
-						preflight={data.arm.preflight}
-						preflightError={data.arm.error}
-						baseUrl={data.arm.baseUrl}
-						lastConnected={data.arm.lastConnected}
-						onhide={() => setConnectionHidden(true)}
-					/>
-				{/if}
+				<!-- Hidden keeps the header, Pi / servo lines and Torque; only the details fold away. -->
+				<RobotArmConnectionPanel
+					preflight={data.arm.preflight}
+					preflightError={data.arm.error}
+					baseUrl={data.arm.baseUrl}
+					lastConnected={data.arm.lastConnected}
+					armReachable={data.arm.reachable}
+					thermal={data.thermal}
+					hidden={connectionHidden}
+					onhide={() => setConnectionHidden(true)}
+					onshow={() => setConnectionHidden(false)}
+				/>
 				<RobotArmCameraPanel
 					cameras={data.cameras}
 					camerasError={data.camerasError}
 					armReachable={data.arm.reachable}
-					thermal={data.thermal}
 				/>
 			</div>
 		</div>
