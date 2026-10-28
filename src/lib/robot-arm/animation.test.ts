@@ -421,17 +421,17 @@ describe('fire steps (cartridge trapdoor solenoids)', () => {
 	it('writes each fire on its frame, and counts them in the header', () => {
 		const p = buildPath([kf('a', A, { holdS: 1 }), fire('A'), fire('B'), kf('b', B, { durationS: 2 })], { rateHz: 30 });
 		const fires = fireFrames(p);
-		expect(fires.map((f) => [f.solenoid, f.pin, f.ms])).toEqual([['A', 17, 1000], ['B', 27, 1000]]);
+		expect(fires.map((f) => [f.solenoid, f.pin, f.ms])).toEqual([['A', 17, 100], ['B', 27, 100]]);
 		// A fires when the pose hold ends; B one pulse + wait later.
 		expect(fires[0].t).toBeCloseTo(1);
-		expect(fires[1].t - fires[0].t).toBeCloseTo(2);
+		expect(fires[1].t - fires[0].t).toBeCloseTo(1.1);
 		const out = composeAnimationJsonl(p, { jointNames: ['a', 'b', 'c', 'd', 'e', 'f'], title: 't' });
 		const lines = out.jsonl.trim().split('\n').map((l) => JSON.parse(l));
 		expect(lines[0].fires).toBe(2);
 		expect(out.fires).toBe(2);
 		expect(lines.filter((l) => l.fire).map((l) => l.fire)).toEqual([
-			{ pin: 17, ms: 1000, solenoid: 'A' },
-			{ pin: 27, ms: 1000, solenoid: 'B' }
+			{ pin: 17, ms: 100, solenoid: 'A' },
+			{ pin: 27, ms: 100, solenoid: 'B' }
 		]);
 	});
 

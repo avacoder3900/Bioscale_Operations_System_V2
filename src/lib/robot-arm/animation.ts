@@ -83,8 +83,8 @@ export const SOLENOIDS: { id: Solenoid; pin: number; label: string }[] = [
 	{ id: 'A', pin: 17, label: 'Solenoid A' },
 	{ id: 'B', pin: 27, label: 'Solenoid B' }
 ];
-/** Same range as the Control tab's pulse buttons; the Pi itself caps at 2000. */
-export const DEFAULT_PULSE_MS = 1000;
+/** Pulse range matches the Control tab's buttons (the Pi caps at 2000); default 100 ms (user, 2026-10-28). */
+export const DEFAULT_PULSE_MS = 100;
 export const MIN_PULSE_MS = 20;
 export const MAX_PULSE_MS = 2000;
 /**
