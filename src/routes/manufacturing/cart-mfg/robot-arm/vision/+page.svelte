@@ -6,21 +6,22 @@
 	 * not, send it back), where is everything right now, recalibrate, and the
 	 * tag registry. See docs/prds/ARM-05-apriltag-vision.md.
 	 */
-	import { deserialize, enhance } from '$app/forms';
-	import { invalidateAll } from '$app/navigation';
+	import { enhance } from '$app/forms';
 	import VisionStage, { type StageTag } from '$lib/components/robot-arm/VisionStage.svelte';
 	import VisionLiveTracker from '$lib/components/robot-arm/VisionLiveTracker.svelte';
 	import CameraControlsPanel from '$lib/components/robot-arm/CameraControlsPanel.svelte';
 	import DepthStreamPanel from '$lib/components/robot-arm/DepthStreamPanel.svelte';
 	import VisionTagCalibrator from '$lib/components/robot-arm/VisionTagCalibrator.svelte';
 	import VisionTagRegistry from '$lib/components/robot-arm/VisionTagRegistry.svelte';
-	import { shouldRetryHome, stepsToDeg, HOME_LOOP_MS, HOME_STEP_TOLERANCE, MAX_JOG_STEPS } from '$lib/robot-arm/home-calibration';
+	import { stepsToDeg, HOME_LOOP_MS, HOME_STEP_TOLERANCE, MAX_JOG_STEPS } from '$lib/robot-arm/home-calibration';
+	import { ReturnHome, RETURN_HOME_CONFIRM, VISION_CAMERA_KEY } from '$lib/robot-arm/return-home.svelte';
 	import type { CalibrationSummary, HomeCheckResult, TagSummary } from '$lib/server/robot-arm-vision';
 	import type { CameraStatus } from '$lib/server/robot-arm-client';
 
 	let { data, form } = $props();
 
-	const STORAGE_KEY = 'bims.armVision.camera.v1';
+	// Also read by the ARM CONNECTION card's Return to home, on every tab.
+	const STORAGE_KEY = VISION_CAMERA_KEY;
 
 	const cameras = $derived((data.cameras ?? []) as CameraStatus[]);
 	const tags = $derived((data.tags ?? []) as TagSummary[]);
@@ -62,151 +63,42 @@
 		!armReachable ? 'The arm is unreachable — check the connection on the Control tab.' : busy ? 'The arm is running something — stop it first.' : ''
 	);
 
-	// Return to home runs as a loop of attempts driven from here (each attempt is
-	// one server request, inside Vercel's 30 s); its latest result wins over the
-	// form's until another home action is submitted.
-	let loopResult = $state<HomeCheckResult | null>(null);
+	// Return to home runs as a loop of attempts (each attempt is one server
+	// request, inside Vercel's 30 s) — the ReturnHome driver, shared with the ARM
+	// CONNECTION card so it can start from any tab; its latest result wins over
+	// the form's until another home action is submitted.
+	const rh = new ReturnHome();
+	const loop = $derived(rh.loop);
+	const tick = $derived(rh.now);
 	const formResult = $derived(form && 'homeResult' in form ? (form.homeResult as HomeCheckResult) : null);
-	const homeResult = $derived(loopResult ?? formResult);
+	const homeResult = $derived(rh.result ?? formResult);
 	const shownResult = $derived(homeResult && homeResult.cameraName === camera ? homeResult : null);
 	const flash = $derived(form as { success?: string; warning?: string; error?: string; warnings?: string[] } | null);
 
-	let homeBusy = $state<string | null>(null);
+	// Which home action is in flight: a form one (check, calibrate…) or the loop.
+	let formBusy = $state<string | null>(null);
+	const homeBusy = $derived(formBusy ?? (rh.running ? 'return' : null));
 	const homeEnhance = (kind: string) => () => {
-		homeBusy = kind;
-		loopResult = null;
-		loop = null;
+		formBusy = kind;
+		rh.reset();
 		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => {
 			await update({ reset: false });
-			homeBusy = null;
+			formBusy = null;
 		};
 	};
 
-	let loop = $state<{
-		running: boolean;
-		attempt: number;
-		startedAt: number;
-		stopping: boolean;
-		outcome: string | null;
-		error: string | null;
-		/** Final step in progress: closing the claw after the attempts ended. */
-		closing: boolean;
-		clawClosed: boolean;
-		clawError: string | null;
-		frozen: boolean;
-		/** Sent with every attempt; Stop marks it on the server so the attempt in progress ends before its next jog. */
-		runId: string;
-	} | null>(null);
-	let tick = $state(Date.now());
-
 	/**
-	 * Return to home, repeated until the arm is home. Each attempt: (servo 1
-	 * safety gate) → open the mouth (attempt 1 only) → servo 2 home → all
-	 * joints home -> close the claw. Stops when done, on a freeze, an error, Stop,
-	 * once every joint has been within CLAW_CLOSE_TOLERANCE (40 steps) for
-	 * CLAW_CLOSE_AFTER_MS (5 s) — "close enough, close the claw" (2026-10-23) —
-	 * or when 90 s have passed (no new attempt starts after that). However it
-	 * ends, the LAST step is closing the mouth (closeClaw) unless it is already
-	 * closed — except after a freeze, where torque stays off for the technician.
+	 * Return to home, repeated until the arm is home: the ReturnHome loop, with
+	 * this tab's camera. See src/lib/robot-arm/return-home.svelte.ts for the
+	 * sequence and when it stops.
 	 */
-	async function closeClawAtEnd() {
-		if (!loop) return;
-		loop.closing = true;
-		try {
-			// Each request closes for up to ~20 s; three is far more than a claw needs.
-			for (let i = 0; i < 3; i++) {
-				const fd = new FormData();
-				fd.set('camera', camera);
-				const res = await fetch('?/closeClaw', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-				const r = deserialize(await res.text());
-				if (r.type === 'failure') {
-					loop.clawError = String((r.data as { error?: string } | undefined)?.error ?? 'Closing the claw failed.');
-					return;
-				}
-				if (r.type !== 'success') {
-					loop.clawError = r.type === 'error' ? `Closing the claw failed: ${r.error?.message ?? r.status}` : 'Unexpected response while closing the claw.';
-					return;
-				}
-				if ((r.data?.clawResult as { closed?: boolean } | undefined)?.closed) {
-					loop.clawClosed = true;
-					return;
-				}
-			}
-			loop.clawError = 'The claw did not reach its closed stop.';
-		} catch (e) {
-			loop.clawError = `Closing the claw failed: ${e instanceof Error ? e.message : String(e)}`;
-		} finally {
-			loop.closing = false;
-		}
-	}
-
-	/**
-	 * Stop returning: tell the server so the attempt in progress ends before
-	 * its next jog (not after its whole ~20 s slice); the loop then closes the
-	 * mouth as its final step. Marked locally first, so even if this request
-	 * fails no further attempt starts.
-	 */
-	async function stopReturning() {
-		if (!loop?.running || loop.stopping) return;
-		loop.stopping = true;
-		const fd = new FormData();
-		fd.set('camera', camera);
-		fd.set('runId', loop.runId);
-		try {
-			await fetch('?/stopReturn', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-		} catch {
-			/* the local flag still ends the loop after this attempt */
-		}
-	}
-
 	async function runReturnHome() {
-		if (!confirm('The arm will MOVE until it is home: open the mouth, bring the shoulder (servo 2) home, then every joint, then close the claw. You can press Stop at any time. Is the path clear?')) return;
-		homeBusy = 'return';
-		loopResult = null;
-		loop = { running: true, attempt: 0, startedAt: Date.now(), stopping: false, outcome: null, error: null, closing: false, clawClosed: false, clawError: null, frozen: false, runId: crypto.randomUUID() };
-		const clock = setInterval(() => (tick = Date.now()), 500);
-		try {
-			while (loop) {
-				loop.attempt++;
-				const fd = new FormData();
-				fd.set('camera', camera);
-				fd.set('attempt', String(loop.attempt));
-				fd.set('runId', loop.runId);
-				const res = await fetch('?/returnHome', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-				const r = deserialize(await res.text());
-				if (r.type === 'failure') {
-					loop.error = String((r.data as { error?: string } | undefined)?.error ?? 'Return to home failed.');
-					break;
-				}
-				if (r.type !== 'success' || !r.data?.homeResult) {
-					loop.error = r.type === 'error' ? `Return to home failed: ${r.error?.message ?? r.status}` : 'Unexpected response from the server.';
-					break;
-				}
-				const h = r.data.homeResult as HomeCheckResult;
-				loopResult = h;
-				loop.clawClosed = h.clawClosed === true;
-				loop.frozen = h.home.verdict === 'frozen';
-				const d = shouldRetryHome({ verdict: h.home.verdict, elapsedMs: Date.now() - loop.startedAt, residualMax: h.home.residualMax, clawClosed: h.clawClosed ?? null });
-				if (loop.stopping) {
-					loop.outcome = 'stopped by you';
-					break;
-				}
-				if (!d.retry) {
-					loop.outcome = d.reason;
-					break;
-				}
-			}
-		} catch (e) {
-			if (loop) loop.error = `Return to home failed: ${e instanceof Error ? e.message : String(e)}`;
-		} finally {
-			// The final step, every time: close the mouth (not after a freeze).
-			if (loop && !loop.frozen && !loop.clawClosed) await closeClawAtEnd();
-			clearInterval(clock);
-			if (loop) loop.running = false;
-			homeBusy = null;
-			await invalidateAll();
-		}
+		if (!confirm(RETURN_HOME_CONFIRM)) return;
+		await rh.run(camera);
 	}
+
+	/** Stop returning: ends within one jog, then the loop closes the mouth. */
+	const stopReturning = () => rh.stop(camera);
 
 	const VERDICT: Record<string, { label: string; color: string }> = {
 		home: { label: 'AT HOME', color: '#4ade80' },

@@ -24047,7 +24047,6 @@ Source: branch feat/arm-frame-averaging @ commit bbb71242
 Retrieve this exact code: git checkout feat/arm-frame-averaging at commit bbb71242
   (or: git log feat/arm-frame-averaging --oneline to find it if the branch has since moved on)
 What this deployment is for: AprilTag frame stacking live in BIMS: calibrations/pose references take 5 detections of 5-frame stacks, step/home checks one 5-frame stack; Vision tab Live Tags "average" select.
-=======
 2026-10-28 — feat/arm-wax-fill-loop — Robot Arm wax fill: single-cart STAGE protocol (arm_cart_x/y/z), tip-neutral cart location, OT-2 homed before every arm move
 ================================================================================
 Alejandro: the arm rig does not use the 24-well carriage — there is one elevated platform stage for the
@@ -24167,3 +24166,34 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/arm-wax-fill-loop @ commit 631c0065 (merged to master as 779afe11; conflicts resolved toward 4b699897 "no deck identity")
 Retrieve this exact code: git checkout master at commit 779afe11
 What this deployment is for: the single-cart STAGE wax-fill protocol (upload Wax_Filling_GEN7_ArmStage.py to the arm's OT-2), the Robot Arm "Stage calibration" tab (scan position, tip-neutral cart location, dispense depth, stage geometry), OT-2 homed and confirmed before every arm move, robot-aware protocol re-sync.
+=======
+
+
+================================================================================
+2026-10-28 — master — Return to home from any Robot Arm tab (ARM CONNECTION card)
+================================================================================
+Alejandro: "add a return to home button on the robot card that appears so i can access that button
+from any page the card is." Return to home lived only on the Vision tab. It is now a row under Torque
+at the top of the ARM CONNECTION card in the arm +layout's right rail — on every Robot Arm tab, and
+still there when the card is hidden (the top lines never fold, like Torque).
+  - src/lib/robot-arm/return-home.svelte.ts: the loop the Vision tab drove inline (attempt → ?/returnHome
+    until shouldRetryHome says stop, then ?/closeClaw; Stop → ?/stopReturn) is now one ReturnHome class,
+    posting to the Vision route's actions by URL so it runs from any tab. Same sequence, same stops,
+    same confirm text (RETURN_HOME_CONFIRM). Fires ARM_BUS_FREE_EVENT at the end so the Torque row
+    re-reads (the loop turns torque on, or off after a freeze).
+  - src/lib/components/robot-arm/ReturnHomeControl.svelte: the row — Return to home / Stop returning,
+    attempt + elapsed, outcome, claw closed or not, FROZEN notice, the attempt's message. Uses the
+    Vision tab's saved camera (bims.armVision.camera.v1), else the newest active calibration. Disabled
+    while the arm is unreachable; a held arm is refused by the server (409) and the refusal is shown.
+  - RobotArmConnectionPanel.svelte renders it under TorqueControl.
+  - vision/+page.svelte: ~130 lines of loop replaced by the shared class; its readout and buttons are
+    unchanged (loop / tick / homeBusy now derive from the class).
+Built in a fresh master worktree (Bioscale_V2-wt-return-home-card); the main checkout stays on
+feat/arm-wax-fill-loop with another session's uncommitted work, untouched. Committed straight to master
+and pushed (Alejandro, 2026-10-28: commit to main and push automatically).
+svelte-check: 14 errors / 436 warnings = baseline, none in touched files. home-calibration unit tests: 29 pass.
+Not exercised against the arm: the server actions are unchanged, only where they are called from.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ commit 63ecdacf
+Retrieve this exact code: git checkout master at commit 63ecdacf
+What this deployment is for: the Return to home row on the ARM CONNECTION card, on every Robot Arm tab.

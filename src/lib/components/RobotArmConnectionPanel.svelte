@@ -13,6 +13,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import type { ArmThermal } from '$lib/server/robot-arm-client';
 	import PiThermalChip from './robot-arm/PiThermalChip.svelte';
+	import ReturnHomeControl from './robot-arm/ReturnHomeControl.svelte';
 	import TorqueControl from './robot-arm/TorqueControl.svelte';
 
 	interface PreflightCheck {
@@ -202,13 +203,15 @@
 
 	<!--
 		Always visible, hidden panel or not, in the order they had on the camera
-		card: Pi heat + Wi-Fi, the servo temperatures, then Torque.
+		card: Pi heat + Wi-Fi, the servo temperatures, then Torque — and under
+		it Return to home (2026-10-28), so the arm can be sent home from any tab.
 	-->
 	<div class="mt-2 space-y-1.5">
 		<PiThermalChip initial={thermal} {armReachable} />
 	</div>
 	<div class="-mx-3 mt-2 sm:-mx-4">
 		<TorqueControl {armReachable} />
+		<ReturnHomeControl {armReachable} />
 	</div>
 
 	{#if !hidden}
