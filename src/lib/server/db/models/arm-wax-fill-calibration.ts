@@ -66,7 +66,8 @@ const armWaxFillCalibrationSchema = new Schema(
 			taughtAt: Date,
 			taughtBy: { _id: String, username: String }
 		},
-		stageRotationDeg: { type: Number, default: 0 },
+		/** The arm's stage holds the cart turned 90° CCW from a carriage slot (gates toward the operator). */
+		stageRotationDeg: { type: Number, default: 90 },
 		stageJumpHeightMm: { type: Number, default: 60 },
 		holeOffsets: {
 			type: [new Schema({ name: { type: String, required: true }, dx: { type: Number, default: 0 }, dy: { type: Number, default: 0 }, dz: { type: Number, default: 0 } }, { _id: false })],

@@ -34,6 +34,7 @@
 		HOLE_OFFSET_LIMIT_MM,
 		STAGE_JUMP_LIMITS,
 		STAGE_PREJUMP_MM,
+		STAGE_ROTATION_DEFAULT_DEG,
 		WAX_HOLE_DEPTH_MM,
 		WAX_HOLE_DIAMETER_MM,
 		depthFromLive,
@@ -56,7 +57,24 @@
 	const rim = $derived(calibration?.cartLocation ?? null);
 	const taught = $derived(!!calibration?.holes);
 	// Untaught: draw the lattice at the origin so the plane still shows the cart's shape.
-	const wells = $derived<StageHole[]>(calibration?.holes ?? stageTargets(0, 0, 0, calibration?.stageRotationDeg ?? 0));
+	const rotation = $derived(calibration?.stageRotationDeg ?? STAGE_ROTATION_DEFAULT_DEG);
+	const wells = $derived<StageHole[]>(calibration?.holes ?? stageTargets(0, 0, 0, rotation));
+	// Orientation arrows on the plane: the gate direction (gate 4 → 1) and the row
+	// direction (row 1 → 3) of the lattice as it sits on the deck at this rotation.
+	const gateDir = $derived.by(() => {
+		const a = wells[0], b = wells[3];
+		return { x: b.rigid.x - a.rigid.x, y: b.rigid.y - a.rigid.y };
+	});
+	const rowDir = $derived.by(() => {
+		const a = wells[0], b = wells[8];
+		return { x: b.rigid.x - a.rigid.x, y: b.rigid.y - a.rigid.y };
+	});
+	const facing = $derived.by(() => {
+		const d = gateDir;
+		const ax = Math.abs(d.x), ay = Math.abs(d.y);
+		if (ay >= ax) return d.y < 0 ? 'gates run toward you (front); gate 4 at the back' : 'gates run away from you (back); gate 4 nearest you';
+		return d.x < 0 ? 'gates run right → left; gate 4 on the right' : 'gates run left → right; gate 4 on the left';
+	});
 	const wellByName = $derived(new Map(wells.map((w) => [w.name, w] as const)));
 	const depthMm = $derived(calibration?.dispenseDepth?.mm ?? null);
 	const jumpMm = $derived(calibration?.stageJumpHeightMm ?? 60);
@@ -928,10 +946,10 @@
 			const r = await postAction('saveDispenseDepth', { z: String(p.z), hasTip: 'true' });
 			if (r) msg = r.success;
 		});
-	let rotationDeg = $state<number>(data.calibration?.stageRotationDeg ?? 0);
+	let rotationDeg = $state<number>(data.calibration?.stageRotationDeg ?? STAGE_ROTATION_DEFAULT_DEG);
 	let jumpHeightMm = $state<number>(data.calibration?.stageJumpHeightMm ?? 60);
 	$effect(() => {
-		rotationDeg = data.calibration?.stageRotationDeg ?? 0;
+		rotationDeg = data.calibration?.stageRotationDeg ?? STAGE_ROTATION_DEFAULT_DEG;
 		jumpHeightMm = data.calibration?.stageJumpHeightMm ?? 60;
 	});
 	async function saveGeometry() {
@@ -981,7 +999,7 @@
 			{#if runId}<div class="mt-0.5 text-[10px]">close run to switch</div>{/if}
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
-			12 wax holes · 6 × 9 mm lattice · rotation {calibration?.stageRotationDeg ?? 0}° ·
+			12 wax holes · 6 × 9 mm lattice · rotation {rotation}° ({facing}) ·
 			{#if taught}first hole <span class="font-mono">({fmt3(rim!.x)}, {fmt3(rim!.y)}, {fmt3(rim!.z)})</span>{:else}<span class="text-amber-300">first hole not taught</span>{/if}
 		</div>
 		{#if locked}<div class="text-xs text-amber-300">A wax-fill loop is running on this robot — motion is locked until it ends.</div>{/if}
@@ -1047,6 +1065,17 @@
 						{#if showGrid}
 							<rect x={bounds.x0} y="0" width={bounds.x1 - bounds.x0} height={bounds.y1 - bounds.y0} fill="url(#sgrid-10mm)" />
 						{/if}
+						<!-- Which way is which: the OT-2's front (low y, toward the operator) is the bottom of the plane. -->
+						<text x={(bounds.x0 + bounds.x1) / 2} y={bounds.y1 - bounds.y0 - 0.8} font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">▼ front · toward you (−y)</text>
+						<text x={(bounds.x0 + bounds.x1) / 2} y="1.6" font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">back of the OT-2 (+y)</text>
+						<!-- Gate and row directions of the lattice at this rotation. -->
+						<defs>
+							<marker id="sarrow" viewBox="0 0 4 4" refX="3.5" refY="2" markerWidth="4" markerHeight="4" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="rgba(0,255,255,0.7)" /></marker>
+						</defs>
+						<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + gateDir.x * 1.25} y2={cy(wells[0].rigid.y + gateDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
+						<text x={wells[0].rigid.x + gateDir.x * 1.35} y={cy(wells[0].rigid.y + gateDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">gates 4→1</text>
+						<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + rowDir.x * 1.25} y2={cy(wells[0].rigid.y + rowDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
+						<text x={wells[0].rigid.x + rowDir.x * 1.35} y={cy(wells[0].rigid.y + rowDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">rows 1→3</text>
 						<!-- reagent holes: orientation only -->
 						{#each wells as w (`rg-${w.name}`)}
 							<circle cx={w.reagent.x} cy={cy(w.reagent.y)} r={wellR * 0.8} fill="rgba(80,170,215,0.35)" style="pointer-events:none;" />
@@ -1316,7 +1345,7 @@
 				<label>Cart rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<label>Travel height (mm) <input type="number" step="1" min={STAGE_JUMP_LIMITS.min} max={STAGE_JUMP_LIMITS.max} bind:value={jumpHeightMm} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 			</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Rotation: counter-clockwise from above, about the first hole. 0° = as in a carriage slot (gates toward −x, rows toward −y); 180° = turned end for end — the plane redraws on save. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is tall.</p>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Rotation: counter-clockwise from above, about the first hole, vs a carriage slot. <strong>90° = this stage</strong>: the cart turned a quarter turn so the gates run toward you (gate 4 at the back, gate 1 nearest you) and the rows run left → right. 270° (or −90°) = the same quarter turn the other way; 0° = as on a carriage. The plane's arrows show the result; save to redraw. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is tall.</p>
 			<button type="button" onclick={saveGeometry} disabled={busy || locked} class="w-full rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>
 		</section>
 

@@ -37,6 +37,14 @@ export const DISPENSE_DEPTH_DEFAULT_MM = -1.0;
 /** The stage protocol's `stage_jump_height` RTP bounds (travel clearance over the rim). */
 export const STAGE_JUMP_LIMITS = { min: 10, max: 60 } as const;
 export const STAGE_JUMP_DEFAULT_MM = 60;
+/**
+ * How the arm's stage holds the cart: turned exactly 90° counter-clockwise (seen
+ * from above) from a carriage slot, so the gates run toward the FRONT of the
+ * OT-2 — toward the operator — with gate 4 at the back, and the three rows run
+ * left → right. This is the default for a calibration that has never set a
+ * rotation; a stage that holds the cart the other way round is 270° (−90°).
+ */
+export const STAGE_ROTATION_DEFAULT_DEG = 90;
 /** Pre-jump height the fill pauses at over a hole before descending (protocol constant). */
 export const STAGE_PREJUMP_MM = 5;
 /** Largest per-hole correction the protocol's hole_NN_dx/dy/dz RTPs accept, mm. */

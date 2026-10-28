@@ -24253,3 +24253,11 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-calibration-studio @ commit d6965997 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy d6965997 (Stage Calibration Studio)"
 What this deployment is for: the Stage Calibration Studio (Deck Studio layout + functions, 2D plane, per-hole corrections, robot-keyed calibrator) and the stage protocol's per-hole RTPs - re-upload Wax_Filling_GEN7_ArmStage.py to the arm's OT-2 to activate them.
+
+Follow-up (same day): the stage holds the cart turned EXACTLY 90 deg from a carriage slot (top of the cart toward the operator).
+STAGE_ROTATION_DEFAULT_DEG = 90 is now the default everywhere (calibration model, calibrationView fallback, geometry
+save, the page, the protocol's arm_cart_rotation_deg default): at 90 CCW the gates run toward the front/operator (gate 4
+at the back) and the rows run left-right. The plane now marks front (toward you, -y) / back and draws gate 4->1 and
+row 1->3 arrows at the current rotation so the orientation can be checked at a glance; the pickers row says it in words.
+A calibration doc that already SAVED a rotation keeps its value - set 90 (or 270 if the cart faces the other way) in
+Stage - geometry and save. svelte-check: 14-error baseline; tests pass.

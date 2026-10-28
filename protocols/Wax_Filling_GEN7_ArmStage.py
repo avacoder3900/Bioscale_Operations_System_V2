@@ -134,8 +134,8 @@ def add_parameters(parameters: protocol_api.Parameters):
         description="Taught Z of the first wax hole's RIM (tip end). 0 = not taught (run refuses).",
         default=0.0, minimum=0.0, maximum=200.0, unit="mm")
     parameters.add_float(variable_name="arm_cart_rotation_deg", display_name="Cart rotation on the stage",
-        description="How the stage turns the cart vs a carriage slot, degrees CCW from above about the first hole. 0 = gates toward -x, rows toward -y; 180 = turned end for end.",
-        default=0.0, minimum=-360.0, maximum=360.0, unit="deg")
+        description="CCW from above about the first hole vs a carriage slot. 90 = the arm's stage (gates toward the front/operator, rows left-right); 0 = as on a carriage.",
+        default=90.0, minimum=-360.0, maximum=360.0, unit="deg")
     # How high above the hole rim the tip travels when it arrives at the cart
     # and when it leaves for the tube. The carriage protocol hardcodes 60; the
     # stage is raised, so this is tunable in case 60 over the rim is out of reach.

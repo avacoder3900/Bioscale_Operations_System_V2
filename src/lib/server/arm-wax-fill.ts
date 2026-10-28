@@ -63,6 +63,7 @@ import {
 	HOLE_OFFSET_LIMIT_MM,
 	STAGE_JUMP_DEFAULT_MM,
 	STAGE_JUMP_LIMITS,
+	STAGE_ROTATION_DEFAULT_DEG,
 	STAGE_WELL_NAMES,
 	WAX_HOLE_DEPTH_MM,
 	depthFromLive,
@@ -319,7 +320,7 @@ function point(d: any): TaughtPoint | null {
 
 function calibrationView(robotId: string, d: any): CalibrationView {
 	const cartLocation = point(d?.cartLocation);
-	const stageRotationDeg = Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : 0;
+	const stageRotationDeg = Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : STAGE_ROTATION_DEFAULT_DEG;
 	const jump = Number(d?.stageJumpHeightMm);
 	const dd = d?.dispenseDepth;
 	const holeOffsets = offsetsOf(d);
@@ -680,7 +681,7 @@ export async function saveStageCalibrator(
 export async function saveStageGeometry(user: User, robotId: string, input: { rotationDeg: unknown; jumpHeightMm: unknown }): Promise<CalibrationView> {
 	await connectDB();
 	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
-	const rotationDeg = input.rotationDeg === null || String(input.rotationDeg).trim() === '' ? 0 : num(input.rotationDeg, 'Cart rotation');
+	const rotationDeg = input.rotationDeg === null || String(input.rotationDeg).trim() === '' ? STAGE_ROTATION_DEFAULT_DEG : num(input.rotationDeg, 'Cart rotation');
 	if (rotationDeg < -360 || rotationDeg > 360) throw new ArmWaxFillError('Cart rotation must be between −360° and 360°.');
 	const jumpHeightMm = input.jumpHeightMm === null || String(input.jumpHeightMm).trim() === '' ? STAGE_JUMP_DEFAULT_MM : num(input.jumpHeightMm, 'Travel height');
 	if (jumpHeightMm < STAGE_JUMP_LIMITS.min || jumpHeightMm > STAGE_JUMP_LIMITS.max) {
