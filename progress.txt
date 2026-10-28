@@ -24163,3 +24163,7 @@ Motion over the stage still uses TEACH_ARC_Z = 120 for arcs (the planner cannot 
 run on a robot.
 svelte-check (portable node): 14-error baseline, none in touched files. Unit: stage-geometry.test.ts + the
 protocol's python geometry test + run-lifecycle-records (29) + protocol-freshness (5) pass.
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/arm-wax-fill-loop @ commit 631c0065 (merged to master as 779afe11; conflicts resolved toward 4b699897 "no deck identity")
+Retrieve this exact code: git checkout master at commit 779afe11
+What this deployment is for: the single-cart STAGE wax-fill protocol (upload Wax_Filling_GEN7_ArmStage.py to the arm's OT-2), the Robot Arm "Stage calibration" tab (scan position, tip-neutral cart location, dispense depth, stage geometry), OT-2 homed and confirmed before every arm move, robot-aware protocol re-sync.
