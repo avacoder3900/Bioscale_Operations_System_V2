@@ -24267,3 +24267,7 @@ always-visible panel in the right rail (status + when/by, calX/calY/Approach Z, 
 From live, Save -> robot, with the teach steps written out); the Tip panel warns when no point is taught. Rotate-cart
 buttons (quarter turn CCW/CW about the first hole, saved immediately) on the plane toolbar and beside Save geometry.
 svelte-check: 14-error baseline.
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-calibration-studio @ commit 1203e651 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1203e651 (stage rotation 90, Tip calibrator panel, rotate buttons)"
+What this deployment is for: stage rotation defaults to 90 deg with front/back markers and direction arrows on the plane; rotate-cart buttons; the Tip calibrator teach as its own panel.
