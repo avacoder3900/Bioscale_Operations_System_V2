@@ -14,6 +14,11 @@
 	 * specific value, it should move to that specific value"). The arm read
 	 * (positions, temperatures, torque) is polled only while nothing is being
 	 * sent — the Pi's servo bus must never see two callers at once.
+	 *
+	 * The sliders are locked until Live is on (2026-10-28): moving a slider
+	 * that does nothing confused operators, who then pressed Live and had the
+	 * arm start moving under them. Live first reads the arm and puts every
+	 * slider where the arm really is, so turning it on never moves the arm.
 	 */
 	import type { Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
@@ -234,38 +239,33 @@
 	}
 
 	function setValue(s: number, v: number) {
-		if (!Number.isFinite(v)) return;
+		// Sliders only move the arm: nothing changes them until Live is on.
+		if (!live || !Number.isFinite(v)) return;
 		// The slider's range follows the value (sliderRange includes it), so only the encoder bounds apply.
 		values[s] = Math.round(Math.max(0, Math.min(ENCODER_MAX, v)));
 		if (live) void pump();
 	}
 
-	/** Live on: the sliders now drive the arm. The arm must already be at them (Go to pose, or start from the arm). */
-	function startLive() {
-		if (!canLive) return;
-		if (!atValues) {
-			note = { text: pose ? 'The arm is not at these values yet — Go to pose first, or press Start From Arm.' : 'Press Start From Arm first.', kind: 'warn' };
+	/**
+	 * Live on. Safety first: read the arm, set every slider to where it really
+	 * is and make that the arm's goal too, so the sliders and the arm agree
+	 * and nothing jumps. From then on the sliders drive the arm.
+	 */
+	async function startLive() {
+		await readArmNow();
+		if (!armPos || !canLive) {
+			if (!armPos) note = { text: 'Could not read the arm, so Live stays off.', kind: 'warn' };
 			return;
 		}
-		// The arm's goals are the slider values (Go to left them there), so only changes are sent.
-		sent = [...values];
-		live = true;
-		note = { text: 'Live — the arm follows the sliders.', kind: 'ok' };
-	}
-
-	/** Sliders := where the arm is, and make that the arm's goal too, so the two agree from here on. */
-	async function startFromArm() {
-		await readArmNow();
-		if (!armPos || !canLive) return;
 		values = [...armPos];
 		sent = new Array(SERVO_COUNT).fill(null);
 		live = true;
 		await pump();
-		note = { text: 'Live from where the arm is — the arm follows the sliders.', kind: 'ok' };
+		note = { text: 'Live — the sliders are set to where the arm is; the arm follows them.', kind: 'ok' };
 	}
 
 	function reset() {
-		if (pose) {
+		if (pose && live) {
 			values = [...pose.positions];
 			if (live) void pump();
 		}
@@ -305,8 +305,7 @@
 				<button type="button" class={btn} style={amber} disabled={!canLive} onclick={() => ongoto?.(pose!)}>Go to pose</button>
 			{/if}
 			{@render beforeLive?.()}
-			<button type="button" class={btn} style={green} disabled={!canLive || !atValues} onclick={startLive} title={atValues ? 'Sliders drive the arm' : 'The arm is not at these values'}>Live</button>
-			<button type="button" class={btn} style={cyan} disabled={!canLive} onclick={startFromArm} title="Set the sliders to where the arm is and go live">Start From Arm</button>
+			<button type="button" class={btn} style={green} disabled={!canLive} onclick={startLive} title="Set the sliders to where the arm is, then let them drive the arm">Live</button>
 		{/if}
 		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>close</button>{/if}
 		<label class="flex w-full items-center gap-1 text-[11px] sm:w-auto" style="color: var(--color-tron-text-secondary)" title="The green dot above each slider stays on this reference; hover a dot for its number and where the arm really is">
@@ -323,7 +322,7 @@
 		<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>
 	{:else if !live}
 		<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-			{atValues ? 'Press Live, then move a slider — the arm follows.' : pose ? 'Go to pose, then press Live.' : 'Press Start From Arm to pose from where the arm is.'}
+			The sliders are locked. Press Live to move the arm with them — Live first sets them to where the arm is.{pose && !atValues ? ' To edit this pose, Go to pose first.' : ''}
 		</p>
 	{/if}
 
@@ -355,8 +354,9 @@
 						max={r.max}
 						step="1"
 						value={values[s]}
+						disabled={!live}
 						oninput={(e) => setValue(s, Number(e.currentTarget.value))}
-						class="w-full accent-cyan-400"
+						class="w-full accent-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
 						aria-label="{JOINT_LABELS[s]} (servo {s + 1})"
 					/>
 					<!-- axis -->
@@ -368,8 +368,8 @@
 					</div>
 				</div>
 				<div class="col-span-2 flex items-center gap-1 sm:col-span-1">
-					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] - 10)} aria-label="minus 10">−10</button>
-					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] - 1)} aria-label="minus 1">−1</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] - 10)} aria-label="minus 10">−10</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] - 1)} aria-label="minus 1">−1</button>
 					<!-- Exact entry: type a step value and press Enter (or leave the box) to apply it; the slider follows. -->
 					<input
 						type="number"
@@ -377,21 +377,22 @@
 						max={ENCODER_MAX}
 						step="1"
 						value={values[s]}
+						disabled={!live}
 						onchange={(e) => { setValue(s, Math.round(Number(e.currentTarget.value))); e.currentTarget.value = String(values[s]); }}
 						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
-						class="{input} w-24 text-center font-mono tabular-nums"
+						class="{input} w-24 text-center font-mono tabular-nums disabled:cursor-not-allowed disabled:opacity-40"
 						style={inputStyle}
 						aria-label="{JOINT_LABELS[s]} value (steps)"
 						title="Absolute encoder goal, 0–{ENCODER_MAX}. Enter applies it."
 					/>
-					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
-					<button type="button" class={nudge} style={nudgeStyle} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>
 					<span class="ml-1 w-14 text-right font-mono text-[10px]" style="color: var(--color-tron-text-secondary)" title="Angle from the servo's centre">{deg(values[s])}°</span>
 					{#if refValue(s) != null}
 						<!-- the reference marker's value in words, and a way back to it -->
 						<span class="ml-2 font-mono text-[10px]" style="color: {values[s] === refValue(s) ? 'var(--color-tron-text-secondary)' : '#4ade80'}" title="{ref.label}: {refValue(s)}{armPos ? ` · arm now: ${armPos[s]}` : ''}">● {refValue(s)}</span>
 						{#if values[s] !== refValue(s)}
-							<button type="button" class="{nudge} w-7" style={nudgeStyle} onclick={() => setValue(s, refValue(s)!)} title="Back to {refValue(s)} ({ref.label})" aria-label="back to the reference value">↺</button>
+							<button type="button" class="{nudge} w-7" style={nudgeStyle} disabled={!live} onclick={() => setValue(s, refValue(s)!)} title="Back to {refValue(s)} ({ref.label})" aria-label="back to the reference value">↺</button>
 						{/if}
 					{/if}
 				</div>
@@ -406,7 +407,7 @@
 				<input type="hidden" name="positions" value={JSON.stringify(values)} />
 				<button type="submit" class={btn} style={green} disabled={!dirty}>Save pose</button>
 			</form>
-			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!dirty} onclick={reset}>reset to saved</button>
+			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!dirty || !live} onclick={reset} title={live ? 'Sliders (and the arm) back to the saved pose' : 'Press Live first: the sliders only move with the arm'}>reset to saved</button>
 		{/if}
 		<form method="POST" action="?/createPose" use:enhance={() => async ({ result, update }) => { await update({ reset: false }); if (result.type === 'success') newName = ''; }} class="flex flex-wrap items-end gap-2">
 			<input type="hidden" name="positions" value={JSON.stringify(values)} />
