@@ -23807,3 +23807,9 @@ What this deployment is for: blue-bordered Show on ARM CAMERA / ARM CONNECTION; 
 - vite.config.ts: server.fs.allow includes node_modules' real path (a worktree's junctioned
   node_modules got 403 on the SvelteKit client entry, so pages never hydrated).
 npm run check: 13 errors (baseline 13). Tests 633 passed.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CGiz1JBC4vxS7kZxTccmf7iNT6fi
+Source: branch master @ commit 7f6c2f4e (merge of feat/arm-solenoid-steps)
+Retrieve this exact code: git checkout master at commit 7f6c2f4e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Animate fire steps (trapdoor solenoids), sliders locked until Live, automatic torque check, Animate page polish
+Pi side (gpio.py + replay_settle.py) NOT deployed yet: plays with fire steps are refused until it is.
