@@ -15,6 +15,7 @@
 	 * (positions, temperatures, torque) is polled only while nothing is being
 	 * sent — the Pi's servo bus must never see two callers at once.
 	 */
+	import type { Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { onDestroy } from 'svelte';
 	import {
@@ -49,11 +50,13 @@
 		/** Play a Go to for this pose (the page owns playback). */
 		ongoto?: (pose: PoseSummary) => void;
 		onclose?: () => void;
+		/** Drawn just left of Live (the Animate page puts Follow Leader Arm here). */
+		beforeLive?: Snippet;
 		/** Home as encoder steps (servo 1..6; null where unknown), from the Vision tab's calibration — the default reference marker. */
 		home?: (number | null)[] | null;
 	}
 
-	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose, home = null }: Props = $props();
+	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose, home = null, beforeLive }: Props = $props();
 
 	/** "The arm is at these values" — loaded joints sit a few tens of steps short of their goal. */
 	const AT_POSE_STEPS = 80;
@@ -301,6 +304,7 @@
 			{#if pose && ongoto && !atValues}
 				<button type="button" class={btn} style={amber} disabled={!canLive} onclick={() => ongoto?.(pose!)}>Go to pose</button>
 			{/if}
+			{@render beforeLive?.()}
 			<button type="button" class={btn} style={green} disabled={!canLive || !atValues} onclick={startLive} title={atValues ? 'Sliders drive the arm' : 'The arm is not at these values'}>Live</button>
 			<button type="button" class={btn} style={cyan} disabled={!canLive} onclick={startFromArm} title="Set the sliders to where the arm is and go live">Start From Arm</button>
 		{/if}

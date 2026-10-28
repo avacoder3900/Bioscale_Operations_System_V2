@@ -326,24 +326,26 @@
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
 		<!-- editor column -->
 		<div class="space-y-3">
-			<!-- control arm -->
-			<div class="{card} flex flex-wrap items-end gap-3" style="border-color: {following ? '#4ade80' : 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
-				{#if following}
-					<div class="w-full text-xs text-emerald-300">Following the control arm. Move it into a pose, hold it still, name it and save.</div>
-					<form method="POST" action="?/saveLeaderPose" use:enhance class="flex flex-wrap items-end gap-2">
-						<input type="hidden" name="resume" value="1" />
-						<input name="name" required maxlength="80" placeholder="Pose name" class="{input} w-44" style={inputStyle} aria-label="Pose name" />
-						<button type="submit" class={btn} style={green} disabled={!armReachable}>Save</button>
-					</form>
-					<form method="POST" action="?/stopLeaderPosing" use:enhance>
-						<button type="submit" class={btn} style={cyan} disabled={!armReachable}>Done</button>
-					</form>
-				{:else}
-					<form method="POST" action="?/poseWithLeader" use:enhance onsubmit={(e) => { if (!confirm('The follower will move to wherever the control arm is now, then follow it. Is the control arm roughly matching the follower and is the path clear?')) e.preventDefault(); }}>
-						<button type="submit" class={btn} style={cyan} disabled={blocked || !!heat?.tooHot.length}>Follow Control Arm</button>
-					</form>
-				{/if}
+			<!-- control arm: only while following (Follow Leader Arm itself sits next to Live in the pose editor) -->
+			{#if following}
+			<div class="{card} flex flex-wrap items-end gap-3" style="border-color: #4ade80; background: var(--color-tron-surface);">
+				<div class="w-full text-xs text-emerald-300">Following the control arm. Move it into a pose, hold it still, name it and save.</div>
+				<form method="POST" action="?/saveLeaderPose" use:enhance class="flex flex-wrap items-end gap-2">
+					<input type="hidden" name="resume" value="1" />
+					<input name="name" required maxlength="80" placeholder="Pose name" class="{input} w-44" style={inputStyle} aria-label="Pose name" />
+					<button type="submit" class={btn} style={green} disabled={!armReachable}>Save</button>
+				</form>
+				<form method="POST" action="?/stopLeaderPosing" use:enhance>
+					<button type="submit" class={btn} style={cyan} disabled={!armReachable}>Done</button>
+				</form>
 			</div>
+			{/if}
+
+			{#snippet followLeader()}
+				<form method="POST" action="?/poseWithLeader" use:enhance onsubmit={(e) => { if (!confirm('The follower will move to wherever the control arm is now, then follow it. Is the control arm roughly matching the follower and is the path clear?')) e.preventDefault(); }}>
+					<button type="submit" class={btn} style={cyan} disabled={blocked || !!heat?.tooHot.length}>Follow Leader Arm</button>
+				</form>
+			{/snippet}
 
 			{#key editing}
 				<PoseEditor
@@ -356,6 +358,7 @@
 					ongoto={goTo}
 					onclose={editPose ? () => (editing = 'new') : undefined}
 					{home}
+					beforeLive={following ? undefined : followLeader}
 				/>
 				{#if editPose}
 					<PoseCameraCard pose={editPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(editPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
