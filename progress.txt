@@ -23916,3 +23916,17 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch feat/arm-replay-loop-progress (merged into master; git log master --oneline for the merge commit)
 Retrieve this exact code: git checkout feat/arm-replay-loop-progress
 What this deployment is for: Control tab loop counter during multi-loop replays + the replay.stop torque backstop, together with the deploy log for the Wax fill tab (a24cb29f).
+
+
+================================================================================
+2026-10-28 — feat/arm-wax-fill-no-deck — Arm wax fill: no deck identity
+================================================================================
+Alejandro: "deck identity not needed for robot arm wax fill". The single cart sits at a taught location the
+arm places it in; there is no carriage for the protocol to identify. Removed: the deck pick from Setup, the
+deckId on ArmWaxFillSettings / ArmWaxFillRun / the cycle's WaxFillingRun and cart waxFilling stamp, the
+readiness line, the decks list in the load. run-lifecycle-records startContext: a run with armWaxFill set
+needs its cartridge but not a deck (the untracked-fill guard stays as it was for every other wax run);
+resolveDeckBinding already tolerates no deckId. Deck position (1–24 → resume_cartridge) stays.
+vitest run-lifecycle-records.test.ts: 32 passed. svelte-check: 14 errors / 435 warnings = baseline.
+Not yet pushed: the push to master was blocked by the auto-mode permission classifier; Alejandro pushes
+master-arm-wax-merge:master (and feat/arm-wax-fill-no-deck) by hand.

@@ -76,7 +76,6 @@ export const actions: Actions = {
 		try {
 			await saveSetup(user, {
 				robotId: field(d, 'robotId'),
-				deckId: field(d, 'deckId'),
 				cartPosition: field(d, 'cartPosition'),
 				waxSourceLot: field(d, 'waxSourceLot'),
 				testMode: field(d, 'testMode') === 'on' || field(d, 'testMode') === 'true'

@@ -35,7 +35,6 @@ import {
 	AuditLog,
 	BucketCycle,
 	CartridgeRecord,
-	Equipment,
 	OpentronsRobot,
 	OpentronsScannerPositionSet,
 	OpentronsScannerSweepRun,
@@ -129,7 +128,6 @@ async function resolveAnimation(raw: unknown, what: string): Promise<AnimationRe
 
 export interface SettingsView {
 	robotId: string | null;
-	deckId: string | null;
 	cartPosition: number;
 	waxSourceLot: string | null;
 	testMode: boolean;
@@ -146,7 +144,6 @@ function animRef(d: any): AnimationRef | null {
 function settingsView(d: any): SettingsView {
 	return {
 		robotId: d?.robotId ?? null,
-		deckId: d?.deckId ?? null,
 		cartPosition: Number(d?.cartPosition) || 1,
 		waxSourceLot: d?.waxSourceLot ?? null,
 		testMode: !!d?.testMode,
@@ -164,35 +161,29 @@ export async function getSettings(): Promise<SettingsView> {
 
 export async function saveSetup(
 	user: User,
-	input: { robotId: unknown; deckId: unknown; cartPosition: unknown; waxSourceLot: unknown; testMode: boolean }
+	input: { robotId: unknown; cartPosition: unknown; waxSourceLot: unknown; testMode: boolean }
 ): Promise<SettingsView> {
 	await connectDB();
 	const robotId = String(input.robotId ?? '').trim();
-	const deckId = String(input.deckId ?? '').trim();
 	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds.');
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
-	if (!deckId) throw new ArmWaxFillError('Pick the deck the single-cart fixture is registered as.');
-	const deck = (await Equipment.findOne({ _id: deckId, equipmentType: 'deck' }).select('_id archivedAt').lean()) as any;
-	if (!deck) throw new ArmWaxFillError('That deck is not in the equipment registry.', 404);
-	if (deck.archivedAt) throw new ArmWaxFillError('That deck is archived.');
 	const cartPosition = Math.round(num(input.cartPosition, 'Cart position'));
 	if (cartPosition < 1 || cartPosition > 24) throw new ArmWaxFillError('Cart position must be 1–24.');
 	const waxSourceLot = String(input.waxSourceLot ?? '').trim().slice(0, 100) || null;
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, deckId, cartPosition, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
 		robotId,
 		robotName: robot.name,
-		deckId,
 		cartPosition,
 		waxSourceLot,
 		testMode: !!input.testMode,
-		before: { robotId: before.robotId, deckId: before.deckId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode }
+		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -390,7 +381,6 @@ export interface LoopCycleView {
 export interface LoopView {
 	_id: string;
 	robot: { _id: string; name: string };
-	deckId: string | null;
 	cartPosition: number;
 	requestedRuns: number;
 	completedRuns: number;
@@ -411,7 +401,6 @@ function loopView(d: any): LoopView {
 	return {
 		_id: String(d._id),
 		robot: { _id: String(d.robot?._id ?? ''), name: d.robot?.name ?? '' },
-		deckId: d.deckId ?? null,
 		cartPosition: Number(d.cartPosition) || 1,
 		requestedRuns: Number(d.requestedRuns) || 0,
 		completedRuns: Number(d.completedRuns) || 0,
@@ -477,7 +466,6 @@ export function readiness(
 	const blocking: string[] = [];
 	const notes: string[] = [];
 	if (!settings.robotId) blocking.push('Setup: pick the OT-2 the arm feeds.');
-	if (!settings.deckId) blocking.push('Setup: pick the deck the single-cart fixture is registered as.');
 	if (!settings.grabAnimation) blocking.push('Animations: choose the grab animation.');
 	if (!settings.withdrawAnimation) blocking.push('Animations: choose the withdraw animation.');
 	if (settings.robotId && !protocol) blocking.push('The robot has no wax-filling protocol uploaded — upload it on /opentrons first.');
@@ -496,9 +484,8 @@ export function readiness(
 export async function loadArmWaxFill() {
 	await connectDB();
 	const settings = await getSettings();
-	const [robots, decks, moveSets, sequences, calibration, protocol, active, recent, robotConflict] = await Promise.all([
+	const [robots, moveSets, sequences, calibration, protocol, active, recent, robotConflict] = await Promise.all([
 		OpentronsRobot.find({ isActive: { $ne: false } }).select('_id name').sort({ name: 1 }).lean(),
-		Equipment.find({ equipmentType: 'deck', archivedAt: null }).select('_id name deckLoadName particleDeviceId status').sort({ name: 1 }).lean(),
 		listMoveSets().catch(() => []),
 		listSequences().catch(() => []),
 		getCalibration(settings.robotId),
@@ -513,13 +500,6 @@ export async function loadArmWaxFill() {
 		robotName,
 		scannerDeviceId: scannerDeviceIdForRobot(robotName),
 		robots: (robots as any[]).map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id) })),
-		decks: (decks as any[]).map((d) => ({
-			_id: String(d._id),
-			name: d.name ?? String(d._id),
-			deckLoadName: d.deckLoadName ?? null,
-			particleDeviceId: d.particleDeviceId ?? null,
-			status: d.status ?? null
-		})),
 		moveSets: moveSets.filter((m) => !m.archived).map((m) => ({ _id: m._id, name: m.name, keyframes: m.keyframes.length })),
 		sequences: sequences.filter((s) => !s.archived).map((s) => ({ _id: s._id, name: s.name, items: s.items.length })),
 		calibration,
@@ -551,7 +531,6 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 	await ArmWaxFillRun.create({
 		_id,
 		robot: { _id: String(robot._id), name: robot.name ?? String(robot._id) },
-		deckId: settings.deckId,
 		cartPosition: settings.cartPosition,
 		requestedRuns,
 		completedRuns: 0,
@@ -565,7 +544,6 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 	await audit(user, 'arm_wax_fill.loop_start', 'arm_wax_fill_runs', _id, {
 		requestedRuns,
 		robotId: String(robot._id),
-		deckId: settings.deckId,
 		cartPosition: settings.cartPosition,
 		grab: settings.grabAnimation,
 		withdraw: settings.withdrawAnimation
@@ -686,7 +664,6 @@ async function attachCart(user: User, loop: any, waxRunId: string, barcode: stri
 			$set: {
 				status: 'wax_filling',
 				'waxFilling.runId': waxRunId,
-				'waxFilling.deckId': loop.deckId ?? null,
 				'waxFilling.robotId': loop.robot?._id ?? null,
 				'waxFilling.robotName': loop.robot?.name ?? null,
 				'waxFilling.deckPosition': cartPosition,
@@ -739,7 +716,7 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 			robot: { _id: robotId, name: loop.robot?.name ?? robotId },
 			operator: opRef(user),
 			status: 'Loading',
-			deckId: loop.deckId ?? settings.deckId ?? undefined,
+			// No deck: the single cart sits at a taught location the arm places it in (startContext accepts an armWaxFill run without one).
 			waxSourceLot: settings.waxSourceLot ?? undefined,
 			cartridgeIds: [],
 			plannedCartridgeCount: 1,
