@@ -23692,6 +23692,11 @@ Source: branch master @ commit 5d5887e0 (fast-forward of feat/ask-bims-compact-l
 Retrieve this exact code: git checkout 5d5887e0
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: Ask BIMS circle launcher (expands on hover) and the header X that hides it per page
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/x9XsZV56KLYxFHkCXBmMaRmtHYVL
+Source: branch master @ commit fc3a1aeb
+Retrieve this exact code: git checkout fc3a1aeb
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: Bookmark and Minimize restored in the Ask BIMS header, X sits after them
 
 ================================================================================
 2026-10-28 — master — Robot Arm warning chip label corrected to "Show Warning"
