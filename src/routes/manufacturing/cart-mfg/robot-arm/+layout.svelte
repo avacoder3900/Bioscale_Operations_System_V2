@@ -117,7 +117,7 @@
 	}
 
 	// The preflight warning (e.g. the leader BusLinker missing) can be collapsed
-	// to a small "Show warning" chip. The hidden TEXT is remembered, not a flag,
+	// to a small "Show Warning" chip. The hidden TEXT is remembered, not a flag,
 	// so a new or different warning shows again.
 	const DIAGNOSIS_HIDDEN_KEY = 'robot-arm:diagnosis-hidden';
 	let hiddenDiagnosis = $state<string | null>(null);
@@ -203,7 +203,7 @@
 			onclick={() => setDiagnosisHidden(false)}
 			class="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
 		>
-			Show warning
+			Show Warning
 		</button>
 	{:else if diagnosis}
 		<div class="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
