@@ -23706,3 +23706,18 @@ Source: branch master @ commit a6f5dd85
 Retrieve this exact code: git checkout master at commit a6f5dd85
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Pi/Servos/Torque lines in ARM CONNECTION; fast servo-temp return after plays
+
+================================================================================
+2026-10-28 — master — ARM CAMERA Show matches ARM CONNECTION Show (blue box); dot before ARM CONNECTION
+================================================================================
+User request. The Show button on both right-rail panels is now the same box: cyan text in a
+cyan border, min-h 44px, px-3 (ARM CONNECTION's Show had a grey border; ARM CAMERA's had no
+border and grey text). Hide on both stays grey text in a grey border. The connection status
+dot moved from after the ARM CONNECTION title to before it.
+
+Done on fix/arm-servo-row-reason (f78060cf) and merged into master; the merge conflicted with
+a6f5dd85's rail rearrangement, resolved by keeping master's structure (panel stays mounted
+with hidden/onshow; the separate collapsed bar is gone, so my dot on that bar was dropped).
+
+Files: RobotArmCameraPanel.svelte, RobotArmConnectionPanel.svelte. npm run check: 14 errors
+(baseline 14, none in these files).
