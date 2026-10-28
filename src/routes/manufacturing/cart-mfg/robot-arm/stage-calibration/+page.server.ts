@@ -1,17 +1,21 @@
 /**
- * Robot Arm — Stage calibration: the robot-arm line's own calibration studio.
+ * Robot Arm — Stage Calibration Studio: the robot-arm line's own calibration
+ * studio, organised exactly like the Deck Calibration Studio (2D plane of the
+ * holes, jog, tip calibration, offset → selection, tour / fill motion, set
+ * position, align, recent edits) but for ONE cartridge on an elevated stage.
  *
- * The arm's OT-2 fills ONE cartridge on an elevated single-cart stage, so the
- * Deck Calibration Studio's 24-slot deck model does not apply. What is taught
- * here, per OT-2 (ArmWaxFillCalibration), is everything the stage protocol
- * (protocols/Wax_Filling_GEN7_ArmStage.py) needs:
+ * What is taught here, per OT-2 (ArmWaxFillCalibration), is everything the
+ * stage protocol (protocols/Wax_Filling_GEN7_ArmStage.py) reads instead of a deck:
  *
  *   scan position    where the gantry scanner reads the cart — taught with NO tip
  *   cart location    the rim of the cart's first wax hole — taught with a PROBED
  *                    tip, stored tip-neutral (live − that tip's calibrator adjust)
- *   dispense depth   how far below that rim the tip end sits when wax is
- *                    dispensed (negative = hover) → the protocol's dispense_depth
+ *   hole offsets     per-hole corrections on the rigid 12-hole lattice (the
+ *                    Studio's Apply / Set position / Align / Undo) → hole_NN_dx/dy/dz
+ *   dispense depth   how far below the rim the tip end sits when wax is
+ *                    dispensed (negative = hover) → dispense_depth
  *   stage geometry   the cart's rotation on the stage and the travel height
+ *   calibrator       this robot's tip-calibrator fixture point (robot-keyed)
  *
  * All logic is in $lib/server/arm-wax-fill; this file maps form fields to it.
  */
@@ -19,11 +23,13 @@ import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import {
 	ArmWaxFillError,
+	applyStageEdits,
 	getSettings,
 	loadStageCalibration,
 	saveCartLocation,
 	saveDispenseDepth,
 	saveScanPosition,
+	saveStageCalibrator,
 	saveStageGeometry
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
@@ -85,7 +91,19 @@ export const actions: Actions = {
 				adjustY: field(d, 'adjustY'),
 				tipWell: field(d, 'tipWell')
 			});
-			return { success: 'Cart location saved (tip-neutral).', calibration: json(c) };
+			return { success: 'First hole saved (tip-neutral) — the 12 holes are laid out from it.', calibration: json(c) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The Studio's apply engine: each hole by its own delta; every hole with one
+	// delta = the whole cart translated (see applyStageEdits).
+	applyPerWell: async (ev) => {
+		const { d, user, robotId } = await writer(ev);
+		try {
+			const r = await applyStageEdits(user, robotId, field(d, 'edits'), field(d, 'label'));
+			return { applied: r.applied, failed: r.failed, mode: r.mode, calibration: json(r.calibration) };
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -96,7 +114,7 @@ export const actions: Actions = {
 		const { d, user, robotId } = await writer(ev);
 		try {
 			const c = await saveDispenseDepth(user, robotId, { z: field(d, 'z'), hasTip: field(d, 'hasTip') });
-			return { success: `Dispense depth saved: ${c.dispenseDepth?.mm} mm ${Number(c.dispenseDepth?.mm) >= 0 ? 'below' : 'above'} the rim.`, calibration: json(c) };
+			return { success: `Dispense depth saved: ${Math.abs(Number(c.dispenseDepth?.mm))} mm ${Number(c.dispenseDepth?.mm) >= 0 ? 'below' : 'above'} the rim.`, calibration: json(c) };
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -107,6 +125,23 @@ export const actions: Actions = {
 		try {
 			const c = await saveStageGeometry(user, robotId, { rotationDeg: field(d, 'rotationDeg'), jumpHeightMm: field(d, 'jumpHeightMm') });
 			return { success: `Stage geometry saved: rotation ${c.stageRotationDeg}°, travel height ${c.stageJumpHeightMm} mm.`, calibration: json(c) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// This robot's tip-calibrator fixture (robot-keyed — the arm's OT-2 has no deck).
+	saveCalibrator: async (ev) => {
+		const { d, user, robotId } = await writer(ev);
+		try {
+			const r = await saveStageCalibrator(user, robotId, {
+				x: field(d, 'x'),
+				y: field(d, 'y'),
+				z: field(d, 'z'),
+				zCalWax: field(d, 'zCalWax'),
+				maxTipAdjust: field(d, 'maxTipAdjust')
+			});
+			return { success: `Tip calibrator saved: approach (${r.position.x}, ${r.position.y}, ${r.position.z}), probe Z ${r.zCalWax}${r.maxTipAdjust != null ? `, max adjust ${r.maxTipAdjust}` : ''}.`, calibrator: r };
 		} catch (err) {
 			return failFrom(err);
 		}

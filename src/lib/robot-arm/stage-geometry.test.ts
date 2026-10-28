@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DISPENSE_DEPTH_DEFAULT_MM, depthFromLive, dispenseZ, stageTargets } from './stage-geometry';
+import { DISPENSE_DEPTH_DEFAULT_MM, STAGE_WELL_NAMES, depthFromLive, dispenseZ, holeOffsetParamNames, stageTargets } from './stage-geometry';
 
 // Twin of protocols/tests/test_arm_stage_geometry.py — same numbers, same order.
 describe('stageTargets', () => {
@@ -8,6 +8,7 @@ describe('stageTargets', () => {
 	it('lays out 12 holes in the carriage fill order with the cartridge pitch', () => {
 		const t = stageTargets(X0, Y0, Z0);
 		expect(t.map((h) => h.name)).toEqual(['X2', 'X4', 'X6', 'X8', 'W2', 'W4', 'W6', 'W8', 'V2', 'V4', 'V6', 'V8']);
+		expect(STAGE_WELL_NAMES).toEqual(t.map((h) => h.name));
 		const by = Object.fromEntries(t.map((h) => [h.name, h]));
 		expect([by.X2.x, by.X2.y, by.X2.z]).toEqual([X0, Y0, Z0]);
 		expect([by.X8.x, by.X8.y]).toEqual([X0 - 18, Y0]);
@@ -18,6 +19,8 @@ describe('stageTargets', () => {
 		expect(by.X8.gate).toBe(1);
 		expect(by.V8.row).toBe(3);
 		expect(t.map((h) => h.index)).toEqual([...Array(12).keys()]);
+		// The paired reagent hole sits +3.301, +2.099 from each wax hole (deck def X1 vs X2).
+		expect([by.X2.reagent.x, by.X2.reagent.y]).toEqual([X0 + 3.301, Y0 + 2.099]);
 	});
 
 	it('turns the cart about the first hole', () => {
@@ -36,6 +39,15 @@ describe('stageTargets', () => {
 			expect(Math.hypot(p.X2.x - p.X4.x, p.X2.y - p.X4.y)).toBeCloseTo(6, 2);
 			expect(Math.hypot(p.X2.x - p.W2.x, p.X2.y - p.W2.y)).toBeCloseTo(9, 2);
 		}
+	});
+
+	it('adds a per-hole correction after the rotation, leaving the rigid lattice visible', () => {
+		const t = Object.fromEntries(stageTargets(X0, Y0, Z0, 180, { W4: { dx: 0.3, dy: -0.2, dz: 0.1 } }).map((h) => [h.name, h]));
+		expect([t.W4.rigid.x, t.W4.rigid.y, t.W4.rigid.z]).toEqual([X0 + 6, Y0 + 9, Z0]);
+		expect([t.W4.x, t.W4.y, t.W4.z]).toEqual([X0 + 6.3, Y0 + 8.8, Z0 + 0.1]);
+		expect(t.W4.offset).toEqual({ dx: 0.3, dy: -0.2, dz: 0.1 });
+		expect(t.X2.offset).toEqual({ dx: 0, dy: 0, dz: 0 });
+		expect(holeOffsetParamNames(t.W4.index)).toEqual({ dx: 'hole_06_dx', dy: 'hole_06_dy', dz: 'hole_06_dz' });
 	});
 });
 

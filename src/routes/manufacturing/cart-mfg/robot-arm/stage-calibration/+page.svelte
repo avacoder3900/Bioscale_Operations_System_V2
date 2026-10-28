@@ -1,28 +1,29 @@
 <script lang="ts">
 	/**
-	 * Robot Arm — Stage calibration: the arm line's own calibration studio.
+	 * Stage Calibration Studio — the robot-arm line's own calibration studio.
 	 *
-	 * The arm's OT-2 fills ONE cartridge on an elevated single-cart stage, so
-	 * the Deck Calibration Studio (24 slots, Particle-id decks) does not fit.
-	 * This page keeps the Studio's essentials — a maintenance run, pick up +
-	 * probe a tip on the calibrator, a jog pad with live XYZ, move-to-hole, a
-	 * fill-motion preview — and teaches what the stage protocol
-	 * (protocols/Wax_Filling_GEN7_ArmStage.py) reads instead of a deck:
+	 * Organised exactly like the Deck Calibration Studio (deck-calibration/
+	 * +page.svelte) — pickers · 2D plane with grid, click / box selection and an
+	 * anchor hole · Jog with Move to hole + Capture offset · Tip calibration with
+	 * the fixture teach · Offset → selection with Apply / Shift whole grid / Undo
+	 * · Tour / Fill motion · Set position → selection · Align selection → anchor ·
+	 * Recent edits — but for ONE Gen7 cartridge on an elevated single-cart stage
+	 * instead of a 24-slot deck, so:
 	 *
-	 *   scan position    no tip on (the sweep runs without one)
-	 *   cart location    the rim of the FIRST wax hole, with a PROBED tip on;
-	 *                    stored tip-neutral (live − that tip's adjust), the
-	 *                    Studio's convention, so every fill adds its own tip's
-	 *                    adjust back
-	 *   dispense depth   where the tip END sits when wax is dispensed, taught by
-	 *                    jogging to it over the first hole (rim − live), NEW for
-	 *                    the stage: the hole is 3.75 mm deep and the stage's Z
-	 *                    frame is its own
-	 *   stage geometry   the cart's rotation on the stage, the travel height
+	 *   • the "labware" is the cartridge: 12 wax holes laid out rigidly from the
+	 *     taught FIRST hole (row 1, gate 4) + the cart's rotation, each with its
+	 *     own correction (hole offsets) — what Apply / Set position / Align edit;
+	 *   • there is no deck definition and nothing to upload: every value is sent
+	 *     to the stage protocol as run-time parameters at each run start;
+	 *   • the stage has its own Z frame, so the DISPENSE DEPTH (how far into the
+	 *     hole the tip end goes when wax is dispensed) is taught here too.
 	 *
-	 * Every save is a page action; all logic is in $lib/server/arm-wax-fill.
+	 * Tip frames, as in the Studio: the first hole is taught with a PROBED tip
+	 * and stored tip-neutral (live − that tip's calibrator adjust); every move-to
+	 * applies the current tip's adjust; the scan position is taught with NO tip.
 	 */
-	import { enhance, deserialize } from '$app/forms';
+	import { onDestroy } from 'svelte';
+	import { deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
@@ -30,9 +31,11 @@
 	import {
 		DISPENSE_DEPTH_DEFAULT_MM,
 		DISPENSE_DEPTH_LIMITS,
+		HOLE_OFFSET_LIMIT_MM,
 		STAGE_JUMP_LIMITS,
 		STAGE_PREJUMP_MM,
 		WAX_HOLE_DEPTH_MM,
+		WAX_HOLE_DIAMETER_MM,
 		depthFromLive,
 		dispenseZ,
 		stageTargets,
@@ -43,36 +46,335 @@
 
 	const WAX_FILL_HREF = '/manufacturing/cart-mfg/robot-arm/wax-fill';
 	const robotId = $derived(data.robotId as string | null);
-	const studioCalibratorHref = $derived(
-		robotId ? `/manufacturing/cart-mfg/deck-calibration?kind=calibrator&robot=${encodeURIComponent(robotId)}` : '/manufacturing/cart-mfg/deck-calibration?kind=calibrator'
-	);
+	const robotName = $derived((data.robotName as string | null) ?? 'robot');
 
+	// ── the cartridge on the stage ───────────────────────────────────────────
 	let calibration = $state<CalibrationView | null>(data.calibration);
 	$effect(() => {
 		calibration = data.calibration;
 	});
 	const rim = $derived(calibration?.cartLocation ?? null);
+	const taught = $derived(!!calibration?.holes);
+	// Untaught: draw the lattice at the origin so the plane still shows the cart's shape.
+	const wells = $derived<StageHole[]>(calibration?.holes ?? stageTargets(0, 0, 0, calibration?.stageRotationDeg ?? 0));
+	const wellByName = $derived(new Map(wells.map((w) => [w.name, w] as const)));
 	const depthMm = $derived(calibration?.dispenseDepth?.mm ?? null);
-	const holes = $derived<StageHole[]>(calibration?.holes ?? stageTargets(0, 0, 0, calibration?.stageRotationDeg ?? 0));
-	const holesTaught = $derived(!!calibration?.holes);
+	const jumpMm = $derived(calibration?.stageJumpHeightMm ?? 60);
 
-	// Arc height for travel over the raised stage: the planner only knows the
-	// labware on the deck, not the stage. Well inside a p20's reach with a tip.
-	const TEACH_ARC_Z = 120;
-
-	// ── page actions ─────────────────────────────────────────────────────
-	async function post(name: string, fields: Record<string, string> = {}): Promise<{ ok: true; data: any } | { ok: false; error: string; status: number }> {
-		const fd = new FormData();
-		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
-		const res = await fetch(`?/${name}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-		const r = deserialize(await res.text());
-		if (r.type === 'success') return { ok: true, data: r.data ?? {} };
-		if (r.type === 'failure') return { ok: false, error: String((r.data as any)?.error ?? 'Failed'), status: r.status };
-		if (r.type === 'error') return { ok: false, error: r.error?.message ?? 'Failed', status: r.status ?? 500 };
-		return { ok: false, error: 'Unexpected response', status: 500 };
+	// ── Selection (as the Studio) ────────────────────────────────────────────
+	let selection = $state<Set<string>>(new Set());
+	const selCount = $derived(selection.size);
+	let anchorWell = $state<string | null>(null);
+	const anchor = $derived.by(() => {
+		if (anchorWell && selection.has(anchorWell)) return anchorWell;
+		return wells.find((w) => selection.has(w.name))?.name ?? null;
+	});
+	let deselectMode = $state(false);
+	function toggleWell(name: string, additive: boolean) {
+		if (deselectMode) {
+			const next = new Set(selection);
+			next.delete(name);
+			selection = next;
+			return;
+		}
+		const next = new Set(additive ? selection : []);
+		if (selection.has(name) && additive) next.delete(name);
+		else {
+			next.add(name);
+			anchorWell = name;
+		}
+		if (!additive && selection.has(name) && selection.size === 1) next.clear();
+		selection = next;
+	}
+	function clearSelection() {
+		selection = new Set();
+	}
+	function selectAll() {
+		selection = new Set(wells.map((w) => w.name));
+	}
+	function deselectAll() {
+		selection = new Set();
+		refWell = null;
+		nominal = null;
+		deselectMode = false;
+		boxing = false;
+		boxStart = null;
+		boxNow = null;
+	}
+	function onWindowKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape') deselectAll();
 	}
 
-	// ── robot session + maintenance run (as the scanner / barcode-positions pages) ──
+	// ── Canvas geometry (viewBox = deck mm around the cart; y flipped) ──────
+	let zoom = $state(1);
+	let showGrid = $state(true);
+	let showRigid = $state(true);
+	const wellR = WAX_HOLE_DIAMETER_MM / 2; // real bore — the cart is small enough to draw to scale
+	const VIEW_PAD = 6;
+	const bounds = $derived.by(() => {
+		const xs = wells.flatMap((w) => [w.x, w.rigid.x, w.reagent.x]);
+		const ys = wells.flatMap((w) => [w.y, w.rigid.y, w.reagent.y]);
+		return { x0: Math.min(...xs) - VIEW_PAD, x1: Math.max(...xs) + VIEW_PAD, y0: Math.min(...ys) - VIEW_PAD, y1: Math.max(...ys) + VIEW_PAD };
+	});
+	function cy(y: number): number {
+		return bounds.y1 - y;
+	}
+	let svgEl = $state<SVGSVGElement | null>(null);
+	let boxing = $state(false);
+	let boxStart = $state<{ x: number; y: number } | null>(null);
+	let boxNow = $state<{ x: number; y: number } | null>(null);
+	function toDeck(e: PointerEvent): { x: number; y: number } | null {
+		if (!svgEl) return null;
+		const pt = svgEl.createSVGPoint();
+		pt.x = e.clientX;
+		pt.y = e.clientY;
+		const ctm = svgEl.getScreenCTM();
+		if (!ctm) return null;
+		const loc = pt.matrixTransform(ctm.inverse());
+		return { x: loc.x, y: bounds.y1 - loc.y };
+	}
+	function onCanvasPointerDown(e: PointerEvent) {
+		if (e.button !== 0) return;
+		const d = toDeck(e);
+		if (!d) return;
+		boxing = true;
+		boxStart = d;
+		boxNow = d;
+		(e.target as Element).setPointerCapture?.(e.pointerId);
+	}
+	let hover = $state<{ x: number; y: number } | null>(null);
+	const hoverNearest = $derived.by(() => {
+		if (!hover || !wells.length) return null;
+		let best: StageHole | null = null,
+			bestD = Infinity;
+		for (const w of wells) {
+			const ddx = w.x - hover.x,
+				ddy = w.y - hover.y,
+				d = ddx * ddx + ddy * ddy;
+			if (d < bestD) {
+				bestD = d;
+				best = w;
+			}
+		}
+		return best ? { well: best, dist: Math.sqrt(bestD) } : null;
+	});
+	function onCanvasPointerMove(e: PointerEvent) {
+		hover = toDeck(e);
+		if (boxing) boxNow = hover;
+	}
+	function onCanvasPointerUp(e: PointerEvent) {
+		if (!boxing || !boxStart || !boxNow) {
+			boxing = false;
+			return;
+		}
+		const x0 = Math.min(boxStart.x, boxNow.x),
+			x1 = Math.max(boxStart.x, boxNow.x);
+		const y0 = Math.min(boxStart.y, boxNow.y),
+			y1 = Math.max(boxStart.y, boxNow.y);
+		const moved = Math.abs(x1 - x0) > 0.5 || Math.abs(y1 - y0) > 0.5;
+		if (moved) {
+			const hits = wells.filter((w) => w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1).map((w) => w.name);
+			if (deselectMode) {
+				const next = new Set(selection);
+				for (const h of hits) next.delete(h);
+				selection = next;
+			} else {
+				const next = e.shiftKey ? new Set(selection) : new Set<string>();
+				for (const h of hits) next.add(h);
+				selection = next;
+			}
+		}
+		boxing = false;
+		boxStart = null;
+		boxNow = null;
+	}
+	const boxRect = $derived.by(() => {
+		if (!boxing || !boxStart || !boxNow) return null;
+		const x = Math.min(boxStart.x, boxNow.x);
+		const yTop = Math.max(boxStart.y, boxNow.y);
+		return { x, y: cy(yTop), w: Math.abs(boxNow.x - boxStart.x), h: Math.abs(boxNow.y - boxStart.y) };
+	});
+
+	// ── Captured / manual offset, set-position, undo (as the Studio) ─────────
+	let dx = $state(0),
+		dy = $state(0),
+		dz = $state(0);
+	let setX = $state(0),
+		setY = $state(0),
+		setZ = $state(0);
+	$effect(() => {
+		if (anchor) {
+			const w = wellByName.get(anchor);
+			if (w) {
+				setX = +w.x.toFixed(3);
+				setY = +w.y.toFixed(3);
+				setZ = +w.z.toFixed(3);
+			}
+		}
+	});
+	type Vec3 = { x: number; y: number; z: number };
+	type Edit = { wellName: string; delta: Vec3 };
+	let undoStack = $state<{ edits: Edit[]; label: string }[]>([]);
+	// nominal carries the tip state it was read in (the critical point drops by the
+	// tip length when a tip goes on), so a capture across a tip change is refused.
+	let nominal = $state<{ x: number; y: number; z: number; hasTip: boolean } | null>(null);
+	let refWell = $state<string | null>(null);
+	const APPROACH_Z_MM = 2; // "Move to hole" parks the tip end this far above the rim
+
+	// ── Messages / actions ───────────────────────────────────────────────────
+	let msg = $state<string | null>(null);
+	let errMsg = $state<string | null>(null);
+	let busy = $state(false);
+	function clearMsg() {
+		msg = null;
+		errMsg = null;
+	}
+	async function postAction(action: string, fields: Record<string, string>) {
+		clearMsg();
+		busy = true;
+		try {
+			const fd = new FormData();
+			for (const [k, v] of Object.entries(fields)) fd.set(k, v);
+			const res = await fetch(`?/${action}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+			const result = deserialize(await res.text());
+			if (result.type === 'failure') {
+				errMsg = (result.data as any)?.error ?? 'Action failed';
+				return null;
+			}
+			if (result.type === 'error') {
+				errMsg = result.error?.message ?? 'Action failed';
+				return null;
+			}
+			const out = (result as any).data ?? {};
+			if (out.calibration) calibration = out.calibration;
+			await invalidateAll();
+			return out;
+		} catch (e) {
+			errMsg = e instanceof Error ? e.message : 'Request failed';
+			return null;
+		} finally {
+			busy = false;
+		}
+	}
+
+	// Core apply: each hole by its own delta (the server translates the whole cart
+	// when every hole gets the same delta). Recorded for undo unless this IS an undo.
+	async function applyEdits(edits: Edit[], label: string, record = true) {
+		const r = await postAction('applyPerWell', {
+			edits: JSON.stringify(edits.map((e) => ({ wellName: e.wellName, dx: e.delta.x, dy: e.delta.y, dz: e.delta.z }))),
+			label
+		});
+		if (r && record) undoStack = [...undoStack, { edits, label }];
+		return r;
+	}
+	function applyMsg(verb: string, r: any): string {
+		const rej = r.failed?.length ? ` ⚠ ${r.failed.length} skipped (${r.failed.map((f: any) => `${f.wellName}: ${f.reason}`).join('; ')}).` : '';
+		const how = r.mode === 'translate' ? ' (whole cart moved — the first hole was re-taught)' : '';
+		return `${verb} to ${r.applied} hole(s)${how} — saved to BIMS.${rej} Live for "Move to hole" now; the next fill reads it at start.`;
+	}
+	async function applyToSelection() {
+		if (selection.size === 0) {
+			errMsg = 'Select at least one hole';
+			return;
+		}
+		if (dx === 0 && dy === 0 && dz === 0) {
+			errMsg = 'Capture or enter a non-zero offset';
+			return;
+		}
+		const r = await applyEdits([...selection].map((wellName) => ({ wellName, delta: { x: dx, y: dy, z: dz } })), `offset (${dx}, ${dy}, ${dz})`);
+		if (r) {
+			msg = applyMsg('Applied', r);
+			clearSelection();
+		}
+	}
+	async function applyGlobalShift() {
+		if (dx === 0 && dy === 0 && dz === 0) {
+			errMsg = 'Capture (or type) a non-zero offset first';
+			return;
+		}
+		if (!confirm(`Shift the whole cart (all 12 holes) by dx=${dx} dy=${dy} dz=${dz}? This moves the taught first hole; per-hole corrections stay.`)) return;
+		const r = await applyEdits(wells.map((w) => ({ wellName: w.name, delta: { x: dx, y: dy, z: dz } })), `shift whole cart (${dx}, ${dy}, ${dz})`);
+		if (r) {
+			msg = applyMsg('Whole cart shifted', r);
+			clearSelection();
+		}
+	}
+	async function applyAbsolute() {
+		if (selection.size === 0) {
+			errMsg = 'Select one or more holes — the typed position sets the anchor; the group moves with it';
+			return;
+		}
+		const a = anchor ? wellByName.get(anchor) : null;
+		if (!a) {
+			errMsg = 'Anchor hole not found';
+			return;
+		}
+		const d = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
+		if (d.x === 0 && d.y === 0 && d.z === 0) {
+			errMsg = 'Position equals current — nothing to change';
+			return;
+		}
+		const names = [...selection];
+		const r = await applyEdits(
+			names.map((wellName) => ({ wellName, delta: d })),
+			`set ${anchor} → (${setX}, ${setY}, ${setZ})${names.length > 1 ? ` + ${names.length - 1} more` : ''}`
+		);
+		if (r) msg = names.length === 1 ? `Set ${anchor} to (${setX}, ${setY}, ${setZ}) — saved to BIMS.` : applyMsg(`Set anchor ${anchor} → (${setX}, ${setY}, ${setZ}); moved`, r);
+	}
+	// Align: every other selected hole snaps back onto the rigid lattice, carrying
+	// the anchor's correction — the stage's "clean grid ruled by the anchor".
+	async function alignSelectionToAnchor() {
+		if (selection.size < 2) {
+			errMsg = 'Select the holes to align — at least 2, anchor included';
+			return;
+		}
+		const a = anchor ? wellByName.get(anchor) : null;
+		if (!a) {
+			errMsg = 'Click the trusted (jog-verified) hole last — it becomes the anchor';
+			return;
+		}
+		const edits: Edit[] = [];
+		let already = 0;
+		for (const name of selection) {
+			if (name === a.name) continue;
+			const w = wellByName.get(name);
+			if (!w) continue;
+			const d = { x: +(a.offset.dx - w.offset.dx).toFixed(3), y: +(a.offset.dy - w.offset.dy).toFixed(3), z: 0 };
+			if (d.x === 0 && d.y === 0) {
+				already++;
+				continue;
+			}
+			edits.push({ wellName: name, delta: d });
+		}
+		if (!edits.length) {
+			msg = `Nothing to move — the selection already sits on the lattice ruled by ${a.name}.`;
+			return;
+		}
+		if (!confirm(`Align ${edits.length} hole(s) to anchor ${a.name}?\nEach snaps onto the cartridge's rigid 6 × 9 mm lattice carrying ${a.name}'s correction (${a.offset.dx}, ${a.offset.dy}). Z is untouched.${already ? `\n(${already} already aligned.)` : ''}\nUndo reverts the whole alignment.`)) return;
+		const r = await applyEdits(edits, `align ${edits.length} to ${a.name}`);
+		if (r) {
+			msg = applyMsg(`Aligned to ${a.name}`, r);
+			clearSelection();
+		}
+	}
+	async function undoLast() {
+		const last = undoStack[undoStack.length - 1];
+		if (!last) {
+			errMsg = 'Nothing to undo';
+			return;
+		}
+		const r = await applyEdits(
+			last.edits.map((e) => ({ wellName: e.wellName, delta: { x: -e.delta.x, y: -e.delta.y, z: -e.delta.z } })),
+			'',
+			false
+		);
+		if (r) {
+			undoStack = undoStack.slice(0, -1);
+			msg = `Undid ${last.label} on ${r.applied} hole(s).`;
+		}
+	}
+
+	// ── Robot session + maintenance run ──────────────────────────────────────
 	let robotSession: RobotSession | null = null;
 	let robotConn = $state<RobotSessionState | null>(null);
 	$effect(() => {
@@ -87,41 +389,20 @@
 			robotSession = null;
 		};
 	});
-
-	let maintRunId = $state<string | null>(null);
+	let runId = $state<string | null>(null);
 	let pipetteId = $state<string | null>(null);
 	let pipetteMount = $state<string | null>(null);
 	let pipetteName = $state<string | null>(null);
+	let desiredMount = $state<'left' | 'right'>(data.calibration?.pipetteMount === 'right' ? 'right' : 'left');
 	let connecting = $state(false);
-	let busy = $state(false);
-	let errMsg = $state<string | null>(null);
-	let msg = $state<string | null>(null);
 	let stepSize = $state(1);
 	let zAxis = $state<'leftZ' | 'rightZ'>(data.calibration?.pipetteMount === 'right' ? 'rightZ' : 'leftZ');
 	let liveX = $state<number | null>(null);
 	let liveY = $state<number | null>(null);
 	let liveZ = $state<number | null>(null);
-
-	// Tip state. The fill probes every tip and adds its adjust to the taught
-	// point, so the cart location is saved tip-neutral with a probed tip on; the
-	// scan position is saved with NO tip; the dispense depth needs a tip on
-	// (it is about the tip end) but not a probe (Z is not probed).
-	let hasTip = $state(false);
-	let tipAdjust = $state<{ x: number; y: number } | null>(null);
-	let tipWell = $state<string>(data.teach?.nextTipWell ?? 'A1');
-	let calibrating = $state(false);
-
-	let testScanInFlight = $state(false);
-	let testScanError = $state<string | null>(null);
-	let testScanLatest = $state<string | null>(null);
-
-	let selectedHole = $state<string>('X2');
-	let motionRunning = $state(false);
-
-	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-	const dis = $derived(!maintRunId || !pipetteId || busy || data.loopRunning);
-	const liveDepth = $derived(rim && liveZ !== null ? depthFromLive(rim.z, liveZ) : null);
-	const liveDepthOk = $derived(liveDepth !== null && liveDepth >= DISPENSE_DEPTH_LIMITS.min && liveDepth <= DISPENSE_DEPTH_LIMITS.max);
+	const locked = $derived(!!data.loopRunning);
+	// Arc height for travel over the raised stage (the planner only knows the labware on the deck).
+	const TEACH_ARC_Z = 120;
 
 	async function apiRaw(path: string, init?: RequestInit): Promise<{ status: number; ok: boolean; body: any }> {
 		const doFetch = robotSession ? robotSession.fetchRoute.bind(robotSession) : fetch;
@@ -135,74 +416,80 @@
 		}
 		return { status: res.status, ok: res.ok, body };
 	}
-
 	async function api(path: string, init?: RequestInit): Promise<any> {
 		const { status, ok, body } = await apiRaw(path, init);
 		if (!ok) throw new Error(`${init?.method ?? 'GET'} ${path} → HTTP ${status}: ${body?.message ?? (typeof body === 'string' ? body : JSON.stringify(body))}`);
 		return body;
 	}
+	const mx = (tail: string) => `/api/opentrons-lab/robots/${robotId}/maintenance/${runId}/${tail}`;
 
-	const mx = (tail: string) => `/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}/${tail}`;
-
-	async function openMaintenance() {
-		errMsg = null;
+	async function startMaintenance() {
+		clearMsg();
 		connecting = true;
 		try {
-			const body: Record<string, unknown> = {};
-			if (calibration?.pipetteMount) body.mount = calibration.pipetteMount;
-			if (calibration?.pipetteName) body.pipetteName = calibration.pipetteName;
-			const res = await api(`/api/opentrons-lab/robots/${robotId}/maintenance`, { method: 'POST', body: JSON.stringify(body) });
-			maintRunId = res.runId ?? null;
+			const res = await api(`/api/opentrons-lab/robots/${robotId}/maintenance`, { method: 'POST', body: JSON.stringify({ mount: desiredMount }) });
+			runId = res.runId ?? null;
 			pipetteId = res.pipetteId ?? null;
 			pipetteMount = res.mount ?? null;
 			pipetteName = res.pipetteName ?? null;
 			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
-			msg = pipetteId ? `Connected: pipette ${pipetteName} on ${pipetteMount}.` : 'Maintenance run opened but no pipette could be loaded — jog will fail.';
+			msg = pipetteId ? `Run open: ${pipetteName} on ${pipetteMount}.` : 'Run opened but no pipette could be loaded — jog will fail.';
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
 			connecting = false;
 		}
 	}
-
-	async function closeMaintenance() {
-		if (!maintRunId) return;
+	async function stopMaintenance() {
+		if (!runId) return;
 		busy = true;
 		try {
 			if (hasTip && pipetteId) await api(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) }).catch(() => null);
-			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${maintRunId}`, { method: 'DELETE' });
+			await api(`/api/opentrons-lab/robots/${robotId}/maintenance/${runId}`, { method: 'DELETE' });
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
-			maintRunId = pipetteId = pipetteMount = pipetteName = null;
+			runId = pipetteId = pipetteMount = pipetteName = null;
 			liveX = liveY = liveZ = null;
 			hasTip = false;
 			tipAdjust = null;
+			nominal = null;
+			refWell = null;
 			busy = false;
 		}
 	}
-
+	onDestroy(() => {
+		if (runId) {
+			try {
+				fetch(`/api/opentrons-lab/robots/${robotId}/maintenance/${runId}`, { method: 'DELETE', credentials: 'same-origin', keepalive: true });
+			} catch {
+				/* best-effort */
+			}
+		}
+	});
 	async function refreshPosition() {
-		if (!maintRunId || !pipetteId) return;
-		const res = await api(mx('position'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
-		if (res?.position) {
-			liveX = res.position.x;
-			liveY = res.position.y;
-			liveZ = res.position.z;
+		if (!runId || !pipetteId) return;
+		try {
+			const res = await api(mx('position'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
+			if (res?.position) {
+				liveX = res.position.x;
+				liveY = res.position.y;
+				liveZ = res.position.z;
+			}
+		} catch (e) {
+			errMsg = `Position read failed: ${e instanceof Error ? e.message : String(e)}`;
 		}
 	}
-
-	/** Run one gantry action with the panel locked; errors land in the banner. */
 	async function act(fn: () => Promise<void>) {
-		if (!maintRunId || !pipetteId) {
-			errMsg = 'Open a maintenance run first.';
+		if (!runId || !pipetteId) {
+			errMsg = 'Open a maintenance run first';
 			return;
 		}
-		if (data.loopRunning) {
+		if (locked) {
 			errMsg = 'A wax-fill loop is running on this robot — calibration waits until it ends.';
 			return;
 		}
-		errMsg = null;
+		clearMsg();
 		busy = true;
 		try {
 			await fn();
@@ -212,155 +499,352 @@
 			busy = false;
 		}
 	}
-
-	const home = () =>
+	const homeRobot = () =>
 		act(async () => {
 			await api(mx('home'), { method: 'POST', body: JSON.stringify({}) });
 			await refreshPosition();
 		});
-	const jog = (axis: string, distance: number) =>
+	const jogAxis = (axis: string, distance: number) =>
 		act(async () => {
 			await api(mx('jog'), { method: 'POST', body: JSON.stringify({ pipetteId, axis, distance }) });
 			await refreshPosition();
 		});
-	async function moveAbs(p: { x: number; y: number; z: number }, opts: { arc?: boolean; direct?: boolean } = {}) {
+	async function moveAbs(p: { x: number; y: number; z: number }, o: { arc?: boolean; direct?: boolean; speed?: number } = {}) {
 		await api(mx('move-to'), {
 			method: 'POST',
-			body: JSON.stringify({ pipetteId, x: p.x, y: p.y, z: p.z, ...(opts.arc ? { minimumZHeight: TEACH_ARC_Z, forceDirect: false } : {}), ...(opts.direct ? { forceDirect: true } : {}) })
+			body: JSON.stringify({
+				pipetteId,
+				x: p.x,
+				y: p.y,
+				z: p.z,
+				...(o.speed ? { speed: o.speed } : {}),
+				...(o.arc ? { minimumZHeight: TEACH_ARC_Z, forceDirect: false } : {}),
+				...(o.direct ? { forceDirect: true } : {})
+			})
 		});
 	}
+	const adj = () => ({ x: tipAdjust?.x ?? 0, y: tipAdjust?.y ?? 0 });
 
-	// ── tip: pick up, probe, drop ───────────────────────────────────────
-	async function doPickUpTip(allowRecover = true): Promise<void> {
-		const r = await apiRaw(mx('pick-up-tip'), { method: 'POST', body: JSON.stringify({ pipetteId, tiprackLoadName: data.teach?.tiprackLoadName, slot: '11', tipWell }) });
+	/** To a hole's tip-neutral rim + this tip's adjust, APPROACH_Z_MM above it, via a high arc (the fill's frame). */
+	async function moveToWellSafe(name: string) {
+		if (!taught) throw new Error('Teach the first hole first — the holes are laid out from it.');
+		const w = wellByName.get(name);
+		if (!w) throw new Error(`Unknown hole ${name}`);
+		const a = adj();
+		await moveAbs({ x: w.x + a.x, y: w.y + a.y, z: w.z + APPROACH_Z_MM }, { arc: true });
+	}
+	const moveToSelectedHole = () =>
+		act(async () => {
+			if (selection.size !== 1) throw new Error('Select exactly one reference hole to move to');
+			const name = [...selection][0];
+			await moveToWellSafe(name);
+			await refreshPosition();
+			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ!, hasTip } : null;
+			refWell = name;
+			msg = `At nominal of ${name}${hasTip ? (tipAdjust ? ' (tip on, probed)' : ' (tip on, NOT probed — capture will carry this tip\'s bend)') : ' (no tip)'}. Jog onto the real hole, then Capture.`;
+		});
+	const captureOffset = () =>
+		act(async () => {
+			if (!nominal) throw new Error('Move to a hole first to set the nominal reference');
+			if (nominal.hasTip !== hasTip) {
+				const was = nominal.hasTip ? 'tip was on' : 'no tip';
+				nominal = null;
+				refWell = null;
+				throw new Error(`Tip state changed since "Move to hole" (${was}, now ${hasTip ? 'tip on' : 'no tip'}). Move to the hole again so nominal + capture share one frame, then Capture.`);
+			}
+			await refreshPosition();
+			if (liveX === null || liveY === null || liveZ === null) throw new Error('Could not read position');
+			dx = +(liveX - nominal.x).toFixed(3);
+			dy = +(liveY - nominal.y).toFixed(3);
+			// Nominal was parked APPROACH_Z_MM above the rim: add it back so dz is the true rim delta.
+			dz = +(liveZ - nominal.z + APPROACH_Z_MM).toFixed(3);
+			msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
+		});
+
+	// ── Tour / Fill motion (as the Studio; the stage protocol's heights) ───────
+	let touring = $state(false);
+	let tourIndex = $state(0);
+	let tourWells = $state<string[]>([]);
+	let tourPlaying = $state(false);
+	function fillOrder(names: string[]): string[] {
+		return names.slice().sort((a, b) => (wellByName.get(a)?.index ?? 0) - (wellByName.get(b)?.index ?? 0));
+	}
+	async function tourGoTo(i: number) {
+		if (i < 0 || i >= tourWells.length) return;
+		await act(async () => {
+			const name = tourWells[i];
+			await moveToWellSafe(name);
+			tourIndex = i;
+			selection = new Set([name]);
+			refWell = name;
+			msg = `Tour: ${i + 1}/${tourWells.length} — ${name}`;
+		});
+	}
+	async function startTour() {
+		if (!runId || !pipetteId) {
+			errMsg = 'Open a maintenance run first';
+			return;
+		}
+		tourWells = fillOrder(wells.map((w) => w.name));
+		touring = true;
+		await tourGoTo(0);
+	}
+	async function tourNext() {
+		if (tourIndex < tourWells.length - 1) await tourGoTo(tourIndex + 1);
+	}
+	async function tourPrev() {
+		if (tourIndex > 0) await tourGoTo(tourIndex - 1);
+	}
+	function tourStop() {
+		touring = false;
+		tourPlaying = false;
+	}
+	async function tourPlay() {
+		tourPlaying = true;
+		while (tourPlaying && tourIndex < tourWells.length - 1) {
+			await tourGoTo(tourIndex + 1);
+			if (!tourPlaying || errMsg) break;
+			await new Promise((r) => setTimeout(r, 500));
+		}
+		tourPlaying = false;
+	}
+	let fillMatchProtocol = $state(true);
+	let fillSpeed = $state(20);
+	let fillDwellMs = $state(1000);
+	let fillMotionRunning = $state(false);
+	let fillPaused = $state(false);
+	let fillStop = false;
+	async function fillWaitIfPaused() {
+		while (fillPaused && !fillStop) await new Promise((r) => setTimeout(r, 150));
+	}
+	async function fillMoveAbs(name: string, aboveRimMm: number, o: { forceDirect: boolean; arc?: boolean }) {
+		const w = wellByName.get(name);
+		if (!w) throw new Error(`Unknown hole ${name}`);
+		const a = adj();
+		await moveAbs({ x: w.x + a.x, y: w.y + a.y, z: w.z + aboveRimMm }, { arc: !!o.arc, direct: o.forceDirect, ...(fillMatchProtocol ? {} : { speed: fillSpeed }) });
+	}
+	async function runFillMotion() {
+		if (!runId || !pipetteId) {
+			errMsg = 'Open a maintenance run first';
+			return;
+		}
+		if (!taught) {
+			errMsg = 'Teach the first hole first';
+			return;
+		}
+		const chosen = fillOrder([...selection].filter((n) => wellByName.has(n)));
+		if (!chosen.length) {
+			errMsg = 'Select the hole(s) you want to run the fill motion on';
+			return;
+		}
+		clearMsg();
+		fillMotionRunning = true;
+		fillStop = false;
+		fillPaused = false;
+		busy = true;
+		const dispenseAbove = -(depthMm ?? DISPENSE_DEPTH_DEFAULT_MM);
+		try {
+			for (let i = 0; i < chosen.length; i++) {
+				await fillWaitIfPaused();
+				if (fillStop) {
+					msg = `Fill motion stopped — ${i}/${chosen.length} done`;
+					break;
+				}
+				const name = chosen[i];
+				selection = new Set([name]);
+				refWell = name;
+				msg = `Fill motion ${i + 1}/${chosen.length} — ${name}${fillMatchProtocol ? ' (protocol speed)' : ` @ ${fillSpeed} mm/s`}`;
+				await fillMoveAbs(name, jumpMm, { forceDirect: false, arc: true }); // travel height
+				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: true }); // pre-jump
+				await fillWaitIfPaused();
+				if (fillStop) break;
+				await fillMoveAbs(name, dispenseAbove, { forceDirect: true }); // dispense height
+				await refreshPosition();
+				await new Promise((r) => setTimeout(r, Math.max(0, fillDwellMs)));
+				await fillWaitIfPaused();
+				if (fillStop) break;
+				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: true }); // retract
+				await fillMoveAbs(name, jumpMm, { forceDirect: true }); // back to travel height
+			}
+			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s)${depthMm === null ? ' at the protocol\'s default depth (teach the dispense depth below)' : ''}`;
+		} catch (e) {
+			errMsg = e instanceof Error ? e.message : String(e);
+		} finally {
+			fillMotionRunning = false;
+			fillPaused = false;
+			busy = false;
+			await refreshPosition();
+		}
+	}
+	function pauseFillMotion() {
+		fillPaused = true;
+		msg = 'Fill motion paused — Resume to continue, or Stop to end.';
+	}
+	function resumeFillMotion() {
+		fillPaused = false;
+	}
+	function stopFillMotion() {
+		fillStop = true;
+		fillPaused = false;
+	}
+
+	// ── Tip: pick up, probe on the calibrator, swap, drop; fixture teach ─────
+	let hasTip = $state(false);
+	let tipAdjust = $state<{ x: number; y: number } | null>(null);
+	let calibrating = $state(false);
+	let tipWell = $state<string>(data.teach?.nextTipWell ?? 'A1');
+	const tiprack = $derived(data.teach?.tiprackLoadName ?? 'cosmasanddamian_96_tiprack_20ul');
+	const CAL_Z_MIN = 5,
+		CAL_Z_MAX = 200;
+	const CAL_AT_TOLERANCE_MM = 3;
+	let calX = $state(data.teach?.calibrator?.x ?? 125.181);
+	let calY = $state(data.teach?.calibrator?.y ?? 173.247);
+	let calZ = $state(data.teach?.calibrator?.approachZ ?? 38.5);
+	let probeZ = $state(data.teach?.calibrator?.probeZ ?? 34.491);
+	let maxAdjust = $state<number | ''>(data.teach?.calibrator?.maxTipAdjust ?? '');
+	$effect(() => {
+		const c = data.teach?.calibrator;
+		if (c) {
+			calX = c.x;
+			calY = c.y;
+			calZ = c.approachZ;
+			probeZ = c.probeZ;
+			maxAdjust = c.maxTipAdjust ?? '';
+		}
+	});
+	function atCalibratorNow(): boolean {
+		return liveX !== null && liveY !== null && Math.hypot(liveX - calX, liveY - calY) <= CAL_AT_TOLERANCE_MM;
+	}
+	function checkedZ(v: number, label: string): number | null {
+		if (!Number.isFinite(v) || v < CAL_Z_MIN || v > CAL_Z_MAX) {
+			errMsg = `${label} must be a number between ${CAL_Z_MIN} and ${CAL_Z_MAX} mm (got ${Number.isFinite(v) ? v : 'blank'})`;
+			return null;
+		}
+		return v;
+	}
+	async function doDropTip(): Promise<boolean> {
+		const r = await apiRaw(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
+		if (!r.ok) throw new Error(r.body?.message || `HTTP ${r.status}`);
+		return !!r.body?.dropped;
+	}
+	async function doPickUp(allowRecover: boolean) {
+		const r = await apiRaw(mx('pick-up-tip'), { method: 'POST', body: JSON.stringify({ pipetteId, tiprackLoadName: tiprack, slot: '11', tipWell }) });
 		if (r.ok) {
 			if (r.body?.nextTipWell) tipWell = r.body.nextTipWell;
-			hasTip = true;
-			tipAdjust = null;
 			return;
 		}
 		if (r.status === 409 && r.body?.code === 'TIP_ALREADY_ATTACHED' && allowRecover) {
-			await api(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
-			return doPickUpTip(false);
+			msg = 'The run still had a tip modelled — dropping it in the trash first…';
+			await doDropTip();
+			return doPickUp(false);
 		}
-		throw new Error(r.body?.message ?? (typeof r.body === 'string' ? r.body : `pick-up-tip HTTP ${r.status}`));
+		throw new Error(r.body?.message || (typeof r.body === 'string' ? r.body : `HTTP ${r.status}`));
 	}
-
-	/**
-	 * Pick up a p20 tip and probe it on the tip calibrator (the Studio's sequence):
-	 * travel to the calibrator's approach point, then /api/scanner/calibrate-tip
-	 * attached to this maintenance run so the tip stays on. The adjust it returns
-	 * is what makes the saved cart location tip-neutral.
-	 */
-	async function pickUpAndCalibrateTip() {
-		const cal = data.teach?.calibrator;
-		if (!cal) {
-			errMsg = 'No tip-calibrator point is known for this robot — teach it in the Deck Calibration Studio first (link above).';
-			return;
-		}
+	async function doPickUpTip(): Promise<void> {
+		await doPickUp(true);
+		hasTip = true;
+		tipAdjust = null;
+		nominal = null;
+		refWell = null;
+		await refreshPosition();
+	}
+	async function doGoToCalibrator(z: number): Promise<void> {
+		await moveAbs({ x: calX, y: calY, z }, { arc: true });
+		await refreshPosition();
+	}
+	async function calibrateTip() {
+		const approachZNow = checkedZ(calZ, 'Approach Z');
+		if (approachZNow === null) return;
+		const probeZNow = checkedZ(probeZ, 'Probe Z');
+		if (probeZNow === null) return;
 		if (pipetteMount !== 'left' && pipetteMount !== 'right') {
-			errMsg = 'The maintenance run reported no pipette mount — reopen it.';
+			errMsg = 'The run reported no pipette mount — reopen it.';
 			return;
 		}
 		calibrating = true;
 		await act(async () => {
+			let pickedUpNow = false;
 			if (!hasTip) {
-				msg = `Picking up a tip (${data.teach?.tiprackLoadName} ${tipWell})…`;
+				msg = `Picking up a p20 tip (${tiprack} ${tipWell})…`;
 				await doPickUpTip();
-			}
-			msg = `Moving to the tip calibrator (${cal.x}, ${cal.y}, ${cal.approachZ})…`;
-			await moveAbs({ x: cal.x, y: cal.y, z: cal.approachZ }, { arc: true });
-			msg = 'Probing the tip on the calibrator (slow limit-switch probe, 1–2 min)…';
-			const res = await api('/api/scanner/calibrate-tip', {
-				method: 'POST',
-				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile: 'wax', tipWell, runId: maintRunId, pipetteId })
-			});
-			if (res?.adjust && typeof res.adjust.x === 'number' && typeof res.adjust.y === 'number') {
-				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
-				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on.`;
-			} else {
-				throw new Error(typeof res?.error === 'string' && res.error ? res.error : 'The probe returned no adjust — nothing taught. Calibrate again before saving the cart location.');
+				pickedUpNow = true;
 			}
 			await refreshPosition();
+			if (!pickedUpNow && atCalibratorNow()) msg = 'Already on the calibrator — probing from the jogged position…';
+			else {
+				msg = `Moving to the tip calibrator (${calX}, ${calY}, ${approachZNow})…`;
+				await doGoToCalibrator(approachZNow);
+			}
+			msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on)';
+			const res = await api('/api/scanner/calibrate-tip', {
+				method: 'POST',
+				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile: 'wax', tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } })
+			});
+			if (res?.adjust && typeof res.adjust.x === 'number') {
+				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
+				nominal = null;
+				refWell = null;
+				await refreshPosition();
+				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to. Move to a hole to set a fresh nominal.`;
+			} else {
+				throw new Error((typeof res?.error === 'string' && res.error) || 'Calibration returned no adjust');
+			}
 		});
 		calibrating = false;
 	}
-
-	const pickUpOnly = () =>
+	const pickUpTipAction = () =>
 		act(async () => {
 			await doPickUpTip();
-			msg = `Tip on (${tipWell === 'A1' ? 'rack cursor advanced' : `next ${tipWell}`}) — not probed: fine for the dispense depth, not for the cart location.`;
-			await refreshPosition();
+			msg = `Tip on (no probe) — next fresh ${tipWell}. Enough for Fill motion / depth; Calibrate tip before teaching the first hole.`;
 		});
-
-	const dropTip = () =>
+	const swapTipAction = () =>
 		act(async () => {
-			await api(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
+			const dropped = await doDropTip();
 			hasTip = false;
 			tipAdjust = null;
+			nominal = null;
+			refWell = null;
+			await doPickUpTip();
+			msg = `${dropped ? 'Dropped the old tip and picked' : 'Picked'} a fresh tip — Calibrate tip again before capturing.`;
+		});
+	const dropTipAction = () =>
+		act(async () => {
+			await doDropTip();
+			hasTip = false;
+			tipAdjust = null;
+			nominal = null;
+			refWell = null;
 			msg = 'Tip dropped in the trash.';
 			await refreshPosition();
 		});
-
-	// ── the stage: visit holes, preview the fill motion ─────────────────
-	const adj = () => ({ x: tipAdjust?.x ?? 0, y: tipAdjust?.y ?? 0 });
-
-	/** 2 mm above a hole's rim, via a high arc, with this tip's adjust (the fill's frame). */
-	const goToHole = (h: StageHole, aboveMm = 2) =>
+	const goToCalibrator = () =>
 		act(async () => {
-			if (!holesTaught) throw new Error('Teach the cart location first — the holes are laid out from it.');
-			if (!hasTip) throw new Error('Pick up a tip first — the holes are taught as the tip end on the rim.');
-			const a = adj();
-			await moveAbs({ x: h.x + a.x, y: h.y + a.y, z: h.z + aboveMm }, { arc: true });
-			selectedHole = h.name;
-			msg = `${aboveMm} mm above hole ${h.name} (row ${h.row}, gate ${h.gate})${tipAdjust ? ` with this tip's adjust (${a.x}, ${a.y})` : ' — tip NOT probed, expect it off by this tip\'s bend'}.`;
-			await refreshPosition();
+			const z = checkedZ(calZ, 'Approach Z');
+			if (z === null) throw new Error(errMsg ?? 'Approach Z');
+			await doGoToCalibrator(z);
+			msg = `At the tip-calibrator approach point (${calX}, ${calY}, ${z}). Jog to fine-tune.`;
 		});
+	function captureCalibratorFromLive() {
+		if (liveX === null || liveY === null || liveZ === null) {
+			errMsg = 'No live position — open a run and move/jog first';
+			return;
+		}
+		calX = +liveX.toFixed(3);
+		calY = +liveY.toFixed(3);
+		calZ = +liveZ.toFixed(3);
+		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}). Click Save to persist.`;
+	}
+	async function saveCalibratorPosition() {
+		if (checkedZ(calZ, 'Approach Z') === null || checkedZ(probeZ, 'Probe Z') === null) return;
+		const r = await postAction('saveCalibrator', { x: String(calX), y: String(calY), z: String(calZ), zCalWax: String(probeZ), maxTipAdjust: maxAdjust === '' ? '' : String(maxAdjust) });
+		if (r) msg = r.success;
+	}
 
-	/**
-	 * The stage protocol's exact approach at one hole: arrive at the travel
-	 * height, pre-jump, down to the dispense height (taught, else the protocol's
-	 * default hover), dwell, retract. Dispenses nothing.
-	 */
-	const fillMotion = (h: StageHole) =>
-		act(async () => {
-			if (!holesTaught) throw new Error('Teach the cart location first.');
-			if (!hasTip) throw new Error('Pick up a tip first — the motion is about the tip end.');
-			motionRunning = true;
-			try {
-				const a = adj();
-				const jump = calibration?.stageJumpHeightMm ?? 60;
-				const zd = dispenseZ(h.z, depthMm);
-				const xy = { x: h.x + a.x, y: h.y + a.y };
-				msg = `Fill motion at ${h.name}: travel height ${jump} mm → pre-jump ${STAGE_PREJUMP_MM} mm → dispense ${depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'}`} the rim…`;
-				await moveAbs({ ...xy, z: h.z + jump }, { arc: true });
-				await moveAbs({ ...xy, z: h.z + STAGE_PREJUMP_MM }, { direct: true });
-				await moveAbs({ ...xy, z: zd }, { direct: true });
-				await refreshPosition();
-				await sleep(1500);
-				await moveAbs({ ...xy, z: h.z + STAGE_PREJUMP_MM }, { direct: true });
-				await moveAbs({ ...xy, z: h.z + jump }, { direct: true });
-				selectedHole = h.name;
-				msg = `Fill motion at ${h.name} done — tip end paused at z ${zd.toFixed(2)}.`;
-				await refreshPosition();
-			} finally {
-				motionRunning = false;
-			}
-		});
-
-	/** Straight to the dispense height over the first hole (to check or re-teach the depth). */
-	const goToDispenseHeight = () =>
-		act(async () => {
-			if (!rim) throw new Error('Teach the cart location first.');
-			if (!hasTip) throw new Error('Pick up a tip first.');
-			const a = adj();
-			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { arc: true });
-			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: dispenseZ(rim.z, depthMm) }, { direct: true });
-			msg = depthMm === null ? `At the protocol's default (${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim) — jog Z and save the depth you want.` : `At the taught dispense height (${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim). Jog Z to change it, then save.`;
-			await refreshPosition();
-		});
-
-	// ── scanner test ─────────────────────────────────────────────────────
+	// ── The stage's own teach points ─────────────────────────────────────────
+	let testScanInFlight = $state(false);
+	let testScanError = $state<string | null>(null);
+	let testScanLatest = $state<string | null>(null);
+	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 	async function fireTestScan() {
 		testScanError = null;
 		testScanLatest = null;
@@ -391,328 +875,487 @@
 			testScanInFlight = false;
 		}
 	}
-
-	// ── saves ────────────────────────────────────────────────────────────
 	async function readLive() {
 		await refreshPosition();
 		if (liveX === null || liveY === null || liveZ === null) throw new Error('Could not read the position from the robot.');
 		return { x: liveX, y: liveY, z: liveZ };
 	}
-
-	async function applySave(r: Awaited<ReturnType<typeof post>>) {
-		if (!r.ok) throw new Error(r.error);
-		calibration = r.data.calibration;
-		msg = r.data.success;
-		await invalidateAll();
-	}
-
 	const saveScanPosition = () =>
 		act(async () => {
 			if (hasTip) throw new Error('Drop the tip before saving the scan position — the scanner sweep runs without one.');
 			const p = await readLive();
-			await applySave(await post('saveScanPosition', { x: String(p.x), y: String(p.y), z: String(p.z), pipetteMount: pipetteMount ?? '', pipetteName: pipetteName ?? '', ...(testScanLatest ? { testScanBarcode: testScanLatest } : {}) }));
+			const r = await postAction('saveScanPosition', { x: String(p.x), y: String(p.y), z: String(p.z), pipetteMount: pipetteMount ?? '', pipetteName: pipetteName ?? '', ...(testScanLatest ? { testScanBarcode: testScanLatest } : {}) });
+			if (r) msg = r.success;
 		});
-
-	const saveCartLocation = () =>
+	const saveFirstHole = () =>
 		act(async () => {
-			if (!hasTip || !tipAdjust) throw new Error('Pick up a tip and calibrate it first — the cart location is saved tip-neutral (live − that tip\'s probe adjust).');
+			if (!hasTip || !tipAdjust) throw new Error('Calibrate the tip first — the first hole is saved tip-neutral (live − that tip\'s probe adjust).');
 			const p = await readLive();
-			await applySave(
-				await post('saveCartLocation', {
-					x: String(p.x),
-					y: String(p.y),
-					z: String(p.z),
-					pipetteMount: pipetteMount ?? '',
-					pipetteName: pipetteName ?? '',
-					hasTip: 'true',
-					adjustX: String(tipAdjust.x),
-					adjustY: String(tipAdjust.y),
-					tipWell
-				})
-			);
+			const r = await postAction('saveCartLocation', {
+				x: String(p.x),
+				y: String(p.y),
+				z: String(p.z),
+				pipetteMount: pipetteMount ?? '',
+				pipetteName: pipetteName ?? '',
+				hasTip: 'true',
+				adjustX: String(tipAdjust.x),
+				adjustY: String(tipAdjust.y),
+				tipWell
+			});
+			if (r) {
+				msg = r.success;
+				nominal = null;
+				refWell = null;
+			}
 		});
-
+	const goToDispenseHeight = () =>
+		act(async () => {
+			if (!rim) throw new Error('Teach the first hole first.');
+			if (!hasTip) throw new Error('Pick up a tip first — the depth is about the tip end.');
+			const a = adj();
+			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { arc: true });
+			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: dispenseZ(rim.z, depthMm) }, { direct: true });
+			msg = depthMm === null ? `At the protocol's default (${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim) — jog Z to where the wax should land, then save.` : `At the taught dispense height (${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim). Jog Z to change it, then save.`;
+			await refreshPosition();
+		});
+	const liveDepth = $derived(rim && liveZ !== null ? depthFromLive(rim.z, liveZ) : null);
+	const liveDepthOk = $derived(liveDepth !== null && liveDepth >= DISPENSE_DEPTH_LIMITS.min && liveDepth <= DISPENSE_DEPTH_LIMITS.max);
 	const saveDispenseDepth = () =>
 		act(async () => {
-			if (!rim) throw new Error('Teach the cart location (the rim) first.');
-			if (!hasTip) throw new Error('Pick up a tip first — the depth is where the tip end sits.');
+			if (!rim) throw new Error('Teach the first hole first.');
+			if (!hasTip) throw new Error('Pick up a tip first.');
 			const p = await readLive();
-			await applySave(await post('saveDispenseDepth', { z: String(p.z), hasTip: 'true' }));
+			const r = await postAction('saveDispenseDepth', { z: String(p.z), hasTip: 'true' });
+			if (r) msg = r.success;
 		});
+	let rotationDeg = $state<number>(data.calibration?.stageRotationDeg ?? 0);
+	let jumpHeightMm = $state<number>(data.calibration?.stageJumpHeightMm ?? 60);
+	$effect(() => {
+		rotationDeg = data.calibration?.stageRotationDeg ?? 0;
+		jumpHeightMm = data.calibration?.stageJumpHeightMm ?? 60;
+	});
+	async function saveGeometry() {
+		const r = await postAction('saveStageGeometry', { rotationDeg: String(rotationDeg), jumpHeightMm: String(jumpHeightMm) });
+		if (r) msg = r.success;
+	}
 
-	const fmt = (p: { x: number; y: number; z: number } | null) => (p ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · z ${p.z.toFixed(2)}` : 'not taught');
+	const fmt3 = (n: number) => n.toFixed(2);
 	const when = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString() : '');
-	const btn = 'rounded border border-[var(--color-tron-border)] px-3 py-3 text-sm hover:border-[var(--color-tron-cyan)] disabled:opacity-40';
-	const small = 'rounded border px-3 py-2 text-xs disabled:opacity-40';
-	const primary = `${small} bg-[var(--color-tron-cyan)] border-[var(--color-tron-cyan)] font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80`;
-	const plain = `${small} border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]`;
+	const pad = 'rounded border border-[var(--color-tron-border)] py-2 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40';
 </script>
 
-<div class="space-y-4">
-	<div class="flex flex-wrap items-start justify-between gap-3">
+<svelte:window onkeydown={onWindowKeydown} />
+
+<div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip">
+	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
-			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Stage calibration{#if data.robotName} · {data.robotName}{/if}</h2>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				The arm's OT-2 fills one cart on an elevated stage, not a 24-slot deck. Taught here, per robot: the <span class="font-semibold">scan position</span> (no tip),
-				the <span class="font-semibold">cart location</span> — the rim of the cart's first wax hole, with a probed tip, saved tip-neutral — the
-				<span class="font-semibold">dispense depth</span> the tip end goes to in that hole, and the cart's <span class="font-semibold">rotation</span> and
-				<span class="font-semibold">travel height</span>. The <a href={WAX_FILL_HREF} class="underline" style="color: var(--color-tron-cyan)">Wax fill</a> tab runs on these.
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Stage Calibration Studio</h1>
+			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
+				The robot arm's single-cart stage. Teach the first wax hole, jog to a hole, capture the real offset, select holes, apply it. Corrections persist in BIMS and the stage protocol reads them at every run start — nothing to upload.
 			</p>
 		</div>
-		<div class="flex flex-wrap items-center gap-2">
-			{#if robotId}<TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} />{/if}
-			<a href={studioCalibratorHref} class="{plain} py-1" style="color: var(--color-tron-text)" title="This robot's tip-calibrator point (approach XY, probe Z) — taught in the Deck Calibration Studio; the probe here and the stage protocol both use it">Tip calibrator (Studio)</a>
-			<a href={WAX_FILL_HREF} class="{plain} py-1" style="color: var(--color-tron-text)">Wax fill</a>
+		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax fill tab →</a>
+	</div>
+
+	<!-- Pickers -->
+	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
+			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+				<span class="bg-[var(--color-tron-cyan)]/20 px-2.5 py-1.5 text-[var(--color-tron-cyan)]" title="One Gen7 cartridge on the arm's elevated stage">Cartridge on stage</span>
+				<span class="px-2.5 py-1.5" title="Tube rack · slot 10 — the fill reads its labware definition as on a deck robot">Tube rack 10</span>
+				<span class="px-2.5 py-1.5" title="Tip rack · slot 11">Tip rack 11</span>
+			</div>
+		</div>
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Robot
+			<div class="mt-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">{robotName}<span class="ml-1 opacity-60">· the OT-2 the arm feeds</span></div>
+			{#if robotId}<span class="mt-1 block"><TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} /></span>{/if}
+		</div>
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Pipette mount
+			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+				{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
+					<button type="button" disabled={!!runId} onclick={() => { desiredMount = m as 'left' | 'right'; zAxis = m === 'right' ? 'rightZ' : 'leftZ'; }}
+						class="px-2.5 py-1.5 transition-colors disabled:opacity-50 {desiredMount === m ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
+						title={runId ? 'Close the run to switch mounts' : `Open the run on the ${lbl.toLowerCase()} mount (the wax p20 is normally on the right)`}>{lbl}</button>
+				{/each}
+			</div>
+			{#if runId}<div class="mt-0.5 text-[10px]">close run to switch</div>{/if}
+		</div>
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
+			12 wax holes · 6 × 9 mm lattice · rotation {calibration?.stageRotationDeg ?? 0}° ·
+			{#if taught}first hole <span class="font-mono">({fmt3(rim!.x)}, {fmt3(rim!.y)}, {fmt3(rim!.z)})</span>{:else}<span class="text-amber-300">first hole not taught</span>{/if}
+		</div>
+		{#if locked}<div class="text-xs text-amber-300">A wax-fill loop is running on this robot — motion is locked until it ends.</div>{/if}
+	</div>
+
+	{#if !robotId}
+		<div class="rounded border border-amber-500/40 bg-amber-900/15 p-3 text-xs text-amber-200">No OT-2 is chosen for the arm yet — pick it in <a href={WAX_FILL_HREF} class="underline">Wax fill → Setup</a>, then come back here.</div>
+	{/if}
+	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
+	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
+	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
+
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+		<!-- Canvas -->
+		<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+				<div class="flex flex-wrap items-center gap-3">
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cartridge — {selCount} selected</h2>
+					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's rim">
+						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover the cart for coords</span>{/if}
+					</span>
+				</div>
+				<div class="flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+					<label>Zoom <input type="range" min="0.6" max="4" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
+					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
+					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Reference grid (0.25mm fine · 1mm · 10mm bold)">Grid{showGrid ? ' ✓' : ''}</button>
+					<button type="button" onclick={() => (showRigid = !showRigid)} class="rounded border px-2 py-1 {showRigid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showRigid ? '' : 'color: var(--color-tron-text)'} title="Show where the rigid lattice puts each corrected hole">Lattice{showRigid ? ' ✓' : ''}</button>
+					<button type="button" onclick={selectAll} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all</button>
+					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
+					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
+				</div>
+			</div>
+			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+				Drag a box to select a group (Shift adds). Click a hole to toggle; the last clicked is the anchor. Wax holes are amber (the first, taught hole is ringed); the blue dots are the paired reagent holes, drawn for orientation only. Deck mm, to scale. Esc clears everything.
+				{#if !taught}<span class="text-amber-300"> The cart is drawn at the origin until the first hole is taught (Stage → First hole).</span>{/if}
+			</p>
+			<div class="flex-1 overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 85vh; display: flex; align-items: safe center; justify-content: safe center;">
+				<div style={`width:${zoom * 100}%; flex: 0 0 auto;`}>
+					<svg
+						bind:this={svgEl}
+						width="100%"
+						viewBox={`${bounds.x0} 0 ${bounds.x1 - bounds.x0} ${bounds.y1 - bounds.y0}`}
+						preserveAspectRatio="xMidYMid meet"
+						onpointerdown={onCanvasPointerDown}
+						onpointermove={onCanvasPointerMove}
+						onpointerup={onCanvasPointerUp}
+						onpointerleave={() => (hover = null)}
+						style="display:block; height:auto; touch-action:none; cursor: crosshair;"
+					>
+						<defs>
+							<pattern id="sgrid-025mm" x={bounds.x0} y="0" width="0.25" height="0.25" patternUnits="userSpaceOnUse">
+								<path d="M 0.25 0 L 0 0 0 0.25" fill="none" stroke="rgba(130,180,220,0.22)" stroke-width="0.02" />
+							</pattern>
+							<pattern id="sgrid-1mm" x={bounds.x0} y="0" width="1" height="1" patternUnits="userSpaceOnUse">
+								<rect width="1" height="1" fill="url(#sgrid-025mm)" />
+								<path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(130,180,220,0.40)" stroke-width="0.05" />
+							</pattern>
+							<pattern id="sgrid-10mm" x={bounds.x0} y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+								<rect width="10" height="10" fill="url(#sgrid-1mm)" />
+								<path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(130,180,220,0.55)" stroke-width="0.1" />
+							</pattern>
+						</defs>
+						{#if showGrid}
+							<rect x={bounds.x0} y="0" width={bounds.x1 - bounds.x0} height={bounds.y1 - bounds.y0} fill="url(#sgrid-10mm)" />
+						{/if}
+						<!-- reagent holes: orientation only -->
+						{#each wells as w (`rg-${w.name}`)}
+							<circle cx={w.reagent.x} cy={cy(w.reagent.y)} r={wellR * 0.8} fill="rgba(80,170,215,0.35)" style="pointer-events:none;" />
+						{/each}
+						<!-- rigid lattice position of a corrected hole -->
+						{#if showRigid}
+							{#each wells as w (`rigid-${w.name}`)}
+								{#if w.offset.dx !== 0 || w.offset.dy !== 0}
+									<circle cx={w.rigid.x} cy={cy(w.rigid.y)} r={wellR} fill="none" stroke="rgba(217,160,80,0.45)" stroke-width="0.12" stroke-dasharray="0.3 0.2" style="pointer-events:none;" />
+									<line x1={w.rigid.x} y1={cy(w.rigid.y)} x2={w.x} y2={cy(w.y)} stroke="rgba(217,160,80,0.6)" stroke-width="0.1" style="pointer-events:none;" />
+								{/if}
+							{/each}
+						{/if}
+						{#each wells as w (w.name)}
+							{@const sel = selection.has(w.name)}
+							<circle
+								cx={w.x} cy={cy(w.y)} r={wellR}
+								fill={sel ? 'var(--color-tron-cyan)' : refWell === w.name ? '#f59e0b' : 'rgba(217,160,80,0.65)'}
+								stroke={w.index === 0 ? 'var(--color-tron-cyan)' : sel ? 'var(--color-tron-cyan)' : 'none'}
+								stroke-width={w.index === 0 ? 0.25 : 0.15}
+								onpointerdown={(e) => { e.stopPropagation(); }}
+								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
+								role="button" tabindex="-1"
+							><title>{w.name} (row {w.row}, gate {w.gate}{w.index === 0 ? ', first/taught' : ''}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{w.offset.dx || w.offset.dy || w.offset.dz ? ` · correction ${w.offset.dx}, ${w.offset.dy}, ${w.offset.dz}` : ''}</title></circle>
+							<text x={w.x} y={cy(w.y) - wellR - 0.4} font-size="1.1" text-anchor="middle" fill="rgba(200,220,240,0.7)" style="pointer-events:none; user-select:none;">{w.name}</text>
+						{/each}
+						{#if boxRect}
+							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.15" />
+						{/if}
+					</svg>
+				</div>
+			</div>
+		</section>
+
+		<!-- Right column: jog + tip + offset + protocol -->
+		<div class="min-w-0 space-y-4">
+			<section class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-3">
+				<div class="flex items-center justify-between">
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Jog</h2>
+					{#if !runId}
+						<button type="button" onclick={startMaintenance} disabled={connecting || !robotId || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">{connecting ? 'Opening…' : 'Open run'}</button>
+					{:else}
+						<div class="flex gap-2">
+							<button type="button" onclick={homeRobot} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Home</button>
+							<button type="button" onclick={stopMaintenance} disabled={busy} class="rounded border border-amber-500/40 bg-amber-900/15 px-2 py-1 text-xs text-amber-300 disabled:opacity-40">Close</button>
+						</div>
+					{/if}
+				</div>
+				{#if runId}<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">pipette {pipetteName} ({pipetteMount})</p>{/if}
+				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
+						<option value={0.1}>0.1</option><option value={0.5}>0.5</option><option value={1}>1</option><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option>
+					</select> mm</label>
+					<label>Z <select bind:value={zAxis} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)"><option value="leftZ">leftZ</option><option value="rightZ">rightZ</option></select></label>
+				</div>
+				<div class="mt-2 grid grid-cols-3 gap-1">
+					<div></div>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis('y', stepSize)} class={pad} style="color: var(--color-tron-text)">Y +</button>
+					<div></div>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis('x', -stepSize)} class={pad} style="color: var(--color-tron-text)">X −</button>
+					<div class="flex items-center justify-center text-[10px]" style="color: var(--color-tron-text-secondary)">XY</div>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis('x', stepSize)} class={pad} style="color: var(--color-tron-text)">X +</button>
+					<div></div>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis('y', -stepSize)} class={pad} style="color: var(--color-tron-text)">Y −</button>
+					<div></div>
+				</div>
+				<div class="mt-1 grid grid-cols-2 gap-1">
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis(zAxis, stepSize)} class={pad} style="color: var(--color-tron-text)">Z + up</button>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis(zAxis, -stepSize)} class={pad} style="color: var(--color-tron-text)">Z − down</button>
+				</div>
+				<div class="mt-2 flex items-center justify-between rounded border border-[var(--color-tron-border)] bg-black/30 p-2 font-mono text-xs" style="color: var(--color-tron-text)">
+					<span>x {liveX !== null ? liveX.toFixed(2) : '—'}</span>
+					<span>y {liveY !== null ? liveY.toFixed(2) : '—'}</span>
+					<span>z {liveZ !== null ? liveZ.toFixed(2) : '—'}</span>
+				</div>
+				{#if rim && liveZ !== null}
+					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">tip end {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the taught rim</p>
+				{/if}
+				<div class="mt-2 grid grid-cols-2 gap-2">
+					<button type="button" onclick={moveToSelectedHole} disabled={!pipetteId || busy || selCount !== 1 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Select exactly one hole — parks the tip 2 mm above its rim, this tip's adjust applied">Move to hole</button>
+					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture offset</button>
+				</div>
+
+				<!-- Tip -->
+				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
+					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
+						<span class="font-bold uppercase tracking-wider">Tip</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · p20 rack{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+					</div>
+					<div class="mb-2 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						<span>Pick from</span>
+						<input type="text" bind:value={tipWell} disabled={busy} class="w-12 rounded border border-[var(--color-tron-border)] bg-black/40 px-1 py-0.5 text-center font-mono text-[11px]" style="color: var(--color-tron-text)" title="Rack position of the next fresh tip (column-major). Overtype if the rack was reloaded." />
+						{#if data.teach?.nextTipWell}<span title="Where the robot's tip tracker / Studio cursor says the next fresh tip is">next fresh: <span class="font-mono">{data.teach.nextTipWell}</span> · {data.teach.nextTipSource}</span>{/if}
+						<button type="button" onclick={() => (tipWell = 'A1')} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 hover:border-[var(--color-tron-cyan)]/60" title="Rack was refilled — start from A1 again">Refilled → A1</button>
+					</div>
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
+						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip (picks up a p20 tip first)'}
+					</button>
+					{#if !calibrating}
+						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
+							{#if !hasTip}Picks up <span class="font-mono">{tiprack} {tipWell}</span> from slot 11, moves to ({calX}, {calY}, {calZ}), then probes at z {probeZ}.
+							{:else if atCalibratorNow()}Probes from the current jogged position — already within {CAL_AT_TOLERANCE_MM} mm of the calibrator, so it will not travel.
+							{:else}Moves to ({calX}, {calY}, {calZ}), then probes at z {probeZ}.{/if}
+						</p>
+					{/if}
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap tip — drop it, take a fresh one from the rack</button>
+					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}</button>
+					<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop tip (for the scan position)</button>
+					{#if tipAdjust}
+						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
+					{/if}
+					<details class="mt-2 rounded border border-[var(--color-tron-border)] bg-black/20">
+						<summary class="cursor-pointer select-none px-2 py-1 text-[10px] uppercase tracking-wider hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Fixture point (teach) · {data.teach?.calibrator?.source ?? 'none'}</summary>
+						<div class="border-t border-[var(--color-tron-border)] p-2">
+							<div class="grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+								<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+								<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
+							</div>
+							<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Approach Z is the pre-probe travel height only — "Calibrate tip" and "Go to calibrator" park there. The probe never reads it.</p>
+							<div class="mt-2 grid grid-cols-2 gap-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
+								<label class="block">Probe Z — p20 · wax (zCalWax)
+									<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={probeZ} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
+								</label>
+								<label class="block">Max tip adjust (mm, blank = protocol default)
+									<input type="number" step="0.1" min="0.3" max="12" bind:value={maxAdjust} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
+								</label>
+							</div>
+							<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Touch-off depth the limit-switch probe descends to. "Calibrate tip" uses what is typed here immediately; Save writes it to this robot's production z_cal (robot-keyed — the arm's OT-2 has no deck).{#if data.teach?.calibrator?.taughtAt} Last saved {when(data.teach.calibrator.taughtAt)}{data.teach.calibrator.taughtBy ? ` by ${data.teach.calibrator.taughtBy}` : ''}.{/if}</p>
+							<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
+							<div class="mt-1 grid grid-cols-2 gap-2">
+								<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the X/Y/Z fields">From live ↧</button>
+								<button type="button" onclick={saveCalibratorPosition} disabled={busy || !robotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robotName}</button>
+							</div>
+						</div>
+					</details>
+				</div>
+
+				<!-- Offset → selection -->
+				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
+					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → selection</div>
+					<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+						<label>dx <input type="number" step="0.01" bind:value={dx} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+						<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+						<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+					</div>
+					<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0 || !taught} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}</button>
+					<button type="button" onclick={applyGlobalShift} disabled={busy || !taught} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">⤧ Shift whole cart by this offset</button>
+					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole → Capture → <strong>Shift whole cart</strong> moves the taught first hole (all 12 follow). Apply to a subset writes per-hole corrections (±{HOLE_OFFSET_LIMIT_MM} mm max).</p>
+					<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, whole cart, set-position or align)">↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}</button>
+				</div>
+			</section>
+
+			<!-- Protocol on robot (the Studio's "Sync" — nothing to upload here) -->
+			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol on robot</h2>
+				<div class="mt-2 space-y-1 text-[11px]">
+					{#if !data.protocol}
+						<p class="text-amber-300">No wax-filling protocol on {robotName} — upload <span class="font-mono">protocols/Wax_Filling_GEN7_ArmStage.py</span> on <a href="/opentrons" class="underline">/opentrons</a> and deploy it to this robot.</p>
+					{:else if !data.protocol.declaresCartLocation}
+						<p class="text-amber-300"><span class="font-mono">{data.protocol.protocolName}</span> is the carriage protocol — it reads no stage calibration. Upload Wax_Filling_GEN7_ArmStage.py to this robot.</p>
+					{:else}
+						<p style="color: var(--color-tron-text)">✓ <span class="font-mono">{data.protocol.protocolName}</span> reads the first hole, rotation, travel height and dispense depth.</p>
+						<p class={data.teach?.protocolDeclaresHoleOffsets ? '' : 'text-amber-300'} style={data.teach?.protocolDeclaresHoleOffsets ? 'color: var(--color-tron-text)' : ''}>
+							{data.teach?.protocolDeclaresHoleOffsets ? '✓ reads the per-hole corrections (hole_01…12).' : '○ this upload predates per-hole corrections — re-upload the stage .py to this robot for Apply / Align to reach the fill.'}
+						</p>
+					{/if}
+					<p style="color: var(--color-tron-text-secondary)">Nothing to sync: every value on this page is sent to the robot as run-time parameters at each run start.</p>
+				</div>
+				<button type="button" onclick={() => void invalidateAll()} class="mt-2 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Re-check</button>
+			</section>
 		</div>
 	</div>
 
-	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
-	{#if form?.success}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{form.success}</div>{/if}
-
-	{#if !robotId}
-		<section class="rounded-lg border border-amber-500/40 bg-amber-900/15 p-4 text-xs text-amber-200">
-			No OT-2 is chosen for the arm yet — pick it in <a href={WAX_FILL_HREF} class="underline">Wax fill → Setup</a>, then come back here.
-		</section>
-	{:else}
-		<!-- ── Checklist ─────────────────────────────────────────────────── -->
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">What the stage protocol needs</h3>
-			<ul class="mt-2 grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
-				{#each data.checklist as c (c.key)}
-					<li class="flex gap-2 rounded border p-2 {c.ok ? 'border-green-500/30 bg-green-900/10' : 'border-amber-500/40 bg-amber-900/10'}">
-						<span class="mt-0.5 text-sm leading-none {c.ok ? 'text-green-300' : 'text-amber-300'}">{c.ok ? '✓' : '○'}</span>
-						<span>
-							<span class="font-semibold" style="color: var(--color-tron-text)">{c.label}</span>
-							<span class="block text-[11px]" style="color: var(--color-tron-text-secondary)">{c.detail}</span>
-						</span>
-					</li>
-				{/each}
-			</ul>
-			{#if data.loopRunning}
-				<p class="mt-2 text-[11px] text-amber-300">A wax-fill loop is running on this robot — motion here is locked until it ends.</p>
-			{/if}
-		</section>
-
-		<!-- ── Maintenance run + tip ─────────────────────────────────────── -->
-		<section class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-4 space-y-3">
-			{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
-			{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
-
-			<div class="flex flex-wrap items-center justify-between gap-3">
-				<div class="text-xs" style="color: var(--color-tron-text-secondary)">
-					{#if maintRunId}
-						Maintenance run <span class="font-mono">{maintRunId}</span>{#if pipetteName} · {pipetteName} ({pipetteMount}){/if}
-						· <span class={hasTip ? 'text-green-300' : ''}>{hasTip ? (tipAdjust ? `tip on, probed (${tipAdjust.x}, ${tipAdjust.y})` : 'tip on, NOT probed') : 'no tip'}</span>
-					{:else}No maintenance run open — open one to jog, pick up a tip and teach.{/if}
-				</div>
-				<div class="flex flex-wrap gap-2">
-					{#if !maintRunId}
-						<button type="button" onclick={openMaintenance} disabled={connecting || data.loopRunning}
-							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
-							{connecting ? 'Opening…' : 'Open maintenance run'}
-						</button>
+	<!-- Under-canvas tools: they act on the CURRENT SELECTION -->
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill motion</h2>
+			{#if touring}
+				<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
+				<div class="grid grid-cols-4 gap-1">
+					<button type="button" onclick={tourPrev} disabled={busy || tourIndex === 0} class={pad} style="color: var(--color-tron-text)">‹ Prev</button>
+					<button type="button" onclick={tourNext} disabled={busy || tourIndex >= tourWells.length - 1} class={pad} style="color: var(--color-tron-text)">Next ›</button>
+					{#if tourPlaying}
+						<button type="button" onclick={() => (tourPlaying = false)} class="rounded border border-amber-500/40 bg-amber-900/15 py-1.5 text-xs text-amber-300">Pause</button>
 					{:else}
-						<button type="button" onclick={() => void pickUpAndCalibrateTip()} disabled={dis || calibrating || !data.teach?.calibrator}
-							class="rounded border border-purple-400/50 bg-purple-900/20 px-3 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40"
-							title="Picks up a p20 tip from slot 11, travels to the tip calibrator and runs the slow limit-switch probe. Keeps the tip on.">
-							{calibrating ? 'Calibrating…' : hasTip ? 'Re-probe this tip' : `Pick up tip (${tipWell}) + calibrate`}
-						</button>
-						<button type="button" onclick={() => void pickUpOnly()} disabled={dis || hasTip} class={plain} style="color: var(--color-tron-text)" title="Just a tip, no probe — enough for the dispense depth and the fill motion, not for the cart location">Pick up tip (no probe)</button>
-						<button type="button" onclick={() => void dropTip()} disabled={dis || !hasTip} class="{small} border-amber-500/40 bg-amber-900/15 text-amber-300 hover:bg-amber-900/25">Drop tip</button>
-						<button type="button" onclick={home} disabled={dis} class={plain} style="color: var(--color-tron-text)">Home</button>
-						<button type="button" onclick={closeMaintenance} disabled={busy} class="{small} border-amber-500/40 bg-amber-900/15 text-amber-300 hover:bg-amber-900/25">Close run</button>
+						<button type="button" onclick={tourPlay} disabled={busy || tourIndex >= tourWells.length - 1} class="rounded border border-[var(--color-tron-cyan)]/40 py-1.5 text-xs text-[var(--color-tron-cyan)] disabled:opacity-40">Play</button>
 					{/if}
+					<button type="button" onclick={tourStop} class="rounded border border-red-500/40 bg-red-900/15 py-1.5 text-xs text-red-300">Stop</button>
 				</div>
-			</div>
-			{#if data.teach?.calibrator}
-				<p class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-					Calibrator ({data.teach.calibrator.source}): x {data.teach.calibrator.x} · y {data.teach.calibrator.y} · approach z {data.teach.calibrator.approachZ} · probe z {data.teach.calibrator.probeZ}.
-					Tips: {data.teach.tiprackLoadName} in slot 11, next {tipWell}.
-				</p>
+			{:else if fillMotionRunning}
+				{#if fillPaused}<div class="mb-1 text-center text-[11px] text-amber-300">Paused</div>{/if}
+				<div class="grid grid-cols-2 gap-1">
+					{#if fillPaused}
+						<button type="button" onclick={resumeFillMotion} class="rounded border border-[var(--color-tron-cyan)]/40 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">▶ Resume</button>
+					{:else}
+						<button type="button" onclick={pauseFillMotion} class="rounded border border-amber-500/40 bg-amber-900/15 py-2 text-xs text-amber-300">❚❚ Pause</button>
+					{/if}
+					<button type="button" onclick={stopFillMotion} class="rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">■ Stop</button>
+				</div>
 			{:else}
-				<p class="text-[10px] text-amber-300">No tip-calibrator point for this robot — teach it in the Deck Calibration Studio before probing a tip here.</p>
+				<div class="grid grid-cols-2 gap-1">
+					<button type="button" onclick={startTour} disabled={!pipetteId || busy || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through all 12 holes in fill order">Run through all holes</button>
+					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): travel height → pre-jump → dispense depth → dwell → retract">▶ Fill motion ({selCount} selected)</button>
+				</div>
+				<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<span class="opacity-70">Fill:</span>
+					<label class="flex items-center gap-1"><input type="checkbox" bind:checked={fillMatchProtocol} /> Protocol speed</label>
+					{#if !fillMatchProtocol}<label>Cap <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>{/if}
+					<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
+				</div>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics the stage fill at each selected hole ({jumpMm} mm travel → {STAGE_PREJUMP_MM} mm pre-jump → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → {fillDwellMs} ms dwell → retract), in fill order.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
 			{/if}
+		</section>
 
-			<div class="grid grid-cols-1 gap-4 lg:grid-cols-5">
-				<!-- jog pad + live position -->
-				<div class="space-y-3 lg:col-span-2">
-					<div class="flex flex-wrap items-center gap-3 text-xs" style="color: var(--color-tron-text-secondary)">
-						<label class="flex items-center gap-2">Step
-							<select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-								<option value={0.1}>0.1 mm</option><option value={0.5}>0.5 mm</option><option value={1}>1 mm</option><option value={5}>5 mm</option><option value={10}>10 mm</option><option value={25}>25 mm</option>
-							</select>
-						</label>
-						<label class="flex items-center gap-2">Z axis
-							<select bind:value={zAxis} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-								<option value="leftZ">leftZ</option><option value="rightZ">rightZ</option>
-							</select>
-						</label>
-					</div>
-					<div class="grid grid-cols-3 gap-2">
-						<div></div>
-						<button type="button" disabled={dis} onclick={() => jog('y', stepSize)} class={btn} style="color: var(--color-tron-text)">Y +</button>
-						<div></div>
-						<button type="button" disabled={dis} onclick={() => jog('x', -stepSize)} class={btn} style="color: var(--color-tron-text)">X −</button>
-						<div class="flex items-center justify-center text-[10px]" style="color: var(--color-tron-text-secondary)">deck XY</div>
-						<button type="button" disabled={dis} onclick={() => jog('x', stepSize)} class={btn} style="color: var(--color-tron-text)">X +</button>
-						<div></div>
-						<button type="button" disabled={dis} onclick={() => jog('y', -stepSize)} class={btn} style="color: var(--color-tron-text)">Y −</button>
-						<div></div>
-					</div>
-					<div class="grid grid-cols-2 gap-2">
-						<button type="button" disabled={dis} onclick={() => jog(zAxis, stepSize)} class={btn} style="color: var(--color-tron-text)">Z + (up)</button>
-						<button type="button" disabled={dis} onclick={() => jog(zAxis, -stepSize)} class={btn} style="color: var(--color-tron-text)">Z − (down)</button>
-					</div>
-					<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-						<div class="flex items-center justify-between">
-							<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Live position</span>
-							<button type="button" onclick={() => void act(refreshPosition)} disabled={dis} class="text-[11px] underline disabled:opacity-40" style="color: var(--color-tron-cyan)">Refresh</button>
-						</div>
-						<div class="mt-2 grid grid-cols-3 gap-2 font-mono text-sm" style="color: var(--color-tron-text)">
-							<span>x: {liveX !== null ? liveX.toFixed(2) : '—'}</span><span>y: {liveY !== null ? liveY.toFixed(2) : '—'}</span><span>z: {liveZ !== null ? liveZ.toFixed(2) : '—'}</span>
-						</div>
-						{#if rim && liveZ !== null}
-							<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-								Tip end is <span class="font-mono {liveDepthOk ? '' : 'text-amber-300'}">{Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'}</span> the taught rim (z {rim.z.toFixed(2)}).
-							</p>
-						{/if}
-					</div>
-				</div>
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm, tip-neutral) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta. Prefilled with the anchor's current coords.</p>
+			<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more move with it)` : ''}` : 'Select one or more holes'}</div>
+			<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				<label>x <input type="number" step="0.01" bind:value={setX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<label>y <input type="number" step="0.01" bind:value={setY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<label>z <input type="number" step="0.01" bind:value={setZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+			</div>
+			<button type="button" onclick={applyAbsolute} disabled={busy || selCount === 0 || !taught} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
+				{selCount === 0 ? 'Select one or more holes' : selCount === 1 ? `Set ${anchor} to this position` : `Move ${selCount} holes (anchor ${anchor})`}
+			</button>
+		</section>
 
-				<!-- the stage: 12 holes -->
-				<div class="space-y-2 lg:col-span-3">
-					<div class="flex items-center justify-between">
-						<span class="text-xs font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">The cart on the stage</span>
-						<span class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-							{holesTaught ? `12 wax holes from the taught first hole · rotation ${calibration?.stageRotationDeg ?? 0}° · 6 mm per gate, 9 mm per row` : 'Holes appear once the cart location is taught'}
-						</span>
-					</div>
-					<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-						<div class="mb-1 grid grid-cols-[2.5rem_repeat(4,minmax(0,1fr))] gap-1 text-[10px] text-center" style="color: var(--color-tron-text-secondary)">
-							<span></span><span>gate 4</span><span>gate 3</span><span>gate 2</span><span>gate 1</span>
-						</div>
-						{#each [1, 2, 3] as row (row)}
-							<div class="grid grid-cols-[2.5rem_repeat(4,minmax(0,1fr))] gap-1 mb-1">
-								<span class="flex items-center justify-center text-[10px]" style="color: var(--color-tron-text-secondary)">row {row}</span>
-								{#each holes.filter((h) => h.row === row) as h (h.name)}
-									<button type="button" onclick={() => void goToHole(h)} disabled={dis || !holesTaught || !hasTip}
-										title={holesTaught ? `Move 2 mm above ${h.name}: x ${h.x} · y ${h.y} · z ${h.z}` : 'Teach the cart location first'}
-										class="rounded border px-1 py-2 text-center text-[11px] disabled:opacity-40 {h.index === 0 ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15' : selectedHole === h.name ? 'border-green-500/50 bg-green-900/15' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}"
-										style="color: var(--color-tron-text)">
-										<span class="font-semibold">{h.name}</span>{#if h.index === 0}<span class="block text-[9px]" style="color: var(--color-tron-cyan)">first · taught</span>{:else if holesTaught}<span class="block font-mono text-[9px]" style="color: var(--color-tron-text-secondary)">{h.x.toFixed(1)}, {h.y.toFixed(1)}</span>{/if}
-									</button>
-								{/each}
-							</div>
-						{/each}
-						<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Click a hole to move 2 mm above its rim (tip on; this tip's probe adjust applied, as the fill does). The first hole is the taught one; the rest follow from the cartridge's pitch and the rotation below.</p>
-					</div>
-					<div class="flex flex-wrap items-center gap-2">
-						<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">Fill motion at
-							<select bind:value={selectedHole} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
-								{#each holes as h (h.name)}<option value={h.name}>{h.name}</option>{/each}
-							</select>
-						</label>
-						<button type="button" onclick={() => { const h = holes.find((x) => x.name === selectedHole); if (h) void fillMotion(h); }} disabled={dis || !holesTaught || !hasTip || motionRunning}
-							class="{small} border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10"
-							title="The stage protocol's exact approach at this hole — travel height, pre-jump, dispense height, dwell, retract — without dispensing">
-							{motionRunning ? 'Running…' : 'Run fill motion'}
-						</button>
-						<span class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-							travel {calibration?.stageJumpHeightMm ?? 60} mm → {STAGE_PREJUMP_MM} mm → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (default, depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → pause → up
-						</span>
-					</div>
-				</div>
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Align selection → anchor hole</h2>
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Fixes holes that drifted relative to each other. Jog-verify ONE good hole, select the group (box-drag), click the good hole <strong>last</strong> so it's the anchor. Every other selected hole snaps onto the cartridge's rigid 6 × 9 mm lattice carrying the anchor's correction. Z untouched.</p>
+			<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">{anchor && selCount >= 2 ? `Anchor: ${anchor} (correction ${wellByName.get(anchor)?.offset.dx ?? 0}, ${wellByName.get(anchor)?.offset.dy ?? 0}) — ${selCount - 1} other hole(s) selected` : 'Select the holes, click the trusted hole last'}</div>
+			<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2 || !taught} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40">
+				{selCount < 2 ? 'Select the holes + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
+			</button>
+		</section>
+	</div>
+
+	<!-- The stage's own teach points: what a deck definition would otherwise carry -->
+	<div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
+		<section class="rounded-lg border {taught ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · first hole</h2>
+			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{rim ? `x ${fmt3(rim.x)} · y ${fmt3(rim.y)} · z ${fmt3(rim.z)}` : 'not taught'}</div>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+				The rim of the cart's first wax hole (row 1, gate 4 — X2). Calibrate a tip, jog the <strong>tip end</strong> onto that rim, save: stored tip-neutral (live − this tip's adjust); the other 11 follow from it. Re-teaching it keeps the per-hole corrections.
+				{#if rim?.taughtAt}Taught {when(rim.taughtAt)}{rim.taughtBy ? ` by ${rim.taughtBy}` : ''}.{/if}
+				{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
+			</p>
+			<button type="button" onclick={saveFirstHole} disabled={!pipetteId || busy || !hasTip || !tipAdjust || locked} class="w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={!hasTip || !tipAdjust ? 'Calibrate the tip first — the point is saved tip-neutral' : ''}>Save here as first hole</button>
+		</section>
+
+		<section class="rounded-lg border {depthMm === null ? 'border-amber-500/40' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3 space-y-2">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · dispense depth</h2>
+			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{#if depthMm !== null}{Math.abs(depthMm)} mm {depthMm >= 0 ? 'below' : 'above'} the rim{#if rim} · tip end z {dispenseZ(rim.z, depthMm).toFixed(2)}{/if}{:else}not taught — protocol would hover {Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above{/if}</div>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">How far into the first wax hole the <strong>tip end</strong> goes when wax is dispensed (dispense_depth). "Go to dispense height" parks it at the current value; jog Z to where the wax should land, save. Allowed {DISPENSE_DEPTH_LIMITS.min} (hover) to {DISPENSE_DEPTH_LIMITS.max} mm into the {WAX_HOLE_DEPTH_MM} mm hole.{#if calibration?.dispenseDepth?.taughtAt} Taught {when(calibration.dispenseDepth.taughtAt)}.{/if}</p>
+			{#if rim && liveZ !== null}<p class="text-[11px] {liveDepthOk ? 'text-green-300' : 'text-amber-300'}">Tip end now {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the rim{liveDepthOk ? '' : ' — outside the allowed range'}.</p>{/if}
+			<div class="grid grid-cols-2 gap-2">
+				<button type="button" onclick={goToDispenseHeight} disabled={!pipetteId || busy || !hasTip || !rim} class={pad} style="color: var(--color-tron-text)">Go to dispense height</button>
+				<button type="button" onclick={saveDispenseDepth} disabled={!pipetteId || busy || !hasTip || !rim || !liveDepthOk || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save depth here</button>
 			</div>
 		</section>
 
-		<!-- ── The four taught things ─────────────────────────────────────── -->
-		<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2">
-				<div class="flex items-center justify-between">
-					<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">1 · Scan position</h3>
-					<button type="button" onclick={fireTestScan} disabled={testScanInFlight || !maintRunId}
-						class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test scan'}</button>
-				</div>
-				<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Where the gantry scanner reads the cart the arm placed. Jog with <span class="font-semibold">no tip on</span> (the sweep runs without one), fire a test scan, save.
-					{#if calibration?.scanPosition?.taughtAt}Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}.{/if}
-					{#if calibration?.scanPosition?.testScanBarcode}Test read: <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}
-				</p>
-				{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>
-				{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>{/if}
-				<div class="flex gap-2">
-					<button type="button" onclick={() => void saveScanPosition()} disabled={dis || hasTip} class="{primary} flex-1" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save here as scan position</button>
-					{#if calibration?.scanPosition}
-						<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { arc: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={dis} class={plain} style="color: var(--color-tron-text)">Move to</button>
-					{/if}
-				</div>
-			</section>
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 space-y-2">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · geometry</h2>
+			<div class="grid grid-cols-2 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				<label>Cart rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<label>Travel height (mm) <input type="number" step="1" min={STAGE_JUMP_LIMITS.min} max={STAGE_JUMP_LIMITS.max} bind:value={jumpHeightMm} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+			</div>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Rotation: counter-clockwise from above, about the first hole. 0° = as in a carriage slot (gates toward −x, rows toward −y); 180° = turned end for end — the plane redraws on save. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is tall.</p>
+			<button type="button" onclick={saveGeometry} disabled={busy || locked} class="w-full rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>
+		</section>
 
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2">
-				<div class="flex items-center justify-between">
-					<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">2 · Cart location</h3>
-					<span class="font-mono text-[10px] {hasTip && tipAdjust ? 'text-green-300' : ''}" style={hasTip && tipAdjust ? '' : 'color: var(--color-tron-text-secondary)'}>{hasTip ? (tipAdjust ? `probed ${tipAdjust.x}, ${tipAdjust.y}` : 'tip on · not probed') : 'no tip'}</span>
-				</div>
-				<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{fmt(rim)}</div>
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-					The rim of the cart's <span class="font-semibold">first wax hole</span> (row 1, gate 4 — the hole a full deck calls X2). Pick up + calibrate a tip, jog the
-					<span class="font-semibold">tip end</span> onto that rim, save. Stored tip-neutral (live − this tip's adjust); sent as arm_cart_x/y/z.
-					{#if rim?.taughtAt}Taught {when(rim.taughtAt)}{rim.taughtBy ? ` by ${rim.taughtBy}` : ''}.{/if}
-					{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>{rim.tipWell ? ` (tip ${rim.tipWell})` : ''}.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
-				</p>
-				<div class="flex gap-2">
-					<button type="button" onclick={() => void saveCartLocation()} disabled={dis || !hasTip || !tipAdjust} class="{primary} flex-1" title={!hasTip || !tipAdjust ? 'Pick up and calibrate a tip first — the point is saved tip-neutral' : ''}>Save here as cart location</button>
-					{#if holesTaught}
-						<button type="button" onclick={() => void goToHole(holes[0])} disabled={dis || !hasTip} class={plain} style="color: var(--color-tron-text)" title="2 mm above the taught rim, this tip's adjust applied">Move to</button>
-					{/if}
-				</div>
-			</section>
+		<section class="rounded-lg border {calibration?.scanPosition ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
+			<div class="flex items-center justify-between">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · scan position</h2>
+				<button type="button" onclick={fireTestScan} disabled={testScanInFlight || !runId} class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test scan'}</button>
+			</div>
+			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{calibration?.scanPosition ? `x ${fmt3(calibration.scanPosition.x)} · y ${fmt3(calibration.scanPosition.y)} · z ${fmt3(calibration.scanPosition.z)}` : 'not taught'}</div>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Where the gantry scanner reads the cart the arm placed. Jog with <strong>no tip on</strong> (the sweep runs without one), fire a test scan, save.{#if calibration?.scanPosition?.testScanBarcode} Test read <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}</p>
+			{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>{/if}
+			<div class="grid grid-cols-2 gap-2">
+				<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { arc: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move to</button>
+				<button type="button" onclick={saveScanPosition} disabled={!pipetteId || busy || hasTip || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save here (no tip)</button>
+			</div>
+		</section>
+	</div>
 
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2">
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">3 · Dispense depth</h3>
-				<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">
-					{#if depthMm !== null}{Math.abs(depthMm)} mm {depthMm >= 0 ? 'below' : 'above'} the rim{#if rim} · tip end at z {dispenseZ(rim.z, depthMm).toFixed(2)}{/if}{:else}not taught — the protocol would hover {Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim{/if}
-				</div>
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-					How far into the first wax hole the <span class="font-semibold">tip end</span> goes when wax is dispensed (the protocol's dispense_depth). With a tip on, "Go to dispense height" puts it
-					at the current value over the first hole; jog Z to where the wax should land, save. Allowed {DISPENSE_DEPTH_LIMITS.min} (hover {Math.abs(DISPENSE_DEPTH_LIMITS.min)} mm above)
-					to {DISPENSE_DEPTH_LIMITS.max} mm into the {WAX_HOLE_DEPTH_MM} mm-deep hole — deeper snaps tips. Measured from the taught rim, so re-teach it if the rim moves.
-					{#if calibration?.dispenseDepth?.taughtAt}Taught {when(calibration.dispenseDepth.taughtAt)}{calibration.dispenseDepth.taughtBy ? ` by ${calibration.dispenseDepth.taughtBy}` : ''}.{/if}
-				</p>
-				{#if rim && liveZ !== null}
-					<p class="text-[11px] {liveDepthOk ? 'text-green-300' : 'text-amber-300'}">Tip end now: {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the rim{liveDepthOk ? '' : ' — outside the allowed range'}.</p>
-				{/if}
-				<div class="flex gap-2">
-					<button type="button" onclick={() => void saveDispenseDepth()} disabled={dis || !hasTip || !rim || !liveDepthOk} class="{primary} flex-1" title={!rim ? 'Teach the cart location first' : !hasTip ? 'Pick up a tip first' : !liveDepthOk ? 'Jog within the allowed range' : ''}>Save dispense depth here</button>
-					<button type="button" onclick={() => void goToDispenseHeight()} disabled={dis || !hasTip || !rim} class={plain} style="color: var(--color-tron-text)">Go to dispense height</button>
-				</div>
-			</section>
-
-			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2">
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">4 · Stage geometry</h3>
-				<form method="POST" action="?/saveStageGeometry" use:enhance class="space-y-3 text-xs">
-					<div class="grid grid-cols-2 gap-3">
-						<label class="block">
-							<span style="color: var(--color-tron-text-secondary)">Cart rotation on the stage (°)</span>
-							<input name="rotationDeg" type="number" step="0.5" min="-360" max="360" value={calibration?.stageRotationDeg ?? 0}
-								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-						</label>
-						<label class="block">
-							<span style="color: var(--color-tron-text-secondary)">Travel height over the rim (mm)</span>
-							<input name="jumpHeightMm" type="number" step="1" min={STAGE_JUMP_LIMITS.min} max={STAGE_JUMP_LIMITS.max} value={calibration?.stageJumpHeightMm ?? 60}
-								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-						</label>
-					</div>
-					<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-						Rotation: counter-clockwise from above, about the first hole. 0 = as in a carriage slot (gates toward −x, rows toward −y); 180 = the cart turned end for end.
-						Check it by clicking holes on the map. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is too tall for {STAGE_JUMP_LIMITS.max}.
-					</p>
-					<div class="flex justify-end">
-						<button type="submit" disabled={data.loopRunning} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>
-					</div>
-				</form>
-			</section>
-		</div>
+	<!-- History -->
+	{#if calibration?.edits?.length}
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+			<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent edits</h2>
+			<div class="overflow-x-auto">
+				<table class="w-full text-left text-[11px]">
+					<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Hole</th><th class="px-2 py-1">Δ (x,y,z)</th><th class="px-2 py-1">After</th><th class="px-2 py-1">What</th><th class="px-2 py-1">By</th><th class="px-2 py-1">When</th></tr></thead>
+					<tbody style="color: var(--color-tron-text)">
+						{#each calibration.edits as h (h._id)}
+							<tr class="border-t border-[var(--color-tron-border)]">
+								<td class="px-2 py-1 font-mono">{h.wellName}</td>
+								<td class="px-2 py-1 font-mono">{h.delta.x}, {h.delta.y}, {h.delta.z}</td>
+								<td class="px-2 py-1 font-mono">{h.after.x.toFixed(2)}, {h.after.y.toFixed(2)}, {h.after.z.toFixed(2)}</td>
+								<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{h.label ?? ''}</td>
+								<td class="px-2 py-1">{h.by ?? ''}</td>
+								<td class="px-2 py-1" style="color: var(--color-tron-text-secondary)">{when(h.at)}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		</section>
 	{/if}
 </div>

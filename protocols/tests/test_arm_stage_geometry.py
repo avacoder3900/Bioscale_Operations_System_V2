@@ -23,6 +23,18 @@ def _stub(name, **attrs):
     return m
 
 
+class _Params:
+    """Records every add_* call so the RTP surface can be checked without opentrons."""
+
+    def __init__(self):
+        self.names = []
+
+    def _add(self, **kw):
+        self.names.append(kw['variable_name'])
+
+    add_int = add_float = add_bool = add_str = _add
+
+
 def load_protocol():
     _stub('serial', Serial=object, SerialException=Exception)
     ot = _stub('opentrons')
@@ -76,9 +88,26 @@ def main():
         assert close(d, 6.0), (rot, d)
         assert close(math.dist(pts['X2'], pts['W2']), 9.0)
 
+    # Per-hole corrections are added AFTER the rotation (same numbers as stage-geometry.test.ts).
+    offs = [(0.0, 0.0, 0.0)] * 12
+    offs[5] = (0.3, -0.2, 0.1)  # W4 is 6th in fill order
+    w = {n: (x, y, z) for n, x, y, z in m.stage_targets(X0, Y0, Z0, 180, offs)}
+    assert close(w['W4'][0], X0 + 6.3) and close(w['W4'][1], Y0 + 8.8) and close(w['W4'][2], Z0 + 0.1), w['W4']
+    assert close(w['X2'][0], X0) and close(w['X2'][2], Z0)
+    assert m.hole_offset_param(6, 'dx') == 'hole_06_dx'
+
+    # The RTP surface: the taught point, rotation, travel height and 36 per-hole corrections.
+    p = _Params()
+    m.add_parameters(p)
+    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'stage_jump_height', 'dispense_depth'):
+        assert name in p.names, name
+    hole_params = [n for n in p.names if n.startswith('hole_')]
+    assert len(hole_params) == 36 and hole_params[0] == 'hole_01_dx' and hole_params[-1] == 'hole_12_dz', hole_params[:3]
+    assert len(p.names) == len(set(p.names)), 'duplicate RTP names'
+
     # The "never taught" floor matches the RTP defaults (0) and nothing plausible.
     assert m.MIN_TAUGHT_MM == 1.0
-    print('ok: stage_targets geometry')
+    print('ok: stage_targets geometry + RTP surface')
 
 
 if __name__ == '__main__':

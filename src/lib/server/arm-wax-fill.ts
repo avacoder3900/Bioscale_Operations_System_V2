@@ -48,6 +48,7 @@ import {
 	OpentronsRobot,
 	OpentronsScannerPositionSet,
 	OpentronsScannerSweepRun,
+	TipCalibratorFixture,
 	WaxFillingRun
 } from '$lib/server/db';
 import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
@@ -59,13 +60,18 @@ import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
 	DISPENSE_DEPTH_LIMITS,
+	HOLE_OFFSET_LIMIT_MM,
 	STAGE_JUMP_DEFAULT_MM,
 	STAGE_JUMP_LIMITS,
+	STAGE_WELL_NAMES,
 	WAX_HOLE_DEPTH_MM,
 	depthFromLive,
+	holeOffsetParamNames,
 	stageTargets,
+	type HoleOffsets,
 	type StageHole
 } from '$lib/robot-arm/stage-geometry';
+import { CAL_Z_LIMITS } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
 	isActionFail,
 	recordRunFinishedQueue,
@@ -268,10 +274,33 @@ export interface CalibrationView {
 	stageRotationDeg: number;
 	/** Travel clearance over the rim when arriving at / leaving the cart (stage_jump_height). */
 	stageJumpHeightMm: number;
-	/** The 12 wax-hole rims laid out from the taught cart location (tip-neutral), or null until it is taught. */
+	/** The 12 wax-hole rims laid out from the taught cart location (tip-neutral) plus each hole's correction, or null until it is taught. */
 	holes: StageHole[] | null;
+	/** Per-hole corrections on the rigid lattice (the Studio's Apply / Set position / Align). */
+	holeOffsets: HoleOffsets;
+	/** The Studio's "Recent edits", newest first (last 50). */
+	edits: StageEditView[];
 	pipetteMount: 'left' | 'right';
 	pipetteName: string | null;
+}
+
+export interface StageEditView {
+	_id: string;
+	at: string | null;
+	by: string | null;
+	label: string | null;
+	wellName: string;
+	delta: { x: number; y: number; z: number };
+	after: { x: number; y: number; z: number };
+}
+
+function offsetsOf(d: any): HoleOffsets {
+	const out: HoleOffsets = {};
+	for (const o of (d?.holeOffsets ?? []) as any[]) {
+		if (!o?.name || !STAGE_WELL_NAMES.includes(o.name)) continue;
+		out[o.name] = { dx: Number(o.dx) || 0, dy: Number(o.dy) || 0, dz: Number(o.dz) || 0 };
+	}
+	return out;
 }
 
 function point(d: any): TaughtPoint | null {
@@ -293,6 +322,19 @@ function calibrationView(robotId: string, d: any): CalibrationView {
 	const stageRotationDeg = Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : 0;
 	const jump = Number(d?.stageJumpHeightMm);
 	const dd = d?.dispenseDepth;
+	const holeOffsets = offsetsOf(d);
+	const edits: StageEditView[] = ((d?.edits ?? []) as any[])
+		.slice(-50)
+		.reverse()
+		.map((e) => ({
+			_id: String(e._id),
+			at: iso(e.at),
+			by: e.by?.username ?? null,
+			label: e.label ?? null,
+			wellName: String(e.wellName),
+			delta: { x: Number(e.delta?.x) || 0, y: Number(e.delta?.y) || 0, z: Number(e.delta?.z) || 0 },
+			after: { x: Number(e.after?.x) || 0, y: Number(e.after?.y) || 0, z: Number(e.after?.z) || 0 }
+		}));
 	return {
 		robotId,
 		scanPosition: point(d?.scanPosition),
@@ -304,7 +346,9 @@ function calibrationView(robotId: string, d: any): CalibrationView {
 				: null,
 		stageRotationDeg,
 		stageJumpHeightMm: Number.isFinite(jump) && jump >= STAGE_JUMP_LIMITS.min && jump <= STAGE_JUMP_LIMITS.max ? jump : STAGE_JUMP_DEFAULT_MM,
-		holes: cartLocation ? stageTargets(cartLocation.x, cartLocation.y, cartLocation.z, stageRotationDeg) : null,
+		holes: cartLocation ? stageTargets(cartLocation.x, cartLocation.y, cartLocation.z, stageRotationDeg, holeOffsets) : null,
+		holeOffsets,
+		edits,
 		pipetteMount: d?.pipetteMount === 'right' ? 'right' : 'left',
 		pipetteName: d?.pipetteName ?? null
 	};
@@ -473,6 +517,163 @@ export async function saveDispenseDepth(user: User, robotId: string, input: { z:
 	);
 	await audit(user, 'arm_wax_fill.dispense_depth', 'arm_wax_fill_calibrations', robotId, { mm, liveZ, rimZ: rim.z, before: prev?.dispenseDepth?.mm ?? null });
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
+}
+
+type StageEditInput = { wellName: string; dx: number; dy: number; dz: number };
+
+/**
+ * The Stage Calibration Studio's apply engine — the twin of the Deck Studio's
+ * applyBatch / applyPerWell. Each edit moves ONE hole by its own delta (deck mm,
+ * tip-neutral). Two cases:
+ *
+ *   • every hole, same delta  → the whole cart moved: the taught cart location
+ *     (the rigid lattice's origin) is translated and the per-hole corrections
+ *     are left alone — "Shift whole grid";
+ *   • anything else           → each hole's correction grows by its delta, so the
+ *     lattice stays where it was taught and only those holes move. Corrections
+ *     are capped at HOLE_OFFSET_LIMIT_MM (the protocol's RTP bound); an edit
+ *     that would exceed it is skipped and reported, never clamped.
+ *
+ * Every hole moved gets a "Recent edits" entry (delta + position after), so the
+ * Studio's history table and client-side undo (apply the inverse) work as on a deck.
+ */
+export async function applyStageEdits(
+	user: User,
+	robotId: string,
+	rawEdits: unknown,
+	rawLabel: unknown
+): Promise<{ calibration: CalibrationView; applied: number; failed: { wellName: string; reason: string }[]; mode: 'translate' | 'offsets' }> {
+	await connectDB();
+	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
+	let parsed: any;
+	try {
+		parsed = typeof rawEdits === 'string' ? JSON.parse(rawEdits) : rawEdits;
+	} catch {
+		throw new ArmWaxFillError('edits must be JSON.');
+	}
+	if (!Array.isArray(parsed) || parsed.length === 0) throw new ArmWaxFillError('No edits.');
+	const edits: StageEditInput[] = [];
+	for (const e of parsed) {
+		const wellName = String(e?.wellName ?? '').trim().toUpperCase();
+		const dx = Number(e?.dx ?? 0), dy = Number(e?.dy ?? 0), dz = Number(e?.dz ?? 0);
+		if (!STAGE_WELL_NAMES.includes(wellName)) throw new ArmWaxFillError(`${wellName || '(blank)'} is not one of the cart's wax holes.`);
+		if (![dx, dy, dz].every(Number.isFinite)) throw new ArmWaxFillError(`Delta for ${wellName} must be numbers.`);
+		if (Math.max(Math.abs(dx), Math.abs(dy), Math.abs(dz)) > 10) throw new ArmWaxFillError(`Delta for ${wellName} is over 10 mm — that is not a correction.`);
+		if (edits.some((x) => x.wellName === wellName)) throw new ArmWaxFillError(`${wellName} appears twice.`);
+		edits.push({ wellName, dx, dy, dz });
+	}
+	const label = String(rawLabel ?? '').trim().slice(0, 120) || null;
+	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
+	const rim = point(prev?.cartLocation);
+	if (!rim) throw new ArmWaxFillError('Teach the cart location (the first wax hole) first — the holes are laid out from it.');
+	const rotation = Number.isFinite(Number(prev?.stageRotationDeg)) ? Number(prev.stageRotationDeg) : 0;
+	const offsets = offsetsOf(prev);
+	const failed: { wellName: string; reason: string }[] = [];
+	const uniform = edits.every((e) => e.dx === edits[0].dx && e.dy === edits[0].dy && e.dz === edits[0].dz);
+	const whole = edits.length === STAGE_WELL_NAMES.length && uniform;
+	let cart = { x: rim.x, y: rim.y, z: rim.z };
+	let moved: StageEditInput[] = [];
+	if (whole) {
+		const d = edits[0];
+		if (d.dx === 0 && d.dy === 0 && d.dz === 0) throw new ArmWaxFillError('Zero delta — nothing to apply.');
+		cart = { x: +(rim.x + d.dx).toFixed(3), y: +(rim.y + d.dy).toFixed(3), z: +(rim.z + d.dz).toFixed(3) };
+		moved = edits;
+	} else {
+		for (const e of edits) {
+			if (e.dx === 0 && e.dy === 0 && e.dz === 0) continue;
+			const cur = offsets[e.wellName] ?? { dx: 0, dy: 0, dz: 0 };
+			const next = { dx: +(cur.dx + e.dx).toFixed(3), dy: +(cur.dy + e.dy).toFixed(3), dz: +(cur.dz + e.dz).toFixed(3) };
+			if (Math.max(Math.abs(next.dx), Math.abs(next.dy), Math.abs(next.dz)) > HOLE_OFFSET_LIMIT_MM) {
+				failed.push({ wellName: e.wellName, reason: `correction would be ${JSON.stringify(next)} — over the ±${HOLE_OFFSET_LIMIT_MM} mm the protocol accepts; shift the whole grid instead` });
+				continue;
+			}
+			offsets[e.wellName] = next;
+			moved.push(e);
+		}
+		if (!moved.length) {
+			throw new ArmWaxFillError(
+				failed.length ? `Nothing applied — ${failed.map((f) => `${f.wellName}: ${f.reason}`).join('; ')}` : 'Zero delta — nothing to apply.'
+			);
+		}
+	}
+	const after = new Map(stageTargets(cart.x, cart.y, cart.z, rotation, offsets).map((h) => [h.name, h]));
+	const now = new Date();
+	const history = moved.map((e) => ({
+		_id: generateId(),
+		at: now,
+		by: opRef(user),
+		label,
+		wellName: e.wellName,
+		delta: { x: e.dx, y: e.dy, z: e.dz },
+		after: { x: after.get(e.wellName)!.x, y: after.get(e.wellName)!.y, z: after.get(e.wellName)!.z }
+	}));
+	const $set: Record<string, unknown> = {
+		holeOffsets: STAGE_WELL_NAMES.filter((n) => offsets[n]).map((n) => ({ name: n, ...offsets[n] })),
+		updatedBy: opRef(user)
+	};
+	if (whole) $set['cartLocation'] = { ...(prev.cartLocation ?? {}), x: cart.x, y: cart.y, z: cart.z };
+	await ArmWaxFillCalibration.updateOne({ _id: robotId }, { $set, $push: { edits: { $each: history, $slice: -200 } } });
+	await audit(user, 'arm_wax_fill.stage_edit', 'arm_wax_fill_calibrations', robotId, {
+		mode: whole ? 'translate' : 'offsets',
+		label,
+		edits: moved,
+		failed,
+		cartLocationBefore: { x: rim.x, y: rim.y, z: rim.z },
+		cartLocationAfter: cart
+	});
+	return { calibration: calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean()), applied: moved.length, failed, mode: whole ? 'translate' : 'offsets' };
+}
+
+/**
+ * The arm's OT-2 has no deck, so its tip-calibrator point is the robot-keyed
+ * TipCalibratorFixture row (`deckKey: null`) — the row loadCalibratorFixture
+ * returns for a run with no deck binding, which is how the stage fill reads
+ * cal_x / cal_y / z_cal. Approach XY+Z and the p20 probe Z (zCalWax); the
+ * reagent probe Z is carried forward untouched.
+ */
+export async function saveStageCalibrator(
+	user: User,
+	robotId: string,
+	input: { x: unknown; y: unknown; z: unknown; zCalWax?: unknown; maxTipAdjust?: unknown }
+): Promise<{ position: { x: number; y: number; z: number }; zCalWax: number; maxTipAdjust: number | null }> {
+	await connectDB();
+	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
+	const x = num(input.x, 'calX');
+	const y = num(input.y, 'calY');
+	const z = num(input.z, 'Approach Z');
+	if (plausibleZ(z) === undefined) throw new ArmWaxFillError(`Approach Z must be between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm.`);
+	if (x < 1 || y < 1) throw new ArmWaxFillError('calX / calY look untaught (below 1 mm) — jog onto the fixture and use "From live".');
+	const prev = (await TipCalibratorFixture.findOne({ robotId, deckKey: null }).lean()) as any;
+	let zCalWax: number;
+	if (input.zCalWax !== null && input.zCalWax !== undefined && String(input.zCalWax).trim() !== '') {
+		const v = plausibleZ(Number(input.zCalWax));
+		if (v === undefined) throw new ArmWaxFillError(`Probe Z must be between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm.`);
+		zCalWax = v;
+	} else {
+		zCalWax = plausibleZ(Number(prev?.zCalWax)) ?? TIP_PROFILE.wax.defaultZ;
+	}
+	let maxTipAdjust: number | null = prev?.maxTipAdjust ?? null;
+	if (input.maxTipAdjust !== null && input.maxTipAdjust !== undefined && String(input.maxTipAdjust).trim() !== '') {
+		const v = Number(input.maxTipAdjust);
+		if (!Number.isFinite(v) || v < 0.3 || v > 12) throw new ArmWaxFillError('Max tip adjust must be 0.3–12 mm.');
+		maxTipAdjust = v;
+	}
+	const now = new Date();
+	await TipCalibratorFixture.updateOne(
+		{ robotId, deckKey: null },
+		{
+			$set: { position: { x, y, z }, zCalWax, maxTipAdjust, capturedBy: opRef(user), capturedAt: now, deckLoadName: null },
+			$setOnInsert: { _id: generateId(), robotId, deckKey: null, zCalReagent: TIP_PROFILE.reagent.defaultZ }
+		},
+		{ upsert: true }
+	);
+	await audit(user, 'arm_wax_fill.calibrator', 'tip_calibrator_fixtures', robotId, {
+		position: { x, y, z },
+		zCalWax,
+		maxTipAdjust,
+		before: prev ? { position: prev.position, zCalWax: prev.zCalWax, maxTipAdjust: prev.maxTipAdjust ?? null } : null
+	});
+	return { position: { x, y, z }, zCalWax, maxTipAdjust };
 }
 
 /** The cart's rotation on the stage and the travel clearance over the rim. */
@@ -656,7 +857,10 @@ export function readiness(
 export interface TeachAid {
 	tiprackLoadName: string;
 	nextTipWell: string;
-	calibrator: { x: number; y: number; approachZ: number; probeZ: number; source: string };
+	nextTipSource: string;
+	calibrator: { x: number; y: number; approachZ: number; probeZ: number; source: string; maxTipAdjust: number | null; taughtAt: string | null; taughtBy: string | null };
+	/** Whether the robot's current wax-filling protocol declares the per-hole hole_NN_dx/dy/dz RTPs. */
+	protocolDeclaresHoleOffsets: boolean;
 }
 
 /** The Stage calibration tab's checklist: what the stage protocol needs from this OT-2, and what is taught. */
@@ -721,10 +925,16 @@ export async function loadStageCalibration() {
 }
 
 async function teachAid(robotId: string): Promise<TeachAid> {
-	const [cal, tip] = await Promise.all([resolveCalibratorPoint(robotId, 'wax', {}), nextStudioTipWell(robotId, 'wax')]);
+	const [cal, tip, entry] = await Promise.all([
+		resolveCalibratorPoint(robotId, 'wax', {}),
+		nextStudioTipWell(robotId, 'wax'),
+		currentProtocolEntry(robotId, 'wax-filling').catch(() => null)
+	]);
+	const declared = new Set(((entry?.parametersSchema ?? []) as any[]).map((p) => p?.variableName));
 	return {
 		tiprackLoadName: TIP_PROFILE.wax.loadName,
 		nextTipWell: tip.well,
+		nextTipSource: tip.source,
 		calibrator: {
 			x: cal.point.x,
 			y: cal.point.y,
@@ -732,8 +942,12 @@ async function teachAid(robotId: string): Promise<TeachAid> {
 			// falls back to 38.5 when none is taught. The probe Z is the point's z.
 			approachZ: plausibleZ(cal.fixture?.position?.z) ?? 38.5,
 			probeZ: cal.point.z,
-			source: cal.source
-		}
+			source: cal.source,
+			maxTipAdjust: typeof cal.fixture?.maxTipAdjust === 'number' ? cal.fixture.maxTipAdjust : null,
+			taughtAt: iso(cal.fixture?.capturedAt),
+			taughtBy: cal.fixture?.capturedBy?.username ?? null
+		},
+		protocolDeclaresHoleOffsets: declared.has('hole_01_dx') && declared.has('hole_12_dz')
 	};
 }
 
@@ -1084,6 +1298,14 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		form.set('param_arm_cart_rotation_deg', String(calibration!.stageRotationDeg));
 		form.set('param_dispense_depth', String(calibration!.dispenseDepth!.mm));
 		form.set('param_stage_jump_height', String(calibration!.stageJumpHeightMm));
+		// Per-hole corrections from the Stage Calibration Studio (only the RTPs the
+		// robot's schema declares are read, so an older stage .py ignores them).
+		for (const h of calibration!.holes ?? []) {
+			const p = holeOffsetParamNames(h.index);
+			form.set(`param_${p.dx}`, String(h.offset.dx));
+			form.set(`param_${p.dy}`, String(h.offset.dy));
+			form.set(`param_${p.dz}`, String(h.offset.dz));
+		}
 	} else {
 		// Legacy carriage protocol: one cart at the configured deck position.
 		form.set('param_cartridges', '1');

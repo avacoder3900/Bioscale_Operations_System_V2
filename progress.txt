@@ -24197,3 +24197,55 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch master @ commit 63ecdacf
 Retrieve this exact code: git checkout master at commit 63ecdacf
 What this deployment is for: the Return to home row on the ARM CONNECTION card, on every Robot Arm tab.
+
+
+================================================================================
+2026-10-28 — feat/stage-calibration-studio — Stage Calibration Studio: the Robot Arm's own studio, organised exactly like the Deck Calibration Studio (2D plane + all its functions) for the single elevated stage
+================================================================================
+Alejandro: the stage calibrator should be organised exactly the same as the Calibration Studio — a 2D plane and
+all the same functions — just its own page and identity. (Also: he could not see the first Stage calibration
+tab — production had built at 19:31 UTC, 17 s after the push; a reload was all it needed.)
+Branch cut from master (cfc1a722) in a worktree, so none of the branch's pre-merge deck code came back.
+/manufacturing/cart-mfg/robot-arm/stage-calibration rewritten as "Stage Calibration Studio" — the Deck Studio's
+layout, panel for panel, for ONE Gen7 cartridge on the arm's stage:
+  - Pickers: labware (Cartridge on stage · tube rack 10 · tip rack 11), robot (fixed to the arm's OT-2 + TransportPill),
+    pipette mount (left/right, locked while a run is open), lattice/rotation/first-hole readout.
+  - 2D plane (SVG, deck mm, to scale, y flipped): the 12 wax holes at their real bore (amber; the first/taught hole
+    ringed), the paired reagent holes in blue for orientation (REAGENT_HOLE_OFFSET +3.301/+2.099 from the deck def),
+    0.25/1/10 mm grid, zoom/fit, click + Shift/Ctrl toggle, box-drag select (Shift adds), Deselect mode, Esc clears,
+    anchor = last clicked, hover readout with nearest hole z, "Lattice" toggle showing the rigid position + a tie
+    line for every corrected hole, hole labels.
+  - Jog panel: open/close/home run, step 0.1–25 mm, Z axis, jog pad, live XYZ (+ tip end vs taught rim), Move to
+    hole (2 mm above the rim, this tip's adjust applied, high arc), Capture offset (dx/dy, dz + the 2 mm approach —
+    the Studio's frame rule, tip state stamped on the nominal and a capture across a tip change refused).
+  - Tip panel: tip well + next-fresh cursor + "Refilled → A1", one-click Calibrate tip (pick up if needed → travel
+    unless already within 3 mm → /api/scanner/calibrate-tip attached to the run with the typed calibrator/probe Z),
+    Swap tip, Pick up tip (no probe), Drop tip, Clear tip adjust, and the "Fixture point (teach)" disclosure: calX/calY/
+    Approach Z, Probe Z (zCalWax), Max tip adjust, Go to calibrator (park), From live, Save → robot. The save is
+    ROBOT-KEYED (new saveStageCalibrator → TipCalibratorFixture {robotId, deckKey:null}) because the arm's OT-2 has no
+    deck — that is the row loadCalibratorFixture returns for a run with no deck binding, i.e. what the stage fill reads.
+  - Offset → selection: dx/dy/dz, Apply to N selected, "Shift whole cart" (every hole, one delta → the server
+    translates the taught first hole instead of writing 12 corrections), Undo last (inverse apply, LIFO).
+  - Protocol on robot (the Studio's Sync panel): is the stage .py on the robot, does its upload declare the per-hole
+    RTPs; "nothing to sync — values go as RTPs at run start"; Re-check.
+  - Under the plane, the Studio's 3-up: Tour / Fill motion (tour all 12 in fill order with Prev/Next/Play/Stop; fill
+    motion on the selection at the STAGE protocol's heights — travel height → pre-jump 5 → taught dispense depth (or
+    the protocol default) → dwell → retract — with protocol-speed/cap and dwell controls, Pause/Resume/Stop), Set
+    position → selection (anchor-translate), Align selection → anchor (every selected hole snaps onto the rigid 6×9 mm
+    lattice carrying the anchor's correction — the stage's "clean grid ruled by the anchor"; Z untouched).
+  - Stage row (what a deck definition would otherwise carry): First hole (save tip-neutral; needs a probed tip; keeps
+    corrections), Dispense depth (Go to dispense height, Save depth here, live depth readout, range guard), Geometry
+    (rotation, travel height — the plane redraws), Scan position (test scan, Move to, Save with no tip).
+  - Recent edits table from the calibration doc's edits[] (hole, Δ, after, label, by, when).
+Data/engine: ArmWaxFillCalibration gains holeOffsets[] (per-hole dx/dy/dz on the rigid lattice, ±5 mm) and edits[]
+(cap 200). stage-geometry.ts: stageTargets(x0,y0,z0,rot, offsets) returns each hole with x/y/z, rigid, offset, reagent;
+holeOffsetParamNames(); STAGE_WELL_NAMES. New applyStageEdits(user, robotId, edits, label) = the Studio's apply engine
+(validates names/deltas, whole-cart translate vs per-hole corrections, cap enforced by skipping + reporting, history
+entries per hole, audit arm_wax_fill.stage_edit). cycleFill sends hole_01..12_dx/dy/dz from the calibration doc.
+Protocol: Wax_Filling_GEN7_ArmStage.py declares 36 per-hole RTPs (hole_NN_dx/dy/dz, ±5 mm, default 0) and
+stage_targets(..., offsets) adds them after the rotation; the run log lists non-zero corrections. python geometry test
+now also checks the RTP surface (36 hole params, no duplicate names). stage-geometry.test.ts pins the same numbers.
+The protocol must be RE-UPLOADED to the arm's OT-2 for the per-hole corrections to reach the fill (the Protocol on
+robot panel says so); an older upload simply ignores them (computeRunParameters only sends declared RTPs).
+svelte-check (portable node, worktree with a node_modules junction): 14-error baseline, none in touched files.
+Unit: stage-geometry (5) + run-lifecycle-records (29) pass; python test passes; .py compiles. Not run on a robot.

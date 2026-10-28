@@ -58,17 +58,21 @@ COLUMN_GATE = {'2': 'wax_gate4', '4': 'wax_gate3', '6': 'wax_gate2', '8': 'wax_g
 MIN_TAUGHT_MM = 1.0
 
 
-def stage_targets(x0, y0, z0, rotation_deg=0.0):
+def stage_targets(x0, y0, z0, rotation_deg=0.0, offsets=None):
     """The 12 wax-hole rim points of ONE cartridge whose FIRST wax hole (row 1,
-    gate 4 — deck well X2) has its rim at (x0, y0, z0), deck frame, mm.
+    gate 4 - deck well X2) has its rim at (x0, y0, z0), deck frame, mm.
 
     rotation_deg turns the cartridge about that first hole, counter-clockwise
     seen from above, for a stage that holds the cart in a different orientation
-    from a carriage slot (0 = as on the carriage: gates run toward −x, rows
-    toward −y; 180 = the cart turned end for end).
+    from a carriage slot (0 = as on the carriage: gates run toward -x, rows
+    toward -y; 180 = the cart turned end for end).
 
-    Returns [(well_name, x, y, z), ...] in fill order: row 1 gates 4→1, row 2,
-    row 3 — the order the carriage protocol fills cartridge 1 in.
+    offsets, when given, is a list of 12 (dx, dy, dz) per-hole corrections in
+    fill order, added AFTER the rotation - what the Stage Calibration Studio
+    teaches per hole, the way the Deck Calibration Studio moves one deck well.
+
+    Returns [(well_name, x, y, z), ...] in fill order: row 1 gates 4->1, row 2,
+    row 3 - the order the carriage protocol fills cartridge 1 in.
 
     Module-level and pure ON PURPOSE (no protocol context) so it can be unit
     tested and so analysis never has to execute the fill.
@@ -78,12 +82,19 @@ def stage_targets(x0, y0, z0, rotation_deg=0.0):
     out = []
     for ri in range(len(STAGE_ROWS)):
         for ci in range(len(STAGE_COLS)):
+            i = ri * len(STAGE_COLS) + ci
             dx = ci * COL_PITCH_X
             dy = ri * ROW_PITCH_Y
             rx = dx * c - dy * s
             ry = dx * s + dy * c
-            out.append((STAGE_WELL_NAMES[ri * len(STAGE_COLS) + ci], x0 + rx, y0 + ry, z0))
+            ox, oy, oz = (offsets[i] if offsets and i < len(offsets) else (0.0, 0.0, 0.0))
+            out.append((STAGE_WELL_NAMES[i], x0 + rx + float(ox or 0.0), y0 + ry + float(oy or 0.0), z0 + float(oz or 0.0)))
     return out
+
+
+def hole_offset_param(index1, axis):
+    """RTP name of a hole's per-hole correction: hole_01_dx ... hole_12_dz."""
+    return 'hole_%02d_%s' % (index1, axis)
 
 
 def get_well_column(well_name):
@@ -131,6 +142,16 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="stage_jump_height", display_name="Travel height over the cart (mm)",
         description="Clearance above the hole rim when arriving at / leaving the cart. Lower it if the stage is too high for 60.",
         default=60.0, minimum=10.0, maximum=60.0, unit="mm")
+
+    # ── Per-hole corrections (Stage Calibration Studio) ──────────────────────
+    # The 12 holes are laid out rigidly from the first one; these let BIMS move
+    # any single hole, the way the Deck Calibration Studio moves one deck well.
+    # Deck mm, tip-neutral, added after the cart rotation. Defaults 0 = none.
+    for i, name in enumerate(STAGE_WELL_NAMES, start=1):
+        for axis in ('dx', 'dy', 'dz'):
+            parameters.add_float(variable_name=hole_offset_param(i, axis), display_name="Hole %d (%s) %s" % (i, name, axis),
+                description="Per-hole correction for %s in mm (Stage calibration), added after the cart rotation." % name,
+                default=0.0, minimum=-5.0, maximum=5.0, unit="mm")
 
     # ------------------------------------------------------------------
     # Tip-calibration controls — identical to the carriage protocol. DEFAULT ON:
@@ -289,9 +310,16 @@ def run(protocol: protocol_api.ProtocolContext):
                 'ARM STAGE: arm_cart_x/y/z are not set (0). Teach the cart location on the BIMS '
                 'robot-arm wax-fill page; this protocol never guesses where the cart is.'
             )
-    targets = stage_targets(cart_x, cart_y, cart_z, cart_rot)
+    hole_offsets = [
+        tuple(float(getattr(protocol.params, hole_offset_param(i, axis))) for axis in ('dx', 'dy', 'dz'))
+        for i in range(1, len(STAGE_WELL_NAMES) + 1)
+    ]
+    targets = stage_targets(cart_x, cart_y, cart_z, cart_rot, hole_offsets)
     protocol.comment(f'ARM STAGE: first wax hole at x={cart_x} y={cart_y} z={cart_z}, rotation {cart_rot} deg; '
-                     f'12 holes: ' + ', '.join(f'{n}({x:.2f},{y:.2f})' for n, x, y, _ in targets))
+                     f'12 holes: ' + ', '.join(f'{n}({x:.2f},{y:.2f},{z:.2f})' for n, x, y, z in targets))
+    corrected = [(STAGE_WELL_NAMES[i], o) for i, o in enumerate(hole_offsets) if any(abs(v) > 1e-9 for v in o)]
+    if corrected:
+        protocol.comment('ARM STAGE: per-hole corrections: ' + ', '.join(f'{n} ({o[0]:+.2f},{o[1]:+.2f},{o[2]:+.2f})' for n, o in corrected))
 
     # ── Persistent tip tracking (verbatim from the carriage protocol) ───────
     import json as _json

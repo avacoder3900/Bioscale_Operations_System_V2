@@ -24,6 +24,13 @@ import mongoose, { Schema } from 'mongoose';
  *   stageRotationDeg / stageJumpHeightMm  the cart's rotation on the stage and the
  *                 travel clearance over the rim (`arm_cart_rotation_deg`,
  *                 `stage_jump_height`).
+ *   holeOffsets   per-hole corrections on top of the rigid 12-hole lattice (deck
+ *                 mm, tip-neutral) — what the Stage Calibration Studio's
+ *                 Apply / Set position / Align write, the way the Deck
+ *                 Calibration Studio moves one deck well. Sent as the
+ *                 protocol's hole_NN_dx/dy/dz.
+ *   edits         the Studio's "Recent edits": every hole move with its delta
+ *                 and the hole's position after it (newest last, capped).
  *
  * All taught on the Robot Arm → Stage calibration tab from a maintenance run:
  * jog, save the robot's own XYZ (plus the tip probe for the cart location).
@@ -61,6 +68,27 @@ const armWaxFillCalibrationSchema = new Schema(
 		},
 		stageRotationDeg: { type: Number, default: 0 },
 		stageJumpHeightMm: { type: Number, default: 60 },
+		holeOffsets: {
+			type: [new Schema({ name: { type: String, required: true }, dx: { type: Number, default: 0 }, dy: { type: Number, default: 0 }, dz: { type: Number, default: 0 } }, { _id: false })],
+			default: []
+		},
+		edits: {
+			type: [
+				new Schema(
+					{
+						_id: { type: String, required: true },
+						at: { type: Date, required: true },
+						by: { _id: String, username: String },
+						label: String,
+						wellName: { type: String, required: true },
+						delta: { x: Number, y: Number, z: Number },
+						after: { x: Number, y: Number, z: Number }
+					},
+					{ _id: false }
+				)
+			],
+			default: []
+		},
 		pipetteMount: { type: String, enum: ['left', 'right'], default: 'left' },
 		pipetteName: String,
 		updatedBy: { _id: String, username: String }
