@@ -23416,7 +23416,7 @@ What this deployment is for: Animate pose library select mode - bulk archive / r
 
 
 ================================================================================
-2026-10-28 — feat/arm-wax-fill — Robot Arm "Wax fill" tab: the arm feeds one cart at a time to an OT-2 wax fill, N runs in a loop
+2026-10-28 — feat/arm-wax-fill-loop — Robot Arm "Wax fill" tab: the arm feeds one cart at a time to an OT-2 wax fill, N runs in a loop
 ================================================================================
 Alejandro: begin the robot-arm wax filling system. Same protocol as wax filling, one cart at a time at a
 different location; per cycle: (1) grab animation on the arm, chosen from a dropdown so it can change later,
@@ -23469,3 +23469,11 @@ the stash was left alone. Committed by path only.
 svelte-check (portable node, `svelte-kit sync && svelte-check --threshold error`): 15 errors / 435 warnings —
 the 14-error baseline plus 1 in the other session's untracked src/lib/server/robot-arm-lock.test.ts; none in
 touched files. Not deployed.
+Branch renamed to feat/arm-wax-fill-loop before the push: origin already had a feat/arm-wax-fill from
+2026-08-10 (ARM-WAX-01 scaffold: its own arm-wax-fill.ts, ArmWaxFillRun model, wax-fill page and a tooling
+section on the calibrate tab, all at the same paths). The two are parallel implementations; neither was
+merged into the other.
+Deployment: preview — via Vercel GitHub integration on the push (see the PR / Deployments tab for the URL)
+Source: branch feat/arm-wax-fill-loop @ the commit titled "docs(progress): arm wax fill pushed as feat/arm-wax-fill-loop" (git log feat/arm-wax-fill-loop --oneline)
+Retrieve this exact code: git checkout feat/arm-wax-fill-loop at that commit
+What this deployment is for: first look at the Robot Arm "Wax fill" tab (setup, locked animations, calibration teach panel, loop driver).
