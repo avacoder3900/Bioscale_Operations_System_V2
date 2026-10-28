@@ -23628,3 +23628,25 @@ npm run check: 16 errors / 432 warnings (baseline 16).
 Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (GitHub integration, master fast-forwarded)
 Source: branch feat/ot2-wired-1 @ the commit of this progress entry
 What this deployment is for: OT2-LOG-1 server side live (samples ingest + heartbeat sampling + rollup cron).
+
+================================================================================
+2026-10-28 — fix/arm-servo-row-reason (Pi only) — Animate: arm no longer goes limp after Go to pose / Play
+================================================================================
+Reported: the follower went limp after Go to pose on the Animate page. Root cause: arm-pi was still running
+the 2026-10-22 13:07 copy of src/hardware/replay_settle.py (byte-identical to 4b63d04b), which writes torque
+OFF on all six follower servos at the end of EVERY replay. The hold_at_end exception (7acf9c0d) that BIMS
+asks for in every Animate recording header was never copied to the Pi. BIMS's afterPlay put torque back on,
+but only after the browser's next playback poll: Pi log for run oCpvntN15qjmSMUm shows replay.stop at
+14:33:35.007 UTC and BIMS's POST /torque at 14:33:35.984 — ~1 s limp, then a full-speed snap back to the last
+goal. Audit log: every Go to (15) and move-set Play (9) since 10-26 logged torque_after_play, so the move-set
+page had the same fault; it is just less visible when the last pose is low. Ruled out: arms.disconnect()
+(only closes the port), slider/jog/hold routes (only enable torque), BIMS code (only the manual Torque OFF).
+
+Fix (Pi only, no BIMS code change): backed up the Pi file to replay_settle.py.bak-pre-hold-at-end, copied the
+repo's replay_settle.py (md5 5723b39d…, LF), compiled it, simulate_replay_settle.py all checks passed, and with
+/sessions/active null ran `sudo systemctl restart robot-arm` 09:47:24 CDT. /health ok, startup clean, all six
+servos torque on. Next play's replay.stop log line should carry "held": true and afterPlay should no longer
+audit torque_after_play. Rollback: restore the .bak file and restart when idle.
+Still open (small, not done): torqueBackOn treats any 200 from /torque as success even when the Pi lists
+failed_ids, so one joint could stay limp silently.
+No deployment created for this entry. npm run check not run (no source change).

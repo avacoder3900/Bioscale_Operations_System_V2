@@ -115,6 +115,29 @@
 			/* ignore */
 		}
 	}
+
+	// The preflight warning (e.g. the leader BusLinker missing) can be collapsed
+	// to a small "Show warning" chip. The hidden TEXT is remembered, not a flag,
+	// so a new or different warning shows again.
+	const DIAGNOSIS_HIDDEN_KEY = 'robot-arm:diagnosis-hidden';
+	let hiddenDiagnosis = $state<string | null>(null);
+	$effect(() => {
+		try {
+			hiddenDiagnosis = localStorage.getItem(DIAGNOSIS_HIDDEN_KEY);
+		} catch {
+			/* storage unavailable — default to shown */
+		}
+	});
+	let diagnosisHidden = $derived(!!diagnosis && hiddenDiagnosis === diagnosis);
+	function setDiagnosisHidden(hidden: boolean) {
+		hiddenDiagnosis = hidden ? diagnosis : null;
+		try {
+			if (hidden && diagnosis) localStorage.setItem(DIAGNOSIS_HIDDEN_KEY, diagnosis);
+			else localStorage.removeItem(DIAGNOSIS_HIDDEN_KEY);
+		} catch {
+			/* ignore */
+		}
+	}
 </script>
 
 <div class="space-y-4">
@@ -174,9 +197,24 @@
 				still works — it reads from BIMS, not the arm.
 			</p>
 		</div>
+	{:else if diagnosis && diagnosisHidden}
+		<button
+			type="button"
+			onclick={() => setDiagnosisHidden(false)}
+			class="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
+		>
+			Show warning
+		</button>
 	{:else if diagnosis}
-		<div class="rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
-			{diagnosis}
+		<div class="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
+			<span class="flex-1">{diagnosis}</span>
+			<button
+				type="button"
+				onclick={() => setDiagnosisHidden(true)}
+				class="shrink-0 rounded border border-amber-500/40 px-2 py-0.5 font-semibold hover:bg-amber-500/20"
+			>
+				Hide
+			</button>
 		</div>
 	{/if}
 
