@@ -488,6 +488,11 @@
 		}
 	}
 
+	function toggleBookmarksView() {
+		viewingBookmarks = !viewingBookmarks;
+		if (viewingBookmarks) loadBookmarks();
+	}
+
 	function dismiss() {
 		isOpen = false;
 		dismissed = true;
@@ -764,6 +769,17 @@
 					{/if}
 				</div>
 				<div class="flex items-center gap-1">
+					<button
+						type="button"
+						onclick={toggleBookmarksView}
+						class="rounded p-1 text-xs hover:text-[var(--color-tron-cyan)] {viewingBookmarks ? 'text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)]'}"
+						title={viewingBookmarks ? 'Back to chat' : 'Bookmarks'}
+						aria-label="Toggle bookmarks"
+					>
+						<svg viewBox="0 0 24 24" fill={viewingBookmarks ? 'currentColor' : 'none'} stroke="currentColor" stroke-width="2" class="h-4 w-4">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
+						</svg>
+					</button>
 					{#if messages.length > 0 && !viewingBookmarks}
 						<button
 							type="button"
@@ -777,6 +793,17 @@
 							</svg>
 						</button>
 					{/if}
+					<button
+						type="button"
+						onclick={toggleOpen}
+						class="rounded p-1 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]"
+						title="Minimize"
+						aria-label="Minimize Ask BIMS"
+					>
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="h-4 w-4">
+							<path stroke-linecap="round" stroke-linejoin="round" d="M19 13H5" />
+						</svg>
+					</button>
 					<button
 						type="button"
 						onclick={dismiss}
