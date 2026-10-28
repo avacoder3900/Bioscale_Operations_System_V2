@@ -23960,3 +23960,7 @@ robot-arm/wax-fill/+page.svelte. Committed straight to master (Alejandro, 2026-1
 changes to main automatically"), in a master worktree — the main checkout is on feat/arm-wax-fill-loop
 with another session's uncommitted ArmStage work, left untouched. Not pushed.
 svelte-check: 14 errors / 436 warnings = baseline, none in touched files. No unit tests cover this module.
+Deployment: production — via Vercel GitHub integration on the push to master (pushed automatically; Alejandro, 2026-10-28: "also push a production deploy automatically")
+Source: branch master @ commit 8af62154
+Retrieve this exact code: git checkout master at commit 8af62154
+What this deployment is for: the OT-2 control strip (health, Restart, Reset, Home, Lights, Identify) on the Robot Arm Wax fill tab.
