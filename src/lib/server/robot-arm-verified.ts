@@ -31,7 +31,7 @@
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmPose, RobotArmPoseCalibration, RobotArmVerifiedRun } from '$lib/server/db/models';
 import { robotArm } from './robot-arm-client';
-import { detectTags, listTags, readServos, thumbnail } from './robot-arm-vision';
+import { detectTags, listTags, readServos, thumbnail, CALIBRATION_FRAMES, CHECK_FRAMES } from './robot-arm-vision';
 import {
 	AnimateError,
 	poseSummary,
@@ -262,7 +262,8 @@ async function armNowIdle(): Promise<ArmNow> {
  * what a run lands, not what the sliders were nudged to.
  *
  *   1. Servos read (steps, load, temperature).
- *   2. One AprilTag detection with the frame.
+ *   2. One AprilTag detection with the frame, averaged over CALIBRATION_FRAMES
+ *      like the home calibration (single frames lose the small arm tags).
  *   3. Servos read again; a joint that moved more than the pose tolerance
  *      between the reads means the frame and the encoders disagree — refused.
  *
@@ -292,7 +293,7 @@ export async function calibratePose(
 	const before = await readServos().catch((e) => {
 		throw servoErr(e);
 	});
-	const det = await detectTags(o.cameraName, { includeFrame: true, registry });
+	const det = await detectTags(o.cameraName, { includeFrame: true, registry, frames: CALIBRATION_FRAMES });
 	if (!det.available) throw new AnimateError(det.reason ?? 'the Pi could not detect tags', 502);
 	if (!det.frame) throw new AnimateError('the Pi did not return the frame it detected on', 502);
 	const servos = await readServos().catch((e) => {
@@ -313,7 +314,10 @@ export async function calibratePose(
 			return { markerId: reg._id, tagId: d.id, name: reg.name, group: reg.group, role: reg.role, sizeMm: reg.sizeMm, center: d.center, corners: d.corners, pose: d.pose, depthMm: d.depthMm };
 		});
 	if (!tags.length) throw new AnimateError(`none of the ${registry.length} registered tag(s) is visible at this pose — check the camera view and lighting`, 409);
-	if (!tags.some((t) => t.role === 'arm')) throw new AnimateError('no arm tag is in view at this pose — the camera would say nothing about the arm here. Bring an arm tag into view, or turn verification off for this step.', 409);
+	if (!tags.some((t) => t.role === 'arm')) {
+		const seen = tags.map((t) => `${t.name} #${t.tagId}`).join(', ');
+		throw new AnimateError(`no arm tag is in view at this pose (seen over ${det.framesUsed} frame(s): ${seen}, all fixed) — the camera would say nothing about the arm here. Press Detect tags to see what the camera finds, bring an arm tag into view, or turn verification off for this step.`, 409);
+	}
 	const unregistered = det.tags.filter((d) => !byTagId.has(d.id)).map((d) => d.id);
 	if (unregistered.length) warnings.push(`Seen but not registered, so not in the reference: tag ${unregistered.join(', ')}.`);
 	if (!tags.some((t) => t.role === 'fixed')) warnings.push('No fixed tag in view at this pose — a bumped camera cannot be told apart from the arm being off. A tag on the deck in this view would help.');
@@ -438,7 +442,7 @@ async function checkAgainst(ref: any, stepName: string, tol: StepTolerances): Pr
 	if (!tags.length) warnings.push('This reference has no tags.');
 	else {
 		try {
-			const det = await detectTags(ref.cameraName, { includeFrame: true });
+			const det = await detectTags(ref.cameraName, { includeFrame: true, frames: CHECK_FRAMES });
 			if (!det.available) warnings.push(`Camera check skipped: ${det.reason ?? 'no detection'}`);
 			else {
 				if (det.width !== ref.frameWidth || det.height !== ref.frameHeight) warnings.push(`The stream is ${det.width}×${det.height} but the reference was ${ref.frameWidth}×${ref.frameHeight} — retake the reference at the new resolution.`);

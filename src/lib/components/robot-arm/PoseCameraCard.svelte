@@ -6,13 +6,21 @@
 	 * the camera saw and the encoders read with the arm sitting ON the pose,
 	 * landed by a play. So the flow is: Go to pose (the page plays it) → look
 	 * at the arm, fix it with the sliders if needed and save → Go to pose
-	 * again → Capture reference. Then "Check now" re-detects without moving
-	 * and shows the residuals, and the tolerances are set above that jitter.
+	 * again → Detect tags (optional) → Capture reference. Then "Check now"
+	 * re-detects without moving and shows the residuals, and the tolerances
+	 * are set above that jitter.
+	 *
+	 * Same steps as the Vision tab's home calibration: Detect tags previews
+	 * with the frame count Capture uses (CALIBRATION_FRAMES), so what it shows
+	 * is what Capture will see; Capture and Check average frames like Save
+	 * calibration and the home check do. Tags are registered on the Vision tab.
 	 */
 	import { enhance } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { deserialize } from '$app/forms';
 	import VisionStage, { type StageTag } from './VisionStage.svelte';
+	import { CALIBRATION_FRAMES } from '$lib/robot-arm/apriltags';
+	import { fetchDetections, type LiveDetection } from '$lib/robot-arm/detect-client';
 	import { friendlyName } from '$lib/robot-arm/animation';
 	import { nearPose, worstOffset, AT_POSE_STEPS, MAX_ANGLE_DEG, MAX_POSITION_MM, MAX_TOLERANCE_STEPS } from '$lib/robot-arm/verified-poses';
 	import type { PoseSummary } from '$lib/server/robot-arm-animation';
@@ -45,6 +53,9 @@
 	let checking = $state(false);
 	let capturing = $state(false);
 	let note = $state<{ text: string; kind: 'ok' | 'warn' | 'error' } | null>(null);
+	let det = $state<LiveDetection | null>(null);
+	let detecting = $state(false);
+	let detectError = $state<string | null>(null);
 	let open = $state(true);
 	// Tolerance fields, editable; follow the reference until the operator types.
 	let posMm = $state('');
@@ -54,6 +65,42 @@
 	const atPose = $derived(!!arm && nearPose(arm.positions, pose.positions));
 	const offBy = $derived(arm ? Math.round(worstOffset(arm.positions, pose.positions)) : null);
 	const canAct = $derived(armReachable && !blocked);
+
+	// A detection belongs to one camera and one pose.
+	$effect(() => {
+		void camera;
+		void pose._id;
+		det = null;
+		detectError = null;
+	});
+
+	async function detect() {
+		if (!camera) return;
+		detecting = true;
+		detectError = null;
+		try {
+			det = await fetchDetections(camera, undefined, CALIBRATION_FRAMES);
+			if (!det.available) detectError = det.reason ?? 'The Pi could not detect tags.';
+		} catch (e) {
+			detectError = e instanceof Error ? e.message : 'Detection failed';
+		} finally {
+			detecting = false;
+		}
+	}
+
+	// What Capture would make of this frame: it needs a registered arm tag; a fixed one is recommended.
+	const detArm = $derived((det?.tags ?? []).filter((t) => t.registered?.role === 'arm'));
+	const detFixed = $derived((det?.tags ?? []).filter((t) => t.registered?.role === 'fixed'));
+	const detNew = $derived((det?.tags ?? []).filter((t) => !t.registered));
+	const detTags = $derived<StageTag[]>(
+		(det?.tags ?? []).map((d) => ({
+			key: String(d.id),
+			label: d.registered ? `${d.registered.name} #${d.id}` : `#${d.id} (not registered)`,
+			corners: d.corners,
+			center: d.center,
+			status: d.registered ? 'registered' : 'unregistered'
+		}))
+	);
 
 	// Fetch the picture for the active reference (the list comes without it).
 	$effect(() => {
@@ -162,6 +209,9 @@
 		{#if note}<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>{/if}
 
 		<div class="mt-3 flex flex-wrap items-center gap-2">
+			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, averaged over the same {CALIBRATION_FRAMES} frames Capture uses">
+				{detecting ? 'Detecting…' : det ? 'Detect again' : 'Detect tags'}
+			</button>
 			{#if !atPose}
 				<button type="button" class={btn} style={amber} disabled={!canAct} title={blocked ? blockReason : 'The arm plays to the pose (absolute goals), then holds it'} onclick={() => ongoto(pose)}>Go to pose</button>
 				<span class="text-xs" style={muted}>{arm ? `the arm is ${offBy} steps from this pose (needs ≤ ${AT_POSE_STEPS})` : 'the arm has not been read'}</span>
@@ -196,6 +246,33 @@
 				<button type="button" class={btn} style={cyan} disabled={!canAct || checking} onclick={runCheck} title="No motion: detect and compare with the reference">{checking ? 'Checking…' : 'Check now'}</button>
 			{/if}
 		</div>
+
+		{#if detectError}<p class="mt-2 text-xs text-red-300">{detectError}</p>{/if}
+
+		{#if det?.available}
+			<div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+				<VisionStage src={det.frame} width={det.width} height={det.height} tags={detTags} alt="Detected tags" />
+				<div class="space-y-1 text-xs">
+					<p style={muted}>
+						{det.tags.length} tag(s) in view over {det.framesUsed} frame(s) · {det.width}×{det.height}{atPose ? ' · arm on this pose' : ' · arm not on this pose'}
+					</p>
+					{#if detArm.length}
+						<p style="color: #4ade80">Capture will accept this view: {detArm.length} arm tag(s){detFixed.length ? `, ${detFixed.length} fixed` : ''}.</p>
+					{:else}
+						<p style="color: #fca5a5">No registered arm tag in view — Capture would refuse. Bring an arm tag into view (or check its role on the Vision tab).</p>
+					{/if}
+					{#if detArm.length && !detFixed.length}<p style="color: #fbbf24">No fixed tag in view: a bumped camera will read as the arm being off.</p>{/if}
+					<ul class="space-y-0.5 font-mono">
+						{#each det.tags as d (d.id)}
+							<li style="color: {d.registered?.role === 'arm' ? '#4ade80' : d.registered ? 'var(--color-tron-text)' : '#fbbf24'}">
+								#{d.id} {d.registered ? `${d.registered.name} (${d.registered.role})` : 'not registered'}{d.framesSeen != null ? ` · ${d.framesSeen}/${det.framesUsed} frames` : ''}{d.pose ? ` · ${(d.pose.t[2] / 10).toFixed(1)} cm` : ''}
+							</li>
+						{/each}
+					</ul>
+					{#if detNew.length}<p style={muted}>Register new tags on the Vision tab; unregistered tags are not part of a reference.</p>{/if}
+				</div>
+			</div>
+		{/if}
 
 		{#if calibration}
 			<div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">

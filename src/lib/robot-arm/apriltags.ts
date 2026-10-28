@@ -73,6 +73,19 @@ export interface TagPose {
 	alt?: AltPose | null;
 }
 
+/**
+ * Frames the Pi averages per tag when the arm is PARKED. Corner noise on a
+ * stationary tag is the main source of pose jitter (0.1-0.35 px at 1080p,
+ * 2026-10-23 baseline), and averaging N frames cuts it by about sqrt(N) at
+ * the cost of N detects (~0.15 s each). A calibration is taken once, so it
+ * gets the most; a home check runs after every return and gets a little
+ * less; the live view keeps 1 so it stays live. A pose reference (ARM-09)
+ * uses the same counts as home: capture = CALIBRATION_FRAMES, check =
+ * CHECK_FRAMES.
+ */
+export const CALIBRATION_FRAMES = 5;
+export const CHECK_FRAMES = 3;
+
 export type TagRole = 'fixed' | 'arm';
 
 /** One tag as the Pi saw it. Positions normalised to the frame. */

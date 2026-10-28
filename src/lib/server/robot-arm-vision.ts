@@ -26,6 +26,8 @@ import {
 	assessTags,
 	describeVision,
 	sheetSizeMm,
+	CALIBRATION_FRAMES,
+	CHECK_FRAMES,
 	DEFAULT_TOLERANCES,
 	MAX_TAG_ID,
 	SHEET_MAX_ID,
@@ -219,16 +221,8 @@ export interface DetectResult {
 	framesUsed: number;
 }
 
-/**
- * Frames the Pi averages per tag when the arm is PARKED. Corner noise on a
- * stationary tag is the main source of pose jitter (0.1-0.35 px at 1080p,
- * 2026-10-23 baseline), and averaging N frames cuts it by about sqrt(N) at
- * the cost of N detects (~0.15 s each). A calibration is taken once, so it
- * gets the most; a home check runs after every return and gets a little
- * less; the live view keeps 1 so it stays live.
- */
-export const CALIBRATION_FRAMES = 5;
-export const CHECK_FRAMES = 3;
+// Defined beside the tag maths so the browser (the Animate pose card) uses the same counts.
+export { CALIBRATION_FRAMES, CHECK_FRAMES } from '$lib/robot-arm/apriltags';
 
 /**
  * Sizes sent to the Pi: the registry's (as measured), falling back to the

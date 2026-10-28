@@ -4,7 +4,12 @@
  * Detection runs on the Pi; this only asks the BIMS proxy for the current
  * frame's tags and the JPEG they were found in. Nothing is decoded here.
  */
-import type { TagDetection } from './apriltags';
+import type { TagDetection, TagRole } from './apriltags';
+
+/** A detection with what the registry says it is (null = not registered). */
+export interface LiveTag extends TagDetection {
+	registered: { _id: string; name: string; group: string | null; role: TagRole } | null;
+}
 
 export interface LiveDetection {
 	available: boolean;
@@ -13,7 +18,7 @@ export interface LiveDetection {
 	width: number;
 	height: number;
 	intrinsics: { fx: number; fy: number; cx: number; cy: number; source: string } | null;
-	tags: TagDetection[];
+	tags: LiveTag[];
 	/** data: URL of the frame the tags were found in. */
 	frame: string | null;
 	/** 'raw' when the Pi detected on the sensor's own pixels, 'jpeg' on an older Pi, null if it did not say. */
@@ -48,7 +53,8 @@ export async function fetchDetections(camera: string, signal?: AbortSignal, fram
 					pose: t.pose ?? null,
 					depthMm: t.depthMm ?? null,
 					jitterPx: typeof t.jitterPx === 'number' ? t.jitterPx : null,
-					framesSeen: typeof t.framesSeen === 'number' ? t.framesSeen : null
+					framesSeen: typeof t.framesSeen === 'number' ? t.framesSeen : null,
+					registered: t.registered ?? null
 				}))
 			: [],
 		frame: body.frame ?? null,
