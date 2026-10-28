@@ -153,6 +153,9 @@ export { RobotArmMoveSet } from './robot-arm-move-set.js';
 export { RobotArmSequence } from './robot-arm-sequence.js';
 export { RobotArmPoseCalibration } from './robot-arm-pose-calibration.js';
 export { RobotArmVerifiedRun } from './robot-arm-verified-run.js';
+export { ArmWaxFillSettings } from './arm-wax-fill-settings.js';
+export { ArmWaxFillCalibration } from './arm-wax-fill-calibration.js';
+export { ArmWaxFillRun, ARM_WAX_FILL_STEPS } from './arm-wax-fill-run.js';
 
 // Manufacturing Analytics
 export { ProcessAnalyticsEvent } from './process-analytics-event.js';

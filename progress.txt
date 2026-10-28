@@ -23258,7 +23258,6 @@ inside the 40-step tolerance, so with the new tab it would have stopped after at
 Not hardware-verified yet: next Return to home will show whether J1 lands (the audit row's after.J1).
 Checks: vitest home-calibration 29 passed; svelte-check 14 errors / 432 warnings (baseline).
 
-=======
 2026-10-23 — feat/arm-live-tags-depth-delta — Depth is the distance: AprilTag positions use the D415 depth, image z only as fallback
 ================================================================================
 Alejandro watched the Δdepth column from the previous entry on the live arm: "much more consistent, moving
@@ -23767,7 +23766,6 @@ refuses to play move sets with fire steps.
 
 npm run check: 14 errors (baseline 14). Tests: 633 passed (10 new fire-step tests).
 Local dev server for review: http://127.0.0.1:5180 (worktree). Not merged.
-=======
 2026-10-28 — master — ARM CAMERA Show matches ARM CONNECTION Show (blue box); dot before ARM CONNECTION
 ================================================================================
 User request. The Show button on both right-rail panels is now the same box: cyan text in a
@@ -23813,3 +23811,64 @@ Retrieve this exact code: git checkout master at commit 7f6c2f4e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Animate fire steps (trapdoor solenoids), sliders locked until Live, automatic torque check, Animate page polish
 Pi side (gpio.py + replay_settle.py) NOT deployed yet: plays with fire steps are refused until it is.
+2026-10-28 — feat/arm-wax-fill-loop — Robot Arm "Wax fill" tab: the arm feeds one cart at a time to an OT-2 wax fill, N runs in a loop
+================================================================================
+Alejandro: begin the robot-arm wax filling system. Same protocol as wax filling, one cart at a time at a
+different location; per cycle: (1) grab animation on the arm, chosen from a dropdown so it can change later,
+(2) wax fill — scan the cart at a calibrated barcode location, then fill; the page needs its own calibration
+section for scanning + cart location, modelled on the existing wax-fill calibration, (3) withdraw animation,
+same dropdown. Animations are chosen once and only changeable on explicit request. Loop for as many runs as
+asked. The cart-drop dispenser comes later (not touched).
+New page /manufacturing/cart-mfg/robot-arm/wax-fill (a "Wax fill" tab in the Robot Arm layout, so the arm
+camera + connection rail are on screen while it runs):
+  - Setup card: the OT-2 the arm feeds (OpentronsRobot), the deck the single-cart fixture is registered as
+    (the protocol loads the carriage by the Particle id it reads at run start, so the fixture must be a bound
+    deck), the deck position filled (1–24 → `resume_cartridge`, with `cartridges = 1`), optional wax lot,
+    test mode (unknown barcode → synthetic backed cart, as the wax wizard's test mode).
+  - Animations card: grab + withdraw, each any non-archived Animate move set or sequence. Shown locked;
+    "Change animations" opens the two selects; saved with who/when; audit arm_wax_fill.animations.
+  - Calibration card (per OT-2, ArmWaxFillCalibration): scan position + cart location, taught exactly like
+    the barcode-positions page (maintenance run over the robot session, jog pad, live XYZ, test scan, "Save
+    here as …", "Move to"). The scan position is mirrored into a one-slot OpentronsScannerPositionSet titled
+    "Arm wax fill — single cart" (never the robot's default) so the production sweep code reads it unchanged.
+    The cart location is sent to the protocol as arm_cart_x/y/z when its parameter schema declares them;
+    the current Wax_Filling_GEN7_Cartridge.py does not, so the page says so and fills the deck position from
+    the deck calibration. Readiness lists what is missing before Start can be pressed.
+  - Run card: number of runs, Start / Stop / Resume, step strip (Grab → Scan → Fill → Withdraw), live log,
+    the Animate playback readout while the arm moves, EmbeddedRunController while the OT-2 fills, cycles
+    table, recent loops. The browser drives each step as a page action (the verified-run pattern): cycleGrab
+    (playMoveSet/playSequence; Playback helper polls ?/playback and ?/settle) → cycleGrabDone → one-slot
+    sweep over POST /api/scanner/sweep polled on /api/scanner/sweep/<id> → cycleScanned → cycleFill (a
+    one-cart WaxFillingRun at Loading, cart backing → wax_filling drawn out of its bucket pass, then
+    startRunQueue('wax') = the ordinary freshness gate / create / play on the robot's current wax-filling
+    protocol) → EmbeddedRunController → cycleFillDone (recordRunFinishedQueue: succeeded → cart wax_filled,
+    wax run completed, robot released; anything else → stopRunQueue cancel + loop failed) → cycleWithdraw →
+    cycleWithdrawDone (next cycle or loop completed/stopped). Every id lands on the ArmWaxFillRun before the
+    next step, so a reload shows the cycle and Resume continues it. Stop: arm moving → stopPlayback + loop
+    stopped now; filling → the fill and withdraw finish first; a start that never reached the robot reverts
+    its wax run (aborted) and the cart (backing / synthetic deleted).
+Files: src/lib/server/arm-wax-fill.ts (all logic), src/lib/server/db/models/arm-wax-fill-{settings,
+calibration,run}.ts (+ models/index.ts), wax-filling-run.ts gains armWaxFill {loopId, cycleIndex},
+robot-arm/wax-fill/+page.server.ts + +page.svelte, robot-arm/+layout.svelte (tab). Audit actions
+arm_wax_fill.* on every mutation. Permissions: manufacturing:read/write; cycleFill/cycleFillDone also
+waxFilling:write.
+Not done / to do on the hardware: the protocol variant that reads arm_cart_x/y/z (until then the fill is the
+deck position of the chosen deck); ensure-indexes for arm_wax_fill_runs {status, createdAt} (no .env on
+this PC: run `npx tsx --tsconfig tsconfig.json scripts/ensure-indexes.ts` then `--apply` where there is one);
+nothing has been played on the arm or run on an OT-2 from this page. The scan step uses the queue line
+(bridge daemon); the tailnet /bridge job path is not wired on this page.
+Branch note: this checkout is shared with another session. Partway through, `git stash` was run on
+feat/arm-wax-fill (stash@{0}: my models/index.ts, wax-filling-run.ts and +layout.svelte edits together with
+that session's control-page / robot-arm-lock / animation work); my three edits were re-applied by hand and
+the stash was left alone. Committed by path only.
+svelte-check (portable node, `svelte-kit sync && svelte-check --threshold error`): 15 errors / 435 warnings —
+the 14-error baseline plus 1 in the other session's untracked src/lib/server/robot-arm-lock.test.ts; none in
+touched files. Not deployed.
+Branch renamed to feat/arm-wax-fill-loop before the push: origin already had a feat/arm-wax-fill from
+2026-08-10 (ARM-WAX-01 scaffold: its own arm-wax-fill.ts, ArmWaxFillRun model, wax-fill page and a tooling
+section on the calibrate tab, all at the same paths). The two are parallel implementations; neither was
+merged into the other.
+Deployment: preview — via Vercel GitHub integration on the push (see the PR / Deployments tab for the URL)
+Source: branch feat/arm-wax-fill-loop @ the commit titled "docs(progress): arm wax fill pushed as feat/arm-wax-fill-loop" (git log feat/arm-wax-fill-loop --oneline)
+Retrieve this exact code: git checkout feat/arm-wax-fill-loop at that commit
+What this deployment is for: first look at the Robot Arm "Wax fill" tab (setup, locked animations, calibration teach panel, loop driver).
