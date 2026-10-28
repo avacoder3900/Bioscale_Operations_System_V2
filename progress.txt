@@ -23880,3 +23880,20 @@ jitter is the detector's own floor, not sensor noise, so the big win is cost (on
 and robustness on the small tags, not a large accuracy step. First run after an exposure change found NO tags for
 ~2 s while the sensor settled (motion_luma 13-17): leave a few seconds after changing exposure before a check.
 Deployment (Pi): branch feat/arm-frame-averaging @ commit 5ede5854 — apriltags.py installed on arm-pi as above.
+
+================================================================================
+2026-10-28 — feat/arm-frame-averaging → master — Calibration = 5 detections of 5-frame stacks; merged to master
+================================================================================
+Alejandro picked "5 detections of 5-frame stacks" from the measured table (corner sd 0.034 / 0.029 px vs 0.045 /
+0.041 unstacked). apriltags.ts: CALIBRATION_FRAMES 1 -> 5, CALIBRATION_AVERAGE 30 -> 5; step checks stay one
+detection of a 5-frame stack (CHECK_FRAMES 1, CHECK_AVERAGE 5). Wording in the Live Tags tooltips and the Animate
+pose card's Detect tags title no longer mentions a 30-frame stack. Calibration cost: ~0.8 s of capture + 5 detects.
+Camera settings were NOT touched (Alejandro keeps his own preset; standing rule from 2026-10-28).
+npm run check: 39 errors / 432 warnings; the 26 above the 13 baseline are all "implicitly has an 'any' type" in
+src/routes/+page.server.ts, src/routes/+page.svelte and reagent-filling (generated $types mid-regeneration, files
+not touched here); none in touched files. vitest src/lib/robot-arm + src/routes/api/robot-arm: 255 passed.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch feat/arm-frame-averaging @ commit bbb71242
+Retrieve this exact code: git checkout feat/arm-frame-averaging at commit bbb71242
+  (or: git log feat/arm-frame-averaging --oneline to find it if the branch has since moved on)
+What this deployment is for: AprilTag frame stacking live in BIMS: calibrations/pose references take 5 detections of 5-frame stacks, step/home checks one 5-frame stack; Vision tab Live Tags "average" select.
