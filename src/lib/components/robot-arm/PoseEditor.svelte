@@ -34,6 +34,7 @@
 		SERVO_TEMP_STOP_C
 	} from '$lib/robot-arm/animation';
 	import type { PoseSummary } from '$lib/server/robot-arm-animation';
+	import { liveBus } from '$lib/robot-arm/bus-free';
 
 	interface ArmRead {
 		positions: number[];
@@ -202,6 +203,7 @@
 	async function pump() {
 		if (sending || !live) return;
 		sending = true;
+		liveBus.sending = true;
 		try {
 			if (reading) await reading;
 			while (live) {
@@ -233,6 +235,7 @@
 			note = { text: `The arm did not move: ${e instanceof Error ? e.message : String(e)}`, kind: 'error' };
 		} finally {
 			sending = false;
+			liveBus.sending = false;
 		}
 		// The arm settles after the last move; show where it ended up.
 		setTimeout(() => void readArmNow(), 350);

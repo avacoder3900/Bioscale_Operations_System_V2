@@ -23789,3 +23789,21 @@ Retrieve this exact code: git checkout master at commit 9be76187
 What this deployment is for: blue-bordered Show on ARM CAMERA / ARM CONNECTION; status dot before ARM CONNECTION
 2026-10-28 — feat/arm-solenoid-steps — Fire steps: cartridge trapdoor solenoids as steps in Animate move sets
 =========================================================================
+================================================================================
+2026-10-28 — feat/arm-solenoid-steps — Animate page polish, sliders locked until Live, automatic torque check
+================================================================================
+- Animate page: Trapdoor Solenoids card moved under the pose editor; "New Pose"; "Follow Leader
+  Arm" now sits left of Live (PoseEditor `beforeLive` snippet; the control-arm card only shows
+  while following); subtitle and "for rough posing" hint removed; session chip yellow and
+  title-cased ("Replay Running").
+- Pose editor: every slider control is disabled until Live; Live reads the arm and sets the
+  sliders there before going live (what Start From Arm did). Start From Arm removed.
+- Default solenoid pulse 100 ms (was 1000).
+- Automatic torque check: the servo poll (PiThermalChip) runs every 10 s (was 30 s; one /servos
+  read measured ~55 ms on the Pi, Pi at 64 °C with the camera) and hands each servo's torque flag
+  to the Torque row (ARM_SERVOS_EVENT) — no extra bus read. Torque going OFF without Off pressed
+  shows an amber "Torque went off". The poll skips a cycle while the pose editor sends live moves
+  (liveBus flag in bus-free.ts).
+- vite.config.ts: server.fs.allow includes node_modules' real path (a worktree's junctioned
+  node_modules got 403 on the SvelteKit client entry, so pages never hydrated).
+npm run check: 13 errors (baseline 13). Tests 633 passed.

@@ -24,13 +24,19 @@
 	 * servo's name, load, voltage and torque. Added 2026-10-23 so motor heat
 	 * is visible next to the Pi's on every tab.
 	 *
-	 * Polls /api/robot-arm/thermal every 30 s while the tab is visible, and
+	 * Polls /api/robot-arm/thermal every 10 s while the tab is visible (30 s
+	 * until 2026-10-28; one /servos read is ~55 ms on the Pi, no measurable
+	 * heat), and
 	 * once right away. While a session holds the arm bus (a play, teleop) the
 	 * Pi refuses /servos with a 409, so the row says "paused · arm is moving"
 	 * and re-checks every 3 s until the numbers return (they used to wait up
 	 * to 30 s after an animation, 2026-10-28). It also re-reads at once on
 	 * ARM_BUS_FREE_EVENT (a play has fully ended), and fires that event itself
 	 * when the servos answer again after a session, so Torque re-reads too.
+	 * Each poll also hands every servo's torque flag to the Torque row
+	 * (ARM_SERVOS_EVENT), which is its automatic torque check: no second read
+	 * of the bus. A cycle is skipped while the pose editor is sending live
+	 * moves (liveBus), so the two never share the bus.
 	 * The poll on mount is still needed: the layout load deliberately does
 	 * not read the servo bus, so the servo row has nothing until it. The server side
 	 * logs Pi episodes to device_events. The Pi rows render nothing when the
@@ -41,7 +47,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import type { ArmThermal, ServoState } from '$lib/server/robot-arm-client';
-	import { ARM_BUS_FREE_EVENT, announceBusFree } from '$lib/robot-arm/bus-free';
+	import { ARM_BUS_FREE_EVENT, announceBusFree, announceServos, liveBus } from '$lib/robot-arm/bus-free';
 
 	interface Props {
 		initial: ArmThermal | null;
@@ -49,7 +55,7 @@
 	}
 	let { initial, armReachable }: Props = $props();
 
-	const POLL_MS = 30_000;
+	const POLL_MS = 10_000;
 	/** While the arm bus is busy, and for a while after, so the servo row comes back fast. */
 	const FAST_POLL_MS = 3_000;
 	const FAST_WINDOW_MS = 15_000;
@@ -189,6 +195,7 @@
 				// tell Torque to re-read as well.
 				if (busBusy) announceBusFree(BUS_FREE_SOURCE);
 				servos = body.servos;
+				announceServos({ servos: body.servos.map((s) => ({ id: s.id, torque: typeof s.torque === 'boolean' ? s.torque : null })) });
 				servoFailures = 0;
 				servosError = null;
 			} else if (body.servosError) {
@@ -198,6 +205,7 @@
 				servos = null;
 				servoFailures = 0;
 				servosError = body.servosError;
+				announceServos({ servos: null });
 				if (/robot-arm 409/.test(body.servosError)) fastUntil = Date.now() + FAST_WINDOW_MS;
 			} else {
 				servoFailures++;
@@ -241,7 +249,8 @@
 		const tick = async () => {
 			clearTimeout(timer);
 			if (stopped) return;
-			if (document.visibilityState === 'visible' && !inFlight) {
+			// Skipped while the pose editor is sending live moves: one bus user at a time.
+			if (document.visibilityState === 'visible' && !inFlight && !liveBus.sending) {
 				inFlight = true;
 				try {
 					await poll();
