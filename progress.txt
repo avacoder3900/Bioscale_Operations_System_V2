@@ -24271,3 +24271,13 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-calibration-studio @ commit 1203e651 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1203e651 (stage rotation 90, Tip calibrator panel, rotate buttons)"
 What this deployment is for: stage rotation defaults to 90 deg with front/back markers and direction arrows on the plane; rotate-cart buttons; the Tip calibrator teach as its own panel.
+
+Follow-up (2026-10-28): the Stage studio refused "Shift whole cart" when the captured delta exceeded 10 mm on any axis
+("Delta for X2 is over 10 mm - that is not a correction"). A whole-cart shift re-teaches the cart location, so a cart taught
+10-20 mm off is exactly what it corrects: the blanket cap is gone; the shift is bounded only by the protocol arm_cart_x/y/z
+RTP range (CART_LOCATION_LIMITS: 0-400 mm x/y, 0-200 mm z). Per-hole corrections keep the +/-5 mm protocol cap.
+svelte-check: 14-error baseline; stage-geometry tests pass.
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch fix/stage-whole-shift-limit @ commit 8ca8e593 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 8ca8e593 (whole-cart shift uncapped)"
+What this deployment is for: large whole-cart shifts in the Stage Calibration Studio are accepted again.
