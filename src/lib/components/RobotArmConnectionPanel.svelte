@@ -139,7 +139,8 @@
 		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
 	>
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
+		<h2 class="inline-flex items-center gap-2 text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
+			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}"></span>
 			ARM CONNECTION
 		</h2>
 		<div class="flex items-center gap-2">
@@ -167,10 +168,7 @@
 	</div>
 
 	<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-		<span class="inline-flex items-center gap-2 text-sm" style="color: var(--color-tron-text)">
-			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}"></span>
-			{label}
-		</span>
+		<span class="text-sm" style="color: var(--color-tron-text)">{label}</span>
 
 		{#if reachable}
 			<span class="text-xs" style="color: var(--color-tron-text-secondary)">

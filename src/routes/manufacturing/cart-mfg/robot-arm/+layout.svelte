@@ -94,6 +94,10 @@
 	let dryRun = $derived(data.arm.preflight?.checks?.dry_run?.value ?? null);
 	let version = $derived(data.arm.preflight?.version ?? null);
 	let diagnosis = $derived(data.arm.preflight?.diagnosis ?? null);
+	// Same colors as the dot in RobotArmConnectionPanel, for the hidden-panel row.
+	let connectionDot = $derived(
+		!data.arm.preflight ? '#ef4444' : data.arm.preflight.ok ? '#22c55e' : '#f59e0b'
+	);
 
 	// ARM CONNECTION panel sits above the camera in the right rail. It can be
 	// hidden to give the camera the full rail; the choice is a per-browser
@@ -219,8 +223,14 @@
 						class="flex w-full items-center justify-between rounded border px-3 py-2 text-xs"
 						style="border-color: var(--color-tron-border); background: var(--color-tron-surface); color: var(--color-tron-text-secondary)"
 					>
-						<span class="font-semibold tracking-wide">ARM CONNECTION</span>
-						<span style="color: var(--color-tron-cyan)">Show</span>
+						<span class="inline-flex items-center gap-2 font-semibold tracking-wide">
+							<span class="inline-block h-2 w-2 rounded-full" style="background: {connectionDot}"></span>
+							ARM CONNECTION
+						</span>
+						<span
+							class="rounded border px-2 py-1"
+							style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)">Show</span
+						>
 					</button>
 				{:else}
 					<RobotArmConnectionPanel
