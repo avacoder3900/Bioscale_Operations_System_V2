@@ -84,6 +84,8 @@ const waxFillingRunSchema = new Schema({
 	// only one arm transfer per wax run for now; if the pilot expands to
 	// multiple transfers we'll widen this to an array.
 	armRunId: { type: String, index: true },
+	// Robot-arm wax fill line: the ArmWaxFillRun loop + 1-based cycle this run was one cart of.
+	armWaxFill: { loopId: String, cycleIndex: Number },
 	// Two-phase start marker (OT2-TAILNET-5). Unset except while a start is in flight.
 	startIntent: { type: startIntentSchema, default: undefined },
 }, { timestamps: true });
