@@ -23688,6 +23688,11 @@ template is left in place in case a toggle is wanted elsewhere.
 Files: src/lib/components/ask-bims/AskBimsWidget.svelte. npm run check: 14 errors
 (baseline 14); the one in this file (feedbackState comparison, line ~1045) pre-exists on
 master and is untouched.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/rxvJcx7hc9jBSoXyDTdFMMxaR9KL
+Source: branch master @ commit 5d5887e0 (fast-forward of feat/ask-bims-compact-launcher)
+Retrieve this exact code: git checkout 5d5887e0
+  (or: git log master --oneline to find it if master has since moved on)
+What this deployment is for: Ask BIMS circle launcher (expands on hover) and the header X that hides it per page
 
 ================================================================================
 2026-10-28 — master — Robot Arm warning chip label corrected to "Show Warning"
