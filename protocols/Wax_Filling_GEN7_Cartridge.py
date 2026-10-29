@@ -24,6 +24,27 @@ requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
 CARTS_ON_DECK = 24
 
 
+# Carriage rows, top (X) to bottom (A). Each cartridge spans 3 consecutive rows,
+# one per wax channel, and 8 cartridges fill a carrier column.
+CARRIAGE_ROWS = ['X', 'W', 'V', 'U', 'T', 'S', 'R', 'Q', 'P', 'O', 'N', 'M',
+                 'L', 'K', 'J', 'I', 'H', 'G', 'F', 'E', 'D', 'C', 'B', 'A']
+
+
+def channel_pattern_of_row(row):
+    """Which channel parameter (0 = C, 1 = B, 2 = A) a carriage row belongs to.
+
+    Cartridges sit ALTERNATELY 180 degrees rotated in the carriage: cartridge 1
+    (rows X,W,V) reads C,B,A top to bottom, cartridge 2 (rows U,T,S) reads A,B,C,
+    and so on. The old rule (row index % 3) assumed every cartridge faced the
+    same way, so "Channel A only" filled A on cartridges 1,3,5,7 and C on 2,4,6,8.
+    Channel B is the middle row either way.
+    """
+    i = CARRIAGE_ROWS.index(row)
+    within = i % 3
+    cart = i // 3
+    return within if cart % 2 == 0 else 2 - within
+
+
 def resume_window(total_wells, cartridges_per_deck, resume_cartridge=1, resume_hole=1,
                   carts_on_deck=CARTS_ON_DECK):
     """Which slice of the destination list should this run actually fill?
@@ -78,22 +99,22 @@ def add_parameters(parameters: protocol_api.Parameters):
     # New parameters for row pattern selection
     parameters.add_bool(
         variable_name="row_pattern_0",
-        display_name="Channel C (X,U,R,O...)",
-        description="Fill every 3rd row starting with X (pattern i%3==0)",
+        display_name="Channel C",
+        description="Fill channel C on every cartridge (row X on cart 1, row S on cart 2: carts alternate 180 degrees)",
         default=True
     )
     
     parameters.add_bool(
         variable_name="row_pattern_1", 
-        display_name="Channel B (W,T,Q,N...)",
-        description="Fill every 3rd row starting with W (pattern i%3==1)",
+        display_name="Channel B",
+        description="Fill channel B (the middle row) on every cartridge",
         default=True
     )
     
     parameters.add_bool(
         variable_name="row_pattern_2",
-        display_name="Channel A (V,S,P,M...)", 
-        description="Fill every 3rd row starting with V (pattern i%3==2)",
+        display_name="Channel A", 
+        description="Fill channel A on every cartridge (row V on cart 1, row U on cart 2: carts alternate 180 degrees)",
         default=True
     )
 
@@ -1427,10 +1448,9 @@ def run(protocol: protocol_api.ProtocolContext):
             # Filter rows based on active patterns and maintain specific order
             filtered_rows = []
             
-            # Create pattern mapping
-            pattern_rows = {}
-            for i, row in enumerate(all_rows_in_order):
-                pattern_rows[row] = i % 3
+            # Create pattern mapping (channel per row, allowing for the 180-degree
+            # alternation of cartridges in the carriage)
+            pattern_rows = {row: channel_pattern_of_row(row) for row in all_rows_in_order}
             
             # Add rows in the original order, but only if they match active patterns and exist in coordinate_list
             for row in all_rows_in_order:
