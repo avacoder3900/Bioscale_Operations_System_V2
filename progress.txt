@@ -24595,3 +24595,8 @@ Now, when the protocol on the robot is the rehearsal:
   - readiness no longer requires Test mode for the rehearsal; its note says what happens to the cart. Wax fill tab text updated.
 A loop that was already failed by the old message: press Reset and start it again.
 svelte-check 14 errors / 448 warnings (baseline, none in touched files); vitest run-lifecycle-records 32 pass.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit 4f2e9445 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 4f2e9445 (rehearsal with real carts)"
+What this deployment is for: the robot-arm wax fill rehearsal accepts real carts and real barcodes; it checks the cart (fail route if not a backed cart), plays the animations, and changes no cart or bucket record.
