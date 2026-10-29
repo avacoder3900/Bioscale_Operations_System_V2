@@ -24414,3 +24414,8 @@ fail modes may come; the scan is the only one for now. Applies to any future pro
 Checks: svelte-check 14 errors / 447 warnings (baseline, none in touched files); stage-geometry + animation
 unit tests 59/59. Not run on a robot. Built in a fresh worktree from origin/master because the master worktree
 (Bioscale_V2-wt-master-ot2-controls) picked up another session's uncommitted verified-home-lift edits mid-task.
+
+Deployment: production — via Vercel GitHub integration on the push to master (see the Vercel Deployments tab for the URL)
+Source: branch master @ commit ca5e23b4
+Retrieve this exact code: git checkout ca5e23b4
+What this deployment is for: robot-arm wax fill FAIL ROUTE — fail animation dropdown; a scan that reads nothing or reads a cart that is not a backed cart plays the fail animation (after a gantry home) and the loop stops. Existing setups must pick a fail animation once before Start.
