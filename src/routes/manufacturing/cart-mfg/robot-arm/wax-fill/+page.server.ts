@@ -36,6 +36,8 @@ import {
 	deployStageProtocol,
 	failLoop,
 	getLoop,
+	haltHomeGantry,
+	haltLoop,
 	loadArmWaxFill,
 	resetLoop,
 	saveAnimations,
@@ -275,6 +277,33 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
 			return json(await stopLoop(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// STOP RUN: halt now whatever the step — the arm's play stops where it is, a fill is
+	// cancelled, a scan's sweep is cancelled, the loop ends stopped. The page then calls
+	// haltHomeGantry and, once the OT-2 confirms home, runs the arm's Return to home.
+	haltLoop: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await haltLoop(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// After a halt: the OT-2 all the way home (waits for its run to finish stopping first).
+	// Synchronous on the robot; refuses while the robot is still stopping.
+	haltHomeGantry: async (ev) => {
+		const { d, user } = await writer(ev);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await haltHomeGantry(user, id));
 		} catch (err) {
 			return failFrom(err);
 		}

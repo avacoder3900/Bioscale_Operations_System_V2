@@ -58,6 +58,7 @@ import {
 	OpentronsRobot,
 	OpentronsScannerPositionSet,
 	OpentronsScannerSweepRun,
+	Ot2BridgeCommand,
 	TipCalibratorFixture,
 	WaxFillingRun
 } from '$lib/server/db';
@@ -65,7 +66,7 @@ import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
-import { assembleProtocolUpload, getRobot, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
+import { assembleProtocolUpload, getRobot, robotDelete, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
@@ -1880,6 +1881,194 @@ export async function resetLoop(user: User): Promise<{ loop: LoopView | null; st
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', stopRequested: true, error: 'force reset to idle', endedAt: now } });
 	await audit(user, 'arm_wax_fill.force_reset', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step: cycle?.step ?? null, stoppedArm, torqueOn });
 	return { loop: await getLoop(loopId), stoppedArm, torqueOn };
+}
+
+// ── STOP RUN: halt now, then everything home ─────────────────────────────
+
+/** An OT-2 run in one of these states is over; anything else is still moving or about to. */
+const OT2_RUN_TERMINAL = new Set(['succeeded', 'failed', 'stopped']);
+
+const HALT_REASON = 'Stop run: halted by the operator';
+
+/** The robot's current protocol run (links.current) and its status, or null when the engine holds none. */
+async function currentRobotRun(robot: any): Promise<{ id: string; status: string | null } | null> {
+	const res = await robotGet(robot, '/runs');
+	if (!res.ok) throw new Error(`the OT-2 did not list its runs (HTTP ${res.status})`);
+	const body: any = await res.json().catch(() => ({}));
+	const href = String(body?.links?.current?.href ?? '');
+	const id = href ? href.split('/').pop() ?? '' : '';
+	if (!id) return null;
+	const run = (Array.isArray(body?.data) ? body.data : []).find((r: any) => r?.id === id);
+	return { id, status: run?.status ? String(run.status) : null };
+}
+
+/** The open maintenance run's id (the scanner sweep moves the gantry in one), or null. */
+async function currentMaintenanceRun(robot: any): Promise<string | null> {
+	const res = await robotGet(robot, '/maintenance_runs/current_run').catch(() => null);
+	if (!res || !res.ok) return null;
+	const body: any = await res.json().catch(() => ({}));
+	return body?.data?.id ? String(body.data.id) : null;
+}
+
+/**
+ * Stop whatever the OT-2 is doing for this line that is not the fill (which
+ * goes through the wax run's own cancel): the scan's sweep (cancelled on its
+ * record so the bridge daemon stops its walk and closes its maintenance run)
+ * and any protocol run the engine still holds. Best effort, never throws —
+ * the loop ends either way and haltHomeGantry checks the robot again.
+ */
+async function haltRobotWork(user: User, loopId: string, robotId: string): Promise<string[]> {
+	const notes: string[] = [];
+	const now = new Date();
+	const sweep = await OpentronsScannerSweepRun.findOneAndUpdate(
+		{ contextRef: loopId, status: { $in: ['running', 'paused'] } },
+		{
+			$set: { cancelRequested: true, pauseRequested: false, status: 'cancelled', completedAt: now, abortReason: HALT_REASON },
+			$push: { log: { ts: now, level: 'warn', message: `Cancelled by ${user.username}: Stop run pressed on the arm wax-fill page.` } }
+		},
+		{ new: true }
+	)
+		.lean()
+		.catch(() => null);
+	if (sweep) {
+		notes.push(`scan sweep ${String((sweep as any)._id).slice(0, 8)} cancelled`);
+		if ((sweep as any).line !== 'tailnet') {
+			await Ot2BridgeCommand.updateMany(
+				{ kind: 'sweep', status: { $in: ['pending', 'claimed'] }, 'payload.sweepRunId': String((sweep as any)._id) },
+				{ $set: { status: 'expired', error: HALT_REASON, completedAt: now } }
+			).catch(() => null);
+		}
+	}
+	const robot = await getRobot(robotId).catch(() => null);
+	if (!robot) {
+		notes.push('the OT-2 is not registered — nothing stopped on it');
+		return notes;
+	}
+	try {
+		const cur = await currentRobotRun(robot);
+		if (cur && !(cur.status && OT2_RUN_TERMINAL.has(cur.status))) {
+			const res = await robotPost(robot, `/runs/${cur.id}/actions`, { data: { actionType: 'stop' } });
+			notes.push(res.ok ? `stop sent to robot run ${cur.id.slice(0, 8)}` : `the OT-2 refused to stop run ${cur.id.slice(0, 8)} (HTTP ${res.status})`);
+		}
+	} catch (e) {
+		notes.push(`the OT-2 could not be reached (${e instanceof Error ? e.message : String(e)})`);
+	}
+	return notes;
+}
+
+export interface HaltResult {
+	loop: LoopView;
+	/** The arm was moving and its play was stopped where it stood. */
+	stoppedArm: boolean;
+	torqueOn: boolean | null;
+	/** What happened on the OT-2 side, for the page's log. */
+	robotNotes: string[];
+}
+
+/**
+ * STOP RUN. Halt everything NOW, whatever the step — unlike stopLoop, which
+ * lets a fill and its withdraw finish. The arm's play is stopped where it is
+ * (torque back on, so it holds); a fill in progress is cancelled through the
+ * wax run's ordinary stop (the robot run is stopped, the cart goes back to
+ * backed — the robot log decides if it was finished); a scan's sweep is
+ * cancelled; and the loop ends stopped. The page then homes the OT-2
+ * (haltHomeGantry) and only after the robot confirms it is home runs the arm's
+ * Return to home — the arm never moves over the stage before the OT-2 is up.
+ */
+export async function haltLoop(user: User, loopId: string): Promise<HaltResult> {
+	const { loop, cycle } = await runningLoop(loopId);
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { stopRequested: true } });
+	let stoppedArm = false;
+	let torqueOn: boolean | null = null;
+	const active = await playbackActive().catch(() => null);
+	if (active) {
+		const s = await stopPlayback(user);
+		stoppedArm = true;
+		torqueOn = s.torqueOn;
+	}
+	const robotId = String(loop.robot?._id ?? '');
+	let robotNotes: string[] = [];
+	if (cycle.step === 'fill' && cycle.waxRunId) {
+		const stop = await stopRunQueue('wax', 'cancel', cycle.waxRunId, { reason: HALT_REASON }, user).catch((e) => ({
+			fail: { status: 500, error: (e as Error).message }
+		}));
+		robotNotes.push(
+			isActionFail(stop)
+				? `the wax run could not be cancelled (${stop.fail.error}) — cancel it on the Robots page`
+				: `the wax run was cancelled${cycle.barcode ? ` and cart ${cycle.barcode} went back to backed` : ''}`
+		);
+	} else {
+		robotNotes = await haltRobotWork(user, loopId, robotId);
+	}
+	const now = new Date();
+	await patchCycle(loopId, cycle.index, { step: 'stopped', error: HALT_REASON, endedAt: now });
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', error: HALT_REASON, endedAt: now } });
+	await audit(user, 'arm_wax_fill.halt', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, robotNotes });
+	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn, robotNotes };
+}
+
+/** How long haltHomeGantry waits for the OT-2 to finish stopping before it refuses. */
+const HALT_SETTLE_MS = 30_000;
+
+/**
+ * After a halt: bring the OT-2 all the way home (every axis). Waits for the
+ * run it was stopping to reach a terminal state (an engine mid-stop refuses a
+ * home), closes a maintenance run the sweep daemon left open, then the
+ * synchronous legacy home. Refuses — the arm does not move — while the robot
+ * is still stopping or cannot be reached; the page offers a retry. The
+ * pipette keeps its tip.
+ */
+export async function haltHomeGantry(user: User, loopId: string): Promise<{ homedAt: string; waitedMs: number; notes: string[] }> {
+	await connectDB();
+	const d = (await ArmWaxFillRun.findById(loopId).select('status robot').lean()) as any;
+	if (!d) throw new ArmWaxFillError('Loop not found.', 404);
+	if (d.status === 'running') throw new ArmWaxFillError('The loop is still running — press Stop run first.', 409);
+	const robotId = String(d.robot?._id ?? '');
+	const robot = await getRobot(robotId).catch(() => null);
+	if (!robot) throw new ArmWaxFillError('The OT-2 is not registered — it cannot be homed from here.', 409);
+	const t0 = Date.now();
+	const notes: string[] = [];
+	let cur: { id: string; status: string | null } | null = null;
+	let stopSent = false;
+	for (;;) {
+		try {
+			cur = await currentRobotRun(robot);
+		} catch (e) {
+			throw new ArmWaxFillError(`The OT-2 could not be reached (${e instanceof Error ? e.message : String(e)}) — it was not homed and the arm will not move.`, 502);
+		}
+		if (!cur || (cur.status && OT2_RUN_TERMINAL.has(cur.status))) break;
+		// A run still going (a fill whose start landed after the halt, or a stop the
+		// halt could not send) is stopped here, once; then we wait for it to end.
+		if (!stopSent && cur.status !== 'stop-requested' && cur.status !== 'finishing') {
+			stopSent = true;
+			const res = await robotPost(robot, `/runs/${cur.id}/actions`, { data: { actionType: 'stop' } }).catch(() => null);
+			notes.push(res?.ok ? `stop sent to robot run ${cur.id.slice(0, 8)} (still ${cur.status ?? 'active'} after the halt)` : `the OT-2 refused to stop run ${cur.id.slice(0, 8)}`);
+		}
+		if (Date.now() - t0 > HALT_SETTLE_MS) {
+			throw new ArmWaxFillError(`The OT-2 run ${cur.id.slice(0, 8)} is still ${cur.status ?? 'active'} — it has not finished stopping. Wait a moment and try again; the arm will not move until the OT-2 is home.`, 409);
+		}
+		await new Promise((r) => setTimeout(r, 1500));
+	}
+	const maint = await currentMaintenanceRun(robot);
+	if (maint) {
+		const res = await robotDelete(robot, `/maintenance_runs/${maint}`).catch(() => null);
+		notes.push(res?.ok ? `closed maintenance run ${maint.slice(0, 8)} (the scan's)` : `maintenance run ${maint.slice(0, 8)} could not be closed`);
+	}
+	let res: Response;
+	try {
+		res = await robotPost(robot, '/robot/home', { target: 'robot' }, { timeoutMs: 80_000 });
+	} catch (e) {
+		throw new ArmWaxFillError(`The OT-2 could not home (${e instanceof Error ? e.message : String(e)}) — the arm will not move.`, 502);
+	}
+	if (!res.ok) {
+		const body: any = await res.json().catch(() => ({}));
+		const detail = body?.message ?? body?.errors?.[0]?.detail ?? body?.error ?? `HTTP ${res.status}`;
+		throw new ArmWaxFillError(`The OT-2 refused to home (${detail}) — the arm will not move. If a run is still active on the robot, reset it first.`, 502);
+	}
+	const at = new Date();
+	const waitedMs = Date.now() - t0;
+	await audit(user, 'arm_wax_fill.halt_gantry_home', 'arm_wax_fill_runs', loopId, { robotId, waitedMs, lastRun: cur, notes });
+	return { homedAt: at.toISOString(), waitedMs, notes };
 }
 
 /** A step failed in the browser (or here): the loop stops with the reason on the cycle. */

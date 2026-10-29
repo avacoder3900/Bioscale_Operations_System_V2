@@ -17,6 +17,8 @@
 	import { enhance, deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
+	import { ReturnHome, savedVisionCamera } from '$lib/robot-arm/return-home.svelte';
+	import { HOME_LOOP_MS } from '$lib/robot-arm/home-calibration';
 	import { openRobotSession } from '$lib/opentrons/direct-client';
 	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
 	import type { RobotHealth } from '$lib/server/opentrons/health';
@@ -453,6 +455,104 @@
 		}
 	}
 
+	// ── STOP RUN: halt now, then everything home ─────────────────────────
+	// Unlike Stop (which lets the fill and withdraw finish), Stop run halts
+	// where things stand: the arm's play is stopped, the OT-2 run (fill or
+	// scan sweep) is stopped and the loop ends. Then, in this order — the arm
+	// never moves until the OT-2 confirms it is home — the OT-2 homes every
+	// axis and the arm runs the same Return to home the ARM CONNECTION card
+	// drives (open the mouth, servo 2 home, every joint home, close the claw).
+	type HaltPhase = 'halting' | 'letting_go' | 'ot2' | 'arm' | 'done' | 'error';
+	let halt = $state<{ phase: HaltPhase; error: string | null; ot2Homed: boolean } | null>(null);
+	const returnHome = new ReturnHome();
+	let haltCamera: string | null = null;
+
+	const STOP_RUN_CONFIRM =
+		'STOP RUN — halt everything now and return to home?\n\n' +
+		'• The arm stops where it is (torque stays on, it holds).\n' +
+		'• The OT-2 run is stopped: a cart being filled is left part-filled and goes back to backed; a scan in progress is cancelled. The pipette keeps its tip.\n' +
+		'• Then the OT-2 homes every axis, and only after it confirms home the arm runs Return to home — it OPENS THE MOUTH first, so a cart in the claw is released where the arm stands, then every joint goes home and the claw closes.\n\n' +
+		'The loop ends stopped. Is the path clear?';
+
+	const sleepMs = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+	async function stopRun() {
+		if (!loop || busy || halt?.phase === 'halting' || halt?.phase === 'ot2' || halt?.phase === 'arm') return;
+		if (!confirm(STOP_RUN_CONFIRM)) return;
+		halt = { phase: 'halting', error: null, ot2Homed: false };
+		returnHome.reset();
+		busy = true;
+		stopAsked = true;
+		try {
+			const r = await post('haltLoop', { loopId: loop._id });
+			if (!r.ok) {
+				halt = { phase: 'error', error: `Stop run failed: ${r.error}`, ot2Homed: false };
+				note(`Stop run failed: ${r.error}`, 'error');
+				if (!driving) stopAsked = false;
+				return;
+			}
+			loop = r.data.loop;
+			if (r.data.stoppedArm) note(r.data.torqueOn ? 'STOP RUN — the arm was stopped and is holding its position.' : 'STOP RUN — the arm was stopped, but torque could NOT be re-enabled; it may be limp.', r.data.torqueOn ? 'warn' : 'error');
+			else note('STOP RUN — the loop ended where it stood.', 'warn');
+			for (const n of r.data.robotNotes ?? []) note(`OT-2: ${n}.`, 'warn');
+		} finally {
+			busy = false;
+		}
+		// Let the step in progress see the stopped loop and let go (the fill's
+		// controller reports the stopped run; the scan poll and the play poll end
+		// within a second); carry on regardless after a while.
+		halt = { phase: 'letting_go', error: null, ot2Homed: false };
+		for (let i = 0; i < 40 && driving; i++) await sleepMs(500);
+		await homeAfterHalt();
+	}
+
+	/** The home half of Stop run: OT-2 first, then the arm. Retryable on its own after a refusal. */
+	async function homeAfterHalt() {
+		if (!loop || returnHome.running) return;
+		halt = { phase: 'ot2', error: null, ot2Homed: false };
+		note('Homing the OT-2 (every axis) — the arm waits for the robot to confirm.');
+		const h = await post('haltHomeGantry', { loopId: loop._id });
+		if (!h.ok) {
+			halt = { phase: 'error', error: `${h.error} The arm was NOT moved.`, ot2Homed: false };
+			note(`OT-2 home refused: ${h.error} The arm was NOT moved — fix the robot, then "Try again", or use Return to home on the ARM CONNECTION card once the OT-2 is home.`, 'error');
+			return;
+		}
+		for (const n of h.data?.notes ?? []) note(`OT-2: ${n}.`, 'warn');
+		note(`OT-2 home confirmed${h.data?.waitedMs > 2000 ? ` (waited ${Math.round(h.data.waitedMs / 1000)} s for its run to stop)` : ''} — the arm returns home.`);
+		halt = { phase: 'arm', error: null, ot2Homed: true };
+		haltCamera = savedVisionCamera();
+		await returnHome.run(haltCamera);
+		const l = returnHome.loop;
+		if (l?.error) {
+			halt = { phase: 'error', error: l.error, ot2Homed: true };
+			note(`Arm Return to home: ${l.error}`, 'error');
+		} else {
+			halt = { phase: 'done', error: null, ot2Homed: true };
+			note(`Arm Return to home finished after ${l?.attempt ?? 0} attempt(s): ${l?.outcome ?? 'done'}. ${l?.clawClosed ? 'Claw closed.' : `Claw NOT confirmed closed${l?.clawError ? `: ${l.clawError}` : '.'}`}`, l?.clawClosed ? 'warn' : 'error');
+		}
+	}
+
+	const haltStatus = $derived.by(() => {
+		if (!halt) return null;
+		const rl = returnHome.loop;
+		switch (halt.phase) {
+			case 'halting':
+				return 'Stop run: stopping the arm and the OT-2…';
+			case 'letting_go':
+				return 'Stop run: waiting for the step in progress to let go…';
+			case 'ot2':
+				return 'Stop run: homing the OT-2 (every axis) — the arm waits for the robot to confirm…';
+			case 'arm':
+				if (rl?.closing) return 'Stop run: arm home — closing the claw (final step)…';
+				return `Stop run: arm returning home — attempt ${rl?.attempt ?? 0} · ${Math.round(((returnHome.now - (rl?.startedAt ?? returnHome.now)) / 1000))} s of ${HOME_LOOP_MS / 1000} s${rl?.stopping ? ' · stopping after this jog, then closing the mouth…' : ''}`;
+			case 'done':
+				return `Stop run complete: OT-2 home, arm home (${rl?.outcome ?? 'done'}), ${rl?.clawClosed ? 'claw closed' : 'claw NOT confirmed closed'}.`;
+			case 'error':
+				return halt.error ?? 'Stop run failed.';
+		}
+	});
+	const haltBusy = $derived(halt?.phase === 'halting' || halt?.phase === 'letting_go' || halt?.phase === 'ot2' || halt?.phase === 'arm');
+
 	// ── OT-2 controls (the Robots board's card for this one robot) ────────
 	// Health is the bridge heartbeat (ready / busy / hung / offline), polled
 	// every 10 s from the same endpoint the board uses, so the dot stays fresh
@@ -760,11 +860,19 @@
 							Resume
 						</button>
 					{/if}
-					<button type="button" onclick={stop} disabled={busy || loop.stopRequested}
+					<button type="button" onclick={stop} disabled={busy || haltBusy || loop.stopRequested}
+						title="Lets the cart being filled finish and the arm withdraw it, then ends the loop"
 						class="rounded border border-red-500/50 bg-red-900/15 px-4 py-2 text-sm font-bold text-red-300 hover:bg-red-900/25 disabled:opacity-40">
-						{loop.stopRequested ? 'Stopping…' : 'Stop'}
+						{loop.stopRequested ? 'Stopping after this cart…' : 'Stop after this cart'}
+					</button>
+					<button type="button" onclick={stopRun} disabled={busy || haltBusy}
+						title="Halts NOW: stops the arm and the OT-2 run where they are, then homes the OT-2 and runs the arm's Return to home"
+						class="rounded border border-red-500 bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-40">
+						{haltBusy ? 'Stopping…' : 'STOP RUN'}
 					</button>
 				</div>
+			{:else if haltBusy}
+				<span class="text-xs font-semibold text-amber-300">Stop run in progress…</span>
 			{:else}
 				<form class="flex items-center gap-2" onsubmit={(e) => { e.preventDefault(); void start(); }}>
 					<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
@@ -772,13 +880,38 @@
 						<input type="number" min="1" max="500" bind:value={runs}
 							class="w-20 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)" />
 					</label>
-					<button type="submit" disabled={busy || data.readiness.blocking.length > 0}
+					<button type="submit" disabled={busy || haltBusy || data.readiness.blocking.length > 0}
 						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-sm font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
 						{busy ? 'Starting…' : `Start ${runs} ${rehearsal ? 'rehearsal ' : ''}run${runs === 1 ? '' : 's'}`}
 					</button>
 				</form>
 			{/if}
 		</div>
+
+		{#if haltStatus}
+			<div class="flex flex-wrap items-center gap-2 rounded border p-2 text-xs
+				{halt?.phase === 'error' ? 'border-red-500/60 bg-red-900/20 text-red-200' : halt?.phase === 'done' ? 'border-green-500/40 bg-green-900/15 text-green-200' : 'border-amber-500/50 bg-amber-900/15 text-amber-200'}">
+				<span class="grow">{haltStatus}</span>
+				{#if halt?.phase === 'arm' && returnHome.loop?.running}
+					<button type="button" onclick={() => returnHome.stop(haltCamera)} disabled={returnHome.loop.stopping}
+						title="Stops the arm within one jog, then closes the mouth"
+						class="rounded border border-red-500 bg-red-900/30 px-2 py-0.5 font-semibold text-red-200 disabled:opacity-40">
+						Stop returning
+					</button>
+				{:else if halt?.phase === 'error' && loop && loop.status !== 'running'}
+					<button type="button" onclick={() => void homeAfterHalt()}
+						title={halt.ot2Homed ? 'Run the arm’s Return to home again (the OT-2 homes again first)' : 'Home the OT-2 again, then the arm'}
+						class="rounded border border-amber-500 bg-amber-900/30 px-2 py-0.5 font-semibold text-amber-100">
+						Try again
+					</button>
+				{/if}
+				{#if returnHome.result?.frozen}
+					<span class="basis-full rounded border border-red-500/60 bg-red-900/20 p-2 text-red-200">FROZEN — return the arm to home by hand. {returnHome.result.message}</span>
+				{:else if halt && (halt.phase === 'done' || halt.phase === 'error') && returnHome.result}
+					<span class="basis-full">{returnHome.result.message}</span>
+				{/if}
+			</div>
+		{/if}
 
 		{#if !(loop && loop.status === 'running')}
 			{#if data.readiness.blocking.length}

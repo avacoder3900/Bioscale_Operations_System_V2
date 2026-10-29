@@ -24166,7 +24166,6 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/arm-wax-fill-loop @ commit 631c0065 (merged to master as 779afe11; conflicts resolved toward 4b699897 "no deck identity")
 Retrieve this exact code: git checkout master at commit 779afe11
 What this deployment is for: the single-cart STAGE wax-fill protocol (upload Wax_Filling_GEN7_ArmStage.py to the arm's OT-2), the Robot Arm "Stage calibration" tab (scan position, tip-neutral cart location, dispense depth, stage geometry), OT-2 homed and confirmed before every arm move, robot-aware protocol re-sync.
-=======
 
 
 ================================================================================
@@ -24333,7 +24332,6 @@ Deployment: production - via Vercel GitHub integration on the push to master (pr
 Source: branch feat/arm-stage-rehearsal-p300 @ commit 1a154e3a (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1a154e3a (stage wax fill rehearsal on the p300)"
 What this deployment is for: a p300 / air rehearsal of the robot-arm stage wax fill, to be uploaded to the arm's OT-2 for development runs without a p20.
-=======
 ================================================================================
 2026-10-29 — master — Robot-arm wax fill: the OT-2 pipette goes ALL THE WAY UP before every move (lift rule)
 ================================================================================
@@ -24621,3 +24619,37 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit 832f7d64 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 832f7d64 (bundler resolves labware constants)"
 What this deployment is for: protocol uploads bundle labware loaded through a module-level constant, so the p300 rehearsal's 200 uL rack reaches the robot and its analysis completes clean.
+================================================================================
+2026-10-29 — feat/arm-wax-fill-stop-run — Robot-arm wax fill: STOP RUN button — halt everything now, then OT-2 and arm back to home
+================================================================================
+Alejandro: "build a stop run button on the robot arm wax fill page that halts the current run and returns everything
+to home." The existing Stop is graceful (a fill and its withdraw finish first; only an arm play is cut). STOP RUN is
+the hard one: whatever step the cycle is at, it halts where things stand and then brings both machines home.
+Sequence (the page drives it, like the loop itself):
+  1. ?/haltLoop (server haltLoop): stopRequested; the arm's play is stopped where it is if the Pi has one active
+     (stopPlayback — torque back on, so it holds); at the fill step the one-cart wax run is cancelled through the
+     ordinary stopRunQueue('wax','cancel') (robot run stopped, cart back to backed — the robot log decides if it was
+     finished); at every other step haltRobotWork cancels this loop's scanner sweep on its record (so the bridge daemon
+     stops its walk and closes its maintenance run; the non-tailnet bridge command is expired like the sweep route's
+     cancel) and sends a stop to any protocol run the engine still holds. Cycle step 'stopped' with the reason, loop
+     status 'stopped'. Audit arm_wax_fill.halt with what happened on the OT-2 (robotNotes, also shown in the page log).
+  2. The page waits up to 20 s for the driver to let go (the fill's EmbeddedRunController reports the stopped run,
+     the scan poll and the play poll end within a second) — it carries on regardless after that.
+  3. ?/haltHomeGantry (server haltHomeGantry): refuses while the loop is still running; waits up to 30 s for the
+     robot's current run to reach a terminal state (an engine mid-stop refuses a home), sending a stop once to a run
+     that is still going (a fill whose start landed after the halt); closes a maintenance run the sweep daemon left
+     open; then the synchronous legacy POST /robot/home {target:'robot'} (80 s). Refuses (the arm does NOT move) when
+     the robot is still stopping or unreachable — the page shows "Try again". The pipette keeps its tip.
+  4. Only after the OT-2 confirmed home: the arm's Return to home, the same ReturnHome class the ARM CONNECTION card
+     drives (opens the mouth first — so a cart in the claw is released where the arm stands, the confirm says so —
+     servo 2 home, every joint home, close the claw), with the Vision tab's saved camera. "Stop returning" is offered
+     while it runs; frozen / claw results are shown like the card shows them.
+Page: the run header now has "Stop after this cart" (the old Stop, relabelled with a title) and a solid red "STOP RUN";
+a status strip under the header follows the phases (halting → letting go → OT-2 home → arm home → done / error, with
+Try again on an error once the loop is stopped). Start is disabled while a Stop run is in progress. Confirm text lists
+exactly what moves.
+Files: src/lib/server/arm-wax-fill.ts (haltLoop, haltHomeGantry, haltRobotWork, currentRobotRun,
+currentMaintenanceRun; imports robotDelete, Ot2BridgeCommand), wax-fill/+page.server.ts (haltLoop, haltHomeGantry
+actions), wax-fill/+page.svelte (stopRun, homeAfterHalt, halt state, markup).
+svelte-check: 14 errors / 448 warnings (baseline, none in the touched files). vitest: stage-geometry, robot-arm-lock
+pass. Not run on a robot.
