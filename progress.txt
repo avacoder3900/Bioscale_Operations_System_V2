@@ -24330,3 +24330,7 @@ stage fill does today.
 How to run it: upload the .py on /opentrons (process wax-filling), deploy to the arm's OT-2 (the Wax fill tab then
 reads it as the stage protocol), set z_cal_p300 to the robot's p300 probe Z, put an EMPTY tube in A3 and the 200 uL
 rack in slot 11, then run the Wax fill loop as usual. Deploy Wax_Filling_GEN7_ArmStage.py back before any real fill.
+Deployment: production - via Vercel GitHub integration on the push to master (protocol files + the sync script only; no app routes change)
+Source: branch feat/arm-stage-rehearsal-p300 @ commit 1a154e3a (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1a154e3a (stage wax fill rehearsal on the p300)"
+What this deployment is for: a p300 / air rehearsal of the robot-arm stage wax fill, to be uploaded to the arm's OT-2 for development runs without a p20.
