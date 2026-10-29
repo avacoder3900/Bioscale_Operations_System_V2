@@ -24600,3 +24600,19 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit 4f2e9445 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 4f2e9445 (rehearsal with real carts)"
 What this deployment is for: the robot-arm wax fill rehearsal accepts real carts and real barcodes; it checks the cart (fail route if not a backed cart), plays the animations, and changes no cart or bucket record.
+
+2026-10-29 — feat/stage-cal-follows-protocol — Upload bundler resolves load_labware(CONSTANT): the p300 rehearsal's 200 uL rack was never sent to the robot
+================================================================================
+Alejandro's rehearsal loop (kcDQl7GK1Fu0LDC2o2Dhk, 18:37Z) got past the real-cart check and failed at the robot start:
+"Wax fill did not start: Deck-calibration freshness check failed: protocol analysis completed with errors".
+Cause: labwareNamesReferencedBy (the narrow upload bundle) only matched load_labware('literal', slot). The rehearsal .py
+loads its rack as load_labware(REHEARSAL_TIPRACK, 11) with REHEARSAL_TIPRACK = 'cosmas_and_damian_biotix_96_200ul_tiprack'
+at module level, so the bundle carried only the drybath tuberack; the robot's analysis completed WITH ERRORS on the
+unknown custom labware (the deploy audit at 17:38Z shows analysisStatus 'completed' - the errors live inside the
+analysis), and the run-start freshness gate refuses a protocol whose analysis has errors.
+Fix: labware-refs resolves identifiers passed to load_labware / load_name= / load_adapter through the file's
+module-level string constants (NAME = 'literal'). Verified against the real files: the rehearsal now yields the
+tuberack + the 200 uL rack; the production stage .py is unchanged. labware-refs.test.ts added (3 tests).
+Operator step after this deploy: Wax fill tab -> Protocol on the robot -> deploy the rehearsal again (re-upload with
+the rack bundled; the analysis must complete clean), then Reset and start the loop.
+svelte-check 14 errors / 448 warnings (baseline).
