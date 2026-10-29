@@ -105,3 +105,64 @@ What never overlaps: any arm motion with the gantry at the calibrator (the once-
 2. Protocol: the pause/instruction loop + scan RTPs (+ tests). Library upload from the Wax fill tab.
 3. BIMS: loop state machine, gates, tab UI. Deploy.
 4. One-cart loop on the rehearsal; then a 3-cart loop; measure from the audit log.
+
+## 5. The contract (pinned 2026-10-29 before the build; every piece is written against this text)
+
+**Decision (Alejandro, 2026-10-29): one tip for the entire loop, never changed between carts; build it.**
+
+### 5.1 Instruction file (BIMS → protocol, written by the daemon)
+Path on the robot: `/data/arm_loop.json` (one loop at a time per robot; overwritten, never appended).
+```json
+{ "seq": 3, "loop": "<BIMS ArmWaxFillRun _id>", "cart": 2, "action": "fill", "barcode": "f4bb…" }
+```
+- `seq`: integer, 0 for the start record, then +1 per write within the loop.
+- `action`: `start` (seq 0, written BEFORE the run is played) | `scan` | `fill` | `skip` | `end`.
+- `barcode`: the scanned barcode on `fill`, else null.
+- Protocol start: reads the file; it must be `action == "start"`; remembers `loop`; `seen_seq = 0`. A missing or
+  non-start file at run start → `RuntimeError('ARM LOOP: no start record in /data/arm_loop.json')` (the run fails
+  before any motion).
+- After every `protocol.pause()` returns, the protocol polls the file (0.5 s, up to 60 s) until it holds the same
+  `loop` and `seq > seen_seq`; consumes it (`seen_seq = seq`); otherwise pauses `ARM NO_INSTRUCTION <i>` and polls again
+  after the next resume. Never acts on a stale or foreign record.
+
+### 5.2 Pause messages (protocol → BIMS): `protocol.pause(message)` = a `waitForResume` command whose
+`params.message` is the text. BIMS reads the run's status + current command (GET /runs/{id}, GET /runs/{id}/commands
+with no cursor → the running command).
+- `ARM PARKED <i>` — tip parked in the wax tube holding wax, ready for cart i (1-based). **The arm may move.**
+- `ARM AT_SCAN <i>` — gantry at the scan position over the stage. **The arm must not move.** BIMS reads the scanner.
+- `ARM NO_INSTRUCTION <i>` — resumed without a new instruction (see 5.1). BIMS writes one and resumes.
+Comments (log only): `ARM CART <i> FILLED <barcode>`, `ARM CART <i> SKIPPED`, `ARM LOOP END`.
+
+### 5.3 Run-time parameters added to both stage protocols
+- `cartridges` int 1–24, default 1: carts this run serves (BIMS sends the loop's requested runs).
+- `arm_scan_x`, `arm_scan_y` float 0–400, `arm_scan_z` float 0–200, default 0: the taught scan position (BIMS
+  sends `calibration.scanPosition`, as it sends `arm_cart_x/y/z`). A 0 = untaught → refuse before motion, like the cart.
+Descriptions ≤ 100 chars, display names ≤ 30 (test_rtp_limits.py).
+
+### 5.4 Protocol sequence
+```
+start: read start record → home → calibrator port → pick up tip → probe (unchanged, once) → aspirate → park → pause PARKED 1
+for i in 1..cartridges (the instruction decides, the protocol only counts):
+  resume → instruction:
+    scan : lift → scan position → pause AT_SCAN i → resume → instruction:
+             fill : lift → 12 holes (unchanged) → lift → tube → re-aspirate → park → pause PARKED i+1
+             skip : lift → tube → park → pause PARKED i+1
+             end  : lift → trash tip → home → (run ends)
+    end  : lift → trash tip → home
+```
+`park` = tube A3, tip at the aspirate height (tube floor + min_tip_clearance, the existing model), holding the next
+cart's volume. The lift rule applies to every move that leaves the tube or the stage, unchanged.
+
+### 5.5 Daemon commands (queue line, `Ot2BridgeCommand` kind)
+- `read_scanner` payload `{ "timeoutS": 15 }` → result `{ "barcode": "<str>" | null, "raw": "<str>" }`. Serial only
+  (SCANNER_SERIAL_PORT); no maintenance run, no motion.
+- `write_file` payload `{ "path": "/data/arm_loop.json", "json": {…} }` → result `{ "written": true, "bytes": n }`.
+  Only `/data/arm_loop.json` is allowed; anything else is refused.
+
+### 5.6 BIMS gates
+- Arm plays (grab / withdraw / fail) only when the run is `paused` at `ARM PARKED <i>` with the expected i
+  (`assertRunParked`); never on `AT_SCAN`.
+- BIMS resumes the run only after the arm's play has settled (the page's play poll), exactly as it homes today.
+- Run `failed` / `stopped` / `succeeded` while a cycle is mid-way → the loop fails (succeeded only legitimately after
+  `end`).
+- The EmbeddedRunController's auto-resume of the initial off-deck pause must never resume an `ARM …` pause.
