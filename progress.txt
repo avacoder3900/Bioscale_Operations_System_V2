@@ -24478,3 +24478,8 @@ Worktree note: the master worktree (Bioscale_V2-wt-master-ot2-controls) held ano
 uncommitted fail-animation work; this change was built in its own worktree (Bioscale_V2-wt-arm-standby-a,
 branch feat/arm-wax-fill-standby-a) and pushed to master from there, so that session's local master ref
 is behind origin/master until it fetches.
+
+Deployment: production — via Vercel GitHub integration on the push to master (see the Vercel Deployments tab for the URL)
+Source: branch master @ commit aae3bc57
+Retrieve this exact code: git checkout aae3bc57
+What this deployment is for: robot-arm wax fill Option A — fewer OT-2 homes per cart: the withdraw stamp verifies the run's own end-of-run home and only lifts the pipette (full home as fallback), the one-slot scanner sweep tells the bridge daemon the gantry was just homed so it skips its own, the ArmStage protocol remembers the calibrator's serial port. The bridge daemon still needs redeploying to the robots and the protocol re-uploading on /opentrons.
