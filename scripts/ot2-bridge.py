@@ -102,7 +102,7 @@ except ImportError:
 # 1.3 = OT2-LOG-1 L3: heartbeat metadata.link (interface / tailscale / poll
 # telemetry) + the local report journal and job-report retry queue. The job
 # path and every report's return/error semantics are unchanged.
-VERSION = "ot2-bridge/1.3"
+VERSION = "ot2-bridge/1.3.1"  # 1.3.1: liftBeforeMove - robot-arm wax fill lifts Z all the way up before every sweep move
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
