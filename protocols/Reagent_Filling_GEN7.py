@@ -17,6 +17,31 @@ metadata = {
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
 
+# Carriage rows, top (X) to bottom (A). Each cartridge spans 3 consecutive rows,
+# one per channel, and 8 cartridges fill a carrier column. Kept in step with the
+# same helper in Wax_Filling_GEN7_Cartridge.py (each protocol uploads standalone).
+CARRIAGE_ROWS = ['X', 'W', 'V', 'U', 'T', 'S', 'R', 'Q', 'P', 'O', 'N', 'M',
+                 'L', 'K', 'J', 'I', 'H', 'G', 'F', 'E', 'D', 'C', 'B', 'A']
+
+
+def channel_pattern_of_row(row):
+    """Which channel (0 = c, 1 = b, 2 = a) a carriage row belongs to.
+
+    Cartridges sit ALTERNATELY 180 degrees rotated in the carriage: cartridge 1
+    (rows X,W,V) reads c,b,a top to bottom, cartridge 2 (rows U,T,S) reads a,b,c,
+    and so on. Every 3rd row from V (the old rule) is channel a on cartridges
+    1,3,5,7 but channel c on 2,4,6,8. Channel b is the middle row either way.
+    """
+    i = CARRIAGE_ROWS.index(row)
+    within = i % 3
+    cart = i // 3
+    return within if cart % 2 == 0 else 2 - within
+
+
+def channel_rows(column_rows, channel):
+    """The rows of one channel (0 = c, 1 = b, 2 = a) in a column's fill order."""
+    return [r for r in column_rows if channel_pattern_of_row(r) == channel]
+
 def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_int(
         variable_name="cartridges",
@@ -1300,8 +1325,13 @@ def run(protocol: protocol_api.ProtocolContext):
                 zip(
                     reagents,
                     (
-                        [ row + col for num, col in enumerate(params[reagent]['cols']) for row in rows[(num % 3)]
-                            [(2 - params[reagent]['offset'] if params[reagent]['skip'] != 1 and (num % 3) == 1 else params[reagent]['offset'])::params[reagent]['skip']]
+                        # skip 3 = one channel: 'offset' is the channel (0 = c,
+                        # 1 = b, 2 = a), chosen per cartridge so the 180-degree
+                        # alternation lands on the same channel every cart.
+                        [ row + col for num, col in enumerate(params[reagent]['cols']) for row in (
+                            channel_rows(rows[(num % 3)], params[reagent]['offset'])
+                            if params[reagent]['skip'] != 1
+                            else rows[(num % 3)][params[reagent]['offset']::params[reagent]['skip']])
                         ] for reagent in reagents
                     )
                 )

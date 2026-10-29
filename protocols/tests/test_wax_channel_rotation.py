@@ -1,4 +1,4 @@
-"""Unit test for channel_pattern_of_row in protocols/Wax_Filling_GEN7_Cartridge.py.
+"""Unit test for channel_pattern_of_row in the wax and reagent carriage protocols.
 
 Cartridges alternate 180 degrees in the carriage, so a single-channel fill must
 pick a different row on even and odd cartridges. opentrons/serial are stubbed;
@@ -22,14 +22,14 @@ def _stub(name, **attrs):
     return m
 
 
-def load_protocol():
+def load_protocol(file_name='Wax_Filling_GEN7_Cartridge.py'):
     _stub('serial', Serial=object, SerialException=Exception)
     ot = _stub('opentrons')
     _stub('opentrons.protocol_api', Parameters=object, ProtocolContext=object, OFF_DECK=object())
     _stub('opentrons.types', Location=object, Point=object)
     ot.protocol_api = sys.modules['opentrons.protocol_api']
     ot.types = sys.modules['opentrons.types']
-    spec = importlib.util.spec_from_file_location('wax_cart', os.path.join(ROOT, 'Wax_Filling_GEN7_Cartridge.py'))
+    spec = importlib.util.spec_from_file_location('wax_cart', os.path.join(ROOT, file_name))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
@@ -55,7 +55,19 @@ def main():
     for p in (0, 1, 2):
         carts = [rows.index(r) // 3 for r in rows_for(p)]
         assert carts == list(range(8)), (p, carts)
-    print('ok: channel_pattern_of_row honours the 180-degree cartridge alternation')
+
+    # Reagent: same rule, and the serpentine column order (col 15 runs A -> X)
+    # keeps one row per cartridge on the right channel.
+    r = load_protocol('Reagent_Filling_GEN7.py')
+    assert r.CARRIAGE_ROWS == rows
+    for row in rows:
+        assert r.channel_pattern_of_row(row) == m.channel_pattern_of_row(row), row
+    down = list('XWVUTSRQPONMLKJIHGFEDCBA')
+    assert r.channel_rows(down, 2) == ['V', 'U', 'P', 'O', 'J', 'I', 'D', 'C']
+    assert r.channel_rows(down[::-1], 2) == ['C', 'D', 'I', 'J', 'O', 'P', 'U', 'V']
+    assert r.channel_rows(down, 0) == ['X', 'S', 'R', 'M', 'L', 'G', 'F', 'A']
+    assert r.channel_rows(down, 1) == ['W', 'T', 'Q', 'N', 'K', 'H', 'E', 'B']
+    print('ok: channel_pattern_of_row honours the 180-degree cartridge alternation (wax + reagent)')
 
 
 if __name__ == '__main__':
