@@ -52,9 +52,9 @@
 		return () => window.removeEventListener('hashchange', revealFromHash);
 	});
 
-	const sections: { id: SectionId; title: string; blurb: string }[] = [
-		{ id: 'wax-fill', title: 'Wax Fill', blurb: 'The arm feeds one cart at a time to this OT-2, N runs in a loop.' },
-		{ id: 'stage-calibration', title: 'Stage Calibration', blurb: 'The Stage Calibration Studio: what the stage protocol reads instead of a deck.' }
+	const sections: { id: SectionId; title: string }[] = [
+		{ id: 'wax-fill', title: 'Wax Fill' },
+		{ id: 'stage-calibration', title: 'Stage Calibration' }
 	];
 </script>
 
@@ -62,10 +62,7 @@
 	{#each sections as s (s.id)}
 		<section id={s.id} class="scroll-mt-4 space-y-4">
 			<div class="flex flex-wrap items-center justify-between gap-3 border-b pb-2" style="border-color: var(--color-tron-border)">
-				<div class="min-w-0">
-					<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">{s.title}</h2>
-					{#if hidden[s.id]}<p class="text-xs" style="color: var(--color-tron-text-secondary)">{s.blurb}</p>{/if}
-				</div>
+				<h2 class="min-w-0 text-lg font-bold" style="color: var(--color-tron-cyan)">{s.title}</h2>
 				<button
 					type="button"
 					onclick={() => setHidden(s.id, !hidden[s.id])}
