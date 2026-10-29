@@ -24710,3 +24710,8 @@ same fileName; audit arm_wax_fill.library_replace lists the archived ids + hashe
 addedAt and the picker shows "file <hash8> added <when>" so two rows can never look alike. Options now sort by createdAt.
 Operator: add the corrected .py once more (it reuses the new row and archives the stale one), deploy, Reset, start.
 svelte-check 14 errors / 448 warnings (baseline).
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit 1a064396 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1a064396 (library add replaces older rows)"
+What this deployment is for: adding a stage .py from the Wax fill tab archives the stale copies of that file and the picker names each row's hash, so a corrected protocol is the one that gets deployed.
