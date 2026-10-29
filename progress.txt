@@ -24166,6 +24166,7 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/arm-wax-fill-loop @ commit 631c0065 (merged to master as 779afe11; conflicts resolved toward 4b699897 "no deck identity")
 Retrieve this exact code: git checkout master at commit 779afe11
 What this deployment is for: the single-cart STAGE wax-fill protocol (upload Wax_Filling_GEN7_ArmStage.py to the arm's OT-2), the Robot Arm "Stage calibration" tab (scan position, tip-neutral cart location, dispense depth, stage geometry), OT-2 homed and confirmed before every arm move, robot-aware protocol re-sync.
+=======
 
 
 ================================================================================
@@ -24332,6 +24333,7 @@ Deployment: production - via Vercel GitHub integration on the push to master (pr
 Source: branch feat/arm-stage-rehearsal-p300 @ commit 1a154e3a (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1a154e3a (stage wax fill rehearsal on the p300)"
 What this deployment is for: a p300 / air rehearsal of the robot-arm stage wax fill, to be uploaded to the arm's OT-2 for development runs without a p20.
+=======
 ================================================================================
 2026-10-29 — master — Robot-arm wax fill: the OT-2 pipette goes ALL THE WAY UP before every move (lift rule)
 ================================================================================
@@ -24653,3 +24655,8 @@ currentMaintenanceRun; imports robotDelete, Ot2BridgeCommand), wax-fill/+page.se
 actions), wax-fill/+page.svelte (stopRun, homeAfterHalt, halt state, markup).
 svelte-check: 14 errors / 448 warnings (baseline, none in the touched files). vitest: stage-geometry, robot-arm-lock
 pass. Not run on a robot.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/arm-wax-fill-stop-run @ commit 91599f45 (rebased onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 91599f45 (arm wax fill STOP RUN)"
+What this deployment is for: a STOP RUN button on the robot-arm Wax fill tab that halts the loop where it stands (arm play stopped, fill or scan cancelled, loop ends stopped) and then brings the OT-2 (every axis) and the arm (Return to home) back to home, OT-2 first. Also restores two "=======" separator lines older entries lost in the previous commit's rebase.
