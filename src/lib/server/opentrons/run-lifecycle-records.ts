@@ -600,7 +600,10 @@ async function startContext(
 		// Robot-arm wax fill (2026-10-28): one cart the arm placed at a taught location —
 		// there is no deck to identify, but the cart must still be on the run.
 		const armFill = !!run.armWaxFill?.loopId;
-		if (armFill && !run.cartridgeIds?.length) return actionFail(400, 'This arm wax fill run has no scanned cartridge.');
+		// The p300 / air REHEARSAL (2026-10-29) dispenses nothing and carries no cart on
+		// purpose: the scanned cart was only checked, and nothing may ever be advanced.
+		const armRehearsal = armFill && !!run.armWaxFill?.rehearsal;
+		if (armFill && !armRehearsal && !run.cartridgeIds?.length) return actionFail(400, 'This arm wax fill run has no scanned cartridge.');
 		if (!testFill && !armFill && (!run.deckId || !run.cartridgeIds?.length)) {
 			return actionFail(
 				400,
@@ -1169,8 +1172,11 @@ export async function finishConfirm(kind: FillKind, run: any, obs: FinishObserva
 		// the carts the robot log proves were finished).
 		let advanced = 0;
 		if (finalStatus === 'succeeded') {
-			const r = await advanceCartsToWaxFilled(run, run.cartridgeIds ?? [], user, 'run-complete auto-advance');
-			advanced = r.advanced;
+			// A robot-arm REHEARSAL run dispensed air and carries no cart: complete it, advance nothing.
+			if (!run.armWaxFill?.rehearsal) {
+				const r = await advanceCartsToWaxFilled(run, run.cartridgeIds ?? [], user, 'run-complete auto-advance');
+				advanced = r.advanced;
+			}
 			await WaxFillingRun.findByIdAndUpdate(runId, { $set: { status: 'completed', robotReleasedAt: now, runEndTime: now } });
 		}
 		return { success: true, consumed, nextTipIndex: finalIndex, advanced, autoCompleted: finalStatus === 'succeeded' };

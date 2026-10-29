@@ -24575,3 +24575,23 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit c6bb2923 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy c6bb2923 (stage calibration follows the protocol's pipette)"
 What this deployment is for: the Stage Calibration tab picks up, probes and teaches with the p300 and the 200 uL rack while the p300 rehearsal is on the arm's OT-2 (and writes its probe Z to zCalReagent -> z_cal_p300), and with the p20 for the production fill.
+
+2026-10-29 — feat/stage-cal-follows-protocol — Robot-arm wax fill REHEARSAL runs with real carts and real barcodes: the cart is checked, the animations play, no record changes
+================================================================================
+Alejandro hit "Fill failed: REHEARSAL: cartridge f4bba5cc-... is a real cart. Rehearse with carts the system does not know"
+and said: don't block this; all the rehearsal has to do is check the status of the cart, follow the success/fail check
+with the animations, and move or change nothing.
+Before: attachCart refused any non-synthetic cart under the rehearsal (ca5e23b4 / 9b3357f4), readiness blocked the loop
+unless Test mode was on, and a cart that did pass was consumed from its bucket cycle, set wax_filling and - on a clean
+robot run - auto-advanced to wax_filled by recordRunFinishedQueue, all for a run that dispensed air.
+Now, when the protocol on the robot is the rehearsal:
+  - the scan check is unchanged (cartScanProblem: a backed cart passes; a bucket label, an unknown barcode outside
+    test mode, or a cart at any other status takes the FAIL ROUTE and the fail animation);
+  - cycleFill does NOT call attachCart: no consumeCarts, no status change, cartridgeIds stays empty; an
+    arm_wax_fill.rehearsal_cart audit row records the barcode with touched:false; the WaxFillingRun is stamped
+    armWaxFill.rehearsal = true and its note says the cart was checked only;
+  - run-lifecycle-records: the arm start gate ("no scanned cartridge") is skipped for a rehearsal run, and the
+    run-complete auto-advance is skipped for it (the run still completes and releases the robot);
+  - readiness no longer requires Test mode for the rehearsal; its note says what happens to the cart. Wax fill tab text updated.
+A loop that was already failed by the old message: press Reset and start it again.
+svelte-check 14 errors / 448 warnings (baseline, none in touched files); vitest run-lifecycle-records 32 pass.

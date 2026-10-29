@@ -1060,13 +1060,9 @@ export function readiness(
 	if (settings.robotId && protocol?.rehearsal) {
 		notes.push(
 			`REHEARSAL protocol on the robot (${protocol.protocolName}): the p300 walks the stage fill with 200 µL tips and air — nothing is dispensed. ` +
+				'Real carts and real barcodes are fine: the scanned cart is only CHECKED (a backed cart passes, anything else takes the fail route); it stays in its bucket at backing and nothing is recorded as wax-filled. ' +
 				'Deploy the production stage protocol (Setup → Protocol on the robot) before a real fill.'
 		);
-		if (!settings.testMode) {
-			blocking.push(
-				'Rehearsal protocol on the robot: turn on Test mode in Setup and use carts the system does not know — a real backed cart would otherwise be drawn from its bucket and recorded as wax-filled by a run that dispensed nothing.'
-			);
-		}
 	}
 	if (settings.robotId) notes.push('Before every arm move (grab, withdraw and the fail animation) the OT-2 gantry is homed and the arm waits until the robot confirms it.');
 	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill and the loop stops.`);
@@ -1596,7 +1592,7 @@ export async function cycleFailDone(user: User, loopId: string): Promise<LoopVie
  * `wax_filling` pointing at the run — which is what the finish's
  * advanceCartsToWaxFilled looks for.
  */
-async function attachCart(user: User, loop: any, waxRunId: string, barcode: string, testMode: boolean, cartPosition: number, rehearsal = false) {
+async function attachCart(user: User, loop: any, waxRunId: string, barcode: string, testMode: boolean, cartPosition: number) {
 	const cart = (await CartridgeRecord.findById(barcode).select('_id status waxFilling.runId backing.synthetic').lean()) as any;
 	const now = new Date();
 	if (!cart) {
@@ -1615,12 +1611,6 @@ async function attachCart(user: User, loop: any, waxRunId: string, barcode: stri
 		await audit(user, 'arm_wax_fill.synthetic_cart', 'cartridge_records', barcode, { loopId: String(loop._id), waxRunId, testMode: true });
 	} else if (cart.status === 'wax_filling' && cart.waxFilling?.runId === waxRunId) {
 		return; // a retry of this very cycle
-	} else if (rehearsal && !cart.backing?.synthetic) {
-		// The rehearsal dispenses nothing: a real cart must not leave its bucket or be recorded as wax-filled.
-		throw new ArmWaxFillError(
-			`REHEARSAL: cartridge ${barcode} is a real cart. Rehearse with carts the system does not know (Test mode synthesises them), or deploy the production stage protocol.`,
-			409
-		);
 	} else if (cart.status !== 'backing') {
 		throw new ArmWaxFillError(`Cartridge ${barcode} is at "${cart.status ?? '(none)'}" — only backed carts (status backing) can be wax filled.`, 409);
 	}
@@ -1705,11 +1695,13 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 			cartridgeIds: [],
 			plannedCartridgeCount: 1,
 			setupTimestamp: new Date(),
-			armWaxFill: { loopId, cycleIndex: cycle.index },
+			armWaxFill: { loopId, cycleIndex: cycle.index, rehearsal: protocol.rehearsal },
 			notes: [
 				{
 					_id: generateId(),
-					body: `Robot-arm wax fill: cycle ${cycle.index} of loop ${loopId}, one cart ${stage ? 'at the taught stage location' : `at deck position ${loop.cartPosition}`}.`,
+					body: protocol.rehearsal
+						? `Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): cycle ${cycle.index} of loop ${loopId}, cart ${cycle.barcode} checked only — not on this run, not drawn from its bucket, not advanced.`
+						: `Robot-arm wax fill: cycle ${cycle.index} of loop ${loopId}, one cart ${stage ? 'at the taught stage location' : `at deck position ${loop.cartPosition}`}.`,
 					phase: 'wax_run',
 					author: opRef(user),
 					createdAt: new Date()
@@ -1720,8 +1712,15 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		await patchCycle(loopId, cycle.index, { waxRunId });
 	}
 	try {
-		await attachCart(user, loop, waxRunId, cycle.barcode, settings.testMode, loop.cartPosition, protocol.rehearsal);
-		await WaxFillingRun.updateOne({ _id: waxRunId }, { $addToSet: { cartridgeIds: cycle.barcode } });
+		if (protocol.rehearsal) {
+			// REHEARSAL: the cart was checked at the scan (cartScanProblem — a backed cart,
+			// else the fail route) and that is all that happens to it. It is not put on
+			// the run, not drawn from its bucket and never advanced: the run dispenses air.
+			await audit(user, 'arm_wax_fill.rehearsal_cart', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId, barcode: cycle.barcode, touched: false });
+		} else {
+			await attachCart(user, loop, waxRunId, cycle.barcode, settings.testMode, loop.cartPosition);
+			await WaxFillingRun.updateOne({ _id: waxRunId }, { $addToSet: { cartridgeIds: cycle.barcode } });
+		}
 	} catch (err) {
 		await revertUnstartedWaxRun(user, waxRunId, cycle.barcode, `cart could not be attached: ${(err as Error).message}`).catch(() => null);
 		await patchCycle(loopId, cycle.index, { waxRunId: null });

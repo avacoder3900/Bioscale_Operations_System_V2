@@ -922,7 +922,7 @@
 					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
 							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span> —
-							{#if data.protocol.rehearsal}the p300 walks every station of the stage fill with 200 µL tips and air; nothing is dispensed. Needs Test mode and carts the system does not know.
+							{#if data.protocol.rehearsal}the p300 walks every station of the stage fill with 200 µL tips and air; nothing is dispensed. Real carts and barcodes are fine: the scanned cart is only checked (a backed cart passes, anything else takes the fail route) and no cart record changes.
 							{:else if data.protocol.declaresCartLocation}the stage protocol: fills the taught cart location (arm_cart_x/y/z).
 							{:else}the carriage protocol: fills the deck position; arm_cart_x/y/z not declared.{/if}
 						{:else}
