@@ -62,6 +62,7 @@ import {
 	TipCalibratorFixture,
 	WaxFillingRun
 } from '$lib/server/db';
+import crypto from 'node:crypto';
 import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
@@ -774,6 +775,10 @@ export interface ProtocolOption {
 	onRobot: boolean;
 	lastDeployedAt: string | null;
 	lastDeployedBy: string | null;
+	/** First 8 hex of the row's sha256 — tells two rows of the same file name apart. */
+	fileHash8: string;
+	/** When the row was filed in the library. */
+	addedAt: string | null;
 }
 
 export interface LoopCycleView {
@@ -893,8 +898,8 @@ export async function listStageProtocolOptions(robotId: string, current: Protoco
 	await connectDB();
 	// A stage .py filed under 'other' (the library API's default) is still offered; deploy files it under wax-filling.
 	const rows = (await OpentronProtocol.find({ processType: { $in: ['wax-filling', 'other'] }, isActive: true })
-		.select('_id protocolName fileName fileContent deployments.robotId deployments.deployedAt deployments.deployedBy updatedAt')
-		.sort({ updatedAt: -1 })
+		.select('_id protocolName fileName fileHash createdAt fileContent deployments.robotId deployments.deployedAt deployments.deployedBy updatedAt')
+		.sort({ createdAt: -1 })
 		.lean()) as any[];
 	return rows
 		.filter((r) => String(r.fileContent ?? '').includes(STAGE_MARKER))
@@ -910,9 +915,72 @@ export async function listStageProtocolOptions(robotId: string, current: Protoco
 				rehearsal: String(r.fileContent).includes(REHEARSAL_MARKER),
 				onRobot: !!current && current.protocolName === fileName,
 				lastDeployedAt: iso(mine[0]?.deployedAt),
-				lastDeployedBy: mine[0]?.deployedBy ?? null
+				lastDeployedBy: mine[0]?.deployedBy ?? null,
+				fileHash8: String(r.fileHash ?? '').slice(0, 8),
+				addedAt: iso(r.createdAt)
 			};
 		});
+}
+
+/**
+ * File a stage .py in the library AS THE ONE ROW FOR THAT FILE NAME. The generic
+ * library POST only ever inserts, so re-adding a corrected .py left the old row
+ * active beside the new one; the picker then listed two identical names and the
+ * old one was deployed again (2026-10-29, the rehearsal's RTP-description fix
+ * never reached the robot). Here: a row with the same sha256 is reused, otherwise
+ * a new row is created, and every OTHER active wax-filling / other row with the
+ * same file name is archived (isActive false — its deployment history stays).
+ */
+export async function addStageProtocolToLibrary(
+	user: User,
+	input: { fileName: unknown; content: unknown }
+): Promise<{ libraryId: string; reused: boolean; archived: string[]; fileHash8: string }> {
+	await connectDB();
+	const fileName = String(input.fileName ?? '').trim();
+	const content = String(input.content ?? '');
+	if (!/\.py$/i.test(fileName)) throw new ArmWaxFillError('Pick a .py file.');
+	if (!content.trim()) throw new ArmWaxFillError(`${fileName} is empty.`);
+	if (!content.includes(STAGE_MARKER)) throw new ArmWaxFillError(`${fileName} does not declare arm_cart_x/y/z — only a stage protocol goes in from here.`);
+	const fileHash = crypto.createHash('sha256').update(content).digest('hex');
+	const same = (await OpentronProtocol.findOne({ fileHash, isActive: true }).select('_id').lean()) as any;
+	let libraryId: string;
+	let reused = false;
+	if (same) {
+		libraryId = String(same._id);
+		reused = true;
+	} else {
+		libraryId = generateId();
+		await OpentronProtocol.create({
+			_id: libraryId,
+			protocolName: fileName.replace(/\.py$/i, ''),
+			description: 'Robot-arm stage protocol (added from the Wax fill tab)',
+			processType: 'wax-filling',
+			fileName,
+			fileHash,
+			fileContent: content,
+			tags: [],
+			uploadedBy: user.username
+		});
+	}
+	const others = (await OpentronProtocol.find({
+		_id: { $ne: libraryId },
+		fileName,
+		isActive: true,
+		processType: { $in: ['wax-filling', 'other'] }
+	})
+		.select('_id fileHash')
+		.lean()) as any[];
+	const archived = others.map((o) => String(o._id));
+	if (archived.length) {
+		await OpentronProtocol.updateMany({ _id: { $in: archived } }, { $set: { isActive: false, lastModifiedBy: user.username } });
+	}
+	await audit(user, 'arm_wax_fill.library_replace', 'opentrons_protocols', libraryId, {
+		fileName,
+		fileHash,
+		reused,
+		archived: others.map((o) => ({ _id: String(o._id), fileHash: o.fileHash ?? null }))
+	});
+	return { libraryId, reused, archived, fileHash8: fileHash.slice(0, 8) };
 }
 
 /**

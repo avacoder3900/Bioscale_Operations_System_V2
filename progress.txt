@@ -24697,3 +24697,16 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit b940dfc4 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy b940dfc4 (RTP descriptions under the limit)"
 What this deployment is for: the repo's stage and rehearsal .py files pass the robot's analysis; the library copies still have to be replaced from the Wax fill tab.
+
+2026-10-29 — feat/stage-cal-follows-protocol — Wax fill tab: "Add a stage .py to the library" REPLACES older rows of that file; the picker names each row's file hash
+================================================================================
+After the RTP-description fix (b940dfc4) the loop still failed with the OLD description text: the 19:15Z deploy audit shows
+the same libraryId Sx87tXGW01RXooC5z0NM4 and the same opentronsProtocolId 724a51fb. The generic library POST
+(api/opentrons-lab/protocols) only ever INSERTS a row (409 on an identical hash), so adding the corrected .py left the old
+row active beside the new one; the picker listed two identical names and the old one was deployed again.
+Fix: addStageProtocolToLibrary (page action addToLibrary) - sha256 the file, reuse an active row with the same hash or
+create one (processType wax-filling), then archive (isActive false) every OTHER active wax-filling/other row with the
+same fileName; audit arm_wax_fill.library_replace lists the archived ids + hashes. ProtocolOption carries fileHash8 +
+addedAt and the picker shows "file <hash8> added <when>" so two rows can never look alike. Options now sort by createdAt.
+Operator: add the corrected .py once more (it reuses the new row and archives the stale one), deploy, Reset, start.
+svelte-check 14 errors / 448 warnings (baseline).

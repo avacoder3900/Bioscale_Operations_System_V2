@@ -79,22 +79,20 @@
 		addingToLibrary = true;
 		deployMsg = null;
 		try {
+			// The page's own action: files the .py as THE library row for that file name
+			// and archives older copies, so the picker never offers a stale twin.
 			const fd = new FormData();
 			fd.set('file', libraryFile);
-			fd.set('protocolName', libraryFile.name.replace(/\.py$/i, ''));
-			fd.set('processType', 'wax-filling');
-			fd.set('description', 'Robot-arm stage protocol (added from the Wax fill tab)');
-			const res = await fetch('/api/opentrons-lab/protocols', { method: 'POST', body: fd });
-			const body = await res.json().catch(() => ({}));
-			if (res.status === 409) {
-				deployMsg = { text: `${libraryFile.name} is already in the library (same file). Pick it below.`, ok: true };
-				deployLibraryId = String(body?.existingId ?? '');
-			} else if (!res.ok) {
-				deployMsg = { text: `Could not add ${libraryFile.name} to the library: ${body?.error ?? res.statusText}`, ok: false };
-			} else {
-				deployMsg = { text: `${libraryFile.name} added to the library — now pick it and Deploy to robot.`, ok: true };
-				deployLibraryId = String(body?.data?._id ?? '');
+			const res = await fetch('?/addToLibrary', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+			const r = deserialize(await res.text());
+			if (r.type === 'success') {
+				deployMsg = { text: String((r.data as any)?.success ?? 'Added to the library.'), ok: true };
+				deployLibraryId = String((r.data as any)?.libraryId ?? '');
 				note(deployMsg.text);
+			} else if (r.type === 'failure') {
+				deployMsg = { text: `Could not add ${libraryFile.name} to the library: ${String((r.data as any)?.error ?? 'failed')}`, ok: false };
+			} else {
+				deployMsg = { text: `Could not add ${libraryFile.name} to the library: ${r.type === 'error' ? (r.error?.message ?? 'error') : 'unexpected response'}`, ok: false };
 			}
 			libraryFile = null;
 			await invalidateAll();
@@ -1068,7 +1066,7 @@
 							<option value="">— choose a stage protocol from the library —</option>
 							{#each data.protocolOptions as o (o.libraryId)}
 								<option value={o.libraryId}>
-									{o.protocolName}{o.rehearsal ? ' · REHEARSAL (p300, air)' : ' · production fill'}{o.onRobot ? ' · on the robot now' : o.lastDeployedAt ? ` · last deployed ${new Date(o.lastDeployedAt).toLocaleDateString()}` : ' · never deployed here'}
+									{o.protocolName}{o.rehearsal ? ' · REHEARSAL (p300, air)' : ' · production fill'} · file {o.fileHash8}{o.addedAt ? ` added ${new Date(o.addedAt).toLocaleString()}` : ''}{o.onRobot ? ' · on the robot now' : o.lastDeployedAt ? ` · last deployed ${new Date(o.lastDeployedAt).toLocaleDateString()}` : ' · never deployed here'}
 								</option>
 							{/each}
 						</select>

@@ -33,6 +33,7 @@ import {
 	cycleScanned,
 	cycleWithdraw,
 	cycleWithdrawDone,
+	addStageProtocolToLibrary,
 	deployStageProtocol,
 	failLoop,
 	getLoop,
@@ -112,6 +113,25 @@ export const actions: Actions = {
 
 	// Put a stage protocol from the library on the arm's OT-2 — the production fill or the
 	// p300 rehearsal — over the server line, and repoint the robot's wax-filling entry to it.
+	// File a stage .py in the library as THE row for that file name (older rows of the
+	// same name are archived), so the picker cannot offer a stale copy beside the new one.
+	addToLibrary: async (ev) => {
+		const { d, user } = await writer(ev);
+		try {
+			const f = d.get('file');
+			if (!(f instanceof File)) return fail(400, { error: 'Pick a .py file.' });
+			const r = await addStageProtocolToLibrary(user, { fileName: f.name, content: await f.text() });
+			return {
+				success:
+					`${f.name} (file ${r.fileHash8}) is ${r.reused ? 'already' : 'now'} in the library` +
+					`${r.archived.length ? `; ${r.archived.length} older cop${r.archived.length === 1 ? 'y' : 'ies'} of that file archived` : ''}. Pick it and Deploy to robot.`,
+				libraryId: r.libraryId
+			};
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
 	deployProtocol: async (ev) => {
 		const { d, user } = await writer(ev);
 		try {
