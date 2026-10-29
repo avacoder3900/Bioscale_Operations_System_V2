@@ -24483,3 +24483,36 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ commit aae3bc57
 Retrieve this exact code: git checkout aae3bc57
 What this deployment is for: robot-arm wax fill Option A — fewer OT-2 homes per cart: the withdraw stamp verifies the run's own end-of-run home and only lifts the pipette (full home as fallback), the one-slot scanner sweep tells the bridge daemon the gantry was just homed so it skips its own, the ArmStage protocol remembers the calibrator's serial port. The bridge daemon still needs redeploying to the robots and the protocol re-uploading on /opentrons.
+
+2026-10-29 — feat/arm-wax-fill-protocol-picker — Robot Arm Wax fill tab: choose and deploy the stage protocol (production fill or the p300 rehearsal) from the page
+================================================================================
+Alejandro, after uploading Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py on /opentrons: "can i have this protocol be
+chosen from the robot arm wax fill page".
+Found on the way - the two deploy paths do not meet: the Opentrons page's Deploy (api/opentrons-lab/protocols/:id/
+deploy) writes only the library row's deployments[] (what the run-start re-sync, storedProtocolForRobot, reads), and
+the Robots page's upload (api/opentrons-lab/robots/:id/protocols) writes only OpentronsRobot.protocols[] (what the
+Wax fill tab, the Stage studio and cycleFill read via currentProtocolEntry). A library Deploy therefore never showed
+up on the Wax fill tab, and a robot upload never became the re-sync source.
+Wax fill tab, Setup card, new "Protocol on the robot" block:
+  - shows the robot's current wax-filling entry with a badge: "Production stage fill" / "Rehearsal . p300 . air . no
+    wax" / carriage; one-line explanation of what it does.
+  - a select of the library's STAGE protocols (active wax-filling rows whose .py declares arm_cart_x), each marked
+    production / REHEARSAL, "on the robot now" or when it was last deployed to this robot; "Deploy to robot".
+  - deployStageProtocol (arm-wax-fill.ts): assembleProtocolUpload + uploadAssembledProtocol over the server line (the
+    queue on Vercel; page maxDuration 120 covers the analysis wait), then BOTH records: the library row's deployments[]
+    (+ parametersSchema / labware / pipettes on a completed analysis, as the Opentrons page records them) and, only
+    when the analysis completed, recordResyncUpload -> the robot's protocols[] entry (uploadedBy "arm wax fill deploy
+    (user)" - recordResyncUpload gained an optional uploadedBy). A failed or pending analysis is recorded on the
+    library row and reported; the robot keeps its previous protocol. AuditLog 'deploy' (from: arm-wax-fill) +
+    arm_wax_fill.deploy_protocol. Refused while a loop runs or with no robot in Setup.
+  - listStageProtocolOptions feeds the select (page load, protocolOptions).
+Rehearsal awareness: ProtocolView.rehearsal = the robot's entry declares z_cal_p300 (REHEARSAL_RTP) or is named
+*Rehearsal*. The header line, the Start button ("Start N rehearsal runs") and the Setup line say so. readiness(): a
+note that nothing is dispensed, and a BLOCK unless Test mode is on - a real backed cart would be drawn from its bucket
+and recorded as wax_filled by a run that dispensed nothing. attachCart() now refuses a non-synthetic cart on a
+rehearsal (409) as the hard stop behind the UI gate; cycleFill passes protocol.rehearsal.
+Rebased over the fail route (ca5e23b4) and the lift rule (2f1fe3a3): readiness notes and the header paragraph merged
+by hand. The lift-rule commit also reconciled the stage protocol (lift + per-hole RTPs, no stage_jump_height), so the
+rehearsal file and the production file now agree; the stage tests pass on both.
+svelte-check: 14-error baseline (none in touched files). python -I: both stage protocol tests pass. Not run against
+a robot: the deploy path reuses the exact helpers the run-start re-sync and the Robots upload use.

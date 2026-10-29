@@ -61,6 +61,29 @@
 	// The robot runs the stage protocol (Wax_Filling_GEN7_ArmStage.py: fills the taught,
 	// tip-neutral cart location, loads no deck) rather than the legacy carriage protocol.
 	const stage = $derived(!!data.protocol?.declaresCartLocation);
+	// The p300 / air REHEARSAL of the stage fill is on the robot: every station, nothing dispensed.
+	const rehearsal = $derived(!!data.protocol?.rehearsal);
+
+	// ── Protocol on the robot (Setup): the production stage fill or the rehearsal, from the library ──
+	let deployLibraryId = $state('');
+	let deploying = $state(false);
+	let deployMsg = $state<{ text: string; ok: boolean } | null>(null);
+	async function deployProtocol() {
+		if (!deployLibraryId || deploying) return;
+		deploying = true;
+		deployMsg = null;
+		const r = await post('deployProtocol', { libraryId: deployLibraryId });
+		deploying = false;
+		if (r.ok) {
+			deployMsg = { text: String(r.data.success ?? 'Deployed.'), ok: true };
+			note(deployMsg.text);
+			deployLibraryId = '';
+			await invalidateAll();
+		} else {
+			deployMsg = { text: r.error, ok: false };
+			note(`Deploy failed: ${r.error}`, 'error');
+		}
+	}
 	const animationOptions = $derived([
 		...data.moveSets.map((m: { _id: string; name: string; keyframes: number }) => ({ value: `move_set:${m._id}`, label: `${m.name} (move set, ${m.keyframes} poses)` })),
 		...data.sequences.map((s: { _id: string; name: string; items: number }) => ({ value: `sequence:${s._id}`, label: `${s.name} (sequence, ${s.items} move sets)` }))
@@ -632,7 +655,8 @@
 		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 			The arm feeds one cart at a time onto its stage: OT-2 gantry <span class="font-semibold">home</span> → <span class="font-semibold">grab</span> →
 			<span class="font-semibold">scan</span> at the taught position → <span class="font-semibold">fill</span>
-			{#if stage}at the taught cart location with the stage protocol{:else}with the robot's carriage protocol (one cart, deck position {data.settings.cartPosition}){/if}
+			{#if stage}at the taught cart location with the stage protocol{:else}with the robot's carriage protocol (one cart, deck position {data.settings.cartPosition}){/if}{#if rehearsal}
+			<span class="font-semibold text-amber-300">— REHEARSAL: the p300 walks it with 200 µL tips and air, nothing is dispensed</span>{/if}
 			→ gantry <span class="font-semibold">home</span> → <span class="font-semibold">withdraw</span>, for as many runs as you ask. If the scan fails
 			— nothing read, or the cart is not a backed cart — the <span class="font-semibold">fail animation</span> plays instead of the fill and the run stops.
 			The arm never moves until the OT-2 confirms its gantry is home. The cart-drop unit will slot in before the grab once it is ready.
@@ -715,7 +739,7 @@
 					</label>
 					<button type="submit" disabled={busy || data.readiness.blocking.length > 0}
 						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-sm font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
-						{busy ? 'Starting…' : `Start ${runs} run${runs === 1 ? '' : 's'}`}
+						{busy ? 'Starting…' : `Start ${runs} ${rehearsal ? 'rehearsal ' : ''}run${runs === 1 ? '' : 's'}`}
 					</button>
 				</form>
 			{/if}
@@ -840,7 +864,7 @@
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
 							Protocol on {data.robotName}: <span class="font-mono">{data.protocol.protocolName}</span>
-							{data.protocol.declaresCartLocation ? '· stage protocol: fills the taught cart location (arm_cart_x/y/z)' : '· carriage protocol: fills the deck position; arm_cart_x/y/z not declared'}
+							{#if data.protocol.rehearsal}<span class="font-bold text-amber-300">· REHEARSAL</span>{/if}
 						{:else if data.settings.robotId}
 							<span class="text-amber-300">No wax-filling protocol on this robot.</span>
 						{/if}
@@ -848,6 +872,54 @@
 					<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save setup</button>
 				</div>
 			</form>
+
+			<!-- Protocol on the robot: the production stage fill or the p300 rehearsal, from the library -->
+			{#if data.settings.robotId}
+				<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3 text-xs">
+					<div class="flex items-center justify-between gap-2">
+						<span class="font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol on the robot</span>
+						{#if data.protocol?.rehearsal}
+							<span class="rounded border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-300">Rehearsal · p300 · air · no wax</span>
+						{:else if data.protocol?.declaresCartLocation}
+							<span class="rounded border border-green-500/40 bg-green-900/15 px-2 py-0.5 text-[10px] font-bold uppercase text-green-300">Production stage fill</span>
+						{/if}
+					</div>
+					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+						{#if data.protocol}
+							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span> —
+							{#if data.protocol.rehearsal}the p300 walks every station of the stage fill with 200 µL tips and air; nothing is dispensed. Needs Test mode and carts the system does not know.
+							{:else if data.protocol.declaresCartLocation}the stage protocol: fills the taught cart location (arm_cart_x/y/z).
+							{:else}the carriage protocol: fills the deck position; arm_cart_x/y/z not declared.{/if}
+						{:else}
+							<span class="text-amber-300">No wax-filling protocol on this robot yet.</span>
+						{/if}
+					</p>
+					<div class="mt-2 flex items-center gap-2">
+						<select bind:value={deployLibraryId} disabled={deploying || loop?.status === 'running'}
+							class="min-w-0 flex-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 disabled:opacity-40" style="color: var(--color-tron-text)">
+							<option value="">— choose a stage protocol from the library —</option>
+							{#each data.protocolOptions as o (o.libraryId)}
+								<option value={o.libraryId}>
+									{o.protocolName}{o.rehearsal ? ' · REHEARSAL (p300, air)' : ' · production fill'}{o.onRobot ? ' · on the robot now' : o.lastDeployedAt ? ` · last deployed ${new Date(o.lastDeployedAt).toLocaleDateString()}` : ' · never deployed here'}
+								</option>
+							{/each}
+						</select>
+						<button type="button" onclick={() => void deployProtocol()} disabled={!deployLibraryId || deploying || loop?.status === 'running'}
+							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
+							{deploying ? 'Deploying…' : 'Deploy to robot'}
+						</button>
+					</div>
+					{#if data.protocolOptions.length === 0}
+						<p class="mt-1 text-[11px] text-amber-300">No stage protocol in the library — upload Wax_Filling_GEN7_ArmStage.py (or the p300 rehearsal) on <a href="/opentrons" class="underline">/opentrons</a> with process wax-filling.</p>
+					{/if}
+					{#if deployMsg}
+						<p class="mt-1 text-[11px] {deployMsg.ok ? 'text-green-300' : 'text-red-300'}">{deployMsg.text}</p>
+					{/if}
+					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
+						Uploads the stored .py with the BIMS labware it loads, waits for the robot's analysis (up to about two minutes), then makes it this robot's wax-filling protocol. Not while a loop runs.
+					</p>
+				</div>
+			{/if}
 		</section>
 
 		<!-- ── Animations ────────────────────────────────────────────── -->

@@ -144,7 +144,9 @@ export async function recordResyncUpload(
 	processType: ProcessType,
 	fileName: string,
 	uploaded: UploadedProtocolResult,
-	username: string
+	username: string,
+	/** Who/what did the upload, for the entry's uploadedBy. Default: the run-start re-sync. */
+	uploadedBy?: string
 ): Promise<void> {
 	await connectDB();
 	await OpentronsRobot.updateOne({ _id: robotId }, { $pull: { protocols: { protocolType: processType } } });
@@ -161,7 +163,7 @@ export async function recordResyncUpload(
 					analysisStatus: uploaded.analysisStatus,
 					labwareDefinitions: uploaded.labwareDefinitions ?? null,
 					pipettesRequired: uploaded.pipettesRequired ?? null,
-					uploadedBy: `run-start auto-resync (${username})`,
+					uploadedBy: uploadedBy ?? `run-start auto-resync (${username})`,
 					createdAt: new Date(),
 					updatedAt: new Date()
 				}

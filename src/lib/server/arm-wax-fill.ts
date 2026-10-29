@@ -54,6 +54,7 @@ import {
 	AuditLog,
 	BucketCycle,
 	CartridgeRecord,
+	OpentronProtocol,
 	OpentronsRobot,
 	OpentronsScannerPositionSet,
 	OpentronsScannerSweepRun,
@@ -63,8 +64,8 @@ import {
 import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
-import { currentProtocolEntry } from '$lib/server/opentrons/protocol-freshness';
-import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
+import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
+import { assembleProtocolUpload, getRobot, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
@@ -114,6 +115,15 @@ export class ArmWaxFillError extends Error {
 export const SCAN_SET_TITLE = 'Arm wax fill — single cart';
 /** Protocol run-time parameters the cart location is sent as, when declared. */
 export const CART_LOCATION_RTPS = ['arm_cart_x', 'arm_cart_y', 'arm_cart_z'] as const;
+/**
+ * Declared only by protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py — the
+ * stage fill walked on the p300 with 200 µL tips and AIR. A robot carrying it
+ * rehearses the loop; it never fills a cart.
+ */
+export const REHEARSAL_RTP = 'z_cal_p300';
+/** A stored .py that declares the taught-cart RTPs (a stage protocol) / the rehearsal's own RTP. */
+const STAGE_MARKER = `variable_name="${CART_LOCATION_RTPS[0]}"`;
+const REHEARSAL_MARKER = `variable_name="${REHEARSAL_RTP}"`;
 
 /**
  * The FAIL ROUTE. A step listed here that fails does not end the loop where it
@@ -741,6 +751,20 @@ export interface ProtocolView {
 	protocolName: string;
 	/** The protocol declares arm_cart_x/y/z, so the taught cart location is sent to it. */
 	declaresCartLocation: boolean;
+	/** The p300 / air REHEARSAL of the stage fill (declares z_cal_p300): walks every station, dispenses nothing. */
+	rehearsal: boolean;
+}
+
+/** A stage protocol in the library the Wax fill tab can put on the arm's OT-2. */
+export interface ProtocolOption {
+	libraryId: string;
+	protocolName: string;
+	fileName: string;
+	rehearsal: boolean;
+	/** Its file is the robot's current wax-filling entry. */
+	onRobot: boolean;
+	lastDeployedAt: string | null;
+	lastDeployedBy: string | null;
 }
 
 export interface LoopCycleView {
@@ -842,11 +866,141 @@ async function protocolFor(robotId: string | null): Promise<ProtocolView | null>
 	const entry = await currentProtocolEntry(robotId, 'wax-filling');
 	if (!entry) return null;
 	const declared = new Set(((entry.parametersSchema ?? []) as any[]).map((p) => p?.variableName));
+	const protocolName = entry.protocolName ?? 'wax-filling';
 	return {
 		opentronsProtocolId: String(entry.opentronsProtocolId),
-		protocolName: entry.protocolName ?? 'wax-filling',
-		declaresCartLocation: CART_LOCATION_RTPS.every((k) => declared.has(k))
+		protocolName,
+		declaresCartLocation: CART_LOCATION_RTPS.every((k) => declared.has(k)),
+		rehearsal: declared.has(REHEARSAL_RTP) || /rehearsal/i.test(protocolName)
 	};
+}
+
+/**
+ * The stage protocols in the library (active wax-filling rows whose .py declares
+ * arm_cart_x) — the production fill and the p300 rehearsal — with whether each
+ * is the file on the robot now and when it last went to this robot.
+ */
+export async function listStageProtocolOptions(robotId: string, current: ProtocolView | null): Promise<ProtocolOption[]> {
+	await connectDB();
+	const rows = (await OpentronProtocol.find({ processType: 'wax-filling', isActive: true })
+		.select('_id protocolName fileName fileContent deployments.robotId deployments.deployedAt deployments.deployedBy updatedAt')
+		.sort({ updatedAt: -1 })
+		.lean()) as any[];
+	return rows
+		.filter((r) => String(r.fileContent ?? '').includes(STAGE_MARKER))
+		.map((r) => {
+			const mine = ((r.deployments ?? []) as any[])
+				.filter((d) => String(d.robotId) === String(robotId))
+				.sort((a, b) => new Date(b.deployedAt ?? 0).getTime() - new Date(a.deployedAt ?? 0).getTime());
+			const fileName = String(r.fileName ?? r.protocolName);
+			return {
+				libraryId: String(r._id),
+				protocolName: String(r.protocolName ?? fileName),
+				fileName,
+				rehearsal: String(r.fileContent).includes(REHEARSAL_MARKER),
+				onRobot: !!current && current.protocolName === fileName,
+				lastDeployedAt: iso(mine[0]?.deployedAt),
+				lastDeployedBy: mine[0]?.deployedBy ?? null
+			};
+		});
+}
+
+/**
+ * Put a stage protocol from the library on the arm's OT-2 and make it the
+ * robot's wax-filling protocol. The Opentrons page's Deploy only writes the
+ * library's deployments[] (what the run-start re-sync reads) and the Robots
+ * page's upload only writes the robot's protocols[] (what this tab, the Stage
+ * studio and cycleFill read); a fill needs both to agree, so this writes both.
+ * Robot half over the server line (the queue on Vercel): the .py + the BIMS
+ * labware it loads, then the on-robot analysis. The robot's entry is only
+ * repointed when that analysis completed — a failed upload leaves the robot
+ * on the protocol it had.
+ */
+export async function deployStageProtocol(user: User, rawLibraryId: unknown): Promise<{ protocol: ProtocolView; analysisStatus: string }> {
+	await connectDB();
+	const libraryId = String(rawLibraryId ?? '').trim();
+	if (!libraryId) throw new ArmWaxFillError('Pick a protocol to deploy.');
+	const settings = await getSettings();
+	if (!settings.robotId) throw new ArmWaxFillError('Setup: pick the OT-2 the arm feeds first.');
+	if (await activeLoop()) throw new ArmWaxFillError('A loop is running — stop it before changing the protocol on the robot.', 409);
+	const robot = await getRobot(settings.robotId);
+	if (!robot) throw new ArmWaxFillError('Robot not found.', 404);
+	const row = (await OpentronProtocol.findById(libraryId).lean()) as any;
+	if (!row || row.isActive === false || row.processType !== 'wax-filling') throw new ArmWaxFillError('That protocol is not an active wax-filling protocol in the library.', 404);
+	const content = String(row.fileContent ?? '');
+	if (!content.includes(STAGE_MARKER)) throw new ArmWaxFillError(`${row.protocolName} does not declare arm_cart_x/y/z — only a stage protocol can go on the arm's OT-2 from here.`);
+	const fileName = String(row.fileName ?? `${row.protocolName}.py`);
+	const rehearsal = content.includes(REHEARSAL_MARKER);
+	const robotId = String(robot._id);
+
+	const bundle = await assembleProtocolUpload(robot, fileName, content);
+	let uploaded;
+	try {
+		uploaded = await uploadAssembledProtocol(robot, bundle);
+	} catch (e) {
+		throw new ArmWaxFillError(`Upload to ${robot.name} failed: ${e instanceof Error ? e.message : String(e)}`, 502);
+	}
+	const analysisStatus = uploaded.analysisStatus === 'completed' || uploaded.analysisStatus === 'failed' ? uploaded.analysisStatus : 'pending';
+	const analysisErrors: string[] = uploaded.analysisErrors ?? [];
+
+	// The library row: deployment history + (on a completed analysis) the requirements, as the Opentrons page's Deploy records them.
+	const set: Record<string, unknown> = {};
+	if (analysisStatus === 'completed') {
+		set.parametersSchema = uploaded.parametersSchema ?? null;
+		set.labwareRequired = ((uploaded.labwareDefinitions ?? []) as any[]).map((lw) => ({
+			loadName: lw.loadName,
+			displayName: lw.displayName ?? lw.loadName,
+			slot: lw.location?.slotName,
+			isCustom: lw.namespace !== 'opentrons'
+		}));
+		set.pipettesRequired = ((uploaded.pipettesRequired ?? []) as any[]).map((p) => ({ pipetteName: p.pipetteName, mount: p.mount }));
+	}
+	await OpentronProtocol.updateOne(
+		{ _id: row._id },
+		{
+			$push: {
+				deployments: {
+					_id: generateId(),
+					robotId,
+					robotName: robot.name,
+					opentronsProtocolId: uploaded.opentronsProtocolId,
+					analysisStatus,
+					analysisErrors,
+					deployedAt: new Date(),
+					deployedBy: user.username
+				}
+			},
+			...(Object.keys(set).length ? { $set: set } : {})
+		}
+	);
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: 'opentrons_protocols',
+		recordId: String(row._id),
+		action: 'deploy',
+		newData: { robotId, opentronsProtocolId: uploaded.opentronsProtocolId, analysisStatus, line: 'queue', from: 'arm-wax-fill', rehearsal },
+		changedAt: new Date(),
+		changedBy: user.username
+	});
+
+	if (analysisStatus !== 'completed') {
+		throw new ArmWaxFillError(
+			`${fileName} was uploaded to ${robot.name} but its analysis ${analysisStatus === 'failed' ? 'FAILED' : 'did not complete'}` +
+				`${analysisErrors.length ? `: ${analysisErrors.join('; ')}` : ''}. The robot keeps its previous wax-filling protocol.`,
+			502
+		);
+	}
+	// The robot's own entry — what this tab, the Stage studio and cycleFill read.
+	await recordResyncUpload(robotId, 'wax-filling', fileName, uploaded, user.username, `arm wax fill deploy (${user.username})`);
+	await audit(user, 'arm_wax_fill.deploy_protocol', 'opentrons_robots', robotId, {
+		libraryId: String(row._id),
+		fileName,
+		rehearsal,
+		opentronsProtocolId: uploaded.opentronsProtocolId
+	});
+	const protocol = await protocolFor(robotId);
+	if (!protocol) throw new ArmWaxFillError('Deployed, but the robot entry could not be read back.', 500);
+	return { protocol, analysisStatus };
 }
 
 /** Why a loop cannot start yet (empty = ready) and softer notes. */
@@ -886,6 +1040,17 @@ export function readiness(
 	} else if (settings.robotId && protocol) {
 		if (!calibration?.cartLocation) notes.push(`Cart location is not taught. The current protocol does not read it; it fills deck position ${settings.cartPosition} from the deck calibration.`);
 		else notes.push(`The current protocol does not declare arm_cart_x/y/z, so the taught cart location is kept but not sent; it fills deck position ${settings.cartPosition}. Upload protocols/Wax_Filling_GEN7_ArmStage.py to fill the stage.`);
+	}
+	if (settings.robotId && protocol?.rehearsal) {
+		notes.push(
+			`REHEARSAL protocol on the robot (${protocol.protocolName}): the p300 walks the stage fill with 200 µL tips and air — nothing is dispensed. ` +
+				'Deploy the production stage protocol (Setup → Protocol on the robot) before a real fill.'
+		);
+		if (!settings.testMode) {
+			blocking.push(
+				'Rehearsal protocol on the robot: turn on Test mode in Setup and use carts the system does not know — a real backed cart would otherwise be drawn from its bucket and recorded as wax-filled by a run that dispensed nothing.'
+			);
+		}
 	}
 	if (settings.robotId) notes.push('Before every arm move (grab, withdraw and the fail animation) the OT-2 gantry is homed and the arm waits until the robot confirms it.');
 	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill and the loop stops.`);
@@ -1011,6 +1176,9 @@ export async function loadArmWaxFill() {
 		settings.robotId ? teachAid(settings.robotId).catch((): TeachAid | null => null) : Promise.resolve<TeachAid | null>(null)
 	]);
 	const robotName = (robots as any[]).find((r) => String(r._id) === settings.robotId)?.name ?? null;
+	const protocolOptions: ProtocolOption[] = settings.robotId
+		? await listStageProtocolOptions(settings.robotId, protocol).catch(() => [])
+		: [];
 	// Bridge-heartbeat health of the OT-2 the arm feeds (ready / busy / hung /
 	// offline), the same read the Robots board makes; the page polls
 	// /api/opentrons-lab/robots/health for the same shape afterwards.
@@ -1027,6 +1195,7 @@ export async function loadArmWaxFill() {
 		sequences: sequences.filter((s) => !s.archived).map((s) => ({ _id: s._id, name: s.name, items: s.items.length })),
 		calibration,
 		protocol,
+		protocolOptions,
 		teach,
 		activeLoop: active,
 		recentLoops: (recent as any[]).map(loopView),
@@ -1372,8 +1541,8 @@ export async function cycleFailDone(user: User, loopId: string): Promise<LoopVie
  * `wax_filling` pointing at the run — which is what the finish's
  * advanceCartsToWaxFilled looks for.
  */
-async function attachCart(user: User, loop: any, waxRunId: string, barcode: string, testMode: boolean, cartPosition: number) {
-	const cart = (await CartridgeRecord.findById(barcode).select('_id status waxFilling.runId').lean()) as any;
+async function attachCart(user: User, loop: any, waxRunId: string, barcode: string, testMode: boolean, cartPosition: number, rehearsal = false) {
+	const cart = (await CartridgeRecord.findById(barcode).select('_id status waxFilling.runId backing.synthetic').lean()) as any;
 	const now = new Date();
 	if (!cart) {
 		if (!testMode) {
@@ -1391,6 +1560,12 @@ async function attachCart(user: User, loop: any, waxRunId: string, barcode: stri
 		await audit(user, 'arm_wax_fill.synthetic_cart', 'cartridge_records', barcode, { loopId: String(loop._id), waxRunId, testMode: true });
 	} else if (cart.status === 'wax_filling' && cart.waxFilling?.runId === waxRunId) {
 		return; // a retry of this very cycle
+	} else if (rehearsal && !cart.backing?.synthetic) {
+		// The rehearsal dispenses nothing: a real cart must not leave its bucket or be recorded as wax-filled.
+		throw new ArmWaxFillError(
+			`REHEARSAL: cartridge ${barcode} is a real cart. Rehearse with carts the system does not know (Test mode synthesises them), or deploy the production stage protocol.`,
+			409
+		);
 	} else if (cart.status !== 'backing') {
 		throw new ArmWaxFillError(`Cartridge ${barcode} is at "${cart.status ?? '(none)'}" — only backed carts (status backing) can be wax filled.`, 409);
 	}
@@ -1490,7 +1665,7 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		await patchCycle(loopId, cycle.index, { waxRunId });
 	}
 	try {
-		await attachCart(user, loop, waxRunId, cycle.barcode, settings.testMode, loop.cartPosition);
+		await attachCart(user, loop, waxRunId, cycle.barcode, settings.testMode, loop.cartPosition, protocol.rehearsal);
 		await WaxFillingRun.updateOne({ _id: waxRunId }, { $addToSet: { cartridgeIds: cycle.barcode } });
 	} catch (err) {
 		await revertUnstartedWaxRun(user, waxRunId, cycle.barcode, `cart could not be attached: ${(err as Error).message}`).catch(() => null);

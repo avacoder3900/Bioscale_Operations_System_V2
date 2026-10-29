@@ -33,6 +33,7 @@ import {
 	cycleScanned,
 	cycleWithdraw,
 	cycleWithdrawDone,
+	deployStageProtocol,
 	failLoop,
 	getLoop,
 	loadArmWaxFill,
@@ -102,6 +103,21 @@ export const actions: Actions = {
 		try {
 			const s = await saveAnimations(user, { grab: field(d, 'grab'), withdraw: field(d, 'withdraw'), fail: field(d, 'fail') });
 			return { success: `Animations saved: grab "${s.grabAnimation?.name}", withdraw "${s.withdrawAnimation?.name}", fail "${s.failAnimation?.name}".` };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Put a stage protocol from the library on the arm's OT-2 — the production fill or the
+	// p300 rehearsal — over the server line, and repoint the robot's wax-filling entry to it.
+	deployProtocol: async (ev) => {
+		const { d, user } = await writer(ev);
+		try {
+			const r = await deployStageProtocol(user, field(d, 'libraryId'));
+			return {
+				success: `${r.protocol.protocolName} is now the wax-filling protocol on the robot${r.protocol.rehearsal ? ' — REHEARSAL: p300, air, no wax' : ''}.`,
+				protocol: json(r.protocol)
+			};
 		} catch (err) {
 			return failFrom(err);
 		}
