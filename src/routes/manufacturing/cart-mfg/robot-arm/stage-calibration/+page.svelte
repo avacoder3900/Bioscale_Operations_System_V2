@@ -58,6 +58,16 @@
 	const robotId = $derived(data.robotId as string | null);
 	const robotName = $derived((data.robotName as string | null) ?? 'robot');
 
+	// ── which tip this page teaches with ─────────────────────────────────────
+	// The protocol on the robot decides (stageTipProfile on the server): the
+	// production stage fill → the p20 on the 20 µL rack, probe Z = zCalWax; the
+	// p300 / air REHEARSAL → the p300 on the 200 µL rack, probe Z = zCalReagent
+	// (its z_cal_p300). Every pick-up, probe and label below follows it.
+	const tipProfile = $derived<'wax' | 'reagent'>(data.teach?.tipProfile ?? 'wax');
+	const pip = $derived(data.teach?.pipette ?? 'p20');
+	const tipUl = $derived(data.teach?.tipUl ?? 20);
+	const zCalKey = $derived(data.teach?.zCalKey ?? 'zCalWax');
+
 	// ── the cartridge on the stage ───────────────────────────────────────────
 	let calibration = $state<CalibrationView | null>(data.calibration);
 	$effect(() => {
@@ -419,10 +429,12 @@
 	let pipetteId = $state<string | null>(null);
 	let pipetteMount = $state<string | null>(null);
 	let pipetteName = $state<string | null>(null);
-	let desiredMount = $state<'left' | 'right'>(data.calibration?.pipetteMount === 'right' ? 'right' : 'left');
+	let desiredMount = $state<'left' | 'right'>(data.teach?.defaultMount ?? (data.calibration?.pipetteMount === 'right' ? 'right' : 'left'));
 	let connecting = $state(false);
 	let stepSize = $state(1);
-	let zAxis = $state<'leftZ' | 'rightZ'>(data.calibration?.pipetteMount === 'right' ? 'rightZ' : 'leftZ');
+	let zAxis = $state<'leftZ' | 'rightZ'>(desiredMount === 'right' ? 'rightZ' : 'leftZ');
+	/** The run's pipette is not the one the protocol on the robot uses (p20 run while the p300 rehearsal is deployed, or the reverse). */
+	const pipetteMismatch = $derived(!!pipetteName && !new RegExp(pip, 'i').test(pipetteName));
 	let liveX = $state<number | null>(null);
 	let liveY = $state<number | null>(null);
 	let liveZ = $state<number | null>(null);
@@ -458,6 +470,8 @@
 			pipetteName = res.pipetteName ?? null;
 			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
 			msg = pipetteId ? `Run open: ${pipetteName} on ${pipetteMount}.` : 'Run opened but no pipette could be loaded — jog will fail.';
+			if (pipetteId && pipetteMismatch)
+				errMsg = `The run opened ${pipetteName} on the ${pipetteMount} mount, but ${data.protocol?.protocolName ?? 'the protocol on the robot'} teaches with the ${pip} (${tiprack}). Close the run and open it on the other mount — a probe with this pipette would use the wrong tip and depth.`;
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -802,8 +816,9 @@
 		calibrating = true;
 		await act(async () => {
 			let pickedUpNow = false;
+			if (pipetteMismatch) throw new Error(`The run's pipette is ${pipetteName}, not the ${pip} this protocol teaches with — close the run and open the other mount.`);
 			if (!hasTip) {
-				msg = `Picking up a p20 tip (${tiprack} ${tipWell})…`;
+				msg = `Picking up a ${pip} tip (${tiprack} ${tipWell})…`;
 				await doPickUpTip();
 				pickedUpNow = true;
 			}
@@ -816,7 +831,7 @@
 			msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on)';
 			const res = await api('/api/scanner/calibrate-tip', {
 				method: 'POST',
-				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile: 'wax', tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } })
+				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } })
 			});
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
@@ -874,7 +889,7 @@
 	}
 	async function saveCalibratorPosition() {
 		if (checkedZ(calZ, 'Approach Z') === null || checkedZ(probeZ, 'Probe Z') === null) return;
-		const r = await postAction('saveCalibrator', { x: String(calX), y: String(calY), z: String(calZ), zCalWax: String(probeZ), maxTipAdjust: maxAdjust === '' ? '' : String(maxAdjust) });
+		const r = await postAction('saveCalibrator', { x: String(calX), y: String(calY), z: String(calZ), probeZ: String(probeZ), tipProfile, maxTipAdjust: maxAdjust === '' ? '' : String(maxAdjust) });
 		if (r) msg = r.success;
 	}
 
@@ -1018,10 +1033,17 @@
 				{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
 					<button type="button" disabled={!!runId} onclick={() => { desiredMount = m as 'left' | 'right'; zAxis = m === 'right' ? 'rightZ' : 'leftZ'; }}
 						class="px-2.5 py-1.5 transition-colors disabled:opacity-50 {desiredMount === m ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}"
-						title={runId ? 'Close the run to switch mounts' : `Open the run on the ${lbl.toLowerCase()} mount (the wax p20 is normally on the right)`}>{lbl}</button>
+						title={runId ? 'Close the run to switch mounts' : `Open the run on the ${lbl.toLowerCase()} mount (the ${pip} is normally on the ${data.teach?.defaultMount ?? 'right'})`}>{lbl}</button>
 				{/each}
 			</div>
 			{#if runId}<div class="mt-0.5 text-[10px]">close run to switch</div>{/if}
+		</div>
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Tip
+			<div class="mt-1 rounded border px-2 py-1.5 text-xs {data.protocol?.rehearsal ? 'border-amber-500/50 bg-amber-900/15 text-amber-200' : 'border-[var(--color-tron-border)] bg-black/30'}" style={data.protocol?.rehearsal ? '' : 'color: var(--color-tron-text)'}
+				title="Follows the wax-filling protocol on the robot: the production stage fill teaches with the p20 (20 µL rack, probe Z = zCalWax); the p300 / air rehearsal teaches with the p300 (200 µL rack, probe Z = zCalReagent → z_cal_p300).">
+				<span class="font-semibold">{pip}</span> · {tipUl} µL rack · slot 11
+				{#if data.protocol?.rehearsal}<span class="ml-1 font-bold uppercase">· rehearsal on the robot</span>{:else}<span class="ml-1 opacity-60">· production stage fill</span>{/if}
+			</div>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
 			12 wax holes · 6 × 9 mm lattice · rotation {rotation}° ({facing}) ·
@@ -1193,7 +1215,7 @@
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
-						<span>{hasTip ? '🟢 tip on' : 'no tip'} · p20 rack{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {pip} · {tipUl} µL rack{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
 					</div>
 					<div class="mb-2 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
 						<span>Pick from</span>
@@ -1204,8 +1226,11 @@
 					{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}
 						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point is taught for {robotName} — the probe would drive to the protocol's default. Teach it in the <strong>Tip calibrator</strong> panel below first.</p>
 					{/if}
-					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
-						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip (picks up a p20 tip first)'}
+					{#if pipetteMismatch}
+						<p class="mb-1 rounded border border-red-400/50 bg-red-900/20 px-1.5 py-1 text-[10px] leading-tight text-red-200">The run's pipette is <span class="font-mono">{pipetteName}</span> on the {pipetteMount} mount, but the protocol on the robot teaches with the <strong>{pip}</strong>. Close the run and open it on the other mount.</p>
+					{/if}
+					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || pipetteMismatch} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a {pip} tip, travels to the tip calibrator, then runs the slow limit-switch probe ({tipProfile} profile, probe Z = {zCalKey}). Keeps the tip on for tuning.">
+						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : `Calibrate tip (picks up a ${pip} tip first)`}
 					</button>
 					{#if !calibrating}
 						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
@@ -1255,7 +1280,7 @@
 					<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 				</div>
 				<div class="mt-2 grid grid-cols-2 gap-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-					<label class="block" title="Touch-off depth the limit-switch probe descends to — production z_cal for this robot">Probe Z — p20 · wax (zCalWax)
+					<label class="block" title={tipProfile === 'reagent' ? 'Touch-off depth the limit-switch probe descends to with the p300 / 200 µL tip — the rehearsal\'s z_cal_p300 for this robot' : 'Touch-off depth the limit-switch probe descends to — production z_cal for this robot'}>Probe Z — {pip} · {tipProfile} ({zCalKey})
 						<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={probeZ} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
 					<label class="block" title="Largest probe adjust the fill accepts before it stops (raw, carries this fixture's baseline). Blank = the protocol's 4.0">Max tip adjust (mm)
@@ -1279,7 +1304,10 @@
 					{:else if !data.protocol.declaresCartLocation}
 						<p class="text-amber-300"><span class="font-mono">{data.protocol.protocolName}</span> is the carriage protocol — it reads no stage calibration. Upload Wax_Filling_GEN7_ArmStage.py to this robot.</p>
 					{:else}
-						<p style="color: var(--color-tron-text)">✓ <span class="font-mono">{data.protocol.protocolName}</span> reads the first hole, rotation, travel height and dispense depth.</p>
+						<p style="color: var(--color-tron-text)">✓ <span class="font-mono">{data.protocol.protocolName}</span> reads the first hole, rotation and dispense depth.</p>
+						{#if data.protocol.rehearsal}
+							<p class="text-amber-300">REHEARSAL (p300, 200 µL tips, air): this page picks up, probes and teaches with the <strong>p300</strong>; Probe Z saves to zCalReagent (the rehearsal's z_cal_p300). A cart location taught with it must be re-taught with the p20 before a production fill.</p>
+						{/if}
 						<p class={data.teach?.protocolDeclaresHoleOffsets ? '' : 'text-amber-300'} style={data.teach?.protocolDeclaresHoleOffsets ? 'color: var(--color-tron-text)' : ''}>
 							{data.teach?.protocolDeclaresHoleOffsets ? '✓ reads the per-hole corrections (hole_01…12).' : '○ this upload predates per-hole corrections — re-upload the stage .py to this robot for Apply / Align to reach the fill.'}
 						</p>

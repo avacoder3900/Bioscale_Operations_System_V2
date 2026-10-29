@@ -122,6 +122,16 @@ export async function calibrationRtpValues(
 			const { zCalKey, defaultZ } = Z_CAL_FOR_PROCESS[processType];
 			out['z_cal'] = plausibleZ(fix[zCalKey]) ?? defaultZ;
 		}
+		// The p300 / air REHEARSAL of the arm stage fill (protocols/
+		// Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py) runs as the wax process but
+		// probes a p300 / 200 µL tip, so it declares its own probe depth,
+		// z_cal_p300, and reads the fixture's REAGENT depth — what the Stage
+		// Calibration Studio teaches while that protocol is on the robot. The
+		// p20's z_cal above is still injected and simply goes unread.
+		if (declared.has('z_cal_p300')) {
+			const { zCalKey, defaultZ } = Z_CAL_FOR_PROCESS['reagent-filling'];
+			out['z_cal_p300'] = plausibleZ(fix[zCalKey]) ?? defaultZ;
+		}
 
 		// Per-robot rejection cap for the tip probe.
 		//

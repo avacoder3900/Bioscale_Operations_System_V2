@@ -67,7 +67,7 @@ import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/service
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
 import { assembleProtocolUpload, getRobot, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
-import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
+import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
 	DISPENSE_DEPTH_LIMITS,
 	CART_LOCATION_LIMITS,
@@ -680,8 +680,8 @@ export async function applyStageEdits(
 export async function saveStageCalibrator(
 	user: User,
 	robotId: string,
-	input: { x: unknown; y: unknown; z: unknown; zCalWax?: unknown; maxTipAdjust?: unknown }
-): Promise<{ position: { x: number; y: number; z: number }; zCalWax: number; maxTipAdjust: number | null }> {
+	input: { x: unknown; y: unknown; z: unknown; probeZ?: unknown; tipProfile?: unknown; zCalWax?: unknown; maxTipAdjust?: unknown }
+): Promise<{ position: { x: number; y: number; z: number }; probeZ: number; tipProfile: TipProfile; maxTipAdjust: number | null }> {
 	await connectDB();
 	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
 	const x = num(input.x, 'calX');
@@ -689,14 +689,21 @@ export async function saveStageCalibrator(
 	const z = num(input.z, 'Approach Z');
 	if (plausibleZ(z) === undefined) throw new ArmWaxFillError(`Approach Z must be between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm.`);
 	if (x < 1 || y < 1) throw new ArmWaxFillError('calX / calY look untaught (below 1 mm) — jog onto the fixture and use "From live".');
+	// Which tip's probe depth this is: the page sends the profile it teaches with
+	// (the protocol on the robot decides — see stageTipProfile). Old callers that
+	// only send zCalWax keep writing the p20's depth.
+	const tipProfile: TipProfile = asTipProfile(input.tipProfile) ?? 'wax';
+	const spec = TIP_PROFILE[tipProfile];
+	const other = TIP_PROFILE[tipProfile === 'wax' ? 'reagent' : 'wax'];
+	const rawProbe = input.probeZ ?? input.zCalWax;
 	const prev = (await TipCalibratorFixture.findOne({ robotId, deckKey: null }).lean()) as any;
-	let zCalWax: number;
-	if (input.zCalWax !== null && input.zCalWax !== undefined && String(input.zCalWax).trim() !== '') {
-		const v = plausibleZ(Number(input.zCalWax));
+	let probeZ: number;
+	if (rawProbe !== null && rawProbe !== undefined && String(rawProbe).trim() !== '') {
+		const v = plausibleZ(Number(rawProbe));
 		if (v === undefined) throw new ArmWaxFillError(`Probe Z must be between ${CAL_Z_LIMITS.min} and ${CAL_Z_LIMITS.max} mm.`);
-		zCalWax = v;
+		probeZ = v;
 	} else {
-		zCalWax = plausibleZ(Number(prev?.zCalWax)) ?? TIP_PROFILE.wax.defaultZ;
+		probeZ = plausibleZ(Number(prev?.[spec.zCalKey])) ?? spec.defaultZ;
 	}
 	let maxTipAdjust: number | null = prev?.maxTipAdjust ?? null;
 	if (input.maxTipAdjust !== null && input.maxTipAdjust !== undefined && String(input.maxTipAdjust).trim() !== '') {
@@ -708,18 +715,19 @@ export async function saveStageCalibrator(
 	await TipCalibratorFixture.updateOne(
 		{ robotId, deckKey: null },
 		{
-			$set: { position: { x, y, z }, zCalWax, maxTipAdjust, capturedBy: opRef(user), capturedAt: now, deckLoadName: null },
-			$setOnInsert: { _id: generateId(), robotId, deckKey: null, zCalReagent: TIP_PROFILE.reagent.defaultZ }
+			$set: { position: { x, y, z }, [spec.zCalKey]: probeZ, maxTipAdjust, capturedBy: opRef(user), capturedAt: now, deckLoadName: null },
+			$setOnInsert: { _id: generateId(), robotId, deckKey: null, [other.zCalKey]: other.defaultZ }
 		},
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.calibrator', 'tip_calibrator_fixtures', robotId, {
 		position: { x, y, z },
-		zCalWax,
+		tipProfile,
+		[spec.zCalKey]: probeZ,
 		maxTipAdjust,
-		before: prev ? { position: prev.position, zCalWax: prev.zCalWax, maxTipAdjust: prev.maxTipAdjust ?? null } : null
+		before: prev ? { position: prev.position, zCalWax: prev.zCalWax, zCalReagent: prev.zCalReagent, maxTipAdjust: prev.maxTipAdjust ?? null } : null
 	});
-	return { position: { x, y, z }, zCalWax, maxTipAdjust };
+	return { position: { x, y, z }, probeZ, tipProfile, maxTipAdjust };
 }
 
 /**
@@ -1036,6 +1044,8 @@ export function readiness(
 		const cl = calibration?.cartLocation ?? null;
 		if (!cl) blocking.push('Stage calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
 		else if (!cl.tipAdjust) blocking.push('Stage calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
+		else if (!protocol?.rehearsal && /p300/i.test(calibration?.pipetteName ?? ''))
+			blocking.push(`Stage calibration: the cart location was taught with the p300 (${calibration?.pipetteName}) while the rehearsal was on the robot. Teach it again with the p20 before a production fill.`);
 		if (cl && !calibration?.dispenseDepth) blocking.push('Stage calibration: teach the dispense depth — jog the tip to the height it should dispense at over the first wax hole and save it.');
 		if (cl?.tipAdjust && calibration?.dispenseDepth) {
 			notes.push(
@@ -1071,12 +1081,38 @@ export function readiness(
  * position, and this robot's tip-calibrator point (approach height + probe Z).
  */
 export interface TeachAid {
+	/**
+	 * The tip the page picks up, probes and teaches with — decided by the
+	 * wax-filling protocol on the robot (stageTipProfile): 'wax' = the p20 and
+	 * its 20 µL rack for the production stage fill; 'reagent' = the p300 and the
+	 * 200 µL rack for the p300 / air rehearsal, which probes at its own depth
+	 * (z_cal_p300 ← zCalReagent). The probe Z below is that tip's.
+	 */
+	tipProfile: TipProfile;
+	/** 'p20' | 'p300' — for labels. */
+	pipette: string;
+	/** The rack's tip volume, µL — for labels. */
+	tipUl: number;
+	/** Which fixture field this tip's probe Z lives in. */
+	zCalKey: 'zCalWax' | 'zCalReagent';
+	/** The mount to open the run on, unless the operator picks the other. */
+	defaultMount: 'left' | 'right';
 	tiprackLoadName: string;
 	nextTipWell: string;
 	nextTipSource: string;
 	calibrator: { x: number; y: number; approachZ: number; probeZ: number; source: string; maxTipAdjust: number | null; taughtAt: string | null; taughtBy: string | null };
 	/** Whether the robot's current wax-filling protocol declares the per-hole hole_NN_dx/dy/dz RTPs. */
 	protocolDeclaresHoleOffsets: boolean;
+}
+
+/**
+ * Which tip the Stage Calibration Studio teaches with: the protocol on the
+ * robot decides. The p300 rehearsal probes and fills (air) with the p300 on
+ * the 200 µL rack, so teaching with the p20 would probe the wrong tip at the
+ * wrong depth; everything else is the production p20 / wax tip.
+ */
+export function stageTipProfile(protocol: ProtocolView | null): TipProfile {
+	return protocol?.rehearsal ? 'reagent' : 'wax';
 }
 
 /** The Stage calibration tab's checklist: what the stage protocol needs from this OT-2, and what is taught. */
@@ -1091,7 +1127,7 @@ export function stageChecklist(calibration: CalibrationView | null, protocol: Pr
 			detail: !protocol
 				? 'No wax-filling protocol — upload protocols/Wax_Filling_GEN7_ArmStage.py on /opentrons and deploy it to this robot.'
 				: protocol.declaresCartLocation
-					? protocol.protocolName
+					? `${protocol.protocolName}${protocol.rehearsal ? ' — REHEARSAL: p300, 200 µL tips, air. This page teaches with the p300.' : ''}`
 					: `${protocol.protocolName} is the carriage protocol (no arm_cart_x/y/z) — upload Wax_Filling_GEN7_ArmStage.py to this robot.`
 		},
 		{
@@ -1120,13 +1156,14 @@ export async function loadStageCalibration() {
 	await connectDB();
 	const settings = await getSettings();
 	const robotId = settings.robotId;
-	const [robot, calibration, protocol, teach, active] = await Promise.all([
+	const [robot, calibration, protocol, active] = await Promise.all([
 		robotId ? (OpentronsRobot.findById(robotId).select('_id name').lean() as Promise<any>) : Promise.resolve(null),
 		getCalibration(robotId),
 		protocolFor(robotId).catch(() => null),
-		robotId ? teachAid(robotId).catch((): TeachAid | null => null) : Promise.resolve<TeachAid | null>(null),
 		activeLoop()
 	]);
+	// The teach aid follows the protocol on the robot (p20 for the fill, p300 for the rehearsal).
+	const teach: TeachAid | null = robotId ? await teachAid(robotId, stageTipProfile(protocol), calibration).catch((): TeachAid | null => null) : null;
 	const robotName: string | null = robot?.name ?? null;
 	return {
 		robotId,
@@ -1140,15 +1177,26 @@ export async function loadStageCalibration() {
 	};
 }
 
-async function teachAid(robotId: string): Promise<TeachAid> {
+async function teachAid(robotId: string, profile: TipProfile, calibration: CalibrationView | null): Promise<TeachAid> {
+	const spec = TIP_PROFILE[profile];
 	const [cal, tip, entry] = await Promise.all([
-		resolveCalibratorPoint(robotId, 'wax', {}),
-		nextStudioTipWell(robotId, 'wax'),
+		resolveCalibratorPoint(robotId, profile, {}),
+		nextStudioTipWell(robotId, profile),
 		currentProtocolEntry(robotId, 'wax-filling').catch(() => null)
 	]);
 	const declared = new Set(((entry?.parametersSchema ?? []) as any[]).map((p) => p?.variableName));
+	// Mount: the one the cart was last taught on if that was this tip, else where
+	// the fleet normally carries it (wax p20 right, reagent p300 left). The run
+	// discovers whatever is really on the mount; the page warns on a mismatch.
+	const taughtWithThisTip = new RegExp(spec.pipette, 'i').test(calibration?.pipetteName ?? '');
+	const defaultMount: 'left' | 'right' = taughtWithThisTip && calibration ? calibration.pipetteMount : profile === 'wax' ? 'right' : 'left';
 	return {
-		tiprackLoadName: TIP_PROFILE.wax.loadName,
+		tipProfile: profile,
+		pipette: spec.pipette,
+		tipUl: profile === 'wax' ? 20 : 200,
+		zCalKey: spec.zCalKey,
+		defaultMount,
+		tiprackLoadName: spec.loadName,
 		nextTipWell: tip.well,
 		nextTipSource: tip.source,
 		calibrator: {
@@ -1170,7 +1218,7 @@ async function teachAid(robotId: string): Promise<TeachAid> {
 export async function loadArmWaxFill() {
 	await connectDB();
 	const settings = await getSettings();
-	const [robots, moveSets, sequences, calibration, protocol, active, recent, robotConflict, teach] = await Promise.all([
+	const [robots, moveSets, sequences, calibration, protocol, active, recent, robotConflict] = await Promise.all([
 		OpentronsRobot.find({ isActive: { $ne: false } }).select('_id name').sort({ name: 1 }).lean(),
 		listMoveSets().catch(() => []),
 		listSequences().catch(() => []),
@@ -1178,9 +1226,10 @@ export async function loadArmWaxFill() {
 		protocolFor(settings.robotId).catch(() => null),
 		activeLoop(),
 		ArmWaxFillRun.find({ status: { $ne: 'running' } }).sort({ createdAt: -1 }).limit(8).lean(),
-		settings.robotId ? checkRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null),
-		settings.robotId ? teachAid(settings.robotId).catch((): TeachAid | null => null) : Promise.resolve<TeachAid | null>(null)
+		settings.robotId ? checkRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null)
 	]);
+	// The teach aid follows the protocol on the robot (p20 for the fill, p300 for the rehearsal).
+	const teach: TeachAid | null = settings.robotId ? await teachAid(settings.robotId, stageTipProfile(protocol), calibration).catch((): TeachAid | null => null) : null;
 	const robotName = (robots as any[]).find((r) => String(r._id) === settings.robotId)?.name ?? null;
 	const protocolOptions: ProtocolOption[] = settings.robotId
 		? await listStageProtocolOptions(settings.robotId, protocol).catch(() => [])

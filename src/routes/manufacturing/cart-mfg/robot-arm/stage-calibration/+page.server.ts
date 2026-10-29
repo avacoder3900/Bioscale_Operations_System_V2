@@ -138,10 +138,11 @@ export const actions: Actions = {
 				x: field(d, 'x'),
 				y: field(d, 'y'),
 				z: field(d, 'z'),
-				zCalWax: field(d, 'zCalWax'),
+				probeZ: field(d, 'probeZ'),
+				tipProfile: field(d, 'tipProfile'),
 				maxTipAdjust: field(d, 'maxTipAdjust')
 			});
-			return { success: `Tip calibrator saved: approach (${r.position.x}, ${r.position.y}, ${r.position.z}), probe Z ${r.zCalWax}${r.maxTipAdjust != null ? `, max adjust ${r.maxTipAdjust}` : ''}.`, calibrator: r };
+			return { success: `Tip calibrator saved: approach (${r.position.x}, ${r.position.y}, ${r.position.z}), probe Z ${r.probeZ} (${r.tipProfile === 'reagent' ? 'p300 · zCalReagent' : 'p20 · zCalWax'})${r.maxTipAdjust != null ? `, max adjust ${r.maxTipAdjust}` : ''}.`, calibrator: r };
 		} catch (err) {
 			return failFrom(err);
 		}

@@ -24543,3 +24543,30 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/arm-wax-fill-protocol-picker @ commit 9631b93b (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 9631b93b (wax fill add-to-library)"
 What this deployment is for: the Wax fill tab can file a stage .py in the protocol library itself, so the picker can be filled without a script.
+
+2026-10-29 — feat/stage-cal-follows-protocol — Stage Calibration Studio teaches with the pipette the protocol on the robot uses (p20 fill / p300 rehearsal)
+================================================================================
+Alejandro: "The calibration window on robot arm wax fill still insists on a 20 ul pipette even though it's set to the 300
+rehearsal protocol."
+Cause: the Stage Calibration tab was hard-wired to the wax profile. teachAid() always resolved the calibrator point for
+'wax' (zCalWax), the wax tip cursor and the 20 uL rack; the page sent tipProfile 'wax' to /api/scanner/calibrate-tip,
+labelled everything p20, and saveStageCalibrator only ever wrote zCalWax. Nothing read protocol.rehearsal. Separately
+calibrationRtpValues never injected z_cal_p300, so the rehearsal always probed at its 40.8 default whatever was taught.
+Fix:
+  - stageTipProfile(protocol): 'reagent' (p300, 200 uL rack, zCalReagent) when the rehearsal is on the robot, else 'wax'.
+    teachAid(robotId, profile, calibration) resolves the calibrator, the tip cursor and the rack for that profile and
+    carries tipProfile / pipette / tipUl / zCalKey / defaultMount (the mount the cart was taught on if with this tip,
+    else wax right / reagent left). Both loaders (stage calibration, wax fill) compute it after the protocol.
+  - saveStageCalibrator takes probeZ + tipProfile and writes that profile's fixture field (zCalWax or zCalReagent);
+    the other key is only seeded on insert. Old zCalWax callers still work.
+  - calibration-rtps: z_cal_p300 <- plausibleZ(fixture.zCalReagent) ?? 40.8 when the protocol declares it.
+  - Page: a Tip block in the pickers (p20 . 20 uL rack . production fill | p300 . 200 uL rack . REHEARSAL on the robot),
+    every p20 label follows the profile, Calibrate tip sends the profile, Probe Z is labelled with its key, the mount
+    defaults from the teach aid, and a run whose discovered pipette is not the profile's (p20 run under the rehearsal,
+    or the reverse) shows a red note and disables Calibrate tip until it is reopened on the other mount.
+  - readiness: a cart location taught with the p300 blocks a production fill until re-taught with the p20 (the
+    rehearsal .py header already promised this).
+svelte-check: 14 errors / 448 warnings (none in the touched files; errors = baseline). vitest: run-lifecycle-records,
+tip-calibrator pass.
+Not covered: the Opentron-tab merge branch (feat/arm-opentron-page, not on master) moved this page to
+opentron/StageCalibration.svelte; it will need these edits carried over when it merges.
