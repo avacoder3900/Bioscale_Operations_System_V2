@@ -15,7 +15,7 @@ import { generateId } from '../utils.js';
  * `failedStep` records which step sent it there (only 'scan' today; more fail
  * modes will add theirs).
  */
-export const ARM_WAX_FILL_STEPS = ['grab', 'scan', 'fill', 'withdraw', 'done'] as const;
+export const ARM_WAX_FILL_STEPS = ['grab', 'scan', 'decide', 'fill', 'withdraw', 'done'] as const;
 export type ArmWaxFillStep = (typeof ARM_WAX_FILL_STEPS)[number];
 
 const animationRefSchema = new Schema(
@@ -36,9 +36,18 @@ const cycleSchema = new Schema(
 		opentronsRunId: String,
 		opentronsRunFinalStatus: String,
 		withdrawArmRunId: String,
-		/** Fail route: the step that failed ('scan') and the arm run of the fail animation. */
+		/** Fail route: the step that failed ('scan' / 'decide') and the arm run of the fail animation. */
 		failedStep: String,
 		failArmRunId: String,
+		/**
+		 * ARM-WAX-LOOP-B: the instruction seqs this cycle sent the protocol (scan / fill /
+		 * skip), and when the protocol answered.
+		 */
+		scanSeq: Number,
+		fillSeq: Number,
+		skipSeq: Number,
+		scanReadAt: Date,
+		filledAt: Date,
 		/**
 		 * When the OT-2 reported its gantry home before each arm move. cycleGrab /
 		 * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp,
@@ -65,6 +74,20 @@ const armWaxFillRunSchema = new Schema(
 		withdrawAnimation: animationRefSchema,
 		failAnimation: animationRefSchema,
 		cycles: { type: [cycleSchema], default: [] },
+		/**
+		 * ARM-WAX-LOOP-B: ONE WaxFillingRun + ONE OT-2 run serve the whole loop. The
+		 * protocol parks its tip in the wax between carts and pauses; BIMS steers it
+		 * through the instruction file (seq + the record last written) and resumes it.
+		 */
+		waxRunId: String,
+		opentronsRunId: String,
+		instructionSeq: { type: Number, default: 0 },
+		pendingInstruction: { seq: Number, loop: String, cart: Number, action: String, barcode: String },
+		/** The 'end' instruction went out: the run is finishing (tip to the trash, home). */
+		ending: { type: Boolean, default: false },
+		/** The run's end was recorded on the wax run (loopFinish / halt). */
+		runFinished: { type: Boolean, default: false },
+		opentronsRunFinalStatus: String,
 		error: String,
 		startedBy: { _id: String, username: String },
 		startedAt: Date,

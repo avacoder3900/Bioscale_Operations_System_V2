@@ -28,19 +28,25 @@
  * 24-slot carriage protocol (no arm_cart_* in its schema) falls back to the
  * legacy deck-position stopgap.
  *
- * Collision rules: the arm never moves while the gantry may be out over the
- * stage. cycleHomeGantry homes the OT-2 (POST /robot/home, synchronous) and
- * stamps the cycle; cycleGrab / cycleWithdraw refuse to play without a fresh
- * stamp. The stage protocol also homes itself at the end of every fill;
- * before the withdraw, cycleHomeGantry verifies that home on the robot (run
- * succeeded, last motion command a full home) and only lifts Z instead of a
- * second full home — anything it cannot verify falls back to the full home.
- * The one-slot scanner sweep is told how long ago the grab's home was
- * (armLineGantryHomedAgoS) so the bridge daemon can skip its own. And
- * the OT-2 pipette goes ALL THE WAY UP (a Z-only home) before every move it
- * makes for this line — in the stage protocol, in the Stage Calibration
- * Studio and in the one-slot scanner sweep (liftBeforeMove) — because the arm
- * and its stage stand above anything the OT-2's motion planner knows about.
+ * ARM-WAX-LOOP-B (2026-10-29, docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md):
+ * ONE OT-2 run serves the whole loop and ONE tip serves every cart of it. The
+ * protocol homes, takes its tip, probes it once, aspirates, parks the tip IN
+ * the wax tube (the wax stays warm) and pauses `ARM PARKED 1`. Per cart BIMS
+ * resumes it with an instruction the bridge daemon writes to /data/arm_loop.json
+ * (scan → the gantry goes to the taught scan position and pauses `ARM AT_SCAN
+ * <i>`, the daemon reads the scanner over serial; fill → the 12 holes, back to
+ * the tube, re-aspirate, park, `ARM PARKED <i+1>`; skip → back to the tube and
+ * park; end → tip to the trash, home, the run ends).
+ *
+ * Collision rule (Alejandro, 2026-10-29): the OT-2 and the arm may move at the
+ * same time as long as the OT-2 is not at the calibrator and not over the
+ * stage. So the arm plays (grab, withdraw, the fail animation) only while the
+ * run is paused `ARM PARKED <i>` — the robot itself reports it (assertRunParked)
+ * — and never at AT_SCAN; the run leaves the tube only on a BIMS resume, sent
+ * after the arm's play has settled. The last cart's `end` goes out before its
+ * withdraw, so the tip-to-trash and the home overlap the arm. The OT-2 pipette
+ * still goes ALL THE WAY UP before every move that leaves the tube or the
+ * stage (the lift rule, in the protocol and the Stage Calibration Studio).
  *
  * Later: the cart-drop unit that dispenses carts for the arm will slot in
  * before the grab step; nothing here assumes where the arm picks a cart up.
@@ -67,7 +73,8 @@ import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
-import { assembleProtocolUpload, getRobot, robotDelete, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
+import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, robotDelete, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
+import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause } from '$lib/robot-arm/arm-loop-protocol';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
@@ -140,7 +147,7 @@ const REHEARSAL_MARKER = `variable_name="${REHEARSAL_RTP}"`;
  * the plain way, with the cart still on the stage. More fail modes add their
  * step here and call enterFailRoute.
  */
-export const FAIL_ROUTE_STEPS = ['scan'] as const;
+export const FAIL_ROUTE_STEPS = ['scan', 'decide'] as const;
 export type FailRouteStep = (typeof FAIL_ROUTE_STEPS)[number];
 
 export type AnimationKind = 'move_set' | 'sequence';
@@ -763,6 +770,8 @@ export interface ProtocolView {
 	declaresCartLocation: boolean;
 	/** The p300 / air REHEARSAL of the stage fill (declares z_cal_p300): walks every station, dispenses nothing. */
 	rehearsal: boolean;
+	/** The protocol serves a whole loop in one run (declares cartridges + arm_scan_x/y/z — ARM-WAX-LOOP-B §5.3). */
+	declaresLoop: boolean;
 }
 
 /** A stage protocol in the library the Wax fill tab can put on the arm's OT-2. */
@@ -796,6 +805,12 @@ export interface LoopCycleView {
 	/** Fail route: the step that failed (FailRouteStep) and the arm run of the fail animation. */
 	failedStep: string | null;
 	failArmRunId: string | null;
+	/** ARM-WAX-LOOP-B: the instruction seqs this cycle sent (scan / fill / skip) and when the protocol answered. */
+	scanSeq: number | null;
+	fillSeq: number | null;
+	skipSeq: number | null;
+	scanReadAt: string | null;
+	filledAt: string | null;
 	/** When the OT-2 confirmed its gantry home before each arm move (cycleHomeGantry). */
 	gantryHomedForGrabAt: string | null;
 	gantryHomedForWithdrawAt: string | null;
@@ -815,6 +830,14 @@ export interface LoopView {
 	withdrawAnimation: AnimationRef | null;
 	failAnimation: AnimationRef | null;
 	cycles: LoopCycleView[];
+	/** ARM-WAX-LOOP-B: the loop's ONE wax run + OT-2 run, the instruction channel, the run's end. */
+	waxRunId: string | null;
+	opentronsRunId: string | null;
+	instructionSeq: number;
+	pendingInstruction: { seq: number; cart: number; action: string; barcode: string | null } | null;
+	ending: boolean;
+	runFinished: boolean;
+	opentronsRunFinalStatus: string | null;
 	error: string | null;
 	startedBy: string | null;
 	startedAt: string | null;
@@ -850,12 +873,26 @@ function loopView(d: any): LoopView {
 				withdrawArmRunId: c.withdrawArmRunId ?? null,
 				failedStep: c.failedStep ?? null,
 				failArmRunId: c.failArmRunId ?? null,
+				scanSeq: c.scanSeq ?? null,
+				fillSeq: c.fillSeq ?? null,
+				skipSeq: c.skipSeq ?? null,
+				scanReadAt: iso(c.scanReadAt),
+				filledAt: iso(c.filledAt),
 				gantryHomedForGrabAt: iso(c.gantryHomedForGrabAt),
 				gantryHomedForWithdrawAt: iso(c.gantryHomedForWithdrawAt),
 				gantryHomedForFailAt: iso(c.gantryHomedForFailAt),
 				error: c.error ?? null
 			})
 		),
+		waxRunId: d.waxRunId ?? null,
+		opentronsRunId: d.opentronsRunId ?? null,
+		instructionSeq: Number(d.instructionSeq ?? 0),
+		pendingInstruction: d.pendingInstruction?.action
+			? { seq: Number(d.pendingInstruction.seq ?? 0), cart: Number(d.pendingInstruction.cart ?? 0), action: String(d.pendingInstruction.action), barcode: d.pendingInstruction.barcode ?? null }
+			: null,
+		ending: !!d.ending,
+		runFinished: !!d.runFinished,
+		opentronsRunFinalStatus: d.opentronsRunFinalStatus ?? null,
 		error: d.error ?? null,
 		startedBy: d.startedBy?.username ?? null,
 		startedAt: iso(d.startedAt),
@@ -885,7 +922,8 @@ async function protocolFor(robotId: string | null): Promise<ProtocolView | null>
 		opentronsProtocolId: String(entry.opentronsProtocolId),
 		protocolName,
 		declaresCartLocation: CART_LOCATION_RTPS.every((k) => declared.has(k)),
-		rehearsal: declared.has(REHEARSAL_RTP) || /rehearsal/i.test(protocolName)
+		rehearsal: declared.has(REHEARSAL_RTP) || /rehearsal/i.test(protocolName),
+		declaresLoop: declared.has('cartridges') && ['arm_scan_x', 'arm_scan_y', 'arm_scan_z'].every((k) => declared.has(k))
 	};
 }
 
@@ -1113,7 +1151,17 @@ export function readiness(
 			'The robot has no wax-filling protocol uploaded — upload protocols/Wax_Filling_GEN7_ArmStage.py on /opentrons (Robots → Protocols, process wax-filling) and deploy it to this robot first.'
 		);
 	}
-	if (settings.robotId && !calibration?.scanPosition) blocking.push('Calibration: teach the scan position.');
+	if (settings.robotId && !calibration?.scanPosition) blocking.push('Calibration: teach the scan position (the run itself goes there to scan; it is sent as arm_scan_x/y/z).');
+	if (settings.robotId && protocol && !stage) {
+		blocking.push(
+			`${protocol.protocolName} is the carriage protocol — the arm line runs one stage protocol per loop. Add the current Wax_Filling_GEN7_ArmStage.py (or the p300 rehearsal) to the library and deploy it to this robot.`
+		);
+	}
+	if (settings.robotId && stage && !protocol?.declaresLoop) {
+		blocking.push(
+			`${protocol?.protocolName} predates the one-run-per-loop fill (no cartridges / arm_scan_x RTPs). Add the current Wax_Filling_GEN7_ArmStage.py (or the p300 rehearsal) to the library and deploy it to this robot.`
+		);
+	}
 	if (settings.robotId && stage) {
 		const cl = calibration?.cartLocation ?? null;
 		if (!cl) blocking.push('Stage calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
@@ -1138,7 +1186,12 @@ export function readiness(
 				'Deploy the production stage protocol (Setup → Protocol on the robot) before a real fill.'
 		);
 	}
-	if (settings.robotId) notes.push('Before every arm move (grab, withdraw and the fail animation) the OT-2 gantry is homed and the arm waits until the robot confirms it.');
+	if (settings.robotId) {
+		notes.push(
+			'One OT-2 run and ONE tip serve the whole loop: the protocol takes the tip, probes it once, and between carts parks it in the wax tube (the wax stays warm) and pauses. ' +
+				'The arm plays only while the robot reports that pause (ARM PARKED); the run leaves the tube only after the arm has settled, and never goes to the calibrator or over the stage while the arm moves.'
+		);
+	}
 	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill and the loop stops.`);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
 	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
@@ -1333,7 +1386,7 @@ export async function loadArmWaxFill() {
 export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView> {
 	await connectDB();
 	const requestedRuns = Math.round(num(rawRuns, 'Number of runs'));
-	if (requestedRuns < 1 || requestedRuns > 500) throw new ArmWaxFillError('Number of runs must be 1–500.');
+	if (requestedRuns < 1 || requestedRuns > 24) throw new ArmWaxFillError('Number of runs must be 1–24: one OT-2 run serves the whole loop and the protocol serves at most 24 carts.');
 	const settings = await getSettings();
 	const [calibration, protocol, active, robotConflict] = await Promise.all([
 		getCalibration(settings.robotId),
@@ -1343,7 +1396,11 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 	]);
 	const r = readiness(settings, calibration, protocol, active, robotConflict);
 	if (r.blocking.length) throw new ArmWaxFillError(r.blocking.join(' '), 409);
-	const robot = (await OpentronsRobot.findById(settings.robotId).select('_id name').lean()) as any;
+	if (!protocol || !protocol.declaresCartLocation || !protocol.declaresLoop || !calibration?.cartLocation || !calibration.dispenseDepth || !calibration.scanPosition) {
+		throw new ArmWaxFillError('The loop needs the one-run stage protocol on the robot and a taught cart location, dispense depth and scan position.', 409);
+	}
+	const robot = await getRobot(settings.robotId!);
+	if (!robot) throw new ArmWaxFillError('The OT-2 is not registered or not active.', 409);
 	const now = new Date();
 	const _id = generateId();
 	await ArmWaxFillRun.create({
@@ -1357,13 +1414,72 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 		withdrawAnimation: settings.withdrawAnimation,
 		failAnimation: settings.failAnimation,
 		cycles: [{ index: 1, step: 'grab', startedAt: now }],
+		instructionSeq: 0,
 		startedBy: opRef(user),
 		startedAt: now
 	});
+	const loop = (await ArmWaxFillRun.findById(_id).lean()) as any;
+	const abort = async (why: string) => {
+		const at = new Date();
+		await patchCycle(_id, 1, { step: 'failed', error: why, endedAt: at });
+		await ArmWaxFillRun.updateOne({ _id }, { $set: { status: 'failed', error: why, endedAt: at, runFinished: true, ending: true } });
+		await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', _id, { cycle: 1, step: 'start', error: why });
+	};
+
+	// 1. The start record on the robot BEFORE the run plays: the protocol reads it
+	//    first thing and refuses to run without it (§5.1).
+	try {
+		await writeInstruction(user, loop, robot, 'start', 1, null);
+	} catch (e) {
+		const why = `Could not write the loop's start record on the robot: ${e instanceof Error ? e.message : String(e)}`;
+		await abort(why);
+		throw new ArmWaxFillError(why, 502);
+	}
+
+	// 2. ONE WaxFillingRun for the loop; carts join it as they are scanned and filled.
+	const waxRunId = generateId();
+	await WaxFillingRun.create({
+		_id: waxRunId,
+		robot: { _id: String(robot._id), name: robot.name ?? String(robot._id) },
+		operator: opRef(user),
+		status: 'Loading',
+		waxSourceLot: settings.waxSourceLot ?? undefined,
+		cartridgeIds: [],
+		plannedCartridgeCount: requestedRuns,
+		setupTimestamp: now,
+		armWaxFill: { loopId: _id, rehearsal: protocol.rehearsal, oneRunPerLoop: true },
+		notes: [
+			{
+				_id: generateId(),
+				body: protocol.rehearsal
+					? `Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}); carts are checked only — none is put on this run, drawn from its bucket or advanced.`
+					: `Robot-arm wax fill: one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}) at the taught stage location; one tip for the whole loop, parked in the wax between carts.`,
+				phase: 'wax_run',
+				author: opRef(user),
+				createdAt: now
+			}
+		]
+	});
+	await ArmWaxFillRun.updateOne({ _id }, { $set: { waxRunId } });
+	await audit(user, 'arm_wax_fill.wax_run_create', 'wax_filling_runs', waxRunId, { loopId: _id, requestedRuns, rehearsal: protocol.rehearsal });
+
+	// 3. The ordinary start (freshness gate, create, play). The protocol homes,
+	//    takes its one tip, probes it, aspirates and parks → `ARM PARKED 1`.
+	const started = await startRunQueue('wax', loopRunForm(waxRunId, protocol, calibration, requestedRuns), user);
+	if (isActionFail(started)) {
+		await revertUnstartedWaxRun(user, waxRunId, `start failed: ${started.fail.error}`).catch(() => null);
+		await abort(`Wax fill did not start: ${started.fail.error}`);
+		throw new ArmWaxFillError(`Wax fill did not start: ${started.fail.error}`, started.fail.status);
+	}
+	await ArmWaxFillRun.updateOne({ _id }, { $set: { opentronsRunId: started.opentronsRunId } });
+	await patchCycle(_id, 1, { waxRunId, opentronsRunId: started.opentronsRunId });
 	await audit(user, 'arm_wax_fill.loop_start', 'arm_wax_fill_runs', _id, {
 		requestedRuns,
 		robotId: String(robot._id),
 		cartPosition: settings.cartPosition,
+		waxRunId,
+		opentronsRunId: started.opentronsRunId,
+		rehearsal: protocol.rehearsal,
 		grab: settings.grabAnimation,
 		withdraw: settings.withdrawAnimation,
 		fail: settings.failAnimation
@@ -1402,33 +1518,26 @@ async function play(user: User, ref: AnimationRef | null, what: string): Promise
 	}
 }
 
-// ── OT-2 gantry home before every arm move ───────────────────────────────
+// ── The OT-2 run is the gate: the arm moves only while the run is PARKED ──
+//
+// ARM-WAX-LOOP-B (docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5): ONE OT-2
+// run serves the whole loop. The protocol parks its tip in the wax tube and
+// pauses `ARM PARKED <i>` whenever the arm may move (grab, withdraw, the fail
+// animation — the tube is neither the calibrator nor the stage); it pauses
+// `ARM AT_SCAN <i>` with the gantry over the stage, where the arm must not.
+// BIMS steers it with the instruction file the bridge daemon writes on the
+// robot (/data/arm_loop.json: scan / fill / skip / end) and resumes it; the
+// arm plays only after the robot itself reports the PARKED pause for the
+// expected cart (assertRunParked) — the stamp the gantry home used to be.
 
-/** A home is trusted for this long; older than that, the step homes again before the arm moves. */
-const GANTRY_HOME_FRESH_MS = 15 * 60_000;
-
-function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHomedForWithdrawAt' | 'gantryHomedForFailAt', what: string) {
-	const at = cycle?.[key] ? new Date(cycle[key]).getTime() : 0;
-	if (!at || Date.now() - at > GANTRY_HOME_FRESH_MS) {
-		throw new ArmWaxFillError(
-			`The OT-2 gantry has not been homed for the ${what} (or that home is older than 15 minutes). ` +
-				'The arm does not move until the robot confirms it is home — press Resume to home it and carry on.',
-			409
-		);
-	}
-}
-
-/** Seconds after which an arm-line gantry home no longer counts as fresh for the scanner sweep. */
+/** Seconds after which an arm-line gantry home no longer counts as fresh for the scanner sweep (legacy per-cart line). */
 export const GANTRY_HOME_FRESH_S = 120;
 
 /**
- * Seconds since this line homed the gantry for the loop's current cycle, for
- * the one-slot scanner sweep (/api/scanner/sweep). The bridge daemon homes
- * the gantry at the start of every sweep unless it knows of a fresh home, and
- * it cannot see the legacy POST /robot/home this line issues before the grab;
- * the gantry has not moved since (only the arm did). null when the loop is not
- * running, the cycle is not at its scan step, the robot differs or the stamp
- * is older than GANTRY_HOME_FRESH_S — the daemon then homes as before.
+ * Legacy per-cart line, kept for /api/scanner/sweep: seconds since this line
+ * homed the gantry for the loop's current cycle. The one-run loop never
+ * stamps gantryHomedForGrabAt (the scan is the protocol's own move and the
+ * daemon reads the scanner over serial), so this is null for it.
  */
 export async function armLineGantryHomedAgoS(loopId: string, robotId: string): Promise<number | null> {
 	await connectDB();
@@ -1441,120 +1550,244 @@ export async function armLineGantryHomedAgoS(loopId: string, robotId: string): P
 	return ago >= 0 && ago < GANTRY_HOME_FRESH_S ? Math.round(ago) : null;
 }
 
-/** How the gantry-home stamp was obtained: a full home, or a verified end-of-run home plus a Z-only lift. */
-export type GantryHomeVia = 'full_home' | 'verified_run_home_lift';
+const waitMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const BRIDGE_POLL_MS = 500;
 
 /**
- * Before the withdraw: did the fill's robot run end with the protocol's own
- * full home? The stage protocol homes as its last motion (comments follow),
- * so a second full home here only costs time. Reads the run (succeeded, which
- * mount carries the pipette) and the last page of its commands. Anything
- * missing or unexpected is a reason to fall back to the full home, not an
- * error — the caller still issues a motion either way.
+ * Enqueue a queue-line command for the robot's bridge daemon and wait for its
+ * result body (the way /api/scanner/calibrate-tip does). `read_scanner` and
+ * `write_file` touch no motion: the daemon's serial scanner and its filesystem.
  */
-async function verifyRunEndedAtHome(robot: any, opentronsRunId: string): Promise<{ ok: true; mount: 'left' | 'right' } | { ok: false; why: string }> {
+async function bridgeCommand(
+	robot: any,
+	user: User,
+	kind: 'read_scanner' | 'write_file',
+	payload: Record<string, unknown>,
+	timeoutMs: number
+): Promise<any> {
+	const cmd = await Ot2BridgeCommand.create({
+		_id: generateId(),
+		robotId: String(robot._id),
+		deviceId: bridgeDeviceIdForRobot(robot),
+		kind,
+		payload,
+		ttlMs: timeoutMs + 30_000,
+		requestedBy: user.username
+	});
+	const deadline = Date.now() + timeoutMs;
+	while (Date.now() < deadline) {
+		const doc = (await Ot2BridgeCommand.findById(cmd._id).select('status result error').lean()) as any;
+		if (doc?.status === 'completed') return doc.result?.body ?? {};
+		if (doc?.status === 'failed' || doc?.status === 'expired') {
+			throw new ArmWaxFillError(`The robot's bridge ${doc.status} the ${kind} command${doc.error ? `: ${doc.error}` : ''}.`, 502);
+		}
+		await waitMs(BRIDGE_POLL_MS);
+	}
+	await Ot2BridgeCommand.updateOne(
+		{ _id: cmd._id, status: { $in: ['pending', 'claimed'] } },
+		{ $set: { status: 'expired', error: 'BIMS gave up waiting for the bridge daemon', completedAt: new Date() } }
+	).catch(() => {});
+	throw new ArmWaxFillError(`The robot's bridge did not answer the ${kind} command within ${Math.round(timeoutMs / 1000)} s — is the bridge daemon online (and does it know read_scanner / write_file)?`, 504);
+}
+
+/**
+ * Write the next instruction (§5.1) for the protocol: seq 0 for the start
+ * record, else the loop's seq + 1. The record is remembered on the loop as
+ * pendingInstruction so a run resumed from outside can be given it again.
+ */
+async function writeInstruction(user: User, loop: any, robot: any, action: ArmLoopAction, cart: number, barcode: string | null): Promise<number> {
+	const seq = action === 'start' ? 0 : Number(loop.instructionSeq ?? 0) + 1;
+	const instruction: ArmLoopInstruction = { seq, loop: String(loop._id), cart, action, barcode };
+	await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { instructionSeq: seq, pendingInstruction: instruction } });
+	loop.instructionSeq = seq;
+	loop.pendingInstruction = instruction;
+	await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: instruction }, 60_000);
+	await audit(user, 'arm_wax_fill.instruction', 'arm_wax_fill_runs', String(loop._id), { seq, action, cart, barcode });
+	return seq;
+}
+
+interface RunPauseRead {
+	/** The OT-2 run's status (idle / running / paused / succeeded / failed / stopped …). */
+	status: string;
+	/** The pause's message when the run is paused at a waitForResume, else null. */
+	message: string | null;
+	/** The message parsed as one of this line's pauses, else null. */
+	pause: ArmPause | null;
+}
+
+/**
+ * The run's status and, when paused, the waitForResume it is paused at
+ * (GET /runs/{id}, then the commands page centred on the current command —
+ * the tail of the run when that page falls short).
+ */
+async function readRunPause(robot: any, runId: string): Promise<RunPauseRead> {
 	const read = async (path: string): Promise<any> => {
 		const r = await robotGet(robot, path);
 		if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
 		return r.json();
 	};
+	let run: any;
 	try {
-		const run = (await read(`/runs/${opentronsRunId}`))?.data;
-		if (run?.status !== 'succeeded') return { ok: false, why: `run status ${run?.status ?? 'unknown'}` };
-		const mount = run?.pipettes?.[0]?.mount;
-		if (mount !== 'left' && mount !== 'right') return { ok: false, why: 'run reports no pipette mount' };
-		// Last page of commands: with no cursor the robot centres the page on the
-		// most recently completed command; re-read from the end if that fell short.
-		const PAGE = 20;
-		let page = await read(`/runs/${opentronsRunId}/commands?pageLength=${PAGE}`);
-		const total = Number(page?.meta?.totalLength ?? 0);
-		const end = Number(page?.meta?.cursor ?? 0) + (Array.isArray(page?.data) ? page.data.length : 0);
-		if (total > 0 && end < total) page = await read(`/runs/${opentronsRunId}/commands?cursor=${Math.max(0, total - PAGE)}&pageLength=${PAGE}`);
-		const cmds: any[] = Array.isArray(page?.data) ? page.data : [];
-		const last = [...cmds].reverse().find((c) => c?.commandType !== 'comment');
-		if (!last) return { ok: false, why: 'no motion command found at the end of the run' };
-		if (last.commandType !== 'home' || last.status !== 'succeeded') return { ok: false, why: `last motion command was ${last.commandType} (${last.status}), not a succeeded home` };
-		if (Array.isArray(last.params?.axes) && last.params.axes.length) return { ok: false, why: `last home was limited to ${last.params.axes.join(', ')}` };
-		return { ok: true, mount };
+		run = (await read(`/runs/${runId}`))?.data;
 	} catch (e) {
-		return { ok: false, why: e instanceof Error ? e.message : String(e) };
+		throw new ArmWaxFillError(`The OT-2 run could not be read (${e instanceof Error ? e.message : String(e)}).`, 502);
 	}
+	const status = String(run?.status ?? 'unknown');
+	if (status !== 'paused') return { status, message: null, pause: null };
+	const PAGE = 20;
+	let cmds: any[] = [];
+	try {
+		let page = await read(`/runs/${runId}/commands?pageLength=${PAGE}`);
+		cmds = Array.isArray(page?.data) ? page.data : [];
+		if (!cmds.some((c) => c?.commandType === 'waitForResume' && c?.status === 'running')) {
+			const total = Number(page?.meta?.totalLength ?? 0);
+			if (total > cmds.length) {
+				page = await read(`/runs/${runId}/commands?cursor=${Math.max(0, total - PAGE)}&pageLength=${PAGE}`);
+				cmds = Array.isArray(page?.data) ? page.data : [];
+			}
+		}
+	} catch {
+		cmds = [];
+	}
+	const waits = cmds.filter((c) => c?.commandType === 'waitForResume');
+	const cur = waits.find((c) => c.status === 'running') ?? waits[waits.length - 1] ?? null;
+	const message = cur?.params?.message ? String(cur.params.message) : null;
+	return { status, message, pause: parseArmPause(message) };
 }
 
-/**
- * The motion cycleHomeGantry issues. Before the grab (and anything else) a
- * full home (~20 s): the gantry's history since the last cycle is not this
- * line's to know. Before the withdraw the fill's protocol has just homed as
- * its last motion, so when the robot confirms that (verifyRunEndedAtHome)
- * only the pipette is homed again — target 'pipette', its carriage and
- * plunger axes, a few seconds — as the physical stamp. Anything the robot
- * cannot confirm falls back to the full home; the audit records which and why.
- */
-async function gantryHomePlan(robot: any, before: string, cycle: any): Promise<{ via: GantryHomeVia; target: Record<string, unknown>; fallbackReason: string | null }> {
-	const full = (fallbackReason: string | null) => ({ via: 'full_home' as GantryHomeVia, target: { target: 'robot' }, fallbackReason });
-	if (before !== 'withdraw') return full(null);
-	if (!cycle.opentronsRunId) return full('this cycle has no robot run id');
-	const v = await verifyRunEndedAtHome(robot, String(cycle.opentronsRunId));
-	return v.ok ? { via: 'verified_run_home_lift', target: { target: 'pipette', mount: v.mount }, fallbackReason: null } : full(v.why);
-}
-
-/**
- * Home the OT-2 gantry and stamp the cycle, BEFORE the arm plays the grab, the
- * withdraw or the fail animation. The robot's legacy POST /robot/home is
- * synchronous (it answers once all axes are home) and needs no maintenance
- * run, so it leaves whatever run the robot holds untouched. cycleGrab /
- * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp, so a
- * browser that skipped this step cannot swing the arm in over a gantry that is
- * still out on the deck (after a scan it is at the scan position). Which
- * motion — the full home or, before a verified withdraw, the pipette lift —
- * is gantryHomePlan's call; before the grab and the fail animation it is
- * always the full home.
- */
-export async function cycleHomeGantry(
-	user: User,
-	loopId: string,
-	rawBefore: unknown
-): Promise<{ homedAt: string; cycle: number; before: 'grab' | 'withdraw' | 'fail'; via: GantryHomeVia; fallbackReason: string | null }> {
-	const before = rawBefore === 'withdraw' ? 'withdraw' : rawBefore === 'grab' ? 'grab' : rawBefore === 'fail' ? 'fail' : null;
-	if (!before) throw new ArmWaxFillError('before must be grab, withdraw or fail.');
-	const { loop, cycle } = await runningLoop(loopId);
-	expectStep(cycle, before);
-	if (before === 'grab' && loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
-	const robotId = String(loop.robot?._id ?? '');
-	const robot = await getRobot(robotId);
-	if (!robot) throw new ArmWaxFillError('The OT-2 is not registered or not active — the arm will not move.', 409);
-	const plan = await gantryHomePlan(robot, before, cycle);
-	const verb = plan.via === 'full_home' ? 'home' : 'lift its pipette';
+/** Resume the run (the OT-2's action for it is 'play'; it has no 'resume'). */
+async function resumeRun(robot: any, runId: string): Promise<void> {
 	let res: Response;
 	try {
-		res = await robotPost(robot, '/robot/home', plan.target, { timeoutMs: 90_000 });
+		res = await robotPost(robot, `/runs/${runId}/actions`, { data: { actionType: 'play' } });
 	} catch (e) {
-		throw new ArmWaxFillError(`The OT-2 could not ${verb} (${e instanceof Error ? e.message : String(e)}) — the arm will not move.`, 502);
+		throw new ArmWaxFillError(`The OT-2 could not be resumed (${e instanceof Error ? e.message : String(e)}).`, 502);
 	}
 	if (!res.ok) {
 		const body: any = await res.json().catch(() => ({}));
-		const detail = body?.message ?? body?.errors?.[0]?.detail ?? body?.error ?? `HTTP ${res.status}`;
-		throw new ArmWaxFillError(`The OT-2 refused to ${verb} (${detail}) — the arm will not move. If a run is still active on the robot, finish or reset it first.`, 502);
+		throw new ArmWaxFillError(`The OT-2 refused to resume its run (${body?.message ?? body?.errors?.[0]?.detail ?? `HTTP ${res.status}`}).`, 502);
 	}
-	const at = new Date();
-	const key = before === 'grab' ? 'gantryHomedForGrabAt' : before === 'withdraw' ? 'gantryHomedForWithdrawAt' : 'gantryHomedForFailAt';
-	await patchCycle(loopId, cycle.index, { [key]: at });
-	await audit(user, 'arm_wax_fill.gantry_home', 'arm_wax_fill_runs', loopId, {
-		cycle: cycle.index,
-		before,
-		robotId,
-		via: plan.via,
-		...(plan.fallbackReason ? { fallbackReason: plan.fallbackReason } : {})
-	});
-	return { homedAt: at.toISOString(), cycle: cycle.index, before, via: plan.via, fallbackReason: plan.fallbackReason };
 }
 
-/** Step 1: the arm MOVES through the grab animation — only after the gantry reported home. */
+/** The arm moves only while the run is paused at `ARM PARKED <cart>`: the tip in the wax tube, nothing over the stage. */
+async function assertRunParked(robot: any, loop: any, cart: number, what: string): Promise<RunPauseRead> {
+	if (!loop.opentronsRunId) throw new ArmWaxFillError(`This loop has no robot run — the arm will not ${what}.`, 409);
+	const r = await readRunPause(robot, String(loop.opentronsRunId));
+	if (isParkedFor(r.pause, cart)) return r;
+	const where = r.status !== 'paused' ? `is ${r.status}` : r.message ? `is paused at "${r.message}"` : 'is paused without an ARM note';
+	throw new ArmWaxFillError(`The OT-2 run ${where}, not parked in the wax tube for cart ${cart} — the arm will not ${what}.`, 409);
+}
+
+type AwaitResult = { done: true; read: RunPauseRead } | { done: false; terminal: string | null; read: RunPauseRead };
+
+const AWAIT_POLL_MS = 1500;
+/** One page action's wait budget (the action's maxDuration is 120 s). */
+const AWAIT_BUDGET_MS = 85_000;
+
+/**
+ * Wait for the run to pause at `expect`. Returns done:false with `terminal`
+ * set when the run ended instead, or with terminal null when the budget ran
+ * out (the page calls again). A `NO_INSTRUCTION` pause means the run was
+ * resumed from outside the loop and found nothing new: the outstanding
+ * instruction for that cart is written again and the run resumed; with none
+ * outstanding nothing is safe to send and the wait fails.
+ */
+async function awaitPause(user: User, loop: any, robot: any, expect: ArmPause, maxWaitMs = AWAIT_BUDGET_MS): Promise<AwaitResult> {
+	const runId = String(loop.opentronsRunId ?? '');
+	if (!runId) throw new ArmWaxFillError('This loop has no robot run.', 409);
+	const deadline = Date.now() + maxWaitMs;
+	for (;;) {
+		const r = await readRunPause(robot, runId);
+		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
+		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
+		if (r.pause?.kind === 'NO_INSTRUCTION') {
+			const p = loop.pendingInstruction;
+			if (p && p.action !== 'start' && Number(p.cart) === r.pause.cart) {
+				await writeInstruction(user, loop, robot, p.action as ArmLoopAction, Number(p.cart), p.barcode ?? null);
+				await audit(user, 'arm_wax_fill.instruction_rewritten', 'arm_wax_fill_runs', String(loop._id), { cart: p.cart, action: p.action, pause: r.message });
+				await resumeRun(robot, runId);
+			} else {
+				throw new ArmWaxFillError(
+					`The OT-2 run was resumed from outside this loop and is waiting for an instruction ("${r.message}") BIMS has not issued. Press STOP RUN and start the loop again.`,
+					409
+				);
+			}
+		}
+		if (Date.now() >= deadline) return { done: false, terminal: null, read: r };
+		await waitMs(AWAIT_POLL_MS);
+	}
+}
+
+/**
+ * The robot run ended while a cycle was mid-way (a protocol error, a stop from
+ * the Opentrons app, a cancel on the Robots page): record the end on the wax
+ * run exactly as a per-cart fill's end was recorded, cancel it when it did not
+ * succeed (the robot log decides which carts were finished), and fail the loop.
+ */
+async function runEndedMidLoop(user: User, loop: any, cycle: any, step: string, status: string): Promise<LoopView> {
+	let note = '';
+	if (loop.waxRunId) {
+		const fin = await recordRunFinishedQueue('wax', String(loop.waxRunId), status, user).catch((e) => ({ fail: { status: 500, error: (e as Error).message } }));
+		if (isActionFail(fin)) note += ` The wax run's end could not be recorded (${fin.fail.error}).`;
+		if (status !== 'succeeded') {
+			const stop = await stopRunQueue('wax', 'cancel', String(loop.waxRunId), { reason: `Robot-arm wax fill: robot run ended ${status} during cycle ${cycle.index}` }, user).catch((e) => ({
+				fail: { status: 500, error: (e as Error).message }
+			}));
+			if (isActionFail(stop)) note += ` The wax run could not be cancelled automatically (${stop.fail.error}) — cancel it on the Robots page.`;
+		}
+	}
+	await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { runFinished: true, ending: true, opentronsRunFinalStatus: status } });
+	return failLoop(user, String(loop._id), step, `The robot run ended ${status} before the cycle finished.${note}`, { opentronsRunFinalStatus: status });
+}
+
+/** Send `end` and resume: the protocol lifts, trashes the tip and homes. Best effort — the note says when it could not. */
+async function sendEnd(user: User, loop: any, robot: any, cart: number): Promise<string | null> {
+	if (loop.ending || !loop.opentronsRunId) return null;
+	try {
+		await writeInstruction(user, loop, robot, 'end', cart, null);
+		await resumeRun(robot, String(loop.opentronsRunId));
+		await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { ending: true } });
+		loop.ending = true;
+		await audit(user, 'arm_wax_fill.loop_end_sent', 'arm_wax_fill_runs', String(loop._id), { cart });
+		return null;
+	} catch (e) {
+		const why = e instanceof Error ? e.message : String(e);
+		await audit(user, 'arm_wax_fill.loop_end_failed', 'arm_wax_fill_runs', String(loop._id), { cart, error: why });
+		return `The end instruction could not be sent (${why}) — the robot run is still parked; press STOP RUN or cancel it on the Robots page.`;
+	}
+}
+
+/** The loop's robot, or a clear refusal. */
+async function loopRobot(loop: any): Promise<any> {
+	const robot = await getRobot(String(loop.robot?._id ?? ''));
+	if (!robot) throw new ArmWaxFillError('The OT-2 is not registered or not active — the loop cannot go on.', 409);
+	return robot;
+}
+
+/**
+ * Before the grab: wait until the run is parked for this cart — `ARM PARKED 1`
+ * after the loop start's home, tip, probe and first aspirate (~70 s), or at
+ * once on later carts (the protocol parked before the previous withdraw).
+ * Bounded per call; the page calls again while `done` is false.
+ */
+export async function cycleAwaitParked(user: User, loopId: string): Promise<{ done: boolean; loop: LoopView }> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'grab');
+	const robot = await loopRobot(loop);
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index });
+	if (!r.done && r.terminal) return { done: true, loop: await runEndedMidLoop(user, loop, cycle, 'grab', r.terminal) };
+	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: 'grab', message: r.read.message });
+	return { done: r.done, loop: (await getLoop(loopId))! };
+}
+
+/** Step 1: the arm MOVES through the grab animation — only while the run is parked for this cart. */
 export async function cycleGrab(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'grab');
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
-	assertGantryHomed(cycle, 'gantryHomedForGrabAt', 'grab');
+	const robot = await loopRobot(loop);
+	await assertRunParked(robot, loop, cycle.index, 'grab');
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
 	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date() });
 	await audit(user, 'arm_wax_fill.cycle_grab', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
@@ -1569,27 +1802,56 @@ export async function cycleGrabDone(user: User, loopId: string): Promise<LoopVie
 	return (await getLoop(loopId))!;
 }
 
-/** Step 2 is the browser's /api/scanner/sweep over the one-slot set; this records its result. */
-export async function cycleScanned(user: User, loopId: string, input: { sweepRunId: unknown; barcode: unknown }): Promise<LoopView> {
+/**
+ * Step 2a: tell the protocol to go to the scan position. Only from PARKED —
+ * the arm has just finished its grab and settled — and only once per cycle.
+ */
+export async function cycleScanStart(user: User, loopId: string): Promise<LoopView> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'scan');
-	const sweepRunId = String(input.sweepRunId ?? '').trim();
-	const barcode = String(input.barcode ?? '').trim();
-	if (!barcode) throw new ArmWaxFillError('The scan returned no barcode.');
-	if (sweepRunId) {
-		const sweep = (await OpentronsScannerSweepRun.findById(sweepRunId).select('robotId scans status').lean()) as any;
-		if (!sweep) throw new ArmWaxFillError('Sweep run not found.', 404);
-		if (String(sweep.robotId) !== String(loop.robot?._id)) throw new ArmWaxFillError('That sweep ran on a different robot.', 409);
-		const seen = (sweep.scans ?? []).some((s: any) => s.barcode === barcode);
-		if (!seen) throw new ArmWaxFillError('The sweep did not read that barcode.', 409);
-	}
-	// Read, but is it a cart that can be filled? If not, the fail route — not a
-	// loop failure with the cart left on the stage.
-	const problem = await cartScanProblem(barcode, (await getSettings()).testMode);
-	if (problem) return enterFailRoute(user, loopId, cycle, 'scan', problem, { sweepRunId: sweepRunId || null, barcode });
-	await patchCycle(loopId, cycle.index, { step: 'fill', sweepRunId: sweepRunId || null, barcode });
-	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, sweepRunId, barcode });
+	if (cycle.scanSeq) return (await getLoop(loopId))!; // a retry after a reload
+	const robot = await loopRobot(loop);
+	await assertRunParked(robot, loop, cycle.index, 'send the scan instruction');
+	const seq = await writeInstruction(user, loop, robot, 'scan', cycle.index, null);
+	await resumeRun(robot, String(loop.opentronsRunId));
+	await patchCycle(loopId, cycle.index, { scanSeq: seq });
+	await audit(user, 'arm_wax_fill.cycle_scan_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq });
 	return (await getLoop(loopId))!;
+}
+
+/**
+ * Step 2b: once the run reports `ARM AT_SCAN <i>` (gantry over the stage, arm
+ * still), the daemon reads the scanner over serial — no maintenance run, no
+ * motion. Nothing read, or a cart that cannot be filled → the fail route.
+ * Bounded; `pending` while the run has not reached the scan position yet.
+ */
+export async function cycleScanRead(user: User, loopId: string): Promise<{ pending: boolean; loop: LoopView }> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'scan');
+	if (!cycle.scanSeq) throw new ArmWaxFillError('The scan instruction has not been sent yet.', 409);
+	const robot = await loopRobot(loop);
+	const r = await awaitPause(user, loop, robot, { kind: 'AT_SCAN', cart: cycle.index });
+	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'scan', r.terminal) };
+	if (!r.done) return { pending: true, loop: (await getLoop(loopId))! };
+	let barcode = '';
+	let raw = '';
+	try {
+		const body = await bridgeCommand(robot, user, 'read_scanner', { timeoutS: 15 }, 45_000);
+		barcode = String(body?.barcode ?? '').trim();
+		raw = String(body?.raw ?? '');
+	} catch (e) {
+		const why = e instanceof Error ? e.message : String(e);
+		await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
+		return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', `the scanner could not be read: ${why}`) };
+	}
+	await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
+	await audit(user, 'arm_wax_fill.scan_read', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode: barcode || null, raw: raw.slice(0, 200) });
+	if (!barcode) return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', 'the scanner read nothing') };
+	const problem = await cartScanProblem(barcode, (await getSettings()).testMode);
+	if (problem) return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', problem, { barcode }) };
+	await patchCycle(loopId, cycle.index, { step: 'decide', barcode });
+	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode });
+	return { pending: false, loop: (await getLoop(loopId))! };
 }
 
 /**
@@ -1609,9 +1871,60 @@ async function cartScanProblem(barcode: string, testMode: boolean): Promise<stri
 	return null;
 }
 
+/**
+ * Step 3: the cart is good — put it on the wax run (production: drawn from its
+ * bucket, wax_filling; rehearsal: checked only) and tell the protocol to fill.
+ * A cart the bucket side refuses takes the fail route from here (the gantry is
+ * still at the scan position; the skip brings it back to the tube first).
+ */
+export async function cycleDecide(user: User, loopId: string): Promise<LoopView> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'decide');
+	if (!cycle.barcode) throw new ArmWaxFillError('This cycle has no scanned barcode.', 409);
+	if (cycle.fillSeq) return (await getLoop(loopId))!; // a retry after a reload
+	const settings = await getSettings();
+	const protocol = await protocolFor(String(loop.robot?._id ?? ''));
+	const rehearsal = !!protocol?.rehearsal;
+	const robot = await loopRobot(loop);
+	if (rehearsal) {
+		// REHEARSAL: the cart was checked at the scan and that is all that happens to it.
+		await audit(user, 'arm_wax_fill.rehearsal_cart', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId: loop.waxRunId ?? null, barcode: cycle.barcode, touched: false });
+	} else {
+		try {
+			await attachCart(user, loop, String(loop.waxRunId), cycle.barcode, settings.testMode, loop.cartPosition);
+			await WaxFillingRun.updateOne({ _id: loop.waxRunId }, { $addToSet: { cartridgeIds: cycle.barcode } });
+		} catch (err) {
+			return enterFailRoute(user, loopId, cycle, 'decide', err instanceof Error ? err.message : String(err), { barcode: cycle.barcode });
+		}
+	}
+	const seq = await writeInstruction(user, loop, robot, 'fill', cycle.index, cycle.barcode);
+	await resumeRun(robot, String(loop.opentronsRunId));
+	await patchCycle(loopId, cycle.index, { step: 'fill', fillSeq: seq, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId ?? null });
+	await audit(user, 'arm_wax_fill.cycle_fill', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId ?? null, barcode: cycle.barcode, rehearsal });
+	return (await getLoop(loopId))!;
+}
+
+/**
+ * Step 3b: the fill is the protocol's — wait for `ARM PARKED <i+1>` (12 holes,
+ * back to the tube, re-aspirate, park). The run ending instead means the fill
+ * did not finish: the end is recorded, the wax run cancelled, the loop fails.
+ */
+export async function cycleFillWait(user: User, loopId: string): Promise<{ pending: boolean; loop: LoopView }> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'fill');
+	const robot = await loopRobot(loop);
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1 });
+	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'fill', r.terminal) };
+	if (!r.done) return { pending: true, loop: (await getLoop(loopId))! };
+	await patchCycle(loopId, cycle.index, { step: 'withdraw', filledAt: new Date() });
+	await audit(user, 'arm_wax_fill.cycle_filled', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId: loop.waxRunId ?? null, barcode: cycle.barcode ?? null, message: r.read.message });
+	await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: 'withdraw', message: r.read.message });
+	return { pending: false, loop: (await getLoop(loopId))! };
+}
+
 // ── the fail route ────────────────────────────────────────────────────────
 
-/** The cycle leaves the happy path: step 'fail' with the reason on it; the fail animation is next. */
+/** The cycle leaves the happy path: step 'fail' with the reason on it; the skip and the fail animation are next. */
 async function enterFailRoute(user: User, loopId: string, cycle: any, failedStep: FailRouteStep, reason: string, extra: Record<string, unknown> = {}): Promise<LoopView> {
 	const msg = String(reason ?? 'failed').slice(0, 2000);
 	await patchCycle(loopId, cycle.index, { step: 'fail', failedStep, error: msg, ...extra });
@@ -1619,27 +1932,45 @@ async function enterFailRoute(user: User, loopId: string, cycle: any, failedStep
 	return (await getLoop(loopId))!;
 }
 
-/** The scan read nothing (sweep errored / timed out / completed without a barcode): the fail route. */
-export async function cycleScanFailed(user: User, loopId: string, input: { reason: unknown; sweepRunId: unknown }): Promise<LoopView> {
-	const { cycle } = await runningLoop(loopId);
-	expectStep(cycle, 'scan');
-	const sweepRunId = String(input.sweepRunId ?? '').trim() || null;
-	const reason = String(input.reason ?? '').trim() || 'the scan read nothing';
-	return enterFailRoute(user, loopId, cycle, 'scan', reason, { sweepRunId });
+/**
+ * Fail route, part 1: the gantry is at the scan position — send `skip` so the
+ * protocol lifts, returns to the tube and parks (`ARM PARKED <i+1>`); only then
+ * may the arm take the cart away. Bounded; `pending` until the run is parked.
+ */
+export async function cycleFailPrepare(user: User, loopId: string): Promise<{ pending: boolean; loop: LoopView }> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'fail');
+	const robot = await loopRobot(loop);
+	if (!cycle.skipSeq) {
+		const seq = await writeInstruction(user, loop, robot, 'skip', cycle.index, null);
+		await resumeRun(robot, String(loop.opentronsRunId));
+		await patchCycle(loopId, cycle.index, { skipSeq: seq });
+		await audit(user, 'arm_wax_fill.cycle_skip_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq });
+	}
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1 });
+	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'fail', r.terminal) };
+	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: 'fail', message: r.read.message });
+	return { pending: !r.done, loop: (await getLoop(loopId))! };
 }
 
-/** Fail route: the arm MOVES through the fail animation — only after the gantry reported home. */
+/** Fail route, part 2: the arm MOVES through the fail animation — only while the run is parked. */
 export async function cycleFail(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fail');
-	assertGantryHomed(cycle, 'gantryHomedForFailAt', 'fail animation');
+	if (!cycle.skipSeq) throw new ArmWaxFillError('The skip instruction has not been sent yet — the gantry may still be over the stage.', 409);
+	const robot = await loopRobot(loop);
+	await assertRunParked(robot, loop, cycle.index + 1, 'play the fail animation');
 	const p = await play(user, animRef(loop.failAnimation), 'fail');
 	await patchCycle(loopId, cycle.index, { failArmRunId: p.runId });
 	await audit(user, 'arm_wax_fill.cycle_fail', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, failedStep: cycle.failedStep ?? null, armRunId: p.runId, durationS: p.durationS });
 	return { play: p, cycle: cycle.index };
 }
 
-/** The fail animation ended: the cycle is failed and the loop ends — the fail route always stops the run. */
+/**
+ * The fail animation ended: the cycle is failed and the loop ends — the fail
+ * route always stops the run. `end` goes to the protocol (tip to the trash,
+ * home); loopFinish then records the run's end.
+ */
 export async function cycleFailDone(user: User, loopId: string): Promise<LoopView> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fail');
@@ -1648,13 +1979,17 @@ export async function cycleFailDone(user: User, loopId: string): Promise<LoopVie
 	const msg = cycle.error ?? 'failed';
 	await patchCycle(loopId, cycle.index, { step: 'failed', endedAt: now });
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'failed', error: `${failedStep}: ${msg} The fail animation played.`, endedAt: now } });
+	const robot = await loopRobot(loop);
+	const endNote = await sendEnd(user, loop, robot, cycle.index);
+	if (endNote) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: `${failedStep}: ${msg} The fail animation played. ${endNote}` } });
 	await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', loopId, {
 		cycle: cycle.index,
 		step: failedStep,
 		error: msg,
 		failRoute: true,
 		failArmRunId: cycle.failArmRunId ?? null,
-		completedRuns: Number(loop.completedRuns ?? 0)
+		completedRuns: Number(loop.completedRuns ?? 0),
+		endSent: !endNote
 	});
 	return (await getLoop(loopId))!;
 }
@@ -1712,177 +2047,66 @@ async function attachCart(user: User, loop: any, waxRunId: string, barcode: stri
 	);
 }
 
-/** A start that never reached the robot: free the robot and the cart again. */
-async function revertUnstartedWaxRun(user: User, waxRunId: string, barcode: string, reason: string) {
+/** The loop's run start never reached the robot: free the wax run again (no cart is on it yet). */
+async function revertUnstartedWaxRun(user: User, waxRunId: string, reason: string) {
 	const run = (await WaxFillingRun.findById(waxRunId).select('status opentronsRunId').lean()) as any;
 	if (!run || run.opentronsRunId) return;
 	await WaxFillingRun.updateOne({ _id: waxRunId }, { $set: { status: 'aborted', abortReason: reason, runEndTime: new Date() } });
-	const cart = (await CartridgeRecord.findById(barcode).select('status waxFilling.runId backing.synthetic').lean()) as any;
-	if (cart?.status === 'wax_filling' && cart.waxFilling?.runId === waxRunId) {
-		if (cart.backing?.synthetic) await CartridgeRecord.deleteOne({ _id: barcode });
-		else await CartridgeRecord.updateOne({ _id: barcode }, { $set: { status: 'backing' }, $unset: { waxFilling: '' } });
-	}
-	await audit(user, 'arm_wax_fill.wax_run_reverted', 'wax_filling_runs', waxRunId, { barcode, reason });
+	await audit(user, 'arm_wax_fill.wax_run_reverted', 'wax_filling_runs', waxRunId, { reason });
 }
 
 /**
- * Step 3: the OT-2 fills the cart. A WaxFillingRun for this one cart, then
- * the ordinary start (freshness gate, create, play) on the robot's current
- * wax-filling protocol. With the stage protocol the taught, tip-neutral cart
- * location goes in as arm_cart_x/y/z (+ the stage rotation); with the legacy
- * carriage protocol it is cartridges = 1 at the configured deck position. The
- * browser then watches the robot run (EmbeddedRunController) and reports
- * its end to cycleFillDone. A retry after a reload returns the run already
- * started for this cycle.
+ * The run-time parameters of the loop's one run: the taught, tip-neutral cart
+ * location, the stage rotation, the dispense depth, the per-hole corrections,
+ * the taught scan position (arm_scan_x/y/z) and how many carts the run serves
+ * (cartridges). computeRunParameters only reads the RTPs the robot's schema
+ * declares, so nothing else is sent.
  */
-export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId: string; opentronsRunId: string; cycle: number }> {
-	const { loop, cycle } = await runningLoop(loopId);
-	expectStep(cycle, 'fill');
-	if (!cycle.barcode) throw new ArmWaxFillError('This cycle has no scanned barcode.', 409);
-	if (cycle.waxRunId && cycle.opentronsRunId) return { waxRunId: cycle.waxRunId, opentronsRunId: cycle.opentronsRunId, cycle: cycle.index };
-
-	const settings = await getSettings();
-	const robotId = String(loop.robot?._id ?? '');
-	const protocol = await protocolFor(robotId);
-	if (!protocol) throw new ArmWaxFillError('The robot has no wax-filling protocol uploaded.', 409);
-	const calibration = await getCalibration(robotId);
-	const stage = protocol.declaresCartLocation;
-	if (stage && !calibration?.cartLocation?.tipAdjust) {
-		throw new ArmWaxFillError('The cart location is not taught tip-neutral (pick up a tip, calibrate it, then save it) — the stage protocol will not be started without it.', 409);
-	}
-	if (stage && !calibration?.dispenseDepth) {
-		throw new ArmWaxFillError('The dispense depth is not taught (Stage calibration tab) — the stage protocol will not be started without it.', 409);
-	}
-
-	let waxRunId: string = cycle.waxRunId ?? '';
-	if (!waxRunId) {
-		const conflict = await checkRobotConflict(robotId);
-		if (conflict) throw new ArmWaxFillError(`${conflict} — finish or cancel it on the Robots page, then press Resume.`, 409);
-		waxRunId = generateId();
-		await WaxFillingRun.create({
-			_id: waxRunId,
-			robot: { _id: robotId, name: loop.robot?.name ?? robotId },
-			operator: opRef(user),
-			status: 'Loading',
-			// No deck: the single cart sits at a taught location the arm places it in (startContext accepts an armWaxFill run without one).
-			waxSourceLot: settings.waxSourceLot ?? undefined,
-			cartridgeIds: [],
-			plannedCartridgeCount: 1,
-			setupTimestamp: new Date(),
-			armWaxFill: { loopId, cycleIndex: cycle.index, rehearsal: protocol.rehearsal },
-			notes: [
-				{
-					_id: generateId(),
-					body: protocol.rehearsal
-						? `Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): cycle ${cycle.index} of loop ${loopId}, cart ${cycle.barcode} checked only — not on this run, not drawn from its bucket, not advanced.`
-						: `Robot-arm wax fill: cycle ${cycle.index} of loop ${loopId}, one cart ${stage ? 'at the taught stage location' : `at deck position ${loop.cartPosition}`}.`,
-					phase: 'wax_run',
-					author: opRef(user),
-					createdAt: new Date()
-				}
-			]
-		});
-		await audit(user, 'arm_wax_fill.wax_run_create', 'wax_filling_runs', waxRunId, { loopId, cycle: cycle.index, barcode: cycle.barcode });
-		await patchCycle(loopId, cycle.index, { waxRunId });
-	}
-	try {
-		if (protocol.rehearsal) {
-			// REHEARSAL: the cart was checked at the scan (cartScanProblem — a backed cart,
-			// else the fail route) and that is all that happens to it. It is not put on
-			// the run, not drawn from its bucket and never advanced: the run dispenses air.
-			await audit(user, 'arm_wax_fill.rehearsal_cart', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId, barcode: cycle.barcode, touched: false });
-		} else {
-			await attachCart(user, loop, waxRunId, cycle.barcode, settings.testMode, loop.cartPosition);
-			await WaxFillingRun.updateOne({ _id: waxRunId }, { $addToSet: { cartridgeIds: cycle.barcode } });
-		}
-	} catch (err) {
-		await revertUnstartedWaxRun(user, waxRunId, cycle.barcode, `cart could not be attached: ${(err as Error).message}`).catch(() => null);
-		await patchCycle(loopId, cycle.index, { waxRunId: null });
-		throw err;
-	}
-
+function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: CalibrationView, requestedRuns: number): FormData {
 	const form = new FormData();
 	form.set('runId', waxRunId);
 	form.set('opentronsProtocolId', protocol.opentronsProtocolId);
-	if (stage) {
-		// The stage protocol: the taught tip-neutral rim of the first wax hole and
-		// how the stage turns the cart. (computeRunParameters only reads the RTPs
-		// the robot's schema declares, so nothing else is sent.)
-		const cl = calibration!.cartLocation!;
-		form.set('param_arm_cart_x', String(cl.x));
-		form.set('param_arm_cart_y', String(cl.y));
-		form.set('param_arm_cart_z', String(cl.z));
-		form.set('param_arm_cart_rotation_deg', String(calibration!.stageRotationDeg));
-		form.set('param_dispense_depth', String(calibration!.dispenseDepth!.mm));
-		// Per-hole corrections from the Stage Calibration Studio (only the RTPs the
-		// robot's schema declares are read, so an older stage .py ignores them).
-		for (const h of calibration!.holes ?? []) {
-			const p = holeOffsetParamNames(h.index);
-			form.set(`param_${p.dx}`, String(h.offset.dx));
-			form.set(`param_${p.dy}`, String(h.offset.dy));
-			form.set(`param_${p.dz}`, String(h.offset.dz));
-		}
-	} else {
-		// Legacy carriage protocol: one cart at the configured deck position.
-		form.set('param_cartridges', '1');
-		form.set('param_resume_cartridge', String(loop.cartPosition));
-		form.set('param_resume_hole', '1');
+	const cl = calibration.cartLocation!;
+	form.set('param_arm_cart_x', String(cl.x));
+	form.set('param_arm_cart_y', String(cl.y));
+	form.set('param_arm_cart_z', String(cl.z));
+	form.set('param_arm_cart_rotation_deg', String(calibration.stageRotationDeg));
+	form.set('param_dispense_depth', String(calibration.dispenseDepth!.mm));
+	for (const h of calibration.holes ?? []) {
+		const p = holeOffsetParamNames(h.index);
+		form.set(`param_${p.dx}`, String(h.offset.dx));
+		form.set(`param_${p.dy}`, String(h.offset.dy));
+		form.set(`param_${p.dz}`, String(h.offset.dz));
 	}
-	const r = await startRunQueue('wax', form, user);
-	if (isActionFail(r)) {
-		await revertUnstartedWaxRun(user, waxRunId, cycle.barcode, `start failed: ${r.fail.error}`).catch(() => null);
-		await patchCycle(loopId, cycle.index, { waxRunId: null });
-		throw new ArmWaxFillError(`Wax fill did not start: ${r.fail.error}`, r.fail.status);
-	}
-	await patchCycle(loopId, cycle.index, { opentronsRunId: r.opentronsRunId });
-	await audit(user, 'arm_wax_fill.cycle_fill', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId, opentronsRunId: r.opentronsRunId, barcode: cycle.barcode });
-	return { waxRunId, opentronsRunId: r.opentronsRunId, cycle: cycle.index };
+	const sp = calibration.scanPosition!;
+	form.set('param_arm_scan_x', String(sp.x));
+	form.set('param_arm_scan_y', String(sp.y));
+	form.set('param_arm_scan_z', String(sp.z));
+	form.set('param_cartridges', String(requestedRuns));
+	return form;
 }
 
 /**
- * The robot run ended. succeeded → the cart is wax_filled, the wax run
- * completes (robot released) and the cycle moves to withdraw. Anything else
- * → the wax run is cancelled through the ordinary stop (the robot log decides
- * whether the cart was finished) and the loop fails.
+ * Step 4: the arm MOVES through the withdraw animation — only while the run is
+ * parked for the next cart. On the loop's last cart `end` goes out first, so
+ * the protocol's tip-to-trash and home overlap the withdraw (the trash and
+ * home are neither the calibrator nor the stage).
  */
-export async function cycleFillDone(user: User, loopId: string, rawStatus: unknown): Promise<LoopView> {
-	const { cycle } = await runningLoop(loopId);
-	expectStep(cycle, 'fill');
-	if (!cycle.waxRunId || !cycle.opentronsRunId) throw new ArmWaxFillError('This cycle has no robot run to finish.', 409);
-	const finalStatus = String(rawStatus ?? '').toLowerCase();
-	const fin = await recordRunFinishedQueue('wax', cycle.waxRunId, finalStatus, user);
-	if (isActionFail(fin)) throw new ArmWaxFillError(`Could not record the wax run's end: ${fin.fail.error}`, fin.fail.status);
-	if (finalStatus === 'succeeded') {
-		await patchCycle(loopId, cycle.index, { step: 'withdraw', opentronsRunFinalStatus: finalStatus });
-		await audit(user, 'arm_wax_fill.cycle_filled', 'arm_wax_fill_runs', loopId, {
-			cycle: cycle.index,
-			waxRunId: cycle.waxRunId,
-			finalStatus,
-			advanced: (fin as any).advanced ?? null
-		});
-		return (await getLoop(loopId))!;
-	}
-	let cancelNote = '';
-	const stop = await stopRunQueue('wax', 'cancel', cycle.waxRunId, { reason: `Robot-arm wax fill: robot run ended ${finalStatus}` }, user).catch((e) => ({
-		fail: { status: 500, error: (e as Error).message }
-	}));
-	if (isActionFail(stop)) cancelNote = ` The wax run could not be cancelled automatically (${stop.fail.error}) — cancel it on the Robots page.`;
-	await failLoop(user, loopId, 'fill', `The robot run ended ${finalStatus}.${cancelNote}`, { opentronsRunFinalStatus: finalStatus });
-	return (await getLoop(loopId))!;
-}
-
-/** Step 4: the arm MOVES through the withdraw animation — only after the gantry reported home. */
-export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
+export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number; endSent: boolean; endNote: string | null }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
-	assertGantryHomed(cycle, 'gantryHomedForWithdrawAt', 'withdraw');
+	const robot = await loopRobot(loop);
+	await assertRunParked(robot, loop, cycle.index + 1, 'withdraw');
+	const last = Number(loop.completedRuns ?? 0) + 1 >= Number(loop.requestedRuns) || !!loop.stopRequested;
+	let endNote: string | null = null;
+	if (last) endNote = await sendEnd(user, loop, robot, cycle.index);
 	const p = await play(user, animRef(loop.withdrawAnimation), 'withdraw');
 	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId });
-	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
-	return { play: p, cycle: cycle.index };
+	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS, last, endSent: last && !endNote });
+	return { play: p, cycle: cycle.index, endSent: last && !endNote, endNote };
 }
 
-/** The withdraw play ended: the cycle is done; the next one starts, or the loop ends. */
+/** The withdraw play ended: the cycle is done; the next one starts, or the loop ends and the run is finishing. */
 export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ loop: LoopView; next: boolean }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
@@ -1892,6 +2116,12 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 	const finished = completedRuns >= Number(loop.requestedRuns);
 	if (finished || loop.stopRequested) {
 		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns, status: finished ? 'completed' : 'stopped', endedAt: now } });
+		// Stop requested during this withdraw: the end has not gone out yet.
+		if (!loop.ending) {
+			const robot = await loopRobot(loop);
+			const endNote = await sendEnd(user, loop, robot, cycle.index);
+			if (endNote) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: endNote } });
+		}
 		await audit(user, finished ? 'arm_wax_fill.loop_complete' : 'arm_wax_fill.loop_stopped', 'arm_wax_fill_runs', loopId, { completedRuns, requestedRuns: loop.requestedRuns });
 		return { loop: (await getLoop(loopId))!, next: false };
 	}
@@ -1900,18 +2130,75 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 }
 
 /**
- * Stop. While the arm is moving (grab / withdraw / fail animation) the play is
- * stopped and the loop ends now; while the OT-2 is filling, the fill and the withdraw still
- * run (a half-filled cart is worse than one more cycle) and the loop ends
- * after them; between steps it ends at the next step.
+ * After `end`: wait for the run to finish (tip to the trash, home) and record
+ * its end on the wax run — a succeeded run advances the carts it filled to
+ * wax_filled and completes (rehearsal runs advance nothing). Works whatever
+ * the loop's final status. Bounded; `done` false means call again.
  */
-export async function stopLoop(user: User, loopId: string): Promise<{ loop: LoopView; stoppedArm: boolean; torqueOn: boolean | null }> {
-	const { cycle } = await runningLoop(loopId);
+export async function loopFinish(user: User, loopId: string): Promise<{ done: boolean; status: string | null; loop: LoopView }> {
+	await connectDB();
+	const loop = (await ArmWaxFillRun.findById(loopId).lean()) as any;
+	if (!loop) throw new ArmWaxFillError('Loop not found.', 404);
+	if (loop.runFinished) return { done: true, status: loop.opentronsRunFinalStatus ?? null, loop: loopView(loop) };
+	if (!loop.ending) throw new ArmWaxFillError('The loop has not sent its end instruction yet.', 409);
+	if (!loop.opentronsRunId) {
+		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { runFinished: true } });
+		return { done: true, status: null, loop: (await getLoop(loopId))! };
+	}
+	const robot = await loopRobot(loop);
+	const deadline = Date.now() + AWAIT_BUDGET_MS;
+	let status: string | null = null;
+	for (;;) {
+		const r = await readRunPause(robot, String(loop.opentronsRunId));
+		if (OT2_RUN_TERMINAL.has(r.status)) {
+			status = r.status;
+			break;
+		}
+		if (r.pause?.kind === 'NO_INSTRUCTION') {
+			// Resumed from outside before the end record landed: send it again.
+			await writeInstruction(user, loop, robot, 'end', r.pause.cart, null);
+			await resumeRun(robot, String(loop.opentronsRunId));
+		}
+		if (Date.now() >= deadline) return { done: false, status: null, loop: (await getLoop(loopId))! };
+		await waitMs(AWAIT_POLL_MS);
+	}
+	let note = '';
+	let advanced: number | null = null;
+	if (loop.waxRunId) {
+		const fin = await recordRunFinishedQueue('wax', String(loop.waxRunId), status, user).catch((e) => ({ fail: { status: 500, error: (e as Error).message } }));
+		if (isActionFail(fin)) note += ` The wax run's end could not be recorded (${fin.fail.error}).`;
+		else advanced = (fin as any).advanced ?? null;
+		if (status !== 'succeeded') {
+			const stop = await stopRunQueue('wax', 'cancel', String(loop.waxRunId), { reason: `Robot-arm wax fill: robot run ended ${status} after the last cart` }, user).catch((e) => ({
+				fail: { status: 500, error: (e as Error).message }
+			}));
+			if (isActionFail(stop)) note += ` The wax run could not be cancelled automatically (${stop.fail.error}) — cancel it on the Robots page.`;
+		}
+	}
+	const set: Record<string, unknown> = { runFinished: true, opentronsRunFinalStatus: status };
+	if (status !== 'succeeded' || note) set.error = [loop.error, status !== 'succeeded' ? `The robot run ended ${status} after the last cart.` : '', note.trim()].filter(Boolean).join(' ');
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: set });
+	await audit(user, 'arm_wax_fill.loop_run_finished', 'arm_wax_fill_runs', loopId, { status, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId, advanced, loopStatus: loop.status });
+	return { done: true, status, loop: (await getLoop(loopId))! };
+}
+
+/**
+ * Stop. While the OT-2 is filling, the fill and the withdraw still run (a
+ * half-filled cart is worse than one more cycle) and the loop ends after them
+ * — `end` goes out before that withdraw. At any other step the loop ends now:
+ * the arm's play is stopped where it is if it is moving, and `end` is sent so
+ * the protocol trashes its tip and homes (allowed beside a stopped or moving
+ * arm: the trash and home are neither the calibrator nor the stage).
+ */
+export async function stopLoop(user: User, loopId: string): Promise<{ loop: LoopView; stoppedArm: boolean; torqueOn: boolean | null; endSent: boolean; note: string | null }> {
+	const { loop, cycle } = await runningLoop(loopId);
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { stopRequested: true } });
 	let stoppedArm = false;
 	let torqueOn: boolean | null = null;
-	if (cycle.step === 'grab' || cycle.step === 'withdraw' || cycle.step === 'scan' || cycle.step === 'fail') {
-		if (cycle.step !== 'scan') {
+	let endSent = false;
+	let note: string | null = null;
+	if (['grab', 'scan', 'decide', 'fail', 'withdraw'].includes(cycle.step)) {
+		if (cycle.step !== 'scan' && cycle.step !== 'decide') {
 			const active = await playbackActive().catch(() => null);
 			if (active) {
 				const s = await stopPlayback(user);
@@ -1921,9 +2208,15 @@ export async function stopLoop(user: User, loopId: string): Promise<{ loop: Loop
 		}
 		await patchCycle(loopId, cycle.index, { step: 'stopped', endedAt: new Date() });
 		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', endedAt: new Date() } });
+		if (!loop.ending && loop.opentronsRunId) {
+			const robot = await getRobot(String(loop.robot?._id ?? '')).catch(() => null);
+			note = robot ? await sendEnd(user, loop, robot, cycle.index) : 'The OT-2 is not registered — the robot run was left as it is.';
+			endSent = !note;
+			if (note) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: note } });
+		}
 	}
-	await audit(user, 'arm_wax_fill.stop', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn });
-	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn };
+	await audit(user, 'arm_wax_fill.stop', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, endSent, note });
+	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn, endSent, note };
 }
 
 /**
@@ -2061,15 +2354,19 @@ export async function haltLoop(user: User, loopId: string): Promise<HaltResult> 
 	}
 	const robotId = String(loop.robot?._id ?? '');
 	let robotNotes: string[] = [];
-	if (cycle.step === 'fill' && cycle.waxRunId) {
-		const stop = await stopRunQueue('wax', 'cancel', cycle.waxRunId, { reason: HALT_REASON }, user).catch((e) => ({
+	if (loop.waxRunId && !loop.runFinished) {
+		// ARM-WAX-LOOP-B: the loop's ONE run, whatever step the cycle is at — the cancel
+		// stops the robot run, records its end and (the robot log deciding) settles the
+		// carts on it; the cart being filled goes back to backed.
+		const stop = await stopRunQueue('wax', 'cancel', String(loop.waxRunId), { reason: HALT_REASON }, user).catch((e) => ({
 			fail: { status: 500, error: (e as Error).message }
 		}));
 		robotNotes.push(
 			isActionFail(stop)
 				? `the wax run could not be cancelled (${stop.fail.error}) — cancel it on the Robots page`
-				: `the wax run was cancelled${cycle.barcode ? ` and cart ${cycle.barcode} went back to backed` : ''}`
+				: `the wax run was cancelled${cycle.step === 'fill' && cycle.barcode ? ` and cart ${cycle.barcode} went back to backed` : ''}`
 		);
+		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { ending: true, runFinished: true, opentronsRunFinalStatus: 'stopped' } });
 	} else {
 		robotNotes = await haltRobotWork(user, loopId, robotId);
 	}

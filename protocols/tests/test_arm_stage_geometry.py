@@ -101,7 +101,8 @@ def main():
     # home) before every move between stations (the LIFT RULE).
     p = _Params()
     m.add_parameters(p)
-    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth'):
+    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth',
+                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z'):
         assert name in p.names, name
     assert 'stage_jump_height' not in p.names, 'travel height RTP is gone: the fill lifts all the way up'
     assert callable(m._resolve_lift)

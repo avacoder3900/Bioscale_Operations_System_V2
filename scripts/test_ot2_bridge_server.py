@@ -544,5 +544,89 @@ class BimsHomeFreshnessTests(unittest.TestCase):
         self.assertGreater(bridge._last_home_at, time.time() - 10)
 
 
+class ArmLoopCommandTests(unittest.TestCase):
+    """ARM-WAX-LOOP-B §5.5 (ot2-bridge 1.4.0): read_scanner (serial only) and
+    write_file (one allowed path, atomic). _post_result is captured, nothing is
+    reported; the allowed path is redirected into a temp dir."""
+
+    def setUp(self):
+        import tempfile
+        self.results = []
+        self._post = bridge._post_result
+        bridge._post_result = lambda cid, payload: self.results.append((cid, payload)) or True
+        self._path = bridge.ARM_LOOP_FILE_PATH
+        self.tmpdir = tempfile.mkdtemp(prefix="arm-loop-")
+        bridge.ARM_LOOP_FILE_PATH = os.path.join(self.tmpdir, "arm_loop.json")
+
+    def tearDown(self):
+        import shutil
+        bridge._post_result = self._post
+        bridge.ARM_LOOP_FILE_PATH = self._path
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_write_file_writes_only_the_allowed_path_atomically(self):
+        rec = {"seq": 2, "loop": "L1", "cart": 1, "action": "fill", "barcode": "f4bb"}
+        bridge.execute_write_file("c1", {"path": bridge.ARM_LOOP_FILE_PATH, "json": rec})
+        cid, res = self.results[-1]
+        self.assertEqual(cid, "c1")
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["body"]["written"], True)
+        with open(bridge.ARM_LOOP_FILE_PATH) as f:
+            self.assertEqual(json.load(f), rec)
+        self.assertEqual(res["body"]["bytes"], os.path.getsize(bridge.ARM_LOOP_FILE_PATH))
+        self.assertFalse(os.path.exists(bridge.ARM_LOOP_FILE_PATH + ".tmp"), "temp file must be replaced, not left behind")
+        # Overwrite: the next record replaces the file whole.
+        rec2 = dict(rec, seq=3, action="end", barcode=None)
+        bridge.execute_write_file("c2", {"path": bridge.ARM_LOOP_FILE_PATH, "json": rec2})
+        with open(bridge.ARM_LOOP_FILE_PATH) as f:
+            self.assertEqual(json.load(f), rec2)
+
+    def test_write_file_refuses_any_other_path_and_non_objects(self):
+        for bad in ("/data/other.json", "/etc/passwd", "", "/data/arm_loop.json/../x.json", "arm_loop.json"):
+            bridge.execute_write_file("c-bad", {"path": bad, "json": {"seq": 1}})
+            cid, res = self.results[-1]
+            self.assertFalse(res["ok"], bad)
+            self.assertIn("only", res["error"], bad)
+        bridge.execute_write_file("c-bad2", {"path": bridge.ARM_LOOP_FILE_PATH, "json": "not an object"})
+        self.assertFalse(self.results[-1][1]["ok"])
+        self.assertFalse(os.path.exists(bridge.ARM_LOOP_FILE_PATH))
+
+    def test_read_scanner_returns_the_barcode_shape(self):
+        port = FakePort()
+        bridge.execute_read_scanner("r1", {"timeoutS": 3}, port)
+        cid, res = self.results[-1]
+        self.assertEqual(cid, "r1")
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["body"]["barcode"], "CART-123")
+        self.assertEqual(res["body"]["raw"], "deadbeef")
+        self.assertIsNone(res["body"]["error"])
+        self.assertEqual(res["body"]["attempts"], 1)
+        self.assertEqual(port.scans, 1)
+
+    def test_read_scanner_no_decode_is_a_null_barcode_after_one_retry(self):
+        class SilentPort(FakePort):
+            def trigger_and_read(self, timeout_s=None, clamp=True):
+                self.scans += 1
+                return None, "abcd", "empty payload (ACK only)"
+        port = SilentPort()
+        bridge.execute_read_scanner("r2", {}, port)
+        cid, res = self.results[-1]
+        self.assertTrue(res["ok"])
+        self.assertIsNone(res["body"]["barcode"])
+        self.assertEqual(res["body"]["raw"], "abcd")
+        self.assertEqual(res["body"]["attempts"], 2)
+        self.assertEqual(port.scans, 2)
+
+    def test_new_kinds_dispatch_and_stay_off_the_direct_job_list(self):
+        port = FakePort()
+        bridge.execute_command({"_id": "d1", "kind": "read_scanner", "payload": {}}, port)
+        self.assertEqual(self.results[-1][0], "d1")
+        self.assertEqual(self.results[-1][1]["body"]["barcode"], "CART-123")
+        bridge.execute_command({"_id": "d2", "kind": "write_file", "payload": {"path": bridge.ARM_LOOP_FILE_PATH, "json": {"seq": 0, "action": "start"}}}, port)
+        self.assertTrue(self.results[-1][1]["ok"])
+        self.assertNotIn("read_scanner", bridge.DIRECT_JOB_KINDS)
+        self.assertNotIn("write_file", bridge.DIRECT_JOB_KINDS)
+
+
 if __name__ == "__main__":
     unittest.main()

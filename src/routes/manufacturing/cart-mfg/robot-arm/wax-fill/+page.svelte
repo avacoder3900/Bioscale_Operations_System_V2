@@ -1,17 +1,25 @@
 <script lang="ts">
 	/**
-	 * Robot Arm — Wax fill. One cart per cycle: grab (arm) → scan (OT-2 gantry
-	 * scanner at the taught position) → fill (OT-2 wax protocol, one cart) →
-	 * withdraw (arm), for as many runs as asked. This page is the driver: each
-	 * step is a page action whose result lands on the ArmWaxFillRun before the
-	 * next one starts, so a reload shows where the cycle is and Resume carries
-	 * on from there. The arm steps reuse the Animate Playback helper (end-of-
-	 * play poll + settle); the fill step reuses EmbeddedRunController.
+	 * Robot Arm — Wax fill (ARM-WAX-LOOP-B). ONE OT-2 run serves the loop: the
+	 * protocol homes, takes ONE tip, probes it once, aspirates and parks the tip
+	 * in the wax tube (the wax stays warm), pausing `ARM PARKED <i>`. Per cart:
+	 * grab (arm, while the OT-2 is parked) → scan (the run goes to the scan
+	 * position, the daemon reads the scanner) → decide (cart on the wax run, or
+	 * the fail route) → fill (the protocol, back to the tube, re-aspirate, park)
+	 * → withdraw (arm, while parked; on the last cart the run trashes its tip
+	 * and homes meanwhile). This page is the driver: each step is a page action
+	 * whose result lands on the ArmWaxFillRun before the next one starts, so a
+	 * reload shows where the cycle is and Resume carries on. The waits are
+	 * bounded server actions called until they report done.
+	 *
+	 * The rule (2026-10-29): the OT-2 and the arm may move at the same time as
+	 * long as the OT-2 is not at the calibrator and not over the stage. The arm
+	 * plays only while the robot reports the PARKED pause; the run leaves the
+	 * tube only after the arm's play has settled.
 	 *
 	 * The fail route: a scan that fails (nothing read, or the cart is not a
-	 * backed cart) does not end the loop where it stands — the cycle goes to
-	 * step 'fail', the gantry homes, the arm plays the FAIL animation and the
-	 * loop then ends failed. Only the scan takes it today.
+	 * backed cart) sends `skip` (the gantry back to the tube), the arm plays the
+	 * FAIL animation once the run is parked, and the loop ends failed.
 	 */
 	import { onDestroy, onMount } from 'svelte';
 	import { enhance, deserialize } from '$app/forms';
@@ -30,6 +38,7 @@
 	const STEP_LABEL: Record<string, string> = {
 		grab: 'Grab',
 		scan: 'Scan',
+		decide: 'Check',
 		fill: 'Fill',
 		withdraw: 'Withdraw',
 		done: 'Done',
@@ -37,7 +46,7 @@
 		failed: 'Failed',
 		stopped: 'Stopped'
 	};
-	const STEPS = ['grab', 'scan', 'fill', 'withdraw'] as const;
+	const STEPS = ['grab', 'scan', 'decide', 'fill', 'withdraw'] as const;
 
 	// ── page state ───────────────────────────────────────────────────────
 	let loop = $state<LoopView | null>(data.activeLoop);
@@ -54,7 +63,6 @@
 	let busy = $state(false);
 	let pageError = $state<string | null>(null);
 	let log = $state<{ at: string; text: string; level: 'info' | 'warn' | 'error' }[]>([]);
-	let fillRun = $state<{ opentronsRunId: string; waxRunId: string } | null>(null);
 	let changingAnimations = $state(false);
 
 	const currentCycle = $derived<LoopCycleView | null>(loop ? (loop.cycles[loop.cycles.length - 1] ?? null) : null);
@@ -174,52 +182,32 @@
 		});
 	}
 
-	// ── the scan step (one-slot sweep over the production scanner route) ─
-	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
-	/** A failure carries the sweep id when the sweep was queued, so the fail route can record it. */
-	async function scanStep(): Promise<{ ok: true; sweepRunId: string; barcode: string } | { ok: false; error: string; sweepRunId?: string }> {
-		if (!calibration?.scanPositionSetId) return { ok: false, error: 'No scan position is taught.' };
-		let res: Response;
-		try {
-			res = await fetch('/api/scanner/sweep', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'same-origin',
-				// liftBeforeMove: the daemon homes the pipette's Z (all the way up) before
-				// every gantry move of this sweep — the arm and its stage stand above
-				// anything the OT-2's planner knows about. The route also forces it for
-				// the arm's one-slot set.
-				body: JSON.stringify({ robotId, positionSetId: calibration.scanPositionSetId, source: 'wax_filling', contextRef: loop!._id, maxSlots: 1, liftBeforeMove: true })
-			});
-		} catch (e) {
-			return { ok: false, error: `sweep request failed: ${e instanceof Error ? e.message : String(e)}` };
-		}
-		const body = await res.json().catch(() => ({}));
-		if (!res.ok) return { ok: false, error: body?.message ?? `sweep refused (HTTP ${res.status})` };
-		const sweepRunId = String(body.sweepRunId);
-		note(`Scan: sweep ${sweepRunId} queued on ${loop!.robot.name}.`);
-		const deadline = Date.now() + 3 * 60_000;
-		while (Date.now() < deadline) {
-			await sleep(1000);
-			if (stopAsked) break;
-			const r = await fetch(`/api/scanner/sweep/${sweepRunId}`, { credentials: 'same-origin' }).catch(() => null);
-			if (!r?.ok) continue;
-			const s = await r.json().catch(() => null);
-			if (!s) continue;
-			if (s.status === 'running' || s.status === 'paused') continue;
-			const scan = (s.scans ?? [])[0];
-			if (s.status === 'completed' && scan?.barcode) return { ok: true, sweepRunId, barcode: String(scan.barcode) };
-			const err = (s.errors ?? [])[0]?.message ?? s.abortReason ?? `sweep ${s.status} with no barcode`;
-			return { ok: false, error: err, sweepRunId };
-		}
-		return { ok: false, error: stopAsked ? 'stopped while scanning' : 'the scanner did not answer within 3 minutes', sweepRunId };
+	// ── the OT-2 run (one per loop; EmbeddedRunController only watches it) ─
+	/** The robot's own run status, for the log; the server-side waits decide what it means. */
+	function onRunStatus(status: string) {
+		if (status === 'succeeded' || status === 'failed' || status === 'stopped') note(`OT-2 run ended ${status}.`, status === 'succeeded' ? 'info' : 'warn');
 	}
 
-	// ── the fill step (EmbeddedRunController reports the end) ────────────
-	let fillDone: ((status: string) => void) | null = null;
-	function onFillComplete(status: string) {
-		fillDone?.(status);
+	/**
+	 * After `end` (the loop completed, stopped or failed): the server waits
+	 * (bounded) for the run to finish — tip to the trash, home — and records its
+	 * end on the wax run. Called until it reports done.
+	 */
+	async function finishRun() {
+		for (let i = 0; i < 40; i++) {
+			if (!loop || loop.runFinished || !loop.ending) return;
+			const r = await post('loopFinish', { loopId: loop._id });
+			if (!r.ok) {
+				note(`Recording the OT-2 run's end: ${r.error}`, 'error');
+				return;
+			}
+			loop = r.data.loop;
+			if (r.data.done) {
+				note(`OT-2 run finished ${r.data.status ?? ''}${loop!.error ? ` — ${loop!.error}` : ''}.`, r.data.status === 'succeeded' ? 'info' : 'warn');
+				return;
+			}
+			note('Waiting for the OT-2 to trash its tip and home…');
+		}
 	}
 
 	// ── the driver ───────────────────────────────────────────────────────
@@ -245,22 +233,37 @@
 			while (loop && loop.status === 'running') {
 				const cycle = loop.cycles[loop.cycles.length - 1];
 				if (!cycle) break;
+				const loopId = loop._id;
 				const tag = `Cycle ${cycle.index}/${loop.requestedRuns}`;
 				if (cycle.step === 'grab') {
 					if (stopAsked) break;
-					// The OT-2 gantry must be home before the arm swings in over the stage; the
-					// server refuses cycleGrab without this stamp, so a failure here ends the loop.
-					note(`${tag}: homing the OT-2 gantry before the arm moves.`);
-					const h = await post('homeGantry', { loopId: loop._id, before: 'grab' });
-					if (stopAsked) {
-						await refreshLoop();
-						break;
+					// The run must be parked (tip in the wax tube) for this cart before the arm swings in;
+					// the server refuses cycleGrab otherwise.
+					note(cycle.index === 1 ? `${tag}: waiting for the OT-2 to home, take its tip, probe it, aspirate and park in the wax…` : `${tag}: checking the OT-2 is parked in the wax.`);
+					let parked = false;
+					let broke = false;
+					while (!parked) {
+						const w = await post('awaitParked', { loopId: loopId });
+						if (stopAsked) {
+							await refreshLoop();
+							broke = true;
+							break;
+						}
+						if (!w.ok) {
+							await fail('grab', `the OT-2 did not report parked: ${w.error}`);
+							broke = true;
+							break;
+						}
+						loop = w.data.loop;
+						if (loop!.status !== 'running') {
+							broke = true;
+							break;
+						}
+						parked = !!w.data.done;
+						if (!parked) note(`${tag}: still waiting for the OT-2 to park…`);
 					}
-					if (!h.ok) {
-						await fail('grab', `the OT-2 did not report home: ${h.error}`);
-						break;
-					}
-					note(`${tag}: OT-2 home — grab — playing "${loop.grabAnimation?.name ?? ''}".`);
+					if (broke) break;
+					note(`${tag}: OT-2 parked — grab — playing "${loop?.grabAnimation?.name ?? ''}".`);
 					const p = await playStep('cycleGrab', `Grab (cycle ${cycle.index})`);
 					if (stopAsked) {
 						// Stop ended the loop on the server while the arm was moving.
@@ -271,7 +274,7 @@
 						await fail('grab', p.error ?? 'play failed');
 						break;
 					}
-					const r = await post('cycleGrabDone', { loopId: loop._id });
+					const r = await post('cycleGrabDone', { loopId: loopId });
 					if (!r.ok) {
 						await fail('grab', r.error);
 						break;
@@ -279,110 +282,61 @@
 					loop = r.data.loop;
 				} else if (cycle.step === 'scan') {
 					if (stopAsked) break;
-					note(`${tag}: scan at the taught position.`);
-					const s = await scanStep();
-					if (stopAsked) {
-						await refreshLoop();
-						break;
-					}
-					if (!s.ok) {
-						// Nothing read: the fail route — the fail animation plays, then the loop stops.
-						note(`${tag}: scan failed — ${s.error}. Taking the fail route.`, 'warn');
-						const f = await post('cycleScanFailed', { loopId: loop._id, reason: s.error, sweepRunId: s.sweepRunId ?? '' });
-						if (!f.ok) {
-							await fail('scan', `${s.error} (and the fail route could not be entered: ${f.error})`);
+					if (!cycle.scanSeq) {
+						note(`${tag}: sending the OT-2 to the scan position.`);
+						const s = await post('cycleScanStart', { loopId: loopId });
+						if (!s.ok) {
+							await fail('scan', s.error);
 							break;
 						}
-						loop = f.data.loop;
-						continue;
+						loop = s.data.loop;
 					}
-					note(`${tag}: read ${s.barcode}.`);
-					const r = await post('cycleScanned', { loopId: loop._id, sweepRunId: s.sweepRunId, barcode: s.barcode });
+					let pending = true;
+					let broke = false;
+					while (pending) {
+						const r = await post('cycleScanRead', { loopId: loopId });
+						if (!r.ok) {
+							await fail('scan', r.error);
+							broke = true;
+							break;
+						}
+						loop = r.data.loop;
+						pending = !!r.data.pending;
+						if (pending) note(`${tag}: waiting for the OT-2 to reach the scan position…`);
+					}
+					if (broke || loop!.status !== 'running') break;
+					const after = loop!.cycles[loop!.cycles.length - 1];
+					if (after?.step === 'fail') note(`${tag}: ${after.error ?? 'the scan failed.'} Taking the fail route.`, 'warn');
+					else if (after?.barcode) note(`${tag}: read ${after.barcode}.`);
+				} else if (cycle.step === 'decide') {
+					note(`${tag}: ${rehearsal ? 'cart checked' : `cart ${cycle.barcode} goes on the wax run`} — telling the OT-2 to fill.`);
+					const r = await post('cycleDecide', { loopId: loopId });
 					if (!r.ok) {
-						await fail('scan', r.error);
+						await fail('decide', r.error);
 						break;
 					}
 					loop = r.data.loop;
-					// Read, but not a cart that can be filled: the server put the cycle on the fail route.
 					const after = loop!.cycles[loop!.cycles.length - 1];
 					if (after?.step === 'fail') note(`${tag}: ${after.error ?? 'the cart cannot be filled.'} Taking the fail route.`, 'warn');
-				} else if (cycle.step === 'fail') {
-					// The fail route: gantry home, the fail animation, and the loop ends failed.
-					note(`${tag}: homing the OT-2 gantry before the arm moves.`);
-					const h = await post('homeGantry', { loopId: loop._id, before: 'fail' });
-					if (!h.ok) {
-						if (stopAsked) {
-							await refreshLoop();
-							if (loop?.status !== 'running') break;
-						}
-						await fail('fail', `the OT-2 did not report home: ${h.error} — the cart is still on the stage`);
-						break;
-					}
-					note(`${tag}: OT-2 home — fail animation — playing "${loop.failAnimation?.name ?? ''}".`);
-					const p = await playStep('cycleFail', `Fail animation (cycle ${cycle.index})`);
-					if (stopAsked) {
-						// Stop pressed while the arm was playing the fail animation ends the loop on the server.
-						await refreshLoop();
-						if (loop?.status !== 'running') break;
-					}
-					if (!p.ok) {
-						await fail('fail', `${p.error ?? 'play failed'} — the cart may still be on the stage`);
-						break;
-					}
-					const r = await post('cycleFailDone', { loopId: loop._id });
-					if (!r.ok) {
-						await fail('fail', r.error);
-						break;
-					}
-					loop = r.data.loop;
-					note(`Loop stopped: ${STEP_LABEL[cycle.failedStep ?? 'scan']?.toLowerCase() ?? cycle.failedStep} failed on cycle ${cycle.index}, the fail animation played — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.`, 'error');
 				} else if (cycle.step === 'fill') {
-					let run = cycle.opentronsRunId && cycle.waxRunId ? { opentronsRunId: cycle.opentronsRunId, waxRunId: cycle.waxRunId } : null;
-					if (!run) {
-						note(`${tag}: starting the wax fill for ${cycle.barcode} (${stage ? 'at the taught stage location' : `deck position ${loop.cartPosition}`}).`);
-						const r = await post('cycleFill', { loopId: loop._id });
+					note(`${tag}: the OT-2 is filling ${cycle.barcode ?? 'the cart'}${rehearsal ? ' (rehearsal: air)' : ''} — waiting for it to park in the wax again.`);
+					let pending = true;
+					let broke = false;
+					while (pending) {
+						const r = await post('cycleFillWait', { loopId: loopId });
 						if (!r.ok) {
 							await fail('fill', r.error);
+							broke = true;
 							break;
 						}
-						run = { opentronsRunId: r.data.opentronsRunId, waxRunId: r.data.waxRunId };
-					} else {
-						note(`${tag}: watching robot run ${run.opentronsRunId} already started.`);
+						loop = r.data.loop;
+						pending = !!r.data.pending;
 					}
-					fillRun = run;
-					const status = await new Promise<string>((resolve) => (fillDone = resolve));
-					fillDone = null;
-					fillRun = null;
-					note(`${tag}: robot run ended ${status}.`, status === 'succeeded' ? 'info' : 'error');
-					if (stopAsked) {
-						// A Reset while the OT-2 was filling ended the loop on the server (a plain
-						// Stop leaves it running: the fill and the withdraw finish first).
-						await refreshLoop();
-						if (loop?.status !== 'running') break;
-					}
-					const r = await post('cycleFillDone', { loopId: loop._id, finalStatus: status });
-					if (!r.ok) {
-						await fail('fill', r.error);
-						break;
-					}
-					loop = r.data.loop;
+					if (broke || loop!.status !== 'running') break;
+					note(`${tag}: filled — the OT-2 is parked in the wax.`);
 				} else if (cycle.step === 'withdraw') {
-					// The fill's protocol homes at its end; the server verifies that on the robot and
-					// only lifts Z (falling back to a full home when it cannot) — the stamp it insists on.
-					note(`${tag}: checking the OT-2 ended its run at home, then lifting Z before the arm moves.`);
-					const h = await post('homeGantry', { loopId: loop._id, before: 'withdraw' });
-					if (!h.ok) {
-						if (stopAsked) {
-							// A Reset while homing ended the loop on the server; nothing to fail.
-							await refreshLoop();
-							if (loop?.status !== 'running') break;
-						}
-						await fail('withdraw', `the OT-2 did not report home: ${h.error}`);
-						break;
-					}
-					note(
-						`${tag}: ${h.data?.via === 'verified_run_home_lift' ? 'OT-2 run ended at home, Z lifted' : `OT-2 homed again${h.data?.fallbackReason ? ` (${h.data.fallbackReason})` : ''}`} — withdraw — playing "${loop.withdrawAnimation?.name ?? ''}".`
-					);
+					const last = loop.completedRuns + 1 >= loop.requestedRuns || loop.stopRequested;
+					note(`${tag}: withdraw — playing "${loop.withdrawAnimation?.name ?? ''}"${last ? ' (last cart: the OT-2 trashes its tip and homes meanwhile)' : ''}.`);
 					const p = await playStep('cycleWithdraw', `Withdraw (cycle ${cycle.index})`);
 					if (stopAsked) {
 						// Stop pressed while the arm was withdrawing ends the loop on the server; a Stop
@@ -394,17 +348,56 @@
 						await fail('withdraw', p.error ?? 'play failed');
 						break;
 					}
-					const r = await post('cycleWithdrawDone', { loopId: loop._id });
+					const r = await post('cycleWithdrawDone', { loopId: loopId });
 					if (!r.ok) {
 						await fail('withdraw', r.error);
 						break;
 					}
 					loop = r.data.loop;
 					note(r.data.next ? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.` : `Loop ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled.`);
+				} else if (cycle.step === 'fail') {
+					// The fail route: skip (the gantry back to the tube), the fail animation once parked, the loop ends failed.
+					if (!cycle.skipSeq) note(`${tag}: fail route — sending the OT-2 back to the wax tube first.`);
+					let pending = true;
+					let broke = false;
+					while (pending) {
+						const r = await post('cycleFailPrepare', { loopId: loopId });
+						if (!r.ok) {
+							await fail('fail', `${r.error} — the cart is still on the stage`);
+							broke = true;
+							break;
+						}
+						loop = r.data.loop;
+						pending = !!r.data.pending;
+						if (pending) note(`${tag}: waiting for the OT-2 to park…`);
+					}
+					if (broke || loop!.status !== 'running') break;
+					note(`${tag}: OT-2 parked — fail animation — playing "${loop?.failAnimation?.name ?? ''}".`);
+					const p = await playStep('cycleFail', `Fail animation (cycle ${cycle.index})`);
+					if (stopAsked) {
+						await refreshLoop();
+						if (loop?.status !== 'running') break;
+					}
+					if (!p.ok) {
+						await fail('fail', `${p.error ?? 'play failed'} — the cart may still be on the stage`);
+						break;
+					}
+					const r = await post('cycleFailDone', { loopId: loopId });
+					if (!r.ok) {
+						await fail('fail', r.error);
+						break;
+					}
+					loop = r.data.loop;
+					note(`Loop stopped: ${STEP_LABEL[cycle.failedStep ?? 'scan']?.toLowerCase() ?? cycle.failedStep} failed on cycle ${cycle.index}, the fail animation played — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.`, 'error');
 				} else {
 					await refreshLoop();
 					break;
 				}
+			}
+			// However the loop ended, `end` went out (or could not): record the run's end.
+			if (loop && loop.ending && !loop.runFinished) await finishRun();
+			else if (loop && loop.status !== 'running' && loop.opentronsRunId && !loop.runFinished && !loop.ending) {
+				note('The OT-2 run is still on the robot (parked or at the scan position) — press STOP RUN, or Reset, to end it.', 'warn');
 			}
 		} catch (e) {
 			pageError = e instanceof Error ? e.message : String(e);
@@ -448,6 +441,9 @@
 			if (r.data.stoppedArm) note(r.data.torqueOn ? 'Stopped — the arm is holding its position.' : 'Stopped, but torque could NOT be re-enabled — the arm may be limp.', r.data.torqueOn ? 'warn' : 'error');
 			else if (loop!.status === 'running') note('Stop requested — the current fill and withdraw finish first.', 'warn');
 			else note('Stopped.', 'warn');
+			if (r.data.endSent) note('The OT-2 was told to end: it trashes its tip and homes.', 'warn');
+			if (r.data.note) note(String(r.data.note), 'error');
+			if (loop!.status !== 'running' && !driving) void finishRun();
 		} finally {
 			busy = false;
 		}
@@ -786,13 +782,14 @@
 	<div>
 		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax fill</h2>
 		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			The arm feeds one cart at a time onto its stage: OT-2 gantry <span class="font-semibold">home</span> → <span class="font-semibold">grab</span> →
-			<span class="font-semibold">scan</span> at the taught position → <span class="font-semibold">fill</span>
-			{#if stage}at the taught cart location with the stage protocol{:else}with the robot's carriage protocol (one cart, deck position {data.settings.cartPosition}){/if}{#if rehearsal}
+			One OT-2 run and one tip serve the whole loop: the robot homes, takes its tip, probes it once, aspirates and parks the tip in the wax (it stays warm) between carts.
+			Per cart: <span class="font-semibold">grab</span> (arm, while the OT-2 is parked) → <span class="font-semibold">scan</span> (the run goes to the taught scan position, the scanner is read) →
+			<span class="font-semibold">check</span> → <span class="font-semibold">fill</span>
+			{#if stage}at the taught cart location{:else}with the robot's carriage protocol{/if}{#if rehearsal}
 			<span class="font-semibold text-amber-300">— REHEARSAL: the p300 walks it with 200 µL tips and air, nothing is dispensed</span>{/if}
-			→ gantry <span class="font-semibold">home</span> → <span class="font-semibold">withdraw</span>, for as many runs as you ask. If the scan fails
-			— nothing read, or the cart is not a backed cart — the <span class="font-semibold">fail animation</span> plays instead of the fill and the run stops.
-			The arm never moves until the OT-2 confirms its gantry is home. The cart-drop unit will slot in before the grab once it is ready.
+			→ <span class="font-semibold">withdraw</span> (arm, while parked), for as many carts as you ask; on the last cart the OT-2 trashes its tip and homes while the arm withdraws.
+			If the scan fails — nothing read, or the cart is not a backed cart — the OT-2 goes back to the tube and the <span class="font-semibold">fail animation</span> plays instead of the fill; the loop stops.
+			The arm moves only while the robot reports it is parked in the wax; it never moves while the OT-2 is at the calibrator or over the stage.
 		</p>
 	</div>
 
@@ -935,7 +932,7 @@
 						{loop.status}{driving ? ' · driving' : loop.status === 'running' ? ' · paused in this browser' : ''}
 					</span>
 				</div>
-				<div class="grid gap-2 {onFailRoute(currentCycle) ? 'grid-cols-5' : 'grid-cols-4'}">
+				<div class="grid gap-2 {onFailRoute(currentCycle) ? 'grid-cols-6' : 'grid-cols-5'}">
 					{#each STEPS as s (s)}
 						<div class="rounded border px-2 py-2 text-center text-xs font-semibold {stepClass(currentCycle, s)}">{STEP_LABEL[s]}</div>
 					{/each}
@@ -954,8 +951,9 @@
 					<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">{playback.settled}</div>
 				{/if}
 
-				{#if fillRun}
-					<EmbeddedRunController robotId={loop.robot._id} robotName={loop.robot.name} opentronsRunId={fillRun.opentronsRunId} onComplete={onFillComplete} />
+				{#if loop.opentronsRunId && !loop.runFinished}
+					<!-- The loop's one run, for the whole loop. Watch only: its ARM pauses are the loop's to resume, never the controller's auto-resume. -->
+					<EmbeddedRunController robotId={loop.robot._id} robotName={loop.robot.name} opentronsRunId={loop.opentronsRunId} autoResumeInitial={false} onStatusChange={onRunStatus} />
 				{/if}
 
 				{#if log.length}

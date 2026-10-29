@@ -603,7 +603,10 @@ async function startContext(
 		// The p300 / air REHEARSAL (2026-10-29) dispenses nothing and carries no cart on
 		// purpose: the scanned cart was only checked, and nothing may ever be advanced.
 		const armRehearsal = armFill && !!run.armWaxFill?.rehearsal;
-		if (armFill && !armRehearsal && !run.cartridgeIds?.length) return actionFail(400, 'This arm wax fill run has no scanned cartridge.');
+		// ARM-WAX-LOOP-B: one run serves the whole loop — carts are scanned and attached
+		// one by one while it runs, so it legitimately starts with none.
+		const armOneRun = armFill && !!run.armWaxFill?.oneRunPerLoop;
+		if (armFill && !armRehearsal && !armOneRun && !run.cartridgeIds?.length) return actionFail(400, 'This arm wax fill run has no scanned cartridge.');
 		if (!testFill && !armFill && (!run.deckId || !run.cartridgeIds?.length)) {
 			return actionFail(
 				400,
@@ -974,7 +977,11 @@ export async function startConfirm(
 		line === 'tailnet' && opts.bridgeJobs === true && robot && bridgeJobGate(robot as any).ok
 			? { jobId: generateId(), kind: 'auto_resume_run' as const, payload: { runId: opentronsRunId } }
 			: null;
-	if (!autoResumeJob) {
+	// ARM-WAX-LOOP-B: the loop's run has no off-deck pause, and its FIRST pause is
+	// the protocol's own `ARM PARKED 1` — the daemon's watcher would resume it as if
+	// it were the engine's. Never arm the auto-resume for that run.
+	const armOneRunPerLoop = !!run.armWaxFill?.oneRunPerLoop;
+	if (!autoResumeJob && !armOneRunPerLoop) {
 		await enqueueAutoResume(kind, robotId, (robot ?? run.robot ?? {}) as any, opentronsRunId, user);
 	}
 	const viaBridge = autoResumeJob ? { autoResumeJobId: autoResumeJob.jobId } : {};

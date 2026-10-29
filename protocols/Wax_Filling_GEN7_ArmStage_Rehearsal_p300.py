@@ -53,10 +53,18 @@ import time
 # force_direct), which the engine runs as XY at the current — top — height and
 # then straight down at the target, never a diagonal. Only the hops between
 # the holes of one row stay low (5 mm over the cart, inside its own footprint).
+#
+# ARM-WAX-LOOP-B (2026-10-29): ONE run serves a whole loop of carts. BIMS drives
+# it cart by cart through /data/arm_loop.json (written by the bridge daemon) and
+# the run pauses between carts with 'ARM PARKED <i>' — the tip idling IN the wax
+# tube, holding the next cart's first batch so the wax stays warm — and at the
+# scan position with 'ARM AT_SCAN <i>'. One tip, probed once, for the whole loop.
+# The arm may move while the run is parked; never while it is at the calibrator
+# or over the stage. See docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5.
 
 metadata = {
     'author': 'Brevitest',
-    'description': 'REHEARSAL ONLY - the robot-arm stage wax fill walked through on the p300 with 200 uL tips and AIR (no wax). Same stations, order, taught cart, probe/retry rules, batching and lift rule as Wax_Filling_GEN7_ArmStage.py; never fills a cart.',
+    'description': 'REHEARSAL ONLY - the robot-arm stage wax fill walked through on the p300 with 200 uL tips and AIR (no wax). Same stations, order, taught cart, probe/retry rules, batching, lift rule and one-run-per-loop pauses (ARM-WAX-LOOP-B) as Wax_Filling_GEN7_ArmStage.py; never fills a cart.',
 }
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
@@ -87,6 +95,100 @@ COLUMN_GATE = {'2': 'wax_gate4', '4': 'wax_gate3', '6': 'wax_gate2', '8': 'wax_g
 # A taught coordinate below this is "never taught" (the RTP defaults are 0 and
 # the deck's front-left corner is NOT where a cart is). Refused before any motion.
 MIN_TAUGHT_MM = 1.0
+
+
+# ── ARM-WAX-LOOP-B: one run per loop, driven by BIMS through an instruction file ──
+# (docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5). The bridge daemon writes
+# /data/arm_loop.json for BIMS; this protocol reads it after every pause. ONE tip
+# serves the whole loop; between carts it idles IN the wax tube (keeps the wax in
+# the tip warm) at the aspirate height, holding the next cart's first batch.
+ARM_LOOP_FILE = '/data/arm_loop.json'
+ARM_LOOP_ACTIONS = ('scan', 'fill', 'skip', 'end')
+ARM_LOOP_POLL_S = 0.5
+ARM_LOOP_WAIT_S = 60.0
+# Analysis / simulation: the robot's analysis has no instruction file and no taught
+# cart, so the loop is walked once per cart on these stand-in points (well inside
+# the deck; nothing real is at them) with synthesised scan → fill → … → end records.
+SIM_CART = (200.0, 200.0, 80.0)
+SIM_SCAN = (200.0, 200.0, 120.0)
+
+
+def read_arm_loop_record(path=ARM_LOOP_FILE):
+    """One read of the instruction file: its dict, or None when missing/unreadable."""
+    import json
+    try:
+        with open(path, 'r') as f:
+            data = json.load(f)
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+class ArmLoopInstructions:
+    """BIMS → protocol instructions (contract §5.1).
+
+    start(): the start record (action 'start', seq 0) must be in the file before
+    any motion; it fixes the loop id. next(): after a resume, the first record
+    with the SAME loop, seq > the last one consumed and a known action, polled
+    every ARM_LOOP_POLL_S for up to ARM_LOOP_WAIT_S; None when nothing fresh
+    arrived (the caller pauses 'ARM NO_INSTRUCTION <i>' and asks again after the
+    next resume). A stale or foreign record never acts.
+    simulate=True reads no file: scan, fill for each cart, then end."""
+
+    def __init__(self, path=ARM_LOOP_FILE, simulate=False, cartridges=1, sleep=None, clock=None):
+        self.path = path
+        self.simulate = bool(simulate)
+        self.cartridges = max(1, int(cartridges))
+        self._sleep = sleep or time.sleep
+        self._clock = clock or time.time
+        self.loop = None
+        self.seen_seq = 0
+        self._sim = []
+
+    def start(self):
+        if self.simulate:
+            self.loop = 'sim'
+            self.seen_seq = 0
+            seq = 0
+            for cart in range(1, self.cartridges + 1):
+                for action in ('scan', 'fill'):
+                    seq += 1
+                    self._sim.append({'seq': seq, 'loop': 'sim', 'cart': cart, 'action': action, 'barcode': None})
+            self._sim.append({'seq': seq + 1, 'loop': 'sim', 'cart': self.cartridges + 1, 'action': 'end', 'barcode': None})
+            return {'seq': 0, 'loop': 'sim', 'action': 'start'}
+        rec = read_arm_loop_record(self.path)
+        if not rec or rec.get('action') != 'start' or not rec.get('loop'):
+            raise RuntimeError('ARM LOOP: no start record in /data/arm_loop.json')
+        self.loop = str(rec['loop'])
+        self.seen_seq = 0
+        return rec
+
+    def is_fresh(self, rec):
+        if not rec or self.loop is None or str(rec.get('loop')) != self.loop:
+            return False
+        try:
+            seq = int(rec.get('seq'))
+        except (TypeError, ValueError):
+            return False
+        return seq > self.seen_seq and rec.get('action') in ARM_LOOP_ACTIONS
+
+    def next(self, timeout_s=ARM_LOOP_WAIT_S, poll_s=ARM_LOOP_POLL_S):
+        if self.simulate:
+            if self._sim:
+                rec = self._sim.pop(0)
+            else:
+                rec = {'seq': self.seen_seq + 1, 'loop': 'sim', 'cart': 0, 'action': 'end', 'barcode': None}
+            self.seen_seq = int(rec['seq'])
+            return rec
+        deadline = self._clock() + float(timeout_s)
+        while True:
+            rec = read_arm_loop_record(self.path)
+            if self.is_fresh(rec):
+                self.seen_seq = int(rec['seq'])
+                return rec
+            if self._clock() >= deadline:
+                return None
+            self._sleep(poll_s)
 
 
 def _resolve_lift(pipette):
@@ -220,6 +322,20 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="arm_cart_rotation_deg", display_name="Cart rotation on the stage",
         description="CCW from above about the first hole. 90 = the arm's stage, gates to the front; 0 = carriage.",
         default=90.0, minimum=-360.0, maximum=360.0, unit="deg")
+
+    # ── ARM-WAX-LOOP-B: one run serves a whole loop of carts ─────────────────
+    parameters.add_int(variable_name="cartridges", display_name="Carts this run serves",
+        description="How many carts this run serves (the BIMS loop's requested runs). One tip for all of them.",
+        default=1, minimum=1, maximum=24)
+    parameters.add_float(variable_name="arm_scan_x", display_name="Arm scan X (deck mm)",
+        description="Taught X of the scan position over the stage. 0 = not taught (run refuses).",
+        default=0.0, minimum=0.0, maximum=400.0, unit="mm")
+    parameters.add_float(variable_name="arm_scan_y", display_name="Arm scan Y (deck mm)",
+        description="Taught Y of the scan position over the stage. 0 = not taught (run refuses).",
+        default=0.0, minimum=0.0, maximum=400.0, unit="mm")
+    parameters.add_float(variable_name="arm_scan_z", display_name="Arm scan Z (deck mm)",
+        description="Taught Z of the scan position (tip end). 0 = not taught (run refuses).",
+        default=0.0, minimum=0.0, maximum=200.0, unit="mm")
     # No travel-height parameter: the pipette goes ALL THE WAY UP (Z-only home)
     # before every move between stations — see the LIFT RULE in the header.
 
@@ -409,6 +525,25 @@ def run(protocol: protocol_api.ProtocolContext):
                 'ARM STAGE: arm_cart_x/y/z are not set (0). Teach the cart location on the BIMS '
                 'robot-arm wax-fill page; this protocol never guesses where the cart is.'
             )
+    # ── The taught scan position (ARM-WAX-LOOP-B) ──────────────────────────
+    scan_x = float(protocol.params.arm_scan_x)
+    scan_y = float(protocol.params.arm_scan_y)
+    scan_z = float(protocol.params.arm_scan_z)
+    scan_taught = scan_x >= MIN_TAUGHT_MM and scan_y >= MIN_TAUGHT_MM and scan_z >= MIN_TAUGHT_MM
+    if not scan_taught:
+        protocol.comment('ARM LOOP: no scan position (arm_scan_x/y/z not set) - the run will refuse to move.')
+        if not protocol.is_simulating():
+            raise RuntimeError(
+                'ARM LOOP: arm_scan_x/y/z are not set (0). Teach the scan position on the BIMS '
+                'Stage calibration tab; this protocol never guesses where the scanner reads.'
+            )
+    if protocol.is_simulating():
+        # Analysis walks the loop on stand-in points (SIM_CART / SIM_SCAN).
+        if not cart_taught:
+            cart_x, cart_y, cart_z = SIM_CART
+        if not scan_taught:
+            scan_x, scan_y, scan_z = SIM_SCAN
+    cartridges = max(1, int(protocol.params.cartridges))
     hole_offsets = [
         tuple(float(getattr(protocol.params, hole_offset_param(i, axis))) for axis in ('dx', 'dy', 'dz'))
         for i in range(1, len(STAGE_WELL_NAMES) + 1)
@@ -531,9 +666,9 @@ def run(protocol: protocol_api.ProtocolContext):
             time.sleep(1.5)
 
     if protocol.is_simulating():
-        ser = _probe_for_calibrator()
-        if not ser or not ser.is_open:
-            return
+        # Analysis: no serial at all. The baseline read and the X/Y probe are
+        # skipped (adjust 0, 0); the loop is walked on the stand-in points.
+        ser = None
     else:
         ser = _find_calibrator()
         while not ser or not ser.is_open:
@@ -545,7 +680,9 @@ def run(protocol: protocol_api.ProtocolContext):
             ser = _find_calibrator(wait_s=8)
 
     try:
-        if not protocol.params.use_tip_calibration:
+        if protocol.is_simulating():
+            protocol.comment('ARM LOOP: analysis - no calibrator serial, baseline x=0.0, y=0.0.')
+        elif not protocol.params.use_tip_calibration:
             protocol.comment('Tip calibration disabled - skipping offset baseline read (x=0.0, y=0.0).')
         else:
             try:
@@ -633,6 +770,9 @@ def run(protocol: protocol_api.ProtocolContext):
 
             if not protocol.params.use_tip_calibration:
                 protocol.comment('Per-tip calibration DISABLED - nominal wax hole position, no X/Y probe.')
+                return { 'x': 0.0, 'y': 0.0 }
+            if protocol.is_simulating():
+                protocol.comment('ARM LOOP: analysis - no serial, no X/Y probe (adjust 0, 0).')
                 return { 'x': 0.0, 'y': 0.0 }
 
             max_adjust = float(protocol.params.max_tip_adjust)
@@ -845,44 +985,14 @@ def run(protocol: protocol_api.ProtocolContext):
         def row_key(well_name):
             return get_well_row(well_name)
 
-        def dispense_stage(source, well_volumes, dispense_rates, source_volume, adjust):
-            """The stage protocol's dispense loop over the 12 targets, with air:
-            batches never cross a row, every batch arrives after a full lift and
-            leaves by lifting all the way up, the mid-run tip swap is honoured."""
-            source_well = tuberack[source]
-            first_dispense = True
+        # ── ARM-WAX-LOOP-B: the fill, batch by batch, with ONE tip for the loop ──
+        def plan_batches(well_volumes):
+            """The carriage protocol's batching, planned up front: batches never
+            cross a row and never exceed the usable volume per trip."""
+            available_volume = maximum_volume_per_aspiration - aspirate_remainder
+            batches = []
             well_index = 0
-
-            row_total = sum(well_volumes[g] for g in ('wax_gate4', 'wax_gate3', 'wax_gate2', 'wax_gate1'))
-            protocol.comment(
-                f'Aspirate budget: {maximum_volume_per_aspiration}uL pipette max - '
-                f'{aspirate_remainder}uL remainder = {maximum_volume_per_aspiration - aspirate_remainder}uL '
-                f'usable per trip; one cartridge row needs {round(row_total, 2)}uL (air)'
-            )
-            if row_total > maximum_volume_per_aspiration - aspirate_remainder:
-                protocol.comment('NOTE: a full cartridge row does not fit in one aspiration, so rows will be filled in parts.')
-
-            def do_tip_swap(mode, at_well):
-                protocol.comment(f'TIP SWAP requested from BIMS ({mode}) - will continue at well {at_well}.')
-                if mode == 'hand':
-                    _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal_p300
-                    lift()
-                    pipette.move_to(P(_cx, _cy, _cz + 60), speed=20)  # planned: XY at the top, then down to the hover
-                    protocol.pause(
-                        f'TIP SWAP (by hand): the pipette is raised over the calibrator. Pull the old tip '
-                        f'off and push a NEW tip firmly on, then click Resume - it will calibrate the new '
-                        f'tip and continue at well {at_well}. Cancel/Stop to end the run.'
-                    )
-                    return pick_up_and_calibrate_tip(pick_up=False)
-                return pick_up_and_calibrate_tip()
-
             while well_index < len(targets):
-                _swap = take_tip_swap_request()
-                if _swap:
-                    adjust = do_tip_swap(_swap, targets[well_index][0])
-                    first_dispense = True
-
-                available_volume = maximum_volume_per_aspiration - aspirate_remainder
                 batch_volume = 0
                 batch_size = 0
                 for i in range(well_index, len(targets)):
@@ -894,97 +1004,156 @@ def run(protocol: protocol_api.ProtocolContext):
                         break
                     batch_volume += vol
                     batch_size += 1
-
                 if batch_size <= 0:
-                    protocol.comment(
-                        f'STOPPING: well {targets[well_index][0]} needs more than the '
+                    raise RuntimeError(
+                        f'ARM LOOP: well {targets[well_index][0]} needs more than the '
                         f'{available_volume}uL usable per aspiration. Lower its gate volume or the aspirate remainder.'
                     )
-                    break
+                batches.append((targets[well_index:well_index + batch_size], batch_volume))
+                well_index += batch_size
+            return batches
 
-                batch = targets[well_index:well_index + batch_size]
-                aspirate_volume = batch_volume + aspirate_remainder
-                aspirate_end = tube_rim_height_2mL - source_height(source_volume - aspirate_volume)
-                aspirate_cover = 2
+        def tube_depth_for(source_volume, aspirate_volume):
+            """How far below the rim the tip end sits to aspirate `aspirate_volume`
+            with `source_volume` in the tube: the existing height model, clamped to
+            the tube floor + min_tip_clearance. None when the model says too deep."""
+            aspirate_end = tube_rim_height_2mL - source_height(source_volume - aspirate_volume)
+            aspirate_cover = 2
+            if (aspirate_end + aspirate_cover) > max_aspirate_depth:
+                return None
+            tip_floor_z = tube_bottom_height_lw + float(protocol.params.min_tip_clearance)
+            target_below_rim = aspirate_end + aspirate_cover
+            target_tip_z = tube_rim_height_2mL - target_below_rim
+            if target_tip_z < tip_floor_z:
+                target_below_rim = tube_rim_height_2mL - tip_floor_z
+                protocol.comment(
+                    f'Aspirate clamped to the tube floor: {float(protocol.params.min_tip_clearance)}mm '
+                    f'above the bottom ({target_below_rim:.2f}mm below the rim)'
+                )
+            return target_below_rim
 
-                protocol.comment(f'Processing wells {well_index + 1} to {well_index + batch_size} of {len(targets)}')
-                if (aspirate_end + aspirate_cover) > max_aspirate_depth:
-                    protocol.comment('Cannot aspirate any deeper - stopping')
-                    break
+        def settle_after_aspirate(source_well):
+            """The settle, touch-off and drip-back the wax recipe always did after
+            an aspirate; also what leaving the park does."""
+            if not wax:
+                return
+            pipette.move_to(source_well.top(-2.3))
+            protocol.delay(seconds=3)
+            pipette.touch_tip(v_offset=-2.3)
+            # The wax recipe drips 0.25 uL back here; that is below the p300's
+            # range, so the rehearsal only pauses where the drip would be.
+            pipette.move_to(source_well.top())
+            protocol.delay(seconds=.5)
 
-                tip_floor_z = tube_bottom_height_lw + float(protocol.params.min_tip_clearance)
-                target_below_rim = aspirate_end + aspirate_cover
-                target_tip_z = tube_rim_height_2mL - target_below_rim
-                if target_tip_z < tip_floor_z:
-                    target_below_rim = tube_rim_height_2mL - tip_floor_z
-                    protocol.comment(
-                        f'Aspirate clamped to the tube floor: {float(protocol.params.min_tip_clearance)}mm '
-                        f'above the bottom ({target_below_rim:.2f}mm below the rim)'
-                    )
-                # Air, from the (empty) tube at the depth the wax model would use.
-                # The move from the calibrator / the cart is PLANNED (lift() ran
-                # before): XY at the top, then down into the tube.
-                pipette.aspirate(aspirate_volume, source_well.top(-target_below_rim))
+        def aspirate_batch(source_well, batch_volume, source_volume):
+            """Into the tube (a PLANNED move: lift() ran before leaving the last
+            station) and aspirate one batch + the remainder."""
+            aspirate_volume = batch_volume + aspirate_remainder
+            below_rim = tube_depth_for(source_volume, aspirate_volume)
+            if below_rim is None:
+                raise RuntimeError('ARM LOOP: cannot aspirate any deeper - the wax tube is too low. Refill it and start the loop again.')
+            if wax:
+                pipette.aspirate(aspirate_volume, source_well.top(-below_rim))
                 protocol.delay(seconds=2)
-                pipette.move_to(source_well.top(-2.3))
-                protocol.delay(seconds=3)
-                pipette.touch_tip(v_offset=-2.3)
-                # The wax recipe drips 0.25 uL back here; that is below the p300's
-                # range, so the rehearsal only pauses where the drip would be.
-                pipette.move_to(source_well.top())
-                protocol.delay(seconds=.5)
+            else:
+                pipette.move_to(source_well.top(-below_rim))
+            settle_after_aspirate(source_well)
+            return aspirate_volume
 
-                dispensed_volume = 0
-                well_z_depth = -float(protocol.params.dispense_depth) + z_offset
-                swap_at = None
-                last_done = None
-                for idx, t in enumerate(batch):
-                    _swap = take_tip_swap_request()
-                    if _swap:
-                        swap_at = (idx, _swap)
-                        break
-                    well_name, tx, ty, tz = t
-                    gate = COLUMN_GATE.get(get_well_column(well_name), 'wax_gate4')
-                    current_volume = well_volumes[gate]
-                    current_rate = dispense_rates[gate]
-                    # Arriving from the tube (idx 0), the first hole of the run, or a
-                    # row crossing: always ALL THE WAY UP first (arrive → lift). The
-                    # planner cannot see the raised stage, so the lift is not optional.
-                    # Within a row: a straight hop to the pre-jump height over the next
-                    # hole (5 mm over the cart, inside its own footprint).
-                    crosses_row = idx > 0 and row_key(well_name) != row_key(batch[idx - 1][0])
-                    if first_dispense or crosses_row or idx == 0:
-                        px, py = arrive(t, adjust)
-                    else:
-                        px, py = tx + adjust['x'], ty + adjust['y']
-                        pipette.move_to(P(px, py, tz + well_prejump_height), force_direct=True)
-                    first_dispense = False
-                    # Down to the dispense height, then dispense IN PLACE (a dispense
-                    # given a bare deck point would plan its own deck-high arc first).
-                    pipette.move_to(P(px, py, tz + well_z_depth), force_direct=True)
+        def park(source_well, source_volume, holding_volume):
+            """Tip IN the wax at the aspirate height for what it holds, where it
+            idles while the arm swaps carts (keeps the wax in the tip warm). A
+            PLANNED move: lift() ran before leaving the last station."""
+            below_rim = tube_depth_for(source_volume, max(holding_volume, aspirate_remainder))
+            if below_rim is None:
+                below_rim = tube_rim_height_2mL - (tube_bottom_height_lw + float(protocol.params.min_tip_clearance))
+            pipette.move_to(source_well.top(-below_rim))
+
+        def dispense_batch(batch, well_volumes, dispense_rates, adjust):
+            """Dispense one batch over the stage: ALL THE WAY UP first (arrive →
+            lift), low hops within a row, lift all the way up when done. The
+            mid-batch tip swap request is honoured as before. Returns the volume
+            dispensed and, when a swap interrupted, (index, mode) of where."""
+            dispensed_volume = 0
+            well_z_depth = -float(protocol.params.dispense_depth) + z_offset
+            last_done = None
+            for idx, t in enumerate(batch):
+                _swap = take_tip_swap_request()
+                if _swap:
+                    if last_done is not None:
+                        leave(last_done, adjust)
+                    return dispensed_volume, (idx, _swap)
+                well_name, tx, ty, tz = t
+                gate = COLUMN_GATE.get(get_well_column(well_name), 'wax_gate4')
+                current_volume = well_volumes[gate]
+                current_rate = dispense_rates[gate]
+                # Arriving from the tube (idx 0) or a row crossing: ALL THE WAY UP
+                # first (arrive → lift). Within a row: a straight hop to the pre-jump
+                # height over the next hole (5 mm over the cart, inside its footprint).
+                crosses_row = idx > 0 and row_key(well_name) != row_key(batch[idx - 1][0])
+                if crosses_row or idx == 0:
+                    px, py = arrive(t, adjust)
+                else:
+                    px, py = tx + adjust['x'], ty + adjust['y']
+                    pipette.move_to(P(px, py, tz + well_prejump_height), force_direct=True)
+                # Down to the dispense height, then dispense IN PLACE (a dispense
+                # given a bare deck point would plan its own deck-high arc first).
+                pipette.move_to(P(px, py, tz + well_z_depth), force_direct=True)
+                if wax:
                     pipette.dispense(current_volume, rate=current_rate)
-                    dispensed_volume += current_volume
-                    last_done = t
-                    protocol.comment(f'Dispensed {current_volume}uL of AIR into well {well_name} (rehearsal)')
+                dispensed_volume += current_volume
+                last_done = t
+                protocol.comment(f'Dispensed {current_volume}uL of AIR into well {well_name} (rehearsal)')
+            if last_done is not None:
+                leave(last_done, adjust)
+            return dispensed_volume, None
 
+        def do_tip_swap(mode, at_well):
+            protocol.comment(f'TIP SWAP requested from BIMS ({mode}) - will continue at well {at_well}.')
+            if mode == 'hand':
+                _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal_p300
+                lift()
+                pipette.move_to(P(_cx, _cy, _cz + 60), speed=20)  # planned: XY at the top, then down to the hover
+                protocol.pause(
+                    f'TIP SWAP (by hand): the pipette is raised over the calibrator. Pull the old tip '
+                    f'off and push a NEW tip firmly on, then click Resume - it will calibrate the new '
+                    f'tip and continue at well {at_well}. Cancel/Stop to end the run.'
+                )
+                return pick_up_and_calibrate_tip(pick_up=False)
+            return pick_up_and_calibrate_tip()
+
+        def fill_cart(cart_index, barcode, source_well, well_volumes, dispense_rates, source_volume, adjust, batches, first_loaded):
+            """One cart: every batch in order. The first batch is already in the
+            tip when the run parked with it (first_loaded): leave the park with the
+            settle ritual instead of aspirating. Returns (source_volume, adjust)."""
+            bi = 0
+            loaded = first_loaded
+            while bi < len(batches):
+                batch, batch_volume = batches[bi]
+                _swap = take_tip_swap_request()
+                if _swap and not loaded:
+                    adjust = do_tip_swap(_swap, batch[0][0])
+                if loaded:
+                    loaded = False
+                    settle_after_aspirate(source_well)
+                else:
+                    aspirate_batch(source_well, batch_volume, source_volume)
+                protocol.comment(f'Processing wells {targets.index(batch[0]) + 1} to {targets.index(batch[-1]) + 1} of {len(targets)}')
+                dispensed_volume, swap_at = dispense_batch(batch, well_volumes, dispense_rates, adjust)
                 source_volume -= dispensed_volume
-                if last_done is not None:
-                    leave(last_done, adjust)
-
+                if wax:
+                    pipette.blow_out(location=source_well.top())
                 if swap_at is not None:
                     _idx, _mode = swap_at
-                    well_index += _idx
-                    pipette.blow_out(location=source_well.top())
-                    adjust = do_tip_swap(_mode, targets[well_index][0])
-                    first_dispense = True
+                    # Finish the interrupted batch's remaining holes after the swap.
+                    rest = batch[_idx:]
+                    rest_volume = sum(well_volumes[COLUMN_GATE.get(get_well_column(t[0]), 'wax_gate4')] for t in rest)
+                    batches = batches[:bi] + [(rest, rest_volume)] + batches[bi + 1:]
+                    adjust = do_tip_swap(_mode, rest[0][0])
                     continue
-
-                well_index += batch_size
-                pipette.blow_out(location=source_well.top())
-
-            if pipette.has_tip:
-                lift()
-                pipette.drop_tip()
+                bi += 1
+            protocol.comment(f'ARM CART {cart_index} FILLED {barcode}')
+            return source_volume, adjust
 
         # ── Volumes (air) ────────────────────────────────────────────────────
         dispense = True
@@ -998,42 +1167,116 @@ def run(protocol: protocol_api.ProtocolContext):
         }
         dispense_rates = { 'wax_gate4': 0.325, 'wax_gate3': 0.325, 'wax_gate2': 0.325, 'wax_gate1': 0.325 }
         dead_volume = 50
-        source_volume = dead_volume + sum(well_volumes[COLUMN_GATE.get(get_well_column(n), 'wax_gate4')] for n, _, _, _ in targets)
+        cart_volume = sum(well_volumes[COLUMN_GATE.get(get_well_column(n), 'wax_gate4')] for n, _, _, _ in targets)
+        source_volume = dead_volume + cartridges * cart_volume
         protocol.comment(f"Rehearsal gate volumes (AIR) - Gate4: {well_volumes['wax_gate4']}uL, Gate3: {well_volumes['wax_gate3']}uL, Gate2: {well_volumes['wax_gate2']}uL, Gate1: {well_volumes['wax_gate1']}uL")
-        protocol.comment(f"Modelled source volume for the aspirate depth (tube A3 should be EMPTY): {source_volume}uL")
+        protocol.comment(f"Modelled source volume for the aspirate depth, {cartridges} cart(s) (tube A3 should be EMPTY): {source_volume}uL")
 
-        if dispense and not protocol.is_simulating():
-            if wax:
-                if protocol.params.run_calibration_check:
-                    protocol.comment('Calibration check enabled. Picking up tip and calibrating...')
-                    check_adjust = pick_up_and_calibrate_tip()
-                    protocol.comment(f'Calibration check adjust: x={check_adjust["x"]}, y={check_adjust["y"]}')
-                    run_calibration_check(check_adjust)
-                    protocol.pause('Calibration check done. Click Resume to START THE REHEARSAL DISPENSE (air) with a fresh tip, or Cancel/Stop to end the run.')
-                    if pipette.has_tip:
-                        lift()
-                        pipette.drop_tip()
-                adjust = pick_up_and_calibrate_tip()
-                dispense_stage(
-                    source=tube_locations['wax'],
-                    well_volumes=well_volumes,
-                    dispense_rates=dispense_rates,
-                    source_volume=source_volume,
-                    adjust=adjust,
-                )
-            else:
-                # Rehearse the tip + probe alone: pick up, calibrate, drop.
-                adjust = pick_up_and_calibrate_tip()
-                protocol.comment(f'Rehearsal (no dispense): tip calibrated, adjust x={adjust["x"]}, y={adjust["y"]}.')
-                if pipette.has_tip:
-                    lift()
-                    pipette.drop_tip()
-            # The robot arm comes in next to take the cart: park the gantry at
-            # home so nothing is left over the stage. (BIMS homes again before
-            # the arm moves; this makes the protocol safe on its own too.)
+        # ── ARM-WAX-LOOP-B: the loop ─────────────────────────────────────────
+        # Once: start record, tip, probe (unchanged), first batch, park → PARKED 1.
+        # Then BIMS drives cart by cart through /data/arm_loop.json (contract §5.4):
+        #   scan → lift → scan position → AT_SCAN i → (fill | skip | end)
+        #   fill → the 12 holes → tube → next cart's first batch → park → PARKED i+1
+        #   skip → tube → park → PARKED i+1        end → trash the tip → home
+        # Analysis (is_simulating): the same loop on synthesised records and the
+        # stand-in points, with no serial and no probe.
+        loop_instructions = ArmLoopInstructions(simulate=protocol.is_simulating(), cartridges=cartridges)
+        loop_instructions.start()
+        source_well = tuberack[tube_locations['wax']]
+        batches = plan_batches(well_volumes)
+        row_total = sum(well_volumes[g] for g in ('wax_gate4', 'wax_gate3', 'wax_gate2', 'wax_gate1'))
+        protocol.comment(
+            f'Aspirate budget: {maximum_volume_per_aspiration}uL pipette max - '
+            f'{aspirate_remainder}uL remainder = {maximum_volume_per_aspiration - aspirate_remainder}uL '
+            f'usable per trip; one cartridge row needs {round(row_total, 2)}uL (air); {len(batches)} trip(s) per cart'
+        )
+        if row_total > maximum_volume_per_aspiration - aspirate_remainder:
+            protocol.comment('NOTE: a full cartridge row does not fit in one aspiration, so rows will be filled in parts.')
+
+        def next_instruction(cart_index):
+            """The next fresh record; pauses ARM NO_INSTRUCTION until one arrives."""
+            while True:
+                rec = loop_instructions.next()
+                if rec:
+                    try:
+                        named = int(rec.get('cart'))
+                    except (TypeError, ValueError):
+                        named = cart_index
+                    if named != cart_index:
+                        protocol.comment(f'ARM LOOP: instruction {rec.get("action")} names cart {named}; this run is at cart {cart_index}.')
+                    return rec
+                protocol.pause(f'ARM NO_INSTRUCTION {cart_index}')
+
+        def go_to_scan_position():
+            """ALL THE WAY UP, then one planned move to the taught scan point (the
+            engine runs it as XY at the top, then straight down)."""
+            lift()
+            pipette.move_to(P(scan_x, scan_y, scan_z))
+
+        def park_for(cart_index, source_volume, holding):
+            """Lift, go to the tube and park: with the next cart's first batch when a
+            cart remains and nothing is held yet; otherwise as the tip is."""
+            lift()
+            if not holding and cart_index <= cartridges:
+                batch, batch_volume = batches[0]
+                holding = aspirate_batch(source_well, batch_volume, source_volume)
+            park(source_well, source_volume, holding)
+            protocol.pause(f'ARM PARKED {cart_index}')
+            return holding
+
+        def finish(holding):
+            """end: give the held wax back to the tube, trash the tip, home."""
+            if holding and wax:
+                lift()
+                pipette.blow_out(location=source_well.top())
+            if pipette.has_tip:
+                lift()
+                pipette.drop_tip()
             protocol.home()
+            protocol.comment('ARM LOOP END')
             protocol.comment('ARM STAGE: gantry homed - clear for the arm. (REHEARSAL: no wax was dispensed.)')
 
+        if wax and protocol.params.run_calibration_check and not protocol.is_simulating():
+            protocol.comment('Calibration check enabled. Picking up tip and calibrating...')
+            check_adjust = pick_up_and_calibrate_tip()
+            protocol.comment(f'Calibration check adjust: x={check_adjust["x"]}, y={check_adjust["y"]}')
+            run_calibration_check(check_adjust)
+            protocol.pause('Calibration check done. Click Resume to START THE LOOP with a fresh tip, or Cancel/Stop to end the run.')
+            if pipette.has_tip:
+                lift()
+                pipette.drop_tip()
+
+        # ONE tip for the whole loop (Alejandro, 2026-10-29): picked up and probed
+        # once here; never changed between carts.
+        adjust = pick_up_and_calibrate_tip()
+        protocol.comment(f'ARM LOOP: one tip for the whole loop ({cartridges} cart(s)); adjust x={adjust["x"]}, y={adjust["y"]}')
+        cart = 1
+        holding = park_for(cart, source_volume, 0)
+        while True:
+            rec = next_instruction(cart)
+            action = rec['action']
+            if action == 'scan':
+                go_to_scan_position()
+                while True:
+                    protocol.pause(f'ARM AT_SCAN {cart}')
+                    rec = next_instruction(cart)
+                    action = rec['action']
+                    if action != 'scan':
+                        break
+            if action == 'end':
+                finish(holding)
+                break
+            if action == 'fill':
+                source_volume, adjust = fill_cart(cart, rec.get('barcode'), source_well, well_volumes, dispense_rates,
+                                                  source_volume, adjust, batches, first_loaded=holding > 0)
+                cart += 1
+                holding = park_for(cart, source_volume, 0)
+            elif action == 'skip':
+                protocol.comment(f'ARM CART {cart} SKIPPED')
+                cart += 1
+                holding = park_for(cart, source_volume, holding)
+            else:
+                protocol.comment(f'ARM LOOP: unknown instruction {action!r} - ignored.')
     finally:
         if ser and ser.is_open:
             try:

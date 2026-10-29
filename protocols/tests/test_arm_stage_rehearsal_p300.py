@@ -85,14 +85,16 @@ def main():
     for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth',
                  'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check', 'tiprack_refilled',
                  'bims_native', 'offset_x', 'offset_y', 'offset_z', 'cal_x', 'cal_y', 'aspirate_remainder',
-                 'vol_gate4', 'vol_gate3', 'vol_gate2', 'vol_gate1', 'wax', 'min_tip_clearance'):
+                 'vol_gate4', 'vol_gate3', 'vol_gate2', 'vol_gate1', 'wax', 'min_tip_clearance',
+                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z'):
         assert name in p.names, name
         assert name in q.names, 'production lost ' + name
     hole_params = [n for n in p.names if n.startswith('hole_')]
     assert hole_params == [n for n in q.names if n.startswith('hole_')]
     assert len(hole_params) == 36 and hole_params[0] == 'hole_01_dx' and hole_params[-1] == 'hole_12_dz'
     # The taught-cart RTPs keep the production bounds (BIMS validates against them).
-    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth', 'cal_x', 'cal_y'):
+    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth', 'cal_x', 'cal_y',
+                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z'):
         for k in ('default', 'minimum', 'maximum'):
             assert p.by_name[name][k] == q.by_name[name][k], (name, k)
 
@@ -131,6 +133,14 @@ def main():
     assert 'def _resolve_lift' in src and src.count('lift()') >= 12, src.count('lift()')
     # No explicit travel height anywhere: neither the RTP nor the planned-arc minimum the pre-lift stage fill used.
     assert 'stage_jump_height' not in src and 'minimum_z_height=tz' not in src
+
+    # ARM-WAX-LOOP-B: the same one-run-per-loop machinery (instruction file, pauses, one tip).
+    assert reh.ARM_LOOP_FILE == prod.ARM_LOOP_FILE == '/data/arm_loop.json'
+    assert reh.ARM_LOOP_ACTIONS == prod.ARM_LOOP_ACTIONS
+    for needle in ("protocol.pause(f'ARM PARKED {cart_index}')", "protocol.pause(f'ARM AT_SCAN {cart}')",
+                   "protocol.pause(f'ARM NO_INSTRUCTION {cart_index}')", "def fill_cart(", "def park_for(", "def finish("):
+        assert needle in src, needle
+    assert len([ln for ln in src.splitlines() if 'pipette.drop_tip()' in ln]) == 4, 'one tip per loop: no drop between carts'
 
     print('ok: rehearsal p300 protocol = production stage cart + p300 air volumes')
 

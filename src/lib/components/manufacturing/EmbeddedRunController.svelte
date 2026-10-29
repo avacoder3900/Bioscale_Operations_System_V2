@@ -38,6 +38,7 @@
 		onComplete,
 		onStatusChange,
 		pollMs = 2000,
+		autoResumeInitial = true,
 		session: sharedSession = null
 	} = $props<{
 		robotId: string;
@@ -51,6 +52,12 @@
 		 */
 		onStatusChange?: (status: string) => void;
 		pollMs?: number;
+		/**
+		 * Auto-resume the engine's initial off-deck pause (default). The robot-arm
+		 * wax-fill loop passes false: its run has no off-deck pause and its first
+		 * pause is the protocol's own `ARM PARKED 1`, which only the loop may resume.
+		 */
+		autoResumeInitial?: boolean;
 		session?: RobotSession | null;
 	}>();
 
@@ -231,7 +238,7 @@
 						// Off-deck labware makes the engine pause once at the very start;
 						// auto-resume only THAT pause. Never one the operator asked for,
 						// never one late in the run, never error-recovery.
-						if (!autoResumedInitial && !operatorPaused && withinAutoResumeWindow() && isInitialEnginePause(run)) {
+						if (autoResumeInitial && !autoResumedInitial && !operatorPaused && withinAutoResumeWindow() && isInitialEnginePause(run)) {
 							autoResumedInitial = true;
 							void handleAction('resume');
 						}

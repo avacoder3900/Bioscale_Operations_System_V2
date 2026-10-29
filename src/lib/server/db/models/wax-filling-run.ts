@@ -87,7 +87,10 @@ const waxFillingRunSchema = new Schema({
 	// Robot-arm wax fill line: the ArmWaxFillRun loop + 1-based cycle this run was one cart of.
 	// rehearsal: the p300 / air rehearsal protocol — no cart is on the run (cartridgeIds stays
 	// empty), nothing is drawn from a bucket and nothing is advanced to wax_filled.
-	armWaxFill: { loopId: String, cycleIndex: Number, rehearsal: Boolean },
+	// oneRunPerLoop (ARM-WAX-LOOP-B): this run serves EVERY cart of the loop — carts join
+	// cartridgeIds as they are scanned and filled, so it starts with none, and the
+	// protocol's own ARM pauses must never be auto-resumed.
+	armWaxFill: { loopId: String, cycleIndex: Number, rehearsal: Boolean, oneRunPerLoop: Boolean },
 	// Two-phase start marker (OT2-TAILNET-5). Unset except while a start is in flight.
 	startIntent: { type: startIntentSchema, default: undefined },
 }, { timestamps: true });

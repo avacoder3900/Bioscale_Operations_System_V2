@@ -102,7 +102,12 @@ except ImportError:
 # 1.3 = OT2-LOG-1 L3: heartbeat metadata.link (interface / tailscale / poll
 # telemetry) + the local report journal and job-report retry queue. The job
 # path and every report's return/error semantics are unchanged.
-VERSION = "ot2-bridge/1.3.1"  # 1.3.1: liftBeforeMove - robot-arm wax fill lifts Z all the way up before every sweep move
+# 1.4 = ARM-WAX-LOOP-B (docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5.5): two queue-line
+# commands for the robot-arm wax-fill loop that runs ONE protocol run per loop —
+# read_scanner (trigger + read the scanner over serial, no maintenance run, no motion:
+# the protocol itself parks the gantry at the scan position) and write_file (the
+# instruction record /data/arm_loop.json the running protocol polls after each pause).
+VERSION = "ot2-bridge/1.4.0"  # 1.4.0: read_scanner + write_file for the arm wax-fill loop (one run per loop)
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -2305,6 +2310,72 @@ def execute_calibrate_tip(command_id: str, payload: dict) -> None:
 
 TIP_SWAP_REQUEST_PATH = "/data/ot2-bridge/tip-swap-request.json"
 
+# ARM-WAX-LOOP-B §5.1: the one instruction record BIMS writes (through write_file)
+# for the running arm stage protocol — the ONLY path write_file may touch.
+ARM_LOOP_FILE_PATH = "/data/arm_loop.json"
+
+
+def execute_read_scanner(command_id: str, payload: dict, port: ScannerPort) -> None:
+    """ARM-WAX-LOOP-B §5.5: trigger + read the barcode scanner over serial, nothing
+    else — no maintenance run, no home, no motion. The arm stage protocol has
+    already parked the gantry at the taught scan position and paused (ARM AT_SCAN);
+    BIMS asks for the read here, exactly the trigger/parse/retry a sweep slot uses
+    (scan_with_retry), minus the grid search (moving would need a run).
+    payload: { timeoutS?: number }  →  { barcode: str|null, raw: str|null, error: str|null, attempts: n }"""
+    try:
+        try:
+            timeout_s = float(payload.get("timeoutS") or SCAN_TIMEOUT)
+        except (TypeError, ValueError):
+            timeout_s = SCAN_TIMEOUT
+        if timeout_s <= 0:
+            timeout_s = SCAN_TIMEOUT
+        scan = scan_with_retry(port, timeout_s, True)
+        if scan["barcode"]:
+            log.info("read_scanner %s: \"%s\" (%d attempt%s)", command_id, scan["barcode"],
+                     scan["attempts"], "" if scan["attempts"] == 1 else "s")
+        else:
+            log.warning("read_scanner %s: no barcode (%s, %d attempts)", command_id,
+                        scan["error"] or "unknown", scan["attempts"])
+        _post_result(command_id, {"ok": True, "status": 200, "body": {
+            "barcode": scan["barcode"] or None,
+            "raw": scan["rawPayload"],
+            "error": scan["error"],
+            "attempts": scan["attempts"],
+        }})
+    except Exception as e:
+        log.error("read_scanner %s failed: %s", command_id, e)
+        _post_result(command_id, {"ok": False, "error": str(e)})
+
+
+def execute_write_file(command_id: str, payload: dict) -> None:
+    """ARM-WAX-LOOP-B §5.5: write the loop instruction record. Only ARM_LOOP_FILE_PATH
+    is allowed — this is a channel into ONE file the protocol polls, not a general
+    file writer. Atomic (temp file + os.replace) so the protocol never reads a torn
+    record. payload: { path: "/data/arm_loop.json", json: {...} }
+    →  { written: true, bytes: n, path }"""
+    try:
+        path = str(payload.get("path") or "")
+        if os.path.normpath(path) != os.path.normpath(ARM_LOOP_FILE_PATH):
+            raise ValueError("write_file: only {} is allowed (got {!r})".format(ARM_LOOP_FILE_PATH, path))
+        record = payload.get("json")
+        if not isinstance(record, dict):
+            raise ValueError("write_file: json must be an object")
+        data = json.dumps(record, separators=(",", ":"), sort_keys=True)
+        target = ARM_LOOP_FILE_PATH
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        tmp = target + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, target)
+        log.info("write_file %s: %d bytes -> %s (seq=%s action=%s)", command_id, len(data), target,
+                 record.get("seq"), record.get("action"))
+        _post_result(command_id, {"ok": True, "status": 200, "body": {"written": True, "bytes": len(data), "path": target}})
+    except Exception as e:
+        log.error("write_file %s failed: %s", command_id, e)
+        _post_result(command_id, {"ok": False, "error": str(e)})
+
 
 def execute_tip_swap_request(command_id: str, payload: dict) -> None:
     """Operator pressed "Swap tip" on the BIMS wax run page. The running wax
@@ -2361,6 +2432,10 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_calibrate_tip(command_id, cmd.get("payload") or {})
     elif kind == "tip_swap_request":
         execute_tip_swap_request(command_id, cmd.get("payload") or {})
+    elif kind == "read_scanner":
+        execute_read_scanner(command_id, cmd.get("payload") or {}, port)
+    elif kind == "write_file":
+        execute_write_file(command_id, cmd.get("payload") or {})
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})
@@ -2404,6 +2479,9 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
 #   The shared test vector lives in both test files (test_ot2_bridge_server.py,
 #   bridge-token.test.ts).
 
+# read_scanner / write_file (1.4.0) are QUEUE-LINE ONLY (execute_command): BIMS
+# drives the arm wax-fill loop server-side, so they are deliberately not direct
+# /bridge job kinds and no browser token can carry them.
 DIRECT_JOB_KINDS = ("sweep", "deck_scan", "calibrate_tip", "tip_swap_request",
                     "restart_robot_server", "auto_resume_run")
 # 'scan' is the /bridge/scan test-scan; it is a token kind, not a queued job.

@@ -14,7 +14,10 @@ const ot2BridgeCommandSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	robotId: String,             // OpentronsRobot._id
 	deviceId: String,            // ot2-<slot>-bridge
-	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request'], required: true },
+	// kind 'read_scanner': trigger + read the gantry scanner over serial, no motion → { barcode | null, raw }
+	// kind 'write_file': write one JSON file on the robot (only /data/arm_loop.json) → { written, bytes }
+	// Both for ARM-WAX-LOOP-B (docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5.5).
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request', 'read_scanner', 'write_file'], required: true },
 	// kind 'http': relay this request to http://localhost:31950 on the robot
 	request: {
 		method: String,

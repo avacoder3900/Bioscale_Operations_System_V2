@@ -7,30 +7,32 @@
  * location, dispense depth, stage geometry) is taught on the sibling
  * stage-calibration route.
  *
- * The browser drives a cycle one action at a time: homeGantry → cycleGrab →
- * (playback poll, settle) → cycleGrabDone → scan over /api/scanner/sweep →
- * cycleScanned → cycleFill → (EmbeddedRunController) → cycleFillDone →
- * homeGantry → cycleWithdraw → (playback poll, settle) → cycleWithdrawDone,
- * and round again. A scan that fails takes the fail route instead:
- * cycleScanFailed (or cycleScanned finding a cart that cannot be filled) →
- * homeGantry → cycleFail → (playback poll, settle) → cycleFailDone, and the
- * loop ends. All logic is in $lib/server/arm-wax-fill; this file only maps
- * form fields to it.
+ * ARM-WAX-LOOP-B: ONE OT-2 run serves the loop (startLoop starts it; the
+ * protocol parks its tip in the wax between carts and pauses). The browser
+ * drives a cycle one action at a time: awaitParked → cycleGrab → (playback
+ * poll, settle) → cycleGrabDone → cycleScanStart → cycleScanRead (until not
+ * pending) → cycleDecide → cycleFillWait (until not pending) → cycleWithdraw
+ * → (playback poll, settle) → cycleWithdrawDone, and round again; the last
+ * withdraw sends `end` first and loopFinish records the run's end. A scan
+ * that fails takes the fail route: cycleFailPrepare (skip, until parked) →
+ * cycleFail → (playback poll, settle) → cycleFailDone → loopFinish. All
+ * logic is in $lib/server/arm-wax-fill; this file only maps form fields to it.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { sharedAnimateActions } from '$lib/server/robot-arm-animate-actions';
 import {
 	ArmWaxFillError,
+	cycleAwaitParked,
+	cycleDecide,
 	cycleFail,
 	cycleFailDone,
-	cycleFill,
-	cycleFillDone,
+	cycleFailPrepare,
+	cycleFillWait,
 	cycleGrab,
 	cycleGrabDone,
-	cycleHomeGantry,
-	cycleScanFailed,
-	cycleScanned,
+	cycleScanRead,
+	cycleScanStart,
 	cycleWithdraw,
 	cycleWithdrawDone,
 	addStageProtocolToLibrary,
@@ -40,6 +42,7 @@ import {
 	haltHomeGantry,
 	haltLoop,
 	loadArmWaxFill,
+	loopFinish,
 	resetLoop,
 	saveAnimations,
 	saveSetup,
@@ -48,8 +51,9 @@ import {
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
 
-// The fill step runs the whole OT-2 start (freshness gate, create, play) in one
-// action, and homeGantry waits for the OT-2 to finish homing (30–60 s cold).
+// startLoop runs the whole OT-2 start (freshness gate, create, play) in one
+// action, and the wait actions (awaitParked, cycleScanRead, cycleFillWait,
+// cycleFailPrepare, loopFinish) each poll the robot for up to ~85 s.
 export const config = { maxDuration: 120 };
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -163,20 +167,19 @@ export const actions: Actions = {
 		return loop ? { loop: json(loop) } : fail(404, { error: 'Loop not found.' });
 	},
 
-	// Home the OT-2 gantry before an arm move and stamp the cycle; cycleGrab /
-	// cycleWithdraw refuse to play the arm without it. Synchronous on the robot.
-	homeGantry: async (ev) => {
-		const { d, user } = await writer(ev);
+	// Before the grab: wait (bounded) until the run is parked for this cart — `ARM PARKED <i>`.
+	awaitParked: async (ev) => {
+		const { d, user } = await writer(ev, true);
 		const id = field(d, 'loopId');
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
-			return json(await cycleHomeGantry(user, id, field(d, 'before')));
+			return json(await cycleAwaitParked(user, id));
 		} catch (err) {
 			return failFrom(err);
 		}
 	},
 
-	// The arm MOVES (grab animation). The page's Playback helper polls ?/playback and settles.
+	// The arm MOVES (grab animation) — the server refuses unless the run is parked. The page's Playback helper polls ?/playback and settles.
 	cycleGrab: async (ev) => {
 		const { d, user } = await writer(ev);
 		const id = field(d, 'loopId');
@@ -199,30 +202,68 @@ export const actions: Actions = {
 		}
 	},
 
-	cycleScanned: async (ev) => {
+	// Send `scan`: the protocol lifts and goes to the taught scan position (from PARKED only).
+	cycleScanStart: async (ev) => {
 		const { d, user } = await writer(ev);
 		const id = field(d, 'loopId');
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
-			return { loop: json(await cycleScanned(user, id, { sweepRunId: field(d, 'sweepRunId'), barcode: field(d, 'barcode') })) };
+			return { loop: json(await cycleScanStart(user, id)) };
 		} catch (err) {
 			return failFrom(err);
 		}
 	},
 
-	// The scan read nothing: the cycle takes the fail route (fail animation, then the loop ends).
-	cycleScanFailed: async (ev) => {
+	// Wait (bounded) for `ARM AT_SCAN <i>`, then the daemon reads the scanner over serial; nothing read or a
+	// cart that cannot be filled → the fail route. { pending: true } means call again.
+	cycleScanRead: async (ev) => {
 		const { d, user } = await writer(ev);
 		const id = field(d, 'loopId');
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
-			return { loop: json(await cycleScanFailed(user, id, { reason: field(d, 'reason'), sweepRunId: field(d, 'sweepRunId') })) };
+			return json(await cycleScanRead(user, id));
 		} catch (err) {
 			return failFrom(err);
 		}
 	},
 
-	// Fail route: the arm MOVES (fail animation) — after the gantry home, like grab and withdraw.
+	// The cart is good: on the wax run (production) or checked only (rehearsal), then `fill`.
+	cycleDecide: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return { loop: json(await cycleDecide(user, id)) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Wait (bounded) for the fill to end with `ARM PARKED <i+1>`; a run that ends instead fails the loop.
+	cycleFillWait: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await cycleFillWait(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Fail route, part 1: `skip` (the gantry back to the tube), wait (bounded) until parked.
+	cycleFailPrepare: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await cycleFailPrepare(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Fail route, part 2: the arm MOVES (fail animation) — the server refuses unless the run is parked.
 	cycleFail: async (ev) => {
 		const { d, user } = await writer(ev);
 		const id = field(d, 'loopId');
@@ -234,35 +275,13 @@ export const actions: Actions = {
 		}
 	},
 
+	// The fail animation played: the loop ends failed and `end` goes to the protocol.
 	cycleFailDone: async (ev) => {
 		const { d, user } = await writer(ev);
 		const id = field(d, 'loopId');
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
 			return { loop: json(await cycleFailDone(user, id)) };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	// The OT-2 fills the cart: a one-cart WaxFillingRun started on the robot's current wax protocol.
-	cycleFill: async (ev) => {
-		const { d, user } = await writer(ev, true);
-		const id = field(d, 'loopId');
-		if (!id) return fail(400, { error: 'loopId missing.' });
-		try {
-			return json(await cycleFill(user, id));
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	cycleFillDone: async (ev) => {
-		const { d, user } = await writer(ev, true);
-		const id = field(d, 'loopId');
-		if (!id) return fail(400, { error: 'loopId missing.' });
-		try {
-			return { loop: json(await cycleFillDone(user, id, field(d, 'finalStatus'))) };
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -286,6 +305,18 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
 			return json(await cycleWithdrawDone(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// After `end`: wait (bounded) for the run to finish and record its end on the wax run.
+	loopFinish: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await loopFinish(user, id));
 		} catch (err) {
 			return failFrom(err);
 		}

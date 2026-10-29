@@ -24715,3 +24715,40 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit 1a064396 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1a064396 (library add replaces older rows)"
 What this deployment is for: adding a stage .py from the Wax fill tab archives the stale copies of that file and the picker names each row's hash, so a corrected protocol is the one that gets deployed.
+
+2026-10-29 — feat/stage-cal-follows-protocol — ARM-WAX-LOOP-B: ONE OT-2 run per robot-arm wax-fill loop, one tip idling in the wax between carts, arm and gantry overlapping under the calibrator-and-stage rule
+================================================================================
+Alejandro (after the first successful loop, 5 min 45 s for one cart, 54% of it the OT-2 run): wants it faster; the OT-2
+and the arm may move at the same time AS LONG AS the OT-2 is not at the calibrator and not hovering above the stage;
+likes Option B (one run per loop); rehearsals must mimic the real thing (no probe skipping); ONE tip for the entire run,
+never changed between carts, and the tip idles IN the wax tube between carts so the wax in it stays warm. Plan + the
+pinned contract: docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md (section 5). Built in three parallel pieces against it:
+  - scripts/ot2-bridge.py 1.4.0 (md5 a1da10cbd30e3b63777779f0d2701401): queue-line commands read_scanner (trigger + read
+    the scanner over serial, no maintenance run, no motion; the same scan_with_retry a sweep slot uses) and write_file
+    (atomic write of /data/arm_loop.json and nothing else). Not direct /bridge job kinds. 38/38 daemon tests.
+  - protocols/Wax_Filling_GEN7_ArmStage.py + the p300 rehearsal (identical machinery): RTPs cartridges (1-24) and
+    arm_scan_x/y/z; ArmLoopInstructions reads the start record then, after every pause, the first record with the same
+    loop id and a higher seq (60 s, else pause 'ARM NO_INSTRUCTION <i>'). Sequence: home, calibrator, ONE tip, ONE probe,
+    aspirate, park in the tube -> 'ARM PARKED 1'; scan -> lift -> scan point -> 'ARM AT_SCAN <i>'; fill -> the 12 holes,
+    tube, re-aspirate, park -> 'ARM PARKED <i+1>'; skip -> park; end -> blow out, trash tip, home, 'ARM LOOP END'. The
+    lift rule unchanged. In analysis the loop is walked on stand-in points with synthesised instructions (the robot's
+    analysis previews every station; if it objects, the fallback is to guard the walk with is_simulating()). Tests:
+    test_arm_stage_loop (new), test_arm_stage_rehearsal_p300, test_arm_stage_geometry, test_rtp_limits all pass.
+  - BIMS: src/lib/robot-arm/arm-loop-protocol.ts (pause parser, instruction types, 4 tests); arm-wax-fill.ts drives one
+    WaxFillingRun + one OT-2 run per loop (startLoop writes the start record through the daemon, starts the run with
+    param_cartridges + param_arm_scan_x/y/z); steps grab -> scan -> check -> fill -> withdraw (+ fail); the arm plays
+    ONLY after assertRunParked reads 'ARM PARKED <i>' from the robot (replaces the per-cart gantry homes, which are
+    gone from the happy path); BIMS resumes the run (actionType 'play' - the OT-2 has no 'resume') only from server
+    actions the page calls after its play poll settled; the scan is write {scan} -> resume -> wait AT_SCAN -> daemon
+    read_scanner -> cartScanProblem; a bad cart = write {skip} -> fail animation -> {end}, the loop stops (fail-route
+    rule); the last withdraw plays while the run ends. Production attaches the cart at {fill} (bucket consume,
+    wax_filling, cartridgeIds); the rehearsal attaches nothing. The run-start gate accepts a oneRunPerLoop run without a
+    scanned cart and does NOT enqueue auto_resume_run for it (it would resume ARM PARKED 1); EmbeddedRunController gets
+    autoResumeInitial=false on the Wax fill tab so it never resumes an ARM pause. Readiness blocks a protocol on the robot
+    that does not declare cartridges / arm_scan_* (i.e. the old one-cart .py).
+Expected: ~2.5 min per cart + ~70 s once per loop (vs 5 min 45 s per cart). To be measured from audit_log.
+NOTHING HAS REACHED THE ROBOT. Until the daemon is redeployed and the new .py deployed, the Wax fill loop cannot start
+(readiness says why). The handoff with the exact steps: docs/HANDOFF-ARM-LOOP-B-DEPLOY-2026-10-29.md.
+Known gaps: smart-abort of a cancelled loop run still keys on the carriage protocol's log lines (carts of an aborted
+production loop may need the Robots page); a loop that fails outside the fail route leaves the run parked - press STOP RUN.
+svelte-check 14 errors / 448 warnings (baseline, none in touched files); vitest 39/39 across the three touched suites.
