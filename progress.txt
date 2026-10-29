@@ -24377,3 +24377,8 @@ moveToCoordinates / pickUpTip / dropTip all SUCCEEDED).
     docs/LAB-MAC-RUNBOOK-OT2-BRIDGE.md) for the sweep part; the protocol must be re-uploaded on /opentrons.
 Checks: py_compile of both .py; protocols/tests/test_arm_stage_geometry.py ok; stage-geometry.test.ts 5/5;
 svelte-check 14 errors (baseline, none in touched files) / 447 warnings; opentrons 8.7.0 engine harness above. Not run on a robot yet.
+
+Deployment: production — via Vercel GitHub integration on the push to master (see the Vercel Deployments tab for the URL)
+Source: branch master @ commit 2f1fe3a3
+Retrieve this exact code: git checkout 2f1fe3a3
+What this deployment is for: robot-arm wax fill LIFT RULE — the OT-2 pipette goes all the way up (Z-only home) before every move in the ArmStage protocol, the Stage Calibration Studio and the arm one-slot sweep; stage_jump_height / travel height removed. Carriage and reagent protocols untouched. The bridge daemon (scripts/ot2-bridge.py) still needs redeploying to the robots and the protocol re-uploading on /opentrons.
