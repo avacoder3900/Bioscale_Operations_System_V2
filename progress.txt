@@ -24672,3 +24672,8 @@ opentrons_protocols 'deploy' audit row carries analysisErrors, and waitForAnalys
 "protocol analysis completed with errors: ...". (The 18:42Z labware-constant fix stands; whether it changed the bundle
 depends on the robot being in the hardened set - an unchanged protocol id says it was not.)
 Next: deploy the rehearsal again from the Wax fill tab; the message now states the analysis errors.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit 95887bfb (rebased onto master after 7b035adb)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 95887bfb (analysis errors shown)"
+What this deployment is for: the Wax fill tab's deploy and the run-start gate both state the robot's protocol analysis errors instead of a bare verdict.
