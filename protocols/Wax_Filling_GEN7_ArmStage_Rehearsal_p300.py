@@ -218,7 +218,7 @@ def add_parameters(parameters: protocol_api.Parameters):
         description="Taught Z of the first wax hole's RIM (tip end). 0 = not taught (run refuses).",
         default=0.0, minimum=0.0, maximum=200.0, unit="mm")
     parameters.add_float(variable_name="arm_cart_rotation_deg", display_name="Cart rotation on the stage",
-        description="CCW from above about the first hole vs a carriage slot. 90 = the arm's stage (gates toward the front/operator, rows left-right); 0 = as on a carriage.",
+        description="CCW from above about the first hole. 90 = the arm's stage, gates to the front; 0 = carriage.",
         default=90.0, minimum=-360.0, maximum=360.0, unit="deg")
     # No travel-height parameter: the pipette goes ALL THE WAY UP (Z-only home)
     # before every move between stations — see the LIFT RULE in the header.
@@ -240,7 +240,7 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_bool(
         variable_name="use_tip_calibration",
         display_name="USE TIP CALIBRATION",
-        description="ON = shift X/Y by the calibrator probe (the cart location is taught tip-neutral). OFF = raw taught position.",
+        description="ON = shift X/Y by the calibrator probe adjust (the cart is taught tip-neutral). OFF = nominal.",
         default=True
     )
     parameters.add_float(
@@ -258,7 +258,7 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_bool(
         variable_name="run_calibration_check",
         display_name="RUN CALIBRATION CHECK",
-        description="Visit the cart's 4 corner wax holes with the real fill motion and pause at each before the rehearsal dispense.",
+        description="Tour the cart's 4 corner wax holes with the real fill motion, pausing at each, before dispensing.",
         default=False
     )
 
@@ -329,7 +329,7 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_bool(
         variable_name="bims_native",
         display_name="BIMS-native offsets",
-        description="Use the BIMS global offset (applied to the tube + tip racks) instead of the built-in per-robot table.",
+        description="Use the BIMS global offset (tube + tip racks) instead of the built-in per-robot table.",
         default=False,
     )
     parameters.add_float(variable_name="offset_x", display_name="BIMS offset X",

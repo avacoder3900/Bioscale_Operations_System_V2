@@ -24677,3 +24677,18 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit 95887bfb (rebased onto master after 7b035adb)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 95887bfb (analysis errors shown)"
 What this deployment is for: the Wax fill tab's deploy and the run-start gate both state the robot's protocol analysis errors instead of a bare verdict.
+
+2026-10-29 — feat/stage-cal-follows-protocol — Stage protocols: RTP descriptions over the Opentrons 100-char limit made the robot's analysis complete with errors
+================================================================================
+The quoted gate message (after 95887bfb) finally named the cause: ParameterNameError [line 220]: Description "CCW from above
+about the first hole vs a carriage slot..." greater than 100 characters. The OT-2 caps an RTP description at 100 chars (and a
+display name at 30); the analysis completes WITH ERRORS, the upload daemon never reads the error list (reports 'completed'),
+and the run-start freshness gate refuses the protocol. The labware-constant theory (832f7d64) was wrong for this failure.
+Over the limit: arm_cart_rotation_deg (150), use_tip_calibration (108), bims_native (101) in BOTH Wax_Filling_GEN7_ArmStage.py
+and the rehearsal, plus run_calibration_check (110) in the rehearsal - so the production stage .py would have failed the same way.
+Fix: the descriptions rewritten under 100 chars in both files; protocols/tests/test_rtp_limits.py scans every protocols/*.py
+add_* call for the three limits. test_arm_stage_rehearsal_p300 / test_arm_stage_geometry still pass.
+Operator steps: Wax fill tab -> Protocol on the robot -> "Add a stage .py to the library" with the NEW
+Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py (and the production ArmStage .py), deploy it, Reset, start the loop.
+Still open: scripts/ot2-bridge.py upload_protocol should return the analysis's errors[] as analysisErrors (needs a daemon
+redeploy to the robots), so a deploy goes red by itself instead of at the next run start.
