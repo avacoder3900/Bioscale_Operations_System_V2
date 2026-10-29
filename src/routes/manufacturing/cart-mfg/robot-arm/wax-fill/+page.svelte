@@ -68,6 +68,41 @@
 	let deployLibraryId = $state('');
 	let deploying = $state(false);
 	let deployMsg = $state<{ text: string; ok: boolean } | null>(null);
+	// Add a stage .py to the protocol LIBRARY (the /opentrons page uploads straight to a
+	// robot and never files the .py; the picker and the run-start re-sync read the library).
+	let libraryFile = $state<File | null>(null);
+	let addingToLibrary = $state(false);
+	async function addToLibrary() {
+		if (!libraryFile || addingToLibrary) return;
+		addingToLibrary = true;
+		deployMsg = null;
+		try {
+			const fd = new FormData();
+			fd.set('file', libraryFile);
+			fd.set('protocolName', libraryFile.name.replace(/\.py$/i, ''));
+			fd.set('processType', 'wax-filling');
+			fd.set('description', 'Robot-arm stage protocol (added from the Wax fill tab)');
+			const res = await fetch('/api/opentrons-lab/protocols', { method: 'POST', body: fd });
+			const body = await res.json().catch(() => ({}));
+			if (res.status === 409) {
+				deployMsg = { text: `${libraryFile.name} is already in the library (same file). Pick it below.`, ok: true };
+				deployLibraryId = String(body?.existingId ?? '');
+			} else if (!res.ok) {
+				deployMsg = { text: `Could not add ${libraryFile.name} to the library: ${body?.error ?? res.statusText}`, ok: false };
+			} else {
+				deployMsg = { text: `${libraryFile.name} added to the library — now pick it and Deploy to robot.`, ok: true };
+				deployLibraryId = String(body?.data?._id ?? '');
+				note(deployMsg.text);
+			}
+			libraryFile = null;
+			await invalidateAll();
+		} catch (e) {
+			deployMsg = { text: e instanceof Error ? e.message : String(e), ok: false };
+		} finally {
+			addingToLibrary = false;
+		}
+	}
+
 	async function deployProtocol() {
 		if (!deployLibraryId || deploying) return;
 		deploying = true;
@@ -910,8 +945,20 @@
 						</button>
 					</div>
 					{#if data.protocolOptions.length === 0}
-						<p class="mt-1 text-[11px] text-amber-300">No stage protocol in the library — upload Wax_Filling_GEN7_ArmStage.py (or the p300 rehearsal) on <a href="/opentrons" class="underline">/opentrons</a> with process wax-filling.</p>
+						<p class="mt-1 text-[11px] text-amber-300">No stage protocol in the library yet. The /opentrons page uploads straight to a robot and does not file the .py; add it here instead.</p>
 					{/if}
+					<div class="mt-2 flex flex-wrap items-center gap-2">
+						<label class="flex min-w-0 flex-1 items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+							<span class="shrink-0">Add a stage .py to the library</span>
+							<input type="file" accept=".py" disabled={addingToLibrary}
+								onchange={(e) => (libraryFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
+								class="min-w-0 flex-1 text-[11px] file:mr-2 file:rounded file:border file:border-[var(--color-tron-border)] file:bg-black/30 file:px-2 file:py-1 file:text-[11px] file:text-[var(--color-tron-text)]" />
+						</label>
+						<button type="button" onclick={() => void addToLibrary()} disabled={!libraryFile || addingToLibrary}
+							class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
+							{addingToLibrary ? 'Adding…' : 'Add to library'}
+						</button>
+					</div>
 					{#if deployMsg}
 						<p class="mt-1 text-[11px] {deployMsg.ok ? 'text-green-300' : 'text-red-300'}">{deployMsg.text}</p>
 					{/if}

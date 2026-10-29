@@ -24520,3 +24520,22 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/arm-wax-fill-protocol-picker @ commit 9b3357f4 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 9b3357f4 (wax fill protocol picker)"
 What this deployment is for: the Wax fill tab can put the production stage fill or the p300 rehearsal on the arm's OT-2 itself, and a rehearsal cannot consume a real cart.
+
+2026-10-29 — feat/arm-wax-fill-protocol-picker — Wax fill tab: "Add a stage .py to the library" (the /opentrons page never files a .py in the library)
+================================================================================
+Alejandro, on the new picker: "No stage protocol in the library - upload Wax_Filling_GEN7_ArmStage.py (or the p300
+rehearsal) on /opentrons with process wax-filling." He had uploaded the rehearsal on /opentrons and the list stayed
+empty.
+Cause: the /opentrons page's upload posts to api/opentrons-lab/robots/:id/protocols - straight onto ONE robot
+(OpentronsRobot.protocols[]); nothing in the UI posts to api/opentrons-lab/protocols, the library (opentrons_protocols,
+the picker's source and the run-start re-sync's source). The library rows that exist were made by scripts
+(set-stored-wax-py, refresh-protocol-source). So the empty-state text sent him to a page that cannot fill the library.
+The same gap means a robot that got its stage .py from /opentrons has NO library row deployed to it, and
+storedProtocolForRobot falls back to "the newest active wax-filling row" - the carriage .py - if the freshness gate
+ever decides to re-sync that robot.
+Fix (Wax fill tab, Protocol on the robot block): a file input + "Add to library" that posts the .py to
+api/opentrons-lab/protocols as processType wax-filling (409 duplicate -> "already in the library", preselected), then
+reloads the picker with it preselected; the empty-state text now says to add it here. listStageProtocolOptions also
+offers a stage .py filed under 'other' (the library API's default), and deployStageProtocol refiles it as wax-filling
+(audited: arm_wax_fill.protocol_process_type) so the re-sync can find it.
+svelte-check: 14-error baseline, none in touched files.

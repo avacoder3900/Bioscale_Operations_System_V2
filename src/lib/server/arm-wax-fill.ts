@@ -882,7 +882,8 @@ async function protocolFor(robotId: string | null): Promise<ProtocolView | null>
  */
 export async function listStageProtocolOptions(robotId: string, current: ProtocolView | null): Promise<ProtocolOption[]> {
 	await connectDB();
-	const rows = (await OpentronProtocol.find({ processType: 'wax-filling', isActive: true })
+	// A stage .py filed under 'other' (the library API's default) is still offered; deploy files it under wax-filling.
+	const rows = (await OpentronProtocol.find({ processType: { $in: ['wax-filling', 'other'] }, isActive: true })
 		.select('_id protocolName fileName fileContent deployments.robotId deployments.deployedAt deployments.deployedBy updatedAt')
 		.sort({ updatedAt: -1 })
 		.lean()) as any[];
@@ -926,9 +927,14 @@ export async function deployStageProtocol(user: User, rawLibraryId: unknown): Pr
 	const robot = await getRobot(settings.robotId);
 	if (!robot) throw new ArmWaxFillError('Robot not found.', 404);
 	const row = (await OpentronProtocol.findById(libraryId).lean()) as any;
-	if (!row || row.isActive === false || row.processType !== 'wax-filling') throw new ArmWaxFillError('That protocol is not an active wax-filling protocol in the library.', 404);
+	if (!row || row.isActive === false || !['wax-filling', 'other'].includes(row.processType)) throw new ArmWaxFillError('That protocol is not an active wax-filling protocol in the library.', 404);
 	const content = String(row.fileContent ?? '');
 	if (!content.includes(STAGE_MARKER)) throw new ArmWaxFillError(`${row.protocolName} does not declare arm_cart_x/y/z — only a stage protocol can go on the arm's OT-2 from here.`);
+	if (row.processType !== 'wax-filling') {
+		// The run-start re-sync looks the robot's .py up under 'wax-filling'; a stage protocol filed as 'other' would never be found.
+		await OpentronProtocol.updateOne({ _id: row._id }, { $set: { processType: 'wax-filling', lastModifiedBy: user.username } });
+		await audit(user, 'arm_wax_fill.protocol_process_type', 'opentrons_protocols', String(row._id), { from: row.processType, to: 'wax-filling' });
+	}
 	const fileName = String(row.fileName ?? `${row.protocolName}.py`);
 	const rehearsal = content.includes(REHEARSAL_MARKER);
 	const robotId = String(robot._id);
