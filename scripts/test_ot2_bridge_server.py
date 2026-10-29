@@ -504,5 +504,45 @@ class DirectProgressCancelTests(unittest.TestCase):
         self.assertEqual(self.report(409, {"cancelRequested": True, "pauseRequested": False}), (False, True))
 
 
+class BimsHomeFreshnessTests(unittest.TestCase):
+    """gantryHomedAgoS in a sweep payload (robot-arm wax-fill line): a young
+    BIMS-side home is adopted into the daemon's freshness tracker so the sweep
+    skips its own full home; stale or junk values change nothing."""
+
+    def setUp(self):
+        self._last = bridge._last_home_at
+        self._send = bridge.send_maintenance_command
+        self.sent = []
+        bridge.send_maintenance_command = lambda run_id, ct, params, timeout_s=0: self.sent.append((ct, params))
+        bridge._last_home_at = 0.0
+
+    def tearDown(self):
+        bridge._last_home_at = self._last
+        bridge.send_maintenance_command = self._send
+
+    def test_fresh_bims_home_skips_the_sweep_home(self):
+        self.assertTrue(bridge.note_bims_home(47))
+        self.assertFalse(bridge.home_gantry("mr-1"))
+        self.assertEqual(self.sent, [])
+
+    def test_stale_or_junk_values_still_home(self):
+        for v in (None, "", "abc", -1, bridge.BIMS_HOME_FRESH_S, 10_000):
+            bridge._last_home_at = 0.0
+            self.sent.clear()
+            self.assertFalse(bridge.note_bims_home(v), v)
+            self.assertTrue(bridge.home_gantry("mr-1"), v)
+            self.assertEqual(self.sent, [("home", {})], v)
+
+    def test_force_still_homes(self):
+        self.assertTrue(bridge.note_bims_home(5))
+        self.assertTrue(bridge.home_gantry("mr-1", force=True))
+        self.assertEqual(self.sent, [("home", {})])
+
+    def test_never_ages_a_fresher_daemon_home(self):
+        bridge._last_home_at = time.time() - 3
+        self.assertTrue(bridge.note_bims_home(60))
+        self.assertGreater(bridge._last_home_at, time.time() - 10)
+
+
 if __name__ == "__main__":
     unittest.main()

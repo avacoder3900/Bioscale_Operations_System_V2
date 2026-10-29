@@ -24419,3 +24419,62 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ commit ca5e23b4
 Retrieve this exact code: git checkout ca5e23b4
 What this deployment is for: robot-arm wax fill FAIL ROUTE — fail animation dropdown; a scan that reads nothing or reads a cart that is not a backed cart plays the fail animation (after a gantry home) and the loop stops. Existing setups must pick a fail animation once before Start.
+================================================================================
+2026-10-29 — master — robot-arm wax fill: fewer OT-2 homes per cart (Option A of the "standby" discussion)
+================================================================================
+Alejandro noticed the OT-2 seems to "restart" between loops on the robot-arm wax-fill line. It does not:
+the robot server stays up. Every cart gets a brand-new protocol run (engine home at play, protocol
+setup, serial probe for the calibrator, tip pick-up + X/Y probe, protocol.home(), engine tip-drop + home)
+and the line itself added three more full homes around it: before the grab (legacy POST /robot/home,
+~20 s in the audit log), inside the scanner sweep (the bridge's maintenance-run home, ~30-60 s per its
+own comment) and before the withdraw (~20 s, seconds after the protocol's own home). Measured from
+audit_log on 2026-10-28/29 (no loop has completed a full cycle yet, all six were 1-cart loops that
+failed or were stopped): loop_start → gantry_home 20-25 s; grab 40.8 s; sweep enqueue → barcode ~39 s;
+scan → run played 34 s (freshness check, one protocol re-upload because a tiprack LPC offset had moved
+1.0 mm — run_start_auto_resync fires 1-5×/day across all robots and both processes, i.e. operators
+re-LPC'ing production decks, not a bug).
+
+Option B (one OT-2 run per loop, the protocol pausing between carts, the scan moved into the protocol
+because POST /maintenance_runs is refused while a protocol run is active — ProtocolRunIsActive) was
+discussed and parked until a real multi-cart loop has been measured. This entry is Option A: keep one
+run per cart, drop the redundant work.
+  - arm-wax-fill.ts: cycleHomeGantry(before='withdraw') no longer homes everything again. gantryHomePlan
+    → verifyRunEndedAtHome reads the cycle's robot run (GET /runs/{id}: status succeeded, pipette mount)
+    and the last page of its commands (GET /runs/{id}/commands?pageLength=20, re-read from the end if
+    the auto cursor fell short); the last non-comment command must be a succeeded, all-axes `home`
+    (the ArmStage protocol's own protocol.home() — comments follow it). Then POST /robot/home
+    {target:'pipette', mount} — the pipette's carriage + plunger axes, a few seconds — is the physical
+    stamp. Anything the robot cannot confirm (run not succeeded, no mount, last motion not a full home,
+    HTTP error) falls back to the full home exactly as before. The audit newData gains via
+    ('full_home' | 'verified_run_home_lift') and fallbackReason; the action's JSON returns both and the
+    page's loop note says which happened. Before the grab: unchanged, always a full home.
+  - armLineGantryHomedAgoS(loopId, robotId) (arm-wax-fill.ts) + POST /api/scanner/sweep: for the arm's
+    one-slot set with source wax_filling and contextRef = the loop id, the route reads the loop's own
+    gantryHomedForGrabAt stamp (never the request body; cycle must be at step 'scan', < 120 s old) and
+    puts gantryHomedAgoS in the daemon payload + the sweep log line.
+  - scripts/ot2-bridge.py: note_bims_home(homed_ago_s) adopts a young (< BIMS_HOME_FRESH_S = 120 s)
+    BIMS-side home into the existing _last_home_at freshness tracker (never ageing a fresher daemon
+    home); home_gantry now returns whether it homed; execute_sweep calls note_bims_home(payload
+    gantryHomedAgoS) before home_gantry and the progress log says "home complete" or "home skipped
+    (gantry homed Ns ago)". Same hardware controller as the legacy home, so the position is known —
+    the daemon already skipped between back-to-back sweeps on the same basis. Production 24-slot sweeps
+    carry no gantryHomedAgoS and behave as before. 4 unit tests (BimsHomeFreshnessTests).
+    THE DAEMON MUST BE REDEPLOYED to the robots for this part.
+  - protocols/Wax_Filling_GEN7_ArmStage.py: the calibrator's serial port is remembered in
+    /data/calibrator_port_<hostname>.json and tried first; every /dev/ttyACM* is still probed when it
+    does not answer (ports renumber after a re-plug/reboot), and nothing is written while simulating.
+    Saves ~1 s per wrong port per run — small. THE PROTOCOL MUST BE RE-UPLOADED on /opentrons.
+  - Not changed: the home before the grab (one full home per cycle stays), the engine's own home at
+    play / tip-drop at the end (not ours to skip), the fresh tip + X/Y probe per cart (process decision),
+    the carriage and reagent protocols.
+Expected saving per cart: the withdraw home (~15-20 s) + the sweep's home (~30-60 s) + a little on the
+serial probe; roughly a minute to a minute and a half. To be measured on the first real multi-cart loop
+(audit action arm_wax_fill.gantry_home now carries via/fallbackReason; the sweep run log says whether
+the daemon skipped its home).
+Checks: py_compile of both .py; scripts/test_ot2_bridge_server.py 33/33; protocols/tests/
+test_arm_stage_geometry.py ok; svelte-check 14 errors (baseline, none in touched files) / 447 warnings, run on the tree rebased onto
+the fail route (ca5e23b4). Not run on a robot yet.
+Worktree note: the master worktree (Bioscale_V2-wt-master-ot2-controls) held another session's live,
+uncommitted fail-animation work; this change was built in its own worktree (Bioscale_V2-wt-arm-standby-a,
+branch feat/arm-wax-fill-standby-a) and pushed to master from there, so that session's local master ref
+is behind origin/master until it fetches.

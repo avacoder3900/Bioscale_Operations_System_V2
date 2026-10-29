@@ -31,7 +31,12 @@
  * Collision rules: the arm never moves while the gantry may be out over the
  * stage. cycleHomeGantry homes the OT-2 (POST /robot/home, synchronous) and
  * stamps the cycle; cycleGrab / cycleWithdraw refuse to play without a fresh
- * stamp. The stage protocol also homes itself at the end of every fill. And
+ * stamp. The stage protocol also homes itself at the end of every fill;
+ * before the withdraw, cycleHomeGantry verifies that home on the robot (run
+ * succeeded, last motion command a full home) and only lifts Z instead of a
+ * second full home — anything it cannot verify falls back to the full home.
+ * The one-slot scanner sweep is told how long ago the grab's home was
+ * (armLineGantryHomedAgoS) so the bridge daemon can skip its own. And
  * the OT-2 pipette goes ALL THE WAY UP (a Z-only home) before every move it
  * makes for this line — in the stage protocol, in the Stage Calibration
  * Studio and in the one-slot scanner sweep (liftBeforeMove) — because the arm
@@ -59,7 +64,7 @@ import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry } from '$lib/server/opentrons/protocol-freshness';
-import { getRobot, robotPost } from '$lib/server/opentrons/proxy';
+import { getRobot, robotGet, robotPost } from '$lib/server/opentrons/proxy';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, plausibleZ, resolveCalibratorPoint } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
@@ -1119,6 +1124,86 @@ function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHome
 	}
 }
 
+/** Seconds after which an arm-line gantry home no longer counts as fresh for the scanner sweep. */
+export const GANTRY_HOME_FRESH_S = 120;
+
+/**
+ * Seconds since this line homed the gantry for the loop's current cycle, for
+ * the one-slot scanner sweep (/api/scanner/sweep). The bridge daemon homes
+ * the gantry at the start of every sweep unless it knows of a fresh home, and
+ * it cannot see the legacy POST /robot/home this line issues before the grab;
+ * the gantry has not moved since (only the arm did). null when the loop is not
+ * running, the cycle is not at its scan step, the robot differs or the stamp
+ * is older than GANTRY_HOME_FRESH_S — the daemon then homes as before.
+ */
+export async function armLineGantryHomedAgoS(loopId: string, robotId: string): Promise<number | null> {
+	await connectDB();
+	const loop = (await ArmWaxFillRun.findById(loopId).lean()) as any;
+	if (!loop || loop.status !== 'running' || String(loop.robot?._id ?? '') !== robotId) return null;
+	const cycle = loop.cycles?.[loop.cycles.length - 1];
+	const at = cycle?.step === 'scan' ? cycle.gantryHomedForGrabAt : null;
+	if (!(at instanceof Date)) return null;
+	const ago = (Date.now() - at.getTime()) / 1000;
+	return ago >= 0 && ago < GANTRY_HOME_FRESH_S ? Math.round(ago) : null;
+}
+
+/** How the gantry-home stamp was obtained: a full home, or a verified end-of-run home plus a Z-only lift. */
+export type GantryHomeVia = 'full_home' | 'verified_run_home_lift';
+
+/**
+ * Before the withdraw: did the fill's robot run end with the protocol's own
+ * full home? The stage protocol homes as its last motion (comments follow),
+ * so a second full home here only costs time. Reads the run (succeeded, which
+ * mount carries the pipette) and the last page of its commands. Anything
+ * missing or unexpected is a reason to fall back to the full home, not an
+ * error — the caller still issues a motion either way.
+ */
+async function verifyRunEndedAtHome(robot: any, opentronsRunId: string): Promise<{ ok: true; mount: 'left' | 'right' } | { ok: false; why: string }> {
+	const read = async (path: string): Promise<any> => {
+		const r = await robotGet(robot, path);
+		if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
+		return r.json();
+	};
+	try {
+		const run = (await read(`/runs/${opentronsRunId}`))?.data;
+		if (run?.status !== 'succeeded') return { ok: false, why: `run status ${run?.status ?? 'unknown'}` };
+		const mount = run?.pipettes?.[0]?.mount;
+		if (mount !== 'left' && mount !== 'right') return { ok: false, why: 'run reports no pipette mount' };
+		// Last page of commands: with no cursor the robot centres the page on the
+		// most recently completed command; re-read from the end if that fell short.
+		const PAGE = 20;
+		let page = await read(`/runs/${opentronsRunId}/commands?pageLength=${PAGE}`);
+		const total = Number(page?.meta?.totalLength ?? 0);
+		const end = Number(page?.meta?.cursor ?? 0) + (Array.isArray(page?.data) ? page.data.length : 0);
+		if (total > 0 && end < total) page = await read(`/runs/${opentronsRunId}/commands?cursor=${Math.max(0, total - PAGE)}&pageLength=${PAGE}`);
+		const cmds: any[] = Array.isArray(page?.data) ? page.data : [];
+		const last = [...cmds].reverse().find((c) => c?.commandType !== 'comment');
+		if (!last) return { ok: false, why: 'no motion command found at the end of the run' };
+		if (last.commandType !== 'home' || last.status !== 'succeeded') return { ok: false, why: `last motion command was ${last.commandType} (${last.status}), not a succeeded home` };
+		if (Array.isArray(last.params?.axes) && last.params.axes.length) return { ok: false, why: `last home was limited to ${last.params.axes.join(', ')}` };
+		return { ok: true, mount };
+	} catch (e) {
+		return { ok: false, why: e instanceof Error ? e.message : String(e) };
+	}
+}
+
+/**
+ * The motion cycleHomeGantry issues. Before the grab (and anything else) a
+ * full home (~20 s): the gantry's history since the last cycle is not this
+ * line's to know. Before the withdraw the fill's protocol has just homed as
+ * its last motion, so when the robot confirms that (verifyRunEndedAtHome)
+ * only the pipette is homed again — target 'pipette', its carriage and
+ * plunger axes, a few seconds — as the physical stamp. Anything the robot
+ * cannot confirm falls back to the full home; the audit records which and why.
+ */
+async function gantryHomePlan(robot: any, before: string, cycle: any): Promise<{ via: GantryHomeVia; target: Record<string, unknown>; fallbackReason: string | null }> {
+	const full = (fallbackReason: string | null) => ({ via: 'full_home' as GantryHomeVia, target: { target: 'robot' }, fallbackReason });
+	if (before !== 'withdraw') return full(null);
+	if (!cycle.opentronsRunId) return full('this cycle has no robot run id');
+	const v = await verifyRunEndedAtHome(robot, String(cycle.opentronsRunId));
+	return v.ok ? { via: 'verified_run_home_lift', target: { target: 'pipette', mount: v.mount }, fallbackReason: null } : full(v.why);
+}
+
 /**
  * Home the OT-2 gantry and stamp the cycle, BEFORE the arm plays the grab, the
  * withdraw or the fail animation. The robot's legacy POST /robot/home is
@@ -1126,9 +1211,16 @@ function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHome
  * run, so it leaves whatever run the robot holds untouched. cycleGrab /
  * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp, so a
  * browser that skipped this step cannot swing the arm in over a gantry that is
- * still out on the deck (after a scan it is at the scan position).
+ * still out on the deck (after a scan it is at the scan position). Which
+ * motion — the full home or, before a verified withdraw, the pipette lift —
+ * is gantryHomePlan's call; before the grab and the fail animation it is
+ * always the full home.
  */
-export async function cycleHomeGantry(user: User, loopId: string, rawBefore: unknown): Promise<{ homedAt: string; cycle: number; before: 'grab' | 'withdraw' | 'fail' }> {
+export async function cycleHomeGantry(
+	user: User,
+	loopId: string,
+	rawBefore: unknown
+): Promise<{ homedAt: string; cycle: number; before: 'grab' | 'withdraw' | 'fail'; via: GantryHomeVia; fallbackReason: string | null }> {
 	const before = rawBefore === 'withdraw' ? 'withdraw' : rawBefore === 'grab' ? 'grab' : rawBefore === 'fail' ? 'fail' : null;
 	if (!before) throw new ArmWaxFillError('before must be grab, withdraw or fail.');
 	const { loop, cycle } = await runningLoop(loopId);
@@ -1137,22 +1229,30 @@ export async function cycleHomeGantry(user: User, loopId: string, rawBefore: unk
 	const robotId = String(loop.robot?._id ?? '');
 	const robot = await getRobot(robotId);
 	if (!robot) throw new ArmWaxFillError('The OT-2 is not registered or not active — the arm will not move.', 409);
+	const plan = await gantryHomePlan(robot, before, cycle);
+	const verb = plan.via === 'full_home' ? 'home' : 'lift its pipette';
 	let res: Response;
 	try {
-		res = await robotPost(robot, '/robot/home', { target: 'robot' }, { timeoutMs: 90_000 });
+		res = await robotPost(robot, '/robot/home', plan.target, { timeoutMs: 90_000 });
 	} catch (e) {
-		throw new ArmWaxFillError(`The OT-2 could not be homed (${e instanceof Error ? e.message : String(e)}) — the arm will not move.`, 502);
+		throw new ArmWaxFillError(`The OT-2 could not ${verb} (${e instanceof Error ? e.message : String(e)}) — the arm will not move.`, 502);
 	}
 	if (!res.ok) {
 		const body: any = await res.json().catch(() => ({}));
 		const detail = body?.message ?? body?.errors?.[0]?.detail ?? body?.error ?? `HTTP ${res.status}`;
-		throw new ArmWaxFillError(`The OT-2 refused to home (${detail}) — the arm will not move. If a run is still active on the robot, finish or reset it first.`, 502);
+		throw new ArmWaxFillError(`The OT-2 refused to ${verb} (${detail}) — the arm will not move. If a run is still active on the robot, finish or reset it first.`, 502);
 	}
 	const at = new Date();
 	const key = before === 'grab' ? 'gantryHomedForGrabAt' : before === 'withdraw' ? 'gantryHomedForWithdrawAt' : 'gantryHomedForFailAt';
 	await patchCycle(loopId, cycle.index, { [key]: at });
-	await audit(user, 'arm_wax_fill.gantry_home', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before, robotId });
-	return { homedAt: at.toISOString(), cycle: cycle.index, before };
+	await audit(user, 'arm_wax_fill.gantry_home', 'arm_wax_fill_runs', loopId, {
+		cycle: cycle.index,
+		before,
+		robotId,
+		via: plan.via,
+		...(plan.fallbackReason ? { fallbackReason: plan.fallbackReason } : {})
+	});
+	return { homedAt: at.toISOString(), cycle: cycle.index, before, via: plan.via, fallbackReason: plan.fallbackReason };
 }
 
 /** Step 1: the arm MOVES through the grab animation — only after the gantry reported home. */

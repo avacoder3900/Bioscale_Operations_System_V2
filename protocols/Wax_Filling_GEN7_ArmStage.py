@@ -443,8 +443,38 @@ def run(protocol: protocol_api.ProtocolContext):
 
     ser = None
 
+    # The calibrator's serial port, remembered across runs so the probe below
+    # asks the right port first instead of every /dev/ttyACM* in turn (each
+    # wrong port costs an open, a settle and a read timeout). The scanner and
+    # the calibrator both enumerate as ttyACM, and which gets which number can
+    # change after a reboot or a re-plug — so the cache is only an ordering
+    # hint; every port is still tried when the remembered one does not answer.
+    _cal_port_cache = f'/data/calibrator_port_{hostname}.json'
+
+    def _remembered_calibrator_port():
+        try:
+            with open(_cal_port_cache, 'r') as _f:
+                _p = _json.load(_f).get('port')
+            return _p if isinstance(_p, str) and _p.startswith('/dev/tty') else None
+        except Exception:
+            return None
+
+    def _remember_calibrator_port(port):
+        if protocol.is_simulating():
+            return
+        try:
+            with open(_cal_port_cache, 'w') as _f:
+                _json.dump({'port': port, 'savedAt': time.time()}, _f)
+        except Exception as _e:
+            protocol.comment(f'Calibrator port cache: could not save ({_e})')
+
     def _probe_for_calibrator():
-        for port in sorted(glob.glob('/dev/ttyACM*')):
+        ports = sorted(glob.glob('/dev/ttyACM*'))
+        remembered = _remembered_calibrator_port()
+        if remembered in ports:
+            ports.remove(remembered)
+            ports.insert(0, remembered)
+        for port in ports:
             _s = None
             try:
                 _s = serial.Serial(port=port, baudrate=115200, timeout=0.5)
@@ -455,6 +485,8 @@ def run(protocol: protocol_api.ProtocolContext):
                 reply = _s.readline()
                 if reply and b':' in reply:
                     protocol.comment(f'Calibrator found on {port}: {reply!r}')
+                    if port != remembered:
+                        _remember_calibrator_port(port)
                     return _s
                 _s.close()
             except Exception as _e:

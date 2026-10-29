@@ -31,7 +31,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
-import { SCAN_SET_TITLE as ARM_SCAN_SET_TITLE } from '$lib/server/arm-wax-fill';
+import { SCAN_SET_TITLE as ARM_SCAN_SET_TITLE, armLineGantryHomedAgoS } from '$lib/server/arm-wax-fill';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import {
@@ -122,6 +122,14 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	if (!set) error(404, positionSetId ? 'Position set not found' : 'No default position set for this robot — teach one first');
 	if (set.robotId !== opentronsRobotId) error(400, 'Position set does not belong to this robot');
 	const liftBeforeMove = liftRequested || set.title === ARM_SCAN_SET_TITLE;
+	// Robot-arm wax fill: the line homed the gantry (legacy POST /robot/home)
+	// right before the grab and the gantry has not moved since (only the arm
+	// did). Tell the daemon how long ago so it can skip the sweep's own full
+	// home (~30-60 s). Read from the loop's own stamp, never from the request.
+	const gantryHomedAgoS =
+		set.title === ARM_SCAN_SET_TITLE && source === 'wax_filling' && contextRef
+			? await armLineGantryHomedAgoS(contextRef, opentronsRobotId)
+			: null;
 
 	const positionsBySlot = new Map<number, { x: number; y: number; z: number }>();
 	for (const p of set.positions ?? []) {
@@ -241,7 +249,7 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 			{
 				ts: new Date(),
 				level: 'info',
-				message: `Sweep queued: ${slotsToWalk} slot(s), set="${set.title}", robot=${robot.name}${liftBeforeMove ? ' — pipette lifted all the way up before every move (robot-arm line)' : ''}`
+				message: `Sweep queued: ${slotsToWalk} slot(s), set="${set.title}", robot=${robot.name}${liftBeforeMove ? ' — pipette lifted all the way up before every move (robot-arm line)' : ''}${gantryHomedAgoS != null ? ` — gantry homed ${gantryHomedAgoS}s ago by the arm line, the daemon may skip its own home` : ''}`
 			}
 		],
 		requestedBy: user._id,
@@ -264,7 +272,8 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 		pipetteName: set.pipetteName ?? null,
 		scanTimeoutS: 3,
 		retryOnce: true,
-		liftBeforeMove
+		liftBeforeMove,
+		...(gantryHomedAgoS != null ? { gantryHomedAgoS } : {})
 	};
 
 	if (tailnet) {

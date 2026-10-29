@@ -309,8 +309,9 @@
 					}
 					loop = r.data.loop;
 				} else if (cycle.step === 'withdraw') {
-					// The fill's protocol homes at its end too; this is the stamp the server insists on.
-					note(`${tag}: homing the OT-2 gantry before the arm moves.`);
+					// The fill's protocol homes at its end; the server verifies that on the robot and
+					// only lifts Z (falling back to a full home when it cannot) — the stamp it insists on.
+					note(`${tag}: checking the OT-2 ended its run at home, then lifting Z before the arm moves.`);
 					const h = await post('homeGantry', { loopId: loop._id, before: 'withdraw' });
 					if (!h.ok) {
 						if (stopAsked) {
@@ -321,7 +322,9 @@
 						await fail('withdraw', `the OT-2 did not report home: ${h.error}`);
 						break;
 					}
-					note(`${tag}: OT-2 home — withdraw — playing "${loop.withdrawAnimation?.name ?? ''}".`);
+					note(
+						`${tag}: ${h.data?.via === 'verified_run_home_lift' ? 'OT-2 run ended at home, Z lifted' : `OT-2 homed again${h.data?.fallbackReason ? ` (${h.data.fallbackReason})` : ''}`} — withdraw — playing "${loop.withdrawAnimation?.name ?? ''}".`
+					);
 					const p = await playStep('cycleWithdraw', `Withdraw (cycle ${cycle.index})`);
 					if (stopAsked) {
 						// Stop pressed while the arm was withdrawing ends the loop on the server; a Stop

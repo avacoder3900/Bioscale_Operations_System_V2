@@ -1226,14 +1226,38 @@ _last_home_at = 0.0
 HOME_FRESH_S = 180.0
 
 
-def home_gantry(run_id: str, force: bool = False) -> None:
+# A home BIMS itself issued (the robot-arm wax-fill line homes over the legacy
+# POST /robot/home before every arm move) counts too: same hardware controller,
+# same known position. The sweep payload carries gantryHomedAgoS, measured by
+# BIMS when it enqueued the command; queue latency is a few seconds, so only a
+# young value is adopted.
+BIMS_HOME_FRESH_S = 120.0
+
+
+def note_bims_home(homed_ago_s) -> bool:
+    """Adopt a BIMS-side gantry home into the freshness tracker. Returns True
+    when adopted (home_gantry will then skip); junk / stale values are ignored."""
+    global _last_home_at
+    try:
+        ago = float(homed_ago_s)
+    except (TypeError, ValueError):
+        return False
+    if not (0.0 <= ago < BIMS_HOME_FRESH_S):
+        return False
+    _last_home_at = max(_last_home_at, time.time() - ago)
+    return True
+
+
+def home_gantry(run_id: str, force: bool = False) -> bool:
+    """Full home unless one is still fresh. Returns True when it homed."""
     global _last_home_at
     age = time.time() - _last_home_at
     if not force and age < HOME_FRESH_S:
         log.info("Skipping home — gantry homed %.0fs ago (still fresh)", age)
-        return
+        return False
     send_maintenance_command(run_id, "home", {}, timeout_s=60.0)
     _last_home_at = time.time()
+    return True
 
 
 # The mount of the pipette loaded by _setup_pipette ('left' | 'right'); lift_z
@@ -1595,10 +1619,15 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
         maint_run_id = open_maintenance_run()
         log.info("Maintenance run open: %s", maint_run_id)
         pipette_id = _setup_pipette(maint_run_id, payload)
-        log.info("Homing gantry before sweep")
-        home_gantry(maint_run_id)
+        homed_ago = payload.get("gantryHomedAgoS")
+        if note_bims_home(homed_ago):
+            log.info("BIMS homed the gantry %ss before enqueueing this sweep (robot-arm line) — skipping the sweep's own home", homed_ago)
+        else:
+            log.info("Homing gantry before sweep")
+        homed_now = home_gantry(maint_run_id)
+        home_note = "home complete" if homed_now else "home skipped (gantry homed {:.0f}s ago)".format(time.time() - _last_home_at)
         pause_req, cancel_req = progress({"log": [
-            {"level": "info", "message": "Bridge: maintenance run {} open, pipette loaded, home complete. Walking taught positions.".format(maint_run_id)}
+            {"level": "info", "message": "Bridge: maintenance run {} open, pipette loaded, {}. Walking taught positions.".format(maint_run_id, home_note)}
         ]})
 
         for pos in positions:
