@@ -15,6 +15,36 @@ the reagent protocol, the Deck Calibration Studio and production 24-slot sweeps 
 untouched. Details: the progress.txt entry "2026-10-29 — master — Robot-arm wax fill:
 the OT-2 pipette goes ALL THE WAY UP before every move (lift rule)".
 
+## Tell the other computer this (paste into Claude there)
+
+```
+Pull master in the Bioscale_Operations_System_V2 repo and read
+docs/HANDOFF-ARM-LIFT-DEPLOY-2026-10-29.md. Follow it end to end.
+
+Goal: deploy the robot-arm wax-fill LIFT RULE (the OT-2 pipette goes all the
+way up before every move, robot-arm line only) to the robots. The code is
+already on master (2f1fe3a3 and bb0804c8); nothing has reached a robot yet.
+
+Two deliverables:
+1. scripts/ot2-bridge.py (ot2-bridge/1.3.1) copied to /data/ot2-bridge/ on
+   B07, R04 and B14 over SSH with ~/.ssh/ot2_rsa, then systemctl restart
+   ot2-bridge on each. Expected md5 of the file from master bb0804c8:
+   c0eedf4f47ebc0c70edc69db3deebc6d. Before each restart, confirm that robot
+   has no active run and the Wax fill loop is not running. Never restart a
+   robot mid-fill.
+2. protocols/Wax_Filling_GEN7_ArmStage.py refreshed into the stored protocol
+   source (npx tsx scripts/refresh-protocol-source.ts --type
+   wax-filling-arm-stage --apply, needs MONGODB_URI) and then Deployed from
+   the BIMS Opentrons -> Protocols page to the OT-2 the arm feeds (Robot Arm ->
+   Wax fill -> Setup shows which). The robot's analysis passing is the proof
+   the lift hook resolves; if it fails with "ARM STAGE: cannot reach the
+   protocol engine", stop and report instead of working around it.
+
+Finish by appending a progress.txt entry on master saying what went where,
+and push. The handoff file has the exact commands and the motion check to do
+with someone at the robot.
+```
+
 Two things must be pushed to the robots, in either order:
 
 | # | What | How | Needs |
