@@ -24570,3 +24570,8 @@ svelte-check: 14 errors / 448 warnings (none in the touched files; errors = base
 tip-calibrator pass.
 Not covered: the Opentron-tab merge branch (feat/arm-opentron-page, not on master) moved this page to
 opentron/StageCalibration.svelte; it will need these edits carried over when it merges.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit c6bb2923 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy c6bb2923 (stage calibration follows the protocol's pipette)"
+What this deployment is for: the Stage Calibration tab picks up, probes and teaches with the p300 and the 200 uL rack while the p300 rehearsal is on the arm's OT-2 (and writes its probe Z to zCalReagent -> z_cal_p300), and with the p20 for the production fill.
