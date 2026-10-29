@@ -24539,3 +24539,7 @@ reloads the picker with it preselected; the empty-state text now says to add it 
 offers a stage .py filed under 'other' (the library API's default), and deployStageProtocol refiles it as wax-filling
 (audited: arm_wax_fill.protocol_process_type) so the re-sync can find it.
 svelte-check: 14-error baseline, none in touched files.
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/arm-wax-fill-protocol-picker @ commit 9631b93b (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 9631b93b (wax fill add-to-library)"
+What this deployment is for: the Wax fill tab can file a stage .py in the protocol library itself, so the picker can be filled without a script.
