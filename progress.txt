@@ -24516,3 +24516,7 @@ by hand. The lift-rule commit also reconciled the stage protocol (lift + per-hol
 rehearsal file and the production file now agree; the stage tests pass on both.
 svelte-check: 14-error baseline (none in touched files). python -I: both stage protocol tests pass. Not run against
 a robot: the deploy path reuses the exact helpers the run-start re-sync and the Robots upload use.
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/arm-wax-fill-protocol-picker @ commit 9b3357f4 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 9b3357f4 (wax fill protocol picker)"
+What this deployment is for: the Wax fill tab can put the production stage fill or the p300 rehearsal on the arm's OT-2 itself, and a rehearsal cannot consume a real cart.
