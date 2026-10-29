@@ -24283,8 +24283,7 @@ Retrieve this exact code: git checkout master at the commit titled "docs(progres
 What this deployment is for: large whole-cart shifts in the Stage Calibration Studio are accepted again.
 
 2026-10-29 — feat/arm-stage-rehearsal-p300 — Robot Arm stage wax fill REHEARSAL protocol: the whole fill walked on the p300 with 200 uL tips and air, for an arm OT-2 without a p20
-================================================================================
-Alejandro: "can we build a test protocol that follows through the steps of the wax fill, but used the 300 pipette
+=========================================================================Alejandro: "can we build a test protocol that follows through the steps of the wax fill, but used the 300 pipette
 tip. This tip wont actually be picking up any wax, I just want to use it to rehearse the protocol." (Earlier in the
 same thread: the p300 cannot do the wax fill itself - the stage protocol loads the p20, budgets 20 uL per trip and
 dispenses ~1.6 uL per gate, below the p300's 20 uL minimum; the Stage Studio's "p300 . reagent (development)" tip type
@@ -24334,3 +24333,47 @@ Deployment: production - via Vercel GitHub integration on the push to master (pr
 Source: branch feat/arm-stage-rehearsal-p300 @ commit 1a154e3a (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 1a154e3a (stage wax fill rehearsal on the p300)"
 What this deployment is for: a p300 / air rehearsal of the robot-arm stage wax fill, to be uploaded to the arm's OT-2 for development runs without a p20.
+=======
+================================================================================
+2026-10-29 — master — Robot-arm wax fill: the OT-2 pipette goes ALL THE WAY UP before every move (lift rule)
+================================================================================
+Alejandro (2026-10-28): when picking up a tip or doing ANY movement on the OT-2 for robot-arm wax filling, bring
+the pipette all the way up first so it cannot hit any structures — every time, but ONLY for the robot-arm wax
+fill; every other wax-filling protocol stays untouched. Then: "push to main".
+First landed on feat/arm-wax-fill-loop as 51c80b74 against the older Stage calibration tab; master had since
+grown the Stage Calibration Studio (d6965997 …), so this is the same change re-applied to master's files by
+hand (the cherry-pick conflicted in six files and was aborted). Scope on master: the ArmStage protocol, the
+Stage Calibration Studio page, arm-wax-fill.ts, the arm's one-slot scanner sweep. Wax_Filling_GEN7_Cartridge.py,
+Reagent_Filling_GEN7.py, the Deck Calibration Studio and production sweeps: zero changes.
+Why it was not already safe: the OT-2's planner only knows the labware on the deck. The arm and its single-cart
+stage stand above that, so the 60 mm "travel height over the rim" arc (stage_jump_height) and the Studio's
+120 mm arc (TEACH_ARC_Z) were guesses, and the daemon's sweep moved direct (diagonal) from home to the scan point.
+How "all the way up" is done without a number (the protocol cannot read its own top-of-Z, and the engine
+rejects a minimum_z_height above the pipette's reach): a Z-ONLY HOME of the pipette's mount, then a PLANNED
+move. opentrons' get_waypoints() travels at the origin height when that is above its arc, so after the home
+the move is XY at the top, then straight down at the target — verified in opentrons 8.7.0 source (the robots'
+version) and in simulation (lift_harness against master's protocol: home {axes:[rightZ]} →
+moveToCoordinates / pickUpTip / dropTip all SUCCEEDED).
+  - protocols/Wax_Filling_GEN7_ArmStage.py: _resolve_lift(pipette) builds lift() = engine `home` for the
+    mount's Z through pipette._core._engine_client.execute_command(HomeParams(axes=[rightZ])) — what
+    pipette.home() does inside minus the plunger (which must not move with wax in the tip). Resolved before
+    any motion; raises (so analysis/upload fails) if a robot-server moves the hook. lift() before: drop tip,
+    pick up tip (first and retry), the calibrator approach, after the probe (back to the top), the
+    hand-tip-swap / no-tip hover, every arrive() at the cart (first hole, from the tube, row crossing),
+    leave() (now just the lift), the final drop. Moves after a lift are planned (no force_direct). Only the
+    in-row hops stay at 5 mm over the cart. stage_jump_height RTP removed (per-hole hole_NN_* RTPs kept).
+    15 lift() calls. Test updated: the RTP surface no longer has stage_jump_height.
+  - Stage Calibration Studio page: lift() = mx home {axes:[zAxis]}; moveAbs({lift}) replaces the arc
+    (TEACH_ARC_Z gone); lift before pick-up-tip, drop tip (incl. the TIP_ALREADY_ATTACHED recovery), to the
+    calibrator, Move to hole / tour (moveToWellSafe), the dispense height, the scan position; Fill motion =
+    lift → pre-jump 5 → dispense → pre-jump → lift. The "Travel height (mm)" field is gone (text explains).
+  - arm-wax-fill.ts: stageJumpHeightMm dropped from CalibrationView / saveStageGeometry (which $unsets the old
+    field) / the readiness note / the RTP form; header documents the rule. stage-geometry.ts: STAGE_JUMP_*
+    gone. Model: field removed. Wax fill tab: summary tile + Setup text.
+  - Scanner sweep: POST /api/scanner/sweep takes liftBeforeMove (the arm page sends it) and forces it for
+    the arm's one-slot set ("Arm wax fill — single cart"); it rides in the daemon payload. scripts/ot2-bridge.py
+    execute_sweep: when set, lift_z (home {axes:[<mount>Z]}) before each slot move and the move is planned
+    (forceDirect false). THE DAEMON MUST BE REDEPLOYED to the robots (scripts/OT2-BRIDGE-DEPLOYMENT.md /
+    docs/LAB-MAC-RUNBOOK-OT2-BRIDGE.md) for the sweep part; the protocol must be re-uploaded on /opentrons.
+Checks: py_compile of both .py; protocols/tests/test_arm_stage_geometry.py ok; stage-geometry.test.ts 5/5;
+svelte-check 14 errors (baseline, none in touched files) / 447 warnings; opentrons 8.7.0 engine harness above. Not run on a robot yet.

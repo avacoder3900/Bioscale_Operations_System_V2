@@ -1236,6 +1236,23 @@ def home_gantry(run_id: str, force: bool = False) -> None:
     _last_home_at = time.time()
 
 
+# The mount of the pipette loaded by _setup_pipette ('left' | 'right'); lift_z
+# needs it to name the Z axis.
+_pipette_mount = None  # type: Optional[str]
+
+
+def lift_z(run_id: str) -> None:
+    """ALL THE WAY UP: home only the pipette's Z axis (top of travel).
+
+    The robot-arm wax-fill line asks for this (payload liftBeforeMove) before
+    EVERY gantry move: the arm and its single-cart stage stand above anything
+    the OT-2's motion planner knows about, so travel happens at the top of Z.
+    A PLANNED move after it (forceDirect=False) runs as XY at the top and then
+    straight down at the target — never a diagonal through the arm."""
+    axis = "rightZ" if _pipette_mount == "right" else "leftZ"
+    send_maintenance_command(run_id, "home", {"axes": [axis]}, timeout_s=60.0)
+
+
 def move_to_coordinates(run_id: str, pipette_id: str, x: float, y: float, z: float,
                         speed: Optional[float] = None, force_direct: bool = True) -> None:
     # forceDirect — sweeps carry no tips/liquid; direct point-to-point cuts
@@ -1543,6 +1560,8 @@ def _setup_pipette(run_id: str, payload: dict) -> str:
     pipette_name, mount = discovered
     log.info("Pipette: %s on %s mount", pipette_name, mount)
     pipette_id = load_pipette_in_run(run_id, pipette_name, mount)
+    global _pipette_mount
+    _pipette_mount = mount
     return pipette_id
 
 
@@ -1551,8 +1570,12 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
     positions = sorted(payload.get("positions") or [], key=lambda p: p.get("slotIndex", 0))
     scan_timeout = float(payload.get("scanTimeoutS") or SCAN_TIMEOUT)
     retry_once = bool(payload.get("retryOnce", True))
+    # Robot-arm wax fill: lift all the way up before every move, then a planned
+    # move (see lift_z). Production sweeps leave this off and move direct.
+    lift_before_move = bool(payload.get("liftBeforeMove", False))
 
-    log.info("sweep command %s: run=%s slots=%d", command_id, sweep_run_id, len(positions))
+    log.info("sweep command %s: run=%s slots=%d lift_before_move=%s",
+             command_id, sweep_run_id, len(positions), lift_before_move)
 
     maint_run_id = None
     slots_done = 0
@@ -1594,10 +1617,16 @@ def execute_sweep(command_id: str, payload: dict, port: ScannerPort) -> None:
                 cancelled = True
                 break
 
-            log.info("Slot %d: moving to (%.1f, %.1f, %.1f)", slot_index + 1,
+            log.info("Slot %d: %smoving to (%.1f, %.1f, %.1f)", slot_index + 1,
+                     "lifting Z all the way up, then " if lift_before_move else "",
                      pos.get("x", 0), pos.get("y", 0), pos.get("z", 0))
             try:
-                move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
+                if lift_before_move:
+                    lift_z(maint_run_id)
+                    move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"],
+                                        force_direct=False)
+                else:
+                    move_to_coordinates(maint_run_id, pipette_id, pos["x"], pos["y"], pos["z"])
             except Exception as e:
                 msg = "move-to failed: {}".format(e)
                 log.warning("Slot %d: %s", slot_index + 1, msg)

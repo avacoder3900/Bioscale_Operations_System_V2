@@ -123,8 +123,8 @@ export const actions: Actions = {
 	saveStageGeometry: async (ev) => {
 		const { d, user, robotId } = await writer(ev);
 		try {
-			const c = await saveStageGeometry(user, robotId, { rotationDeg: field(d, 'rotationDeg'), jumpHeightMm: field(d, 'jumpHeightMm') });
-			return { success: `Stage geometry saved: rotation ${c.stageRotationDeg}°, travel height ${c.stageJumpHeightMm} mm.`, calibration: json(c) };
+			const c = await saveStageGeometry(user, robotId, { rotationDeg: field(d, 'rotationDeg') });
+			return { success: `Stage geometry saved: rotation ${c.stageRotationDeg}°.`, calibration: json(c) };
 		} catch (err) {
 			return failFrom(err);
 		}

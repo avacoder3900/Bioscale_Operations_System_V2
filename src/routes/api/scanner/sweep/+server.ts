@@ -31,6 +31,7 @@
  */
 
 import { json, error } from '@sveltejs/kit';
+import { SCAN_SET_TITLE as ARM_SCAN_SET_TITLE } from '$lib/server/arm-wax-fill';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import {
@@ -78,6 +79,13 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 	const positionSetId = body?.positionSetId?.toString().trim() || null;
 	const source = VALID_SOURCES.has(body?.source) ? body.source : 'manual';
 	const contextRef = body?.contextRef?.toString() || undefined;
+	// Robot-arm wax fill: the pipette goes ALL THE WAY UP (a Z-only home) before
+	// every gantry move of the sweep, and the move is planned (XY at the top,
+	// then straight down) — the arm and its stage stand above anything the
+	// OT-2's planner knows about. Requested by the arm page, and forced for the
+	// arm's one-slot position set whoever asks. Production 24-slot sweeps keep
+	// their direct point-to-point moves.
+	const liftRequested = body?.liftBeforeMove === true;
 	const rawMaxSlots = Number(body?.maxSlots);
 	const maxSlotsRequested =
 		Number.isFinite(rawMaxSlots) && rawMaxSlots > 0 ? Math.floor(rawMaxSlots) : null;
@@ -113,6 +121,7 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 
 	if (!set) error(404, positionSetId ? 'Position set not found' : 'No default position set for this robot — teach one first');
 	if (set.robotId !== opentronsRobotId) error(400, 'Position set does not belong to this robot');
+	const liftBeforeMove = liftRequested || set.title === ARM_SCAN_SET_TITLE;
 
 	const positionsBySlot = new Map<number, { x: number; y: number; z: number }>();
 	for (const p of set.positions ?? []) {
@@ -232,7 +241,7 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 			{
 				ts: new Date(),
 				level: 'info',
-				message: `Sweep queued: ${slotsToWalk} slot(s), set="${set.title}", robot=${robot.name}`
+				message: `Sweep queued: ${slotsToWalk} slot(s), set="${set.title}", robot=${robot.name}${liftBeforeMove ? ' — pipette lifted all the way up before every move (robot-arm line)' : ''}`
 			}
 		],
 		requestedBy: user._id,
@@ -254,7 +263,8 @@ export const POST: RequestHandler = async ({ request, locals, url }) => {
 		pipetteMount: set.pipetteMount ?? 'left',
 		pipetteName: set.pipetteName ?? null,
 		scanTimeoutS: 3,
-		retryOnce: true
+		retryOnce: true,
+		liftBeforeMove
 	};
 
 	if (tailnet) {

@@ -21,6 +21,16 @@
 	 * Tip frames, as in the Studio: the first hole is taught with a PROBED tip
 	 * and stored tip-neutral (live − that tip's calibrator adjust); every move-to
 	 * applies the current tip's adjust; the scan position is taught with NO tip.
+	 *
+	 * LIFT RULE: before EVERY gantry move this page makes — pick up a tip, go
+	 * to the calibrator, a hole, the dispense height, the scan position, drop a
+	 * tip — the pipette goes ALL THE WAY UP (lift(): a Z-only home), and the
+	 * move that follows is a PLANNED move (forceDirect false), which the OT-2
+	 * runs as XY at the top and then straight down. The arm and its stage stand
+	 * above anything the planner knows about, so no arc height or direct travel
+	 * is safe here. The stage protocol does the same (lift() in
+	 * Wax_Filling_GEN7_ArmStage.py). Only the short vertical moves over a hole
+	 * stay direct.
 	 */
 	import { onDestroy } from 'svelte';
 	import { deserialize } from '$app/forms';
@@ -32,7 +42,6 @@
 		DISPENSE_DEPTH_DEFAULT_MM,
 		DISPENSE_DEPTH_LIMITS,
 		HOLE_OFFSET_LIMIT_MM,
-		STAGE_JUMP_LIMITS,
 		STAGE_PREJUMP_MM,
 		STAGE_ROTATION_DEFAULT_DEG,
 		WAX_HOLE_DEPTH_MM,
@@ -77,7 +86,6 @@
 	});
 	const wellByName = $derived(new Map(wells.map((w) => [w.name, w] as const)));
 	const depthMm = $derived(calibration?.dispenseDepth?.mm ?? null);
-	const jumpMm = $derived(calibration?.stageJumpHeightMm ?? 60);
 
 	// ── Selection (as the Studio) ────────────────────────────────────────────
 	let selection = $state<Set<string>>(new Set());
@@ -419,8 +427,6 @@
 	let liveY = $state<number | null>(null);
 	let liveZ = $state<number | null>(null);
 	const locked = $derived(!!data.loopRunning);
-	// Arc height for travel over the raised stage (the planner only knows the labware on the deck).
-	const TEACH_ARC_Z = 120;
 
 	async function apiRaw(path: string, init?: RequestInit): Promise<{ status: number; ok: boolean; body: any }> {
 		const doFetch = robotSession ? robotSession.fetchRoute.bind(robotSession) : fetch;
@@ -527,7 +533,21 @@
 			await api(mx('jog'), { method: 'POST', body: JSON.stringify({ pipetteId, axis, distance }) });
 			await refreshPosition();
 		});
-	async function moveAbs(p: { x: number; y: number; z: number }, o: { arc?: boolean; direct?: boolean; speed?: number } = {}) {
+	/**
+	 * ALL THE WAY UP: home only the pipette's Z axis (top of travel). Called
+	 * before every move between stations; the planned move after it travels at
+	 * the top and comes straight down at its target.
+	 */
+	async function lift() {
+		await api(mx('home'), { method: 'POST', body: JSON.stringify({ axes: [zAxis] }) });
+	}
+	/**
+	 * `lift`: lift first, then a PLANNED move (XY at the top, straight down).
+	 * `direct`: a straight line from where the tip is — only for the short
+	 * vertical moves over a hole, never for travel.
+	 */
+	async function moveAbs(p: { x: number; y: number; z: number }, o: { lift?: boolean; direct?: boolean; speed?: number } = {}) {
+		if (o.lift) await lift();
 		await api(mx('move-to'), {
 			method: 'POST',
 			body: JSON.stringify({
@@ -536,20 +556,19 @@
 				y: p.y,
 				z: p.z,
 				...(o.speed ? { speed: o.speed } : {}),
-				...(o.arc ? { minimumZHeight: TEACH_ARC_Z, forceDirect: false } : {}),
-				...(o.direct ? { forceDirect: true } : {})
+				forceDirect: !!o.direct
 			})
 		});
 	}
 	const adj = () => ({ x: tipAdjust?.x ?? 0, y: tipAdjust?.y ?? 0 });
 
-	/** To a hole's tip-neutral rim + this tip's adjust, APPROACH_Z_MM above it, via a high arc (the fill's frame). */
+	/** To a hole's tip-neutral rim + this tip's adjust, APPROACH_Z_MM above it — all the way up first, then straight down over it (the fill's frame). */
 	async function moveToWellSafe(name: string) {
 		if (!taught) throw new Error('Teach the first hole first — the holes are laid out from it.');
 		const w = wellByName.get(name);
 		if (!w) throw new Error(`Unknown hole ${name}`);
 		const a = adj();
-		await moveAbs({ x: w.x + a.x, y: w.y + a.y, z: w.z + APPROACH_Z_MM }, { arc: true });
+		await moveAbs({ x: w.x + a.x, y: w.y + a.y, z: w.z + APPROACH_Z_MM }, { lift: true });
 	}
 	const moveToSelectedHole = () =>
 		act(async () => {
@@ -635,11 +654,11 @@
 	async function fillWaitIfPaused() {
 		while (fillPaused && !fillStop) await new Promise((r) => setTimeout(r, 150));
 	}
-	async function fillMoveAbs(name: string, aboveRimMm: number, o: { forceDirect: boolean; arc?: boolean }) {
+	async function fillMoveAbs(name: string, aboveRimMm: number, o: { forceDirect: boolean; lift?: boolean }) {
 		const w = wellByName.get(name);
 		if (!w) throw new Error(`Unknown hole ${name}`);
 		const a = adj();
-		await moveAbs({ x: w.x + a.x, y: w.y + a.y, z: w.z + aboveRimMm }, { arc: !!o.arc, direct: o.forceDirect, ...(fillMatchProtocol ? {} : { speed: fillSpeed }) });
+		await moveAbs({ x: w.x + a.x, y: w.y + a.y, z: w.z + aboveRimMm }, { lift: !!o.lift, direct: o.forceDirect, ...(fillMatchProtocol ? {} : { speed: fillSpeed }) });
 	}
 	async function runFillMotion() {
 		if (!runId || !pipetteId) {
@@ -672,8 +691,7 @@
 				selection = new Set([name]);
 				refWell = name;
 				msg = `Fill motion ${i + 1}/${chosen.length} — ${name}${fillMatchProtocol ? ' (protocol speed)' : ` @ ${fillSpeed} mm/s`}`;
-				await fillMoveAbs(name, jumpMm, { forceDirect: false, arc: true }); // travel height
-				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: true }); // pre-jump
+				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: false, lift: true }); // all the way up, over, straight down to the pre-jump height
 				await fillWaitIfPaused();
 				if (fillStop) break;
 				await fillMoveAbs(name, dispenseAbove, { forceDirect: true }); // dispense height
@@ -681,8 +699,8 @@
 				await new Promise((r) => setTimeout(r, Math.max(0, fillDwellMs)));
 				await fillWaitIfPaused();
 				if (fillStop) break;
-				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: true }); // retract
-				await fillMoveAbs(name, jumpMm, { forceDirect: true }); // back to travel height
+				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: true }); // retract to the pre-jump height
+				await lift(); // all the way up before leaving the hole
 			}
 			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s)${depthMm === null ? ' at the protocol\'s default depth (teach the dispense depth below)' : ''}`;
 		} catch (e) {
@@ -741,11 +759,13 @@
 		return v;
 	}
 	async function doDropTip(): Promise<boolean> {
+		await lift(); // the trash move then travels at the top
 		const r = await apiRaw(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
 		if (!r.ok) throw new Error(r.body?.message || `HTTP ${r.status}`);
 		return !!r.body?.dropped;
 	}
 	async function doPickUp(allowRecover: boolean) {
+		await lift(); // the pick-up's own move then travels at the top
 		const r = await apiRaw(mx('pick-up-tip'), { method: 'POST', body: JSON.stringify({ pipetteId, tiprackLoadName: tiprack, slot: '11', tipWell }) });
 		if (r.ok) {
 			if (r.body?.nextTipWell) tipWell = r.body.nextTipWell;
@@ -767,7 +787,7 @@
 		await refreshPosition();
 	}
 	async function doGoToCalibrator(z: number): Promise<void> {
-		await moveAbs({ x: calX, y: calY, z }, { arc: true });
+		await moveAbs({ x: calX, y: calY, z }, { lift: true });
 		await refreshPosition();
 	}
 	async function calibrateTip() {
@@ -931,7 +951,7 @@
 			if (!rim) throw new Error('Teach the first hole first.');
 			if (!hasTip) throw new Error('Pick up a tip first — the depth is about the tip end.');
 			const a = adj();
-			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { arc: true });
+			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { lift: true });
 			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: dispenseZ(rim.z, depthMm) }, { direct: true });
 			msg = depthMm === null ? `At the protocol's default (${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim) — jog Z to where the wax should land, then save.` : `At the taught dispense height (${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim). Jog Z to change it, then save.`;
 			await refreshPosition();
@@ -947,20 +967,18 @@
 			if (r) msg = r.success;
 		});
 	let rotationDeg = $state<number>(data.calibration?.stageRotationDeg ?? STAGE_ROTATION_DEFAULT_DEG);
-	let jumpHeightMm = $state<number>(data.calibration?.stageJumpHeightMm ?? 60);
 	$effect(() => {
 		rotationDeg = data.calibration?.stageRotationDeg ?? STAGE_ROTATION_DEFAULT_DEG;
-		jumpHeightMm = data.calibration?.stageJumpHeightMm ?? 60;
 	});
 	async function saveGeometry() {
-		const r = await postAction('saveStageGeometry', { rotationDeg: String(rotationDeg), jumpHeightMm: String(jumpHeightMm) });
+		const r = await postAction('saveStageGeometry', { rotationDeg: String(rotationDeg) });
 		if (r) msg = r.success;
 	}
 	/** Turn the whole cart a quarter turn about the taught first hole and save — the plane redraws from the result. */
 	async function rotateCart(deltaDeg: number) {
 		const next = (((rotation + deltaDeg) % 360) + 360) % 360;
 		rotationDeg = next;
-		const r = await postAction('saveStageGeometry', { rotationDeg: String(next), jumpHeightMm: String(jumpHeightMm) });
+		const r = await postAction('saveStageGeometry', { rotationDeg: String(next) });
 		if (r) msg = `Cart rotated to ${next}° about the first hole — ${facing}. All 12 holes follow; per-hole corrections are kept.`;
 	}
 
@@ -1302,7 +1320,7 @@
 			{:else}
 				<div class="grid grid-cols-2 gap-1">
 					<button type="button" onclick={startTour} disabled={!pipetteId || busy || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through all 12 holes in fill order">Run through all holes</button>
-					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): travel height → pre-jump → dispense depth → dwell → retract">▶ Fill motion ({selCount} selected)</button>
+					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): all the way up → pre-jump → dispense depth → dwell → pre-jump → all the way up">▶ Fill motion ({selCount} selected)</button>
 				</div>
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					<span class="opacity-70">Fill:</span>
@@ -1310,7 +1328,7 @@
 					{#if !fillMatchProtocol}<label>Cap <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>{/if}
 					<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
 				</div>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics the stage fill at each selected hole ({jumpMm} mm travel → {STAGE_PREJUMP_MM} mm pre-jump → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → {fillDwellMs} ms dwell → retract), in fill order.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
+				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics the stage fill at each selected hole (all the way up → {STAGE_PREJUMP_MM} mm pre-jump → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → {fillDwellMs} ms dwell → {STAGE_PREJUMP_MM} mm → all the way up), in fill order.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
 			{/if}
 		</section>
 
@@ -1366,7 +1384,7 @@
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · geometry</h2>
 			<div class="grid grid-cols-2 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 				<label>Cart rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-				<label>Travel height (mm) <input type="number" step="1" min={STAGE_JUMP_LIMITS.min} max={STAGE_JUMP_LIMITS.max} bind:value={jumpHeightMm} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<div class="text-[11px]">Travel height<span class="mt-0.5 block" style="color: var(--color-tron-text-secondary)">None to set: the pipette goes <strong>all the way up</strong> (top of Z) before every move — here and in the fill.</span></div>
 			</div>
 			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Rotation: counter-clockwise from above, about the first hole, vs a carriage slot. <strong>90° = this stage</strong>: the cart turned a quarter turn so the gates run toward you (gate 4 at the back, gate 1 nearest you) and the rows run left → right. 270° (or −90°) = the same quarter turn the other way; 0° = as on a carriage. The plane's arrows show the result; save to redraw. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is tall.</p>
 			<div class="grid grid-cols-3 gap-2">
@@ -1385,7 +1403,7 @@
 			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Where the gantry scanner reads the cart the arm placed. Jog with <strong>no tip on</strong> (the sweep runs without one), fire a test scan, save.{#if calibration?.scanPosition?.testScanBarcode} Test read <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}</p>
 			{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>{/if}
 			<div class="grid grid-cols-2 gap-2">
-				<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { arc: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move to</button>
+				<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { lift: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move to</button>
 				<button type="button" onclick={saveScanPosition} disabled={!pipetteId || busy || hasTip || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save here (no tip)</button>
 			</div>
 		</section>

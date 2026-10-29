@@ -21,9 +21,9 @@ import mongoose, { Schema } from 'mongoose';
  *                 (negative = hover above it) — the stage protocol's
  *                 `dispense_depth`. Taught by jogging a tip to the height over
  *                 the first hole and saving; stored as rim z − live z.
- *   stageRotationDeg / stageJumpHeightMm  the cart's rotation on the stage and the
- *                 travel clearance over the rim (`arm_cart_rotation_deg`,
- *                 `stage_jump_height`).
+ *   stageRotationDeg  the cart's rotation on the stage (`arm_cart_rotation_deg`).
+ *                 (stageJumpHeightMm, the old travel clearance over the rim, is
+ *                 gone: the pipette goes all the way up before every move.)
  *   holeOffsets   per-hole corrections on top of the rigid 12-hole lattice (deck
  *                 mm, tip-neutral) — what the Stage Calibration Studio's
  *                 Apply / Set position / Align write, the way the Deck
@@ -68,7 +68,6 @@ const armWaxFillCalibrationSchema = new Schema(
 		},
 		/** The arm's stage holds the cart turned 90° CCW from a carriage slot (gates toward the operator). */
 		stageRotationDeg: { type: Number, default: 90 },
-		stageJumpHeightMm: { type: Number, default: 60 },
 		holeOffsets: {
 			type: [new Schema({ name: { type: String, required: true }, dx: { type: Number, default: 0 }, dy: { type: Number, default: 0 }, dz: { type: Number, default: 0 } }, { _id: false })],
 			default: []

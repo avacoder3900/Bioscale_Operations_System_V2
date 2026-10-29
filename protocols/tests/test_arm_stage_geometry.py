@@ -96,11 +96,15 @@ def main():
     assert close(w['X2'][0], X0) and close(w['X2'][2], Z0)
     assert m.hole_offset_param(6, 'dx') == 'hole_06_dx'
 
-    # The RTP surface: the taught point, rotation, travel height and 36 per-hole corrections.
+    # The RTP surface: the taught point, rotation, dispense depth and 36 per-hole
+    # corrections. No travel height: the pipette goes all the way up (a Z-only
+    # home) before every move between stations (the LIFT RULE).
     p = _Params()
     m.add_parameters(p)
-    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'stage_jump_height', 'dispense_depth'):
+    for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth'):
         assert name in p.names, name
+    assert 'stage_jump_height' not in p.names, 'travel height RTP is gone: the fill lifts all the way up'
+    assert callable(m._resolve_lift)
     hole_params = [n for n in p.names if n.startswith('hole_')]
     assert len(hole_params) == 36 and hole_params[0] == 'hole_01_dx' and hole_params[-1] == 'hole_12_dz', hole_params[:3]
     assert len(p.names) == len(set(p.names)), 'duplicate RTP names'

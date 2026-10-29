@@ -28,10 +28,14 @@
  * 24-slot carriage protocol (no arm_cart_* in its schema) falls back to the
  * legacy deck-position stopgap.
  *
- * Collision rule: the arm never moves while the gantry may be out over the
+ * Collision rules: the arm never moves while the gantry may be out over the
  * stage. cycleHomeGantry homes the OT-2 (POST /robot/home, synchronous) and
  * stamps the cycle; cycleGrab / cycleWithdraw refuse to play without a fresh
- * stamp. The stage protocol also homes itself at the end of every fill.
+ * stamp. The stage protocol also homes itself at the end of every fill. And
+ * the OT-2 pipette goes ALL THE WAY UP (a Z-only home) before every move it
+ * makes for this line — in the stage protocol, in the Stage Calibration
+ * Studio and in the one-slot scanner sweep (liftBeforeMove) — because the arm
+ * and its stage stand above anything the OT-2's motion planner knows about.
  *
  * Later: the cart-drop unit that dispenses carts for the arm will slot in
  * before the grab step; nothing here assumes where the arm picks a cart up.
@@ -62,8 +66,6 @@ import {
 	DISPENSE_DEPTH_LIMITS,
 	CART_LOCATION_LIMITS,
 	HOLE_OFFSET_LIMIT_MM,
-	STAGE_JUMP_DEFAULT_MM,
-	STAGE_JUMP_LIMITS,
 	STAGE_ROTATION_DEFAULT_DEG,
 	STAGE_WELL_NAMES,
 	WAX_HOLE_DEPTH_MM,
@@ -274,8 +276,6 @@ export interface CalibrationView {
 	dispenseDepth: DispenseDepthView | null;
 	/** The cart's rotation on the stage, degrees CCW from above about the first hole (arm_cart_rotation_deg). */
 	stageRotationDeg: number;
-	/** Travel clearance over the rim when arriving at / leaving the cart (stage_jump_height). */
-	stageJumpHeightMm: number;
 	/** The 12 wax-hole rims laid out from the taught cart location (tip-neutral) plus each hole's correction, or null until it is taught. */
 	holes: StageHole[] | null;
 	/** Per-hole corrections on the rigid lattice (the Studio's Apply / Set position / Align). */
@@ -322,7 +322,6 @@ function point(d: any): TaughtPoint | null {
 function calibrationView(robotId: string, d: any): CalibrationView {
 	const cartLocation = point(d?.cartLocation);
 	const stageRotationDeg = Number.isFinite(Number(d?.stageRotationDeg)) ? Number(d.stageRotationDeg) : STAGE_ROTATION_DEFAULT_DEG;
-	const jump = Number(d?.stageJumpHeightMm);
 	const dd = d?.dispenseDepth;
 	const holeOffsets = offsetsOf(d);
 	const edits: StageEditView[] = ((d?.edits ?? []) as any[])
@@ -347,7 +346,6 @@ function calibrationView(robotId: string, d: any): CalibrationView {
 				? { mm: dd.mm, liveZ: typeof dd.liveZ === 'number' ? dd.liveZ : null, taughtAt: iso(dd.taughtAt), taughtBy: dd.taughtBy?.username ?? null }
 				: null,
 		stageRotationDeg,
-		stageJumpHeightMm: Number.isFinite(jump) && jump >= STAGE_JUMP_LIMITS.min && jump <= STAGE_JUMP_LIMITS.max ? jump : STAGE_JUMP_DEFAULT_MM,
 		holes: cartLocation ? stageTargets(cartLocation.x, cartLocation.y, cartLocation.z, stageRotationDeg, holeOffsets) : null,
 		holeOffsets,
 		edits,
@@ -688,26 +686,24 @@ export async function saveStageCalibrator(
 	return { position: { x, y, z }, zCalWax, maxTipAdjust };
 }
 
-/** The cart's rotation on the stage and the travel clearance over the rim. */
-export async function saveStageGeometry(user: User, robotId: string, input: { rotationDeg: unknown; jumpHeightMm: unknown }): Promise<CalibrationView> {
+/**
+ * The cart's rotation on the stage. (No travel height any more: the pipette
+ * goes all the way up before every move — see the header.)
+ */
+export async function saveStageGeometry(user: User, robotId: string, input: { rotationDeg: unknown }): Promise<CalibrationView> {
 	await connectDB();
 	if (!robotId) throw new ArmWaxFillError('Save the setup (robot) first.');
 	const rotationDeg = input.rotationDeg === null || String(input.rotationDeg).trim() === '' ? STAGE_ROTATION_DEFAULT_DEG : num(input.rotationDeg, 'Cart rotation');
 	if (rotationDeg < -360 || rotationDeg > 360) throw new ArmWaxFillError('Cart rotation must be between −360° and 360°.');
-	const jumpHeightMm = input.jumpHeightMm === null || String(input.jumpHeightMm).trim() === '' ? STAGE_JUMP_DEFAULT_MM : num(input.jumpHeightMm, 'Travel height');
-	if (jumpHeightMm < STAGE_JUMP_LIMITS.min || jumpHeightMm > STAGE_JUMP_LIMITS.max) {
-		throw new ArmWaxFillError(`Travel height must be ${STAGE_JUMP_LIMITS.min}–${STAGE_JUMP_LIMITS.max} mm above the rim.`);
-	}
 	const prev = (await ArmWaxFillCalibration.findById(robotId).lean()) as any;
 	await ArmWaxFillCalibration.updateOne(
 		{ _id: robotId },
-		{ $set: { stageRotationDeg: rotationDeg, stageJumpHeightMm: jumpHeightMm, updatedBy: opRef(user) } },
+		{ $set: { stageRotationDeg: rotationDeg, updatedBy: opRef(user) }, $unset: { stageJumpHeightMm: '' } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.stage_geometry', 'arm_wax_fill_calibrations', robotId, {
 		rotationDeg,
-		jumpHeightMm,
-		before: { rotationDeg: prev?.stageRotationDeg ?? null, jumpHeightMm: prev?.stageJumpHeightMm ?? null }
+		before: { rotationDeg: prev?.stageRotationDeg ?? null }
 	});
 	return calibrationView(robotId, await ArmWaxFillCalibration.findById(robotId).lean());
 }
@@ -848,7 +844,7 @@ export function readiness(
 		if (cl?.tipAdjust && calibration?.dispenseDepth) {
 			notes.push(
 				`The stage protocol fills the taught cart location (tip-neutral; cart rotation ${calibration.stageRotationDeg}°), dispensing ` +
-					`${Math.abs(calibration.dispenseDepth.mm)} mm ${calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim, travelling ${calibration.stageJumpHeightMm} mm over it. No deck or deck position is used.`
+					`${Math.abs(calibration.dispenseDepth.mm)} mm ${calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim. The pipette goes all the way up before every move between the tip rack, the calibrator, the tube and the cart. No deck or deck position is used.`
 			);
 		}
 	} else if (settings.robotId && protocol) {
@@ -1309,7 +1305,6 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		form.set('param_arm_cart_z', String(cl.z));
 		form.set('param_arm_cart_rotation_deg', String(calibration!.stageRotationDeg));
 		form.set('param_dispense_depth', String(calibration!.dispenseDepth!.mm));
-		form.set('param_stage_jump_height', String(calibration!.stageJumpHeightMm));
 		// Per-hole corrections from the Stage Calibration Studio (only the RTPs the
 		// robot's schema declares are read, so an older stage .py ignores them).
 		for (const h of calibration!.holes ?? []) {
