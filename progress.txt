@@ -24616,3 +24616,8 @@ tuberack + the 200 uL rack; the production stage .py is unchanged. labware-refs.
 Operator step after this deploy: Wax fill tab -> Protocol on the robot -> deploy the rehearsal again (re-upload with
 the rack bundled; the analysis must complete clean), then Reset and start the loop.
 svelte-check 14 errors / 448 warnings (baseline).
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit 832f7d64 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 832f7d64 (bundler resolves labware constants)"
+What this deployment is for: protocol uploads bundle labware loaded through a module-level constant, so the p300 rehearsal's 200 uL rack reaches the robot and its analysis completes clean.
