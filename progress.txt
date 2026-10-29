@@ -24382,3 +24382,35 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ commit 2f1fe3a3
 Retrieve this exact code: git checkout 2f1fe3a3
 What this deployment is for: robot-arm wax fill LIFT RULE — the OT-2 pipette goes all the way up (Z-only home) before every move in the ArmStage protocol, the Stage Calibration Studio and the arm one-slot sweep; stage_jump_height / travel height removed. Carriage and reagent protocols untouched. The bridge daemon (scripts/ot2-bridge.py) still needs redeploying to the robots and the protocol re-uploading on /opentrons.
+
+
+================================================================================
+2026-10-29 — master — Robot-arm wax fill: the FAIL ROUTE (scan fails → fail animation → the run stops)
+================================================================================
+Alejandro: if a cart scans in error, or something is wrong, the protocol needs an alternate route — play a
+second "fail" animation (denoted in its own dropdown; may be the same as a success animation) and stop the
+run. Logic: grab → scan (fail → fail animation, stop; ok → fill) → fill → withdraw. A failed scan means the
+cart was scanned but is not in the right state, OR the machine tried to scan and nothing was picked up. More
+fail modes may come; the scan is the only one for now. Applies to any future protocol on the robot-arm system.
+  - Animations card: third dropdown "Fail" (ArmWaxFillSettings.failAnimation; any move set or sequence, the
+    withdraw one included — the summary says "same as withdraw" when it is). Readiness blocks Start until it
+    is chosen, so EXISTING setups must pick one once ("Change animations"). The loop copies it (ArmWaxFillRun).
+  - arm-wax-fill.ts: FAIL_ROUTE_STEPS = ['scan'] (future fail modes add their step and call enterFailRoute).
+    cycleScanned now checks the cart at the scan (cartScanProblem: bucket label; unknown barcode outside test
+    mode; status not 'backing' — the rules attachCart enforces at the fill) and, if wrong, puts the cycle on
+    the fail route instead of throwing. New cycleScanFailed (nothing read: sweep errored / timed out / no
+    barcode — the page calls it instead of failLoop), cycleFail (plays the fail animation; REFUSES without a
+    fresh gantry-home stamp, like grab/withdraw — after a scan the gantry is at the scan position) and
+    cycleFailDone (cycle 'failed', loop status 'failed', error "scan: <why> The fail animation played.").
+    cycleHomeGantry takes before=fail (gantryHomedForFailAt). stopLoop treats step 'fail' like grab/withdraw
+    (stops the arm, ends now). A failure of the fail route itself (home / play refused) ends the loop the
+    plain way with a note that the cart is still on the stage.
+  - Model: cycle step enum gains 'fail'; fields failedStep, failArmRunId, gantryHomedForFailAt.
+  - Page driver: scan branch → cycleScanFailed (nothing read) or reads the server's fail decision; new 'fail'
+    branch: homeGantry(before=fail) → cycleFail (Playback helper) → cycleFailDone; log lines say why. A fifth
+    "Fail animation" tile appears on the step strip when a cycle is on the route (scan tile red, grab green);
+    the cycles table notes "(fail route after scan, fail animation played)". Header + Setup texts updated.
+  - Audit: arm_wax_fill.cycle_fail_route, cycle_fail, loop_failed {failRoute: true}; animations audit has fail.
+Checks: svelte-check 14 errors / 447 warnings (baseline, none in touched files); stage-geometry + animation
+unit tests 59/59. Not run on a robot. Built in a fresh worktree from origin/master because the master worktree
+(Bioscale_V2-wt-master-ot2-controls) picked up another session's uncommitted verified-home-lift edits mid-task.

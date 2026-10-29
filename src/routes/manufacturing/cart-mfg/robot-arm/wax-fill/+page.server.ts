@@ -11,19 +11,25 @@
  * (playback poll, settle) → cycleGrabDone → scan over /api/scanner/sweep →
  * cycleScanned → cycleFill → (EmbeddedRunController) → cycleFillDone →
  * homeGantry → cycleWithdraw → (playback poll, settle) → cycleWithdrawDone,
- * and round again. All logic is in $lib/server/arm-wax-fill; this file only
- * maps form fields to it.
+ * and round again. A scan that fails takes the fail route instead:
+ * cycleScanFailed (or cycleScanned finding a cart that cannot be filled) →
+ * homeGantry → cycleFail → (playback poll, settle) → cycleFailDone, and the
+ * loop ends. All logic is in $lib/server/arm-wax-fill; this file only maps
+ * form fields to it.
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { sharedAnimateActions } from '$lib/server/robot-arm-animate-actions';
 import {
 	ArmWaxFillError,
+	cycleFail,
+	cycleFailDone,
 	cycleFill,
 	cycleFillDone,
 	cycleGrab,
 	cycleGrabDone,
 	cycleHomeGantry,
+	cycleScanFailed,
 	cycleScanned,
 	cycleWithdraw,
 	cycleWithdrawDone,
@@ -94,8 +100,8 @@ export const actions: Actions = {
 	saveAnimations: async (ev) => {
 		const { d, user } = await writer(ev);
 		try {
-			const s = await saveAnimations(user, { grab: field(d, 'grab'), withdraw: field(d, 'withdraw') });
-			return { success: `Animations saved: grab "${s.grabAnimation?.name}", withdraw "${s.withdrawAnimation?.name}".` };
+			const s = await saveAnimations(user, { grab: field(d, 'grab'), withdraw: field(d, 'withdraw'), fail: field(d, 'fail') });
+			return { success: `Animations saved: grab "${s.grabAnimation?.name}", withdraw "${s.withdrawAnimation?.name}", fail "${s.failAnimation?.name}".` };
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -161,6 +167,41 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
 			return { loop: json(await cycleScanned(user, id, { sweepRunId: field(d, 'sweepRunId'), barcode: field(d, 'barcode') })) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The scan read nothing: the cycle takes the fail route (fail animation, then the loop ends).
+	cycleScanFailed: async (ev) => {
+		const { d, user } = await writer(ev);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return { loop: json(await cycleScanFailed(user, id, { reason: field(d, 'reason'), sweepRunId: field(d, 'sweepRunId') })) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Fail route: the arm MOVES (fail animation) — after the gantry home, like grab and withdraw.
+	cycleFail: async (ev) => {
+		const { d, user } = await writer(ev);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await cycleFail(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	cycleFailDone: async (ev) => {
+		const { d, user } = await writer(ev);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return { loop: json(await cycleFailDone(user, id)) };
 		} catch (err) {
 			return failFrom(err);
 		}

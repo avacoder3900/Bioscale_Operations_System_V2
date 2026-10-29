@@ -8,6 +8,12 @@ import { generateId } from '../utils.js';
  * run does) and every step's ids land here, so a reload resumes where the
  * cycle was and the loop is queryable against the arm runs, the scanner sweep
  * and the WaxFillingRun it produced.
+ *
+ * A scan that fails (nothing read, or the cart is not a backed cart) takes the
+ * FAIL ROUTE instead of failing the loop where it stands: the cycle goes to
+ * step 'fail', the arm plays the fail animation, and the loop ends failed.
+ * `failedStep` records which step sent it there (only 'scan' today; more fail
+ * modes will add theirs).
  */
 export const ARM_WAX_FILL_STEPS = ['grab', 'scan', 'fill', 'withdraw', 'done'] as const;
 export type ArmWaxFillStep = (typeof ARM_WAX_FILL_STEPS)[number];
@@ -20,7 +26,7 @@ const animationRefSchema = new Schema(
 const cycleSchema = new Schema(
 	{
 		index: { type: Number, required: true }, // 1-based
-		step: { type: String, enum: [...ARM_WAX_FILL_STEPS, 'failed', 'stopped'], default: 'grab' },
+		step: { type: String, enum: [...ARM_WAX_FILL_STEPS, 'fail', 'failed', 'stopped'], default: 'grab' },
 		startedAt: Date,
 		endedAt: Date,
 		grabArmRunId: String,
@@ -30,13 +36,17 @@ const cycleSchema = new Schema(
 		opentronsRunId: String,
 		opentronsRunFinalStatus: String,
 		withdrawArmRunId: String,
+		/** Fail route: the step that failed ('scan') and the arm run of the fail animation. */
+		failedStep: String,
+		failArmRunId: String,
 		/**
 		 * When the OT-2 reported its gantry home before each arm move. cycleGrab /
-		 * cycleWithdraw refuse to play the arm without a fresh stamp, so the arm
-		 * never swings in over a gantry that is still out on the deck.
+		 * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp,
+		 * so the arm never swings in over a gantry that is still out on the deck.
 		 */
 		gantryHomedForGrabAt: Date,
 		gantryHomedForWithdrawAt: Date,
+		gantryHomedForFailAt: Date,
 		error: String
 	},
 	{ _id: false }
@@ -53,6 +63,7 @@ const armWaxFillRunSchema = new Schema(
 		stopRequested: { type: Boolean, default: false },
 		grabAnimation: animationRefSchema,
 		withdrawAnimation: animationRefSchema,
+		failAnimation: animationRefSchema,
 		cycles: { type: [cycleSchema], default: [] },
 		error: String,
 		startedBy: { _id: String, username: String },

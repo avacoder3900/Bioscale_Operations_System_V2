@@ -110,6 +110,22 @@ export const SCAN_SET_TITLE = 'Arm wax fill — single cart';
 /** Protocol run-time parameters the cart location is sent as, when declared. */
 export const CART_LOCATION_RTPS = ['arm_cart_x', 'arm_cart_y', 'arm_cart_z'] as const;
 
+/**
+ * The FAIL ROUTE. A step listed here that fails does not end the loop where it
+ * stands: the cycle goes to step 'fail' (failedStep = the step, error = why),
+ * the OT-2 gantry is homed, the arm plays the FAIL animation (chosen on the
+ * Animations card like grab and withdraw; it may be the withdraw animation)
+ * and only then does the loop end as failed. Today only the scan takes it:
+ * the scanner read nothing (sweep errored, timed out or completed without a
+ * barcode), or it read a barcode but the cart is not in the right state to be
+ * filled (not a backed cart, a bucket label, unknown outside test mode). A
+ * failure of the fail route itself (home refused, play refused) ends the loop
+ * the plain way, with the cart still on the stage. More fail modes add their
+ * step here and call enterFailRoute.
+ */
+export const FAIL_ROUTE_STEPS = ['scan'] as const;
+export type FailRouteStep = (typeof FAIL_ROUTE_STEPS)[number];
+
 export type AnimationKind = 'move_set' | 'sequence';
 export interface AnimationRef {
 	kind: AnimationKind;
@@ -166,6 +182,7 @@ export interface SettingsView {
 	testMode: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
+	failAnimation: AnimationRef | null;
 	animationsChangedAt: string | null;
 	animationsChangedBy: string | null;
 }
@@ -182,6 +199,7 @@ function settingsView(d: any): SettingsView {
 		testMode: !!d?.testMode,
 		grabAnimation: animRef(d?.grabAnimation),
 		withdrawAnimation: animRef(d?.withdrawAnimation),
+		failAnimation: animRef(d?.failAnimation),
 		animationsChangedAt: d?.animationsChangedAt ? new Date(d.animationsChangedAt).toISOString() : null,
 		animationsChangedBy: d?.animationsChangedBy?.username ?? null
 	};
@@ -222,21 +240,24 @@ export async function saveSetup(
 }
 
 /** Only called after the operator explicitly chose to change them. */
-export async function saveAnimations(user: User, input: { grab: unknown; withdraw: unknown }): Promise<SettingsView> {
+export async function saveAnimations(user: User, input: { grab: unknown; withdraw: unknown; fail: unknown }): Promise<SettingsView> {
 	await connectDB();
 	const grab = await resolveAnimation(input.grab, 'grab');
 	const withdraw = await resolveAnimation(input.withdraw, 'withdraw');
+	// The fail animation may be any animation, the withdraw one included.
+	const failAnim = await resolveAnimation(input.fail, 'fail');
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	const now = new Date();
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { grabAnimation: grab, withdrawAnimation: withdraw, animationsChangedAt: now, animationsChangedBy: opRef(user), updatedBy: opRef(user) } },
+		{ $set: { grabAnimation: grab, withdrawAnimation: withdraw, failAnimation: failAnim, animationsChangedAt: now, animationsChangedBy: opRef(user), updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.animations', 'arm_wax_fill_settings', 'default', {
 		grab,
 		withdraw,
-		before: { grab: before.grabAnimation, withdraw: before.withdrawAnimation }
+		fail: failAnim,
+		before: { grab: before.grabAnimation, withdraw: before.withdrawAnimation, fail: before.failAnimation }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -729,9 +750,13 @@ export interface LoopCycleView {
 	opentronsRunId: string | null;
 	opentronsRunFinalStatus: string | null;
 	withdrawArmRunId: string | null;
+	/** Fail route: the step that failed (FailRouteStep) and the arm run of the fail animation. */
+	failedStep: string | null;
+	failArmRunId: string | null;
 	/** When the OT-2 confirmed its gantry home before each arm move (cycleHomeGantry). */
 	gantryHomedForGrabAt: string | null;
 	gantryHomedForWithdrawAt: string | null;
+	gantryHomedForFailAt: string | null;
 	error: string | null;
 }
 
@@ -745,6 +770,7 @@ export interface LoopView {
 	stopRequested: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
+	failAnimation: AnimationRef | null;
 	cycles: LoopCycleView[];
 	error: string | null;
 	startedBy: string | null;
@@ -765,6 +791,7 @@ function loopView(d: any): LoopView {
 		stopRequested: !!d.stopRequested,
 		grabAnimation: animRef(d.grabAnimation),
 		withdrawAnimation: animRef(d.withdrawAnimation),
+		failAnimation: animRef(d.failAnimation),
 		cycles: (d.cycles ?? []).map(
 			(c: any): LoopCycleView => ({
 				index: Number(c.index),
@@ -778,8 +805,11 @@ function loopView(d: any): LoopView {
 				opentronsRunId: c.opentronsRunId ?? null,
 				opentronsRunFinalStatus: c.opentronsRunFinalStatus ?? null,
 				withdrawArmRunId: c.withdrawArmRunId ?? null,
+				failedStep: c.failedStep ?? null,
+				failArmRunId: c.failArmRunId ?? null,
 				gantryHomedForGrabAt: iso(c.gantryHomedForGrabAt),
 				gantryHomedForWithdrawAt: iso(c.gantryHomedForWithdrawAt),
+				gantryHomedForFailAt: iso(c.gantryHomedForFailAt),
 				error: c.error ?? null
 			})
 		),
@@ -830,6 +860,7 @@ export function readiness(
 	if (!settings.robotId) blocking.push('Setup: pick the OT-2 the arm feeds.');
 	if (!settings.grabAnimation) blocking.push('Animations: choose the grab animation.');
 	if (!settings.withdrawAnimation) blocking.push('Animations: choose the withdraw animation.');
+	if (!settings.failAnimation) blocking.push('Animations: choose the fail animation (plays instead of the fill when the scan fails; it may be the withdraw animation).');
 	if (settings.robotId && !protocol) {
 		blocking.push(
 			'The robot has no wax-filling protocol uploaded — upload protocols/Wax_Filling_GEN7_ArmStage.py on /opentrons (Robots → Protocols, process wax-filling) and deploy it to this robot first.'
@@ -851,7 +882,8 @@ export function readiness(
 		if (!calibration?.cartLocation) notes.push(`Cart location is not taught. The current protocol does not read it; it fills deck position ${settings.cartPosition} from the deck calibration.`);
 		else notes.push(`The current protocol does not declare arm_cart_x/y/z, so the taught cart location is kept but not sent; it fills deck position ${settings.cartPosition}. Upload protocols/Wax_Filling_GEN7_ArmStage.py to fill the stage.`);
 	}
-	if (settings.robotId) notes.push('Before every arm move (grab and withdraw) the OT-2 gantry is homed and the arm waits until the robot confirms it.');
+	if (settings.robotId) notes.push('Before every arm move (grab, withdraw and the fail animation) the OT-2 gantry is homed and the arm waits until the robot confirms it.');
+	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill and the loop stops.`);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
 	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
 	return { blocking, notes };
@@ -1024,6 +1056,7 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 		status: 'running',
 		grabAnimation: settings.grabAnimation,
 		withdrawAnimation: settings.withdrawAnimation,
+		failAnimation: settings.failAnimation,
 		cycles: [{ index: 1, step: 'grab', startedAt: now }],
 		startedBy: opRef(user),
 		startedAt: now
@@ -1033,7 +1066,8 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 		robotId: String(robot._id),
 		cartPosition: settings.cartPosition,
 		grab: settings.grabAnimation,
-		withdraw: settings.withdrawAnimation
+		withdraw: settings.withdrawAnimation,
+		fail: settings.failAnimation
 	});
 	return (await getLoop(_id))!;
 }
@@ -1074,7 +1108,7 @@ async function play(user: User, ref: AnimationRef | null, what: string): Promise
 /** A home is trusted for this long; older than that, the step homes again before the arm moves. */
 const GANTRY_HOME_FRESH_MS = 15 * 60_000;
 
-function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHomedForWithdrawAt', what: string) {
+function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHomedForWithdrawAt' | 'gantryHomedForFailAt', what: string) {
 	const at = cycle?.[key] ? new Date(cycle[key]).getTime() : 0;
 	if (!at || Date.now() - at > GANTRY_HOME_FRESH_MS) {
 		throw new ArmWaxFillError(
@@ -1086,16 +1120,17 @@ function assertGantryHomed(cycle: any, key: 'gantryHomedForGrabAt' | 'gantryHome
 }
 
 /**
- * Home the OT-2 gantry and stamp the cycle, BEFORE the arm plays the grab or
- * the withdraw. The robot's legacy POST /robot/home is synchronous (it answers
- * once all axes are home) and needs no maintenance run, so it leaves whatever
- * run the robot holds untouched. cycleGrab / cycleWithdraw refuse to play the
- * arm without a fresh stamp, so a browser that skipped this step cannot swing
- * the arm in over a gantry that is still out on the deck.
+ * Home the OT-2 gantry and stamp the cycle, BEFORE the arm plays the grab, the
+ * withdraw or the fail animation. The robot's legacy POST /robot/home is
+ * synchronous (it answers once all axes are home) and needs no maintenance
+ * run, so it leaves whatever run the robot holds untouched. cycleGrab /
+ * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp, so a
+ * browser that skipped this step cannot swing the arm in over a gantry that is
+ * still out on the deck (after a scan it is at the scan position).
  */
-export async function cycleHomeGantry(user: User, loopId: string, rawBefore: unknown): Promise<{ homedAt: string; cycle: number; before: 'grab' | 'withdraw' }> {
-	const before = rawBefore === 'withdraw' ? 'withdraw' : rawBefore === 'grab' ? 'grab' : null;
-	if (!before) throw new ArmWaxFillError('before must be grab or withdraw.');
+export async function cycleHomeGantry(user: User, loopId: string, rawBefore: unknown): Promise<{ homedAt: string; cycle: number; before: 'grab' | 'withdraw' | 'fail' }> {
+	const before = rawBefore === 'withdraw' ? 'withdraw' : rawBefore === 'grab' ? 'grab' : rawBefore === 'fail' ? 'fail' : null;
+	if (!before) throw new ArmWaxFillError('before must be grab, withdraw or fail.');
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, before);
 	if (before === 'grab' && loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
@@ -1114,7 +1149,7 @@ export async function cycleHomeGantry(user: User, loopId: string, rawBefore: unk
 		throw new ArmWaxFillError(`The OT-2 refused to home (${detail}) — the arm will not move. If a run is still active on the robot, finish or reset it first.`, 502);
 	}
 	const at = new Date();
-	const key = before === 'grab' ? 'gantryHomedForGrabAt' : 'gantryHomedForWithdrawAt';
+	const key = before === 'grab' ? 'gantryHomedForGrabAt' : before === 'withdraw' ? 'gantryHomedForWithdrawAt' : 'gantryHomedForFailAt';
 	await patchCycle(loopId, cycle.index, { [key]: at });
 	await audit(user, 'arm_wax_fill.gantry_home', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before, robotId });
 	return { homedAt: at.toISOString(), cycle: cycle.index, before };
@@ -1154,8 +1189,79 @@ export async function cycleScanned(user: User, loopId: string, input: { sweepRun
 		const seen = (sweep.scans ?? []).some((s: any) => s.barcode === barcode);
 		if (!seen) throw new ArmWaxFillError('The sweep did not read that barcode.', 409);
 	}
+	// Read, but is it a cart that can be filled? If not, the fail route — not a
+	// loop failure with the cart left on the stage.
+	const problem = await cartScanProblem(barcode, (await getSettings()).testMode);
+	if (problem) return enterFailRoute(user, loopId, cycle, 'scan', problem, { sweepRunId: sweepRunId || null, barcode });
 	await patchCycle(loopId, cycle.index, { step: 'fill', sweepRunId: sweepRunId || null, barcode });
 	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, sweepRunId, barcode });
+	return (await getLoop(loopId))!;
+}
+
+/**
+ * Why a barcode the scanner read cannot be filled, or null if it can. The
+ * rules attachCart enforces at the fill, checked at the scan so a wrong cart
+ * takes the fail route instead of failing the loop with the cart on the stage.
+ */
+async function cartScanProblem(barcode: string, testMode: boolean): Promise<string | null> {
+	const cart = (await CartridgeRecord.findById(barcode).select('_id status').lean()) as any;
+	if (!cart) {
+		const labels = await findBucketLabels([barcode]);
+		if (labels.size > 0) return `${barcode} is the label on bucket ${[...labels.values()][0]}, not a cartridge.`;
+		if (testMode) return null; // synthesised as a backed cart at the fill
+		return `Cartridge ${barcode} is not in the system (a cart exists once it is scanned into a production bucket; test mode in Setup synthesises test carts).`;
+	}
+	if (cart.status !== 'backing') return `Cartridge ${barcode} is at "${cart.status ?? '(none)'}" — only backed carts (status backing) can be wax filled.`;
+	return null;
+}
+
+// ── the fail route ────────────────────────────────────────────────────────
+
+/** The cycle leaves the happy path: step 'fail' with the reason on it; the fail animation is next. */
+async function enterFailRoute(user: User, loopId: string, cycle: any, failedStep: FailRouteStep, reason: string, extra: Record<string, unknown> = {}): Promise<LoopView> {
+	const msg = String(reason ?? 'failed').slice(0, 2000);
+	await patchCycle(loopId, cycle.index, { step: 'fail', failedStep, error: msg, ...extra });
+	await audit(user, 'arm_wax_fill.cycle_fail_route', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, failedStep, error: msg, ...extra });
+	return (await getLoop(loopId))!;
+}
+
+/** The scan read nothing (sweep errored / timed out / completed without a barcode): the fail route. */
+export async function cycleScanFailed(user: User, loopId: string, input: { reason: unknown; sweepRunId: unknown }): Promise<LoopView> {
+	const { cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'scan');
+	const sweepRunId = String(input.sweepRunId ?? '').trim() || null;
+	const reason = String(input.reason ?? '').trim() || 'the scan read nothing';
+	return enterFailRoute(user, loopId, cycle, 'scan', reason, { sweepRunId });
+}
+
+/** Fail route: the arm MOVES through the fail animation — only after the gantry reported home. */
+export async function cycleFail(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'fail');
+	assertGantryHomed(cycle, 'gantryHomedForFailAt', 'fail animation');
+	const p = await play(user, animRef(loop.failAnimation), 'fail');
+	await patchCycle(loopId, cycle.index, { failArmRunId: p.runId });
+	await audit(user, 'arm_wax_fill.cycle_fail', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, failedStep: cycle.failedStep ?? null, armRunId: p.runId, durationS: p.durationS });
+	return { play: p, cycle: cycle.index };
+}
+
+/** The fail animation ended: the cycle is failed and the loop ends — the fail route always stops the run. */
+export async function cycleFailDone(user: User, loopId: string): Promise<LoopView> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'fail');
+	const now = new Date();
+	const failedStep = cycle.failedStep ?? 'scan';
+	const msg = cycle.error ?? 'failed';
+	await patchCycle(loopId, cycle.index, { step: 'failed', endedAt: now });
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'failed', error: `${failedStep}: ${msg} The fail animation played.`, endedAt: now } });
+	await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', loopId, {
+		cycle: cycle.index,
+		step: failedStep,
+		error: msg,
+		failRoute: true,
+		failArmRunId: cycle.failArmRunId ?? null,
+		completedRuns: Number(loop.completedRuns ?? 0)
+	});
 	return (await getLoop(loopId))!;
 }
 
@@ -1391,8 +1497,8 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 }
 
 /**
- * Stop. While the arm is moving (grab / withdraw) the play is stopped and the
- * loop ends now; while the OT-2 is filling, the fill and the withdraw still
+ * Stop. While the arm is moving (grab / withdraw / fail animation) the play is
+ * stopped and the loop ends now; while the OT-2 is filling, the fill and the withdraw still
  * run (a half-filled cart is worse than one more cycle) and the loop ends
  * after them; between steps it ends at the next step.
  */
@@ -1401,7 +1507,7 @@ export async function stopLoop(user: User, loopId: string): Promise<{ loop: Loop
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { stopRequested: true } });
 	let stoppedArm = false;
 	let torqueOn: boolean | null = null;
-	if (cycle.step === 'grab' || cycle.step === 'withdraw' || cycle.step === 'scan') {
+	if (cycle.step === 'grab' || cycle.step === 'withdraw' || cycle.step === 'scan' || cycle.step === 'fail') {
 		if (cycle.step !== 'scan') {
 			const active = await playbackActive().catch(() => null);
 			if (active) {

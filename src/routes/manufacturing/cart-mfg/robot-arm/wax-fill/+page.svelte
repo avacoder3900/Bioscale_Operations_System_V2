@@ -7,6 +7,11 @@
 	 * next one starts, so a reload shows where the cycle is and Resume carries
 	 * on from there. The arm steps reuse the Animate Playback helper (end-of-
 	 * play poll + settle); the fill step reuses EmbeddedRunController.
+	 *
+	 * The fail route: a scan that fails (nothing read, or the cart is not a
+	 * backed cart) does not end the loop where it stands — the cycle goes to
+	 * step 'fail', the gantry homes, the arm plays the FAIL animation and the
+	 * loop then ends failed. Only the scan takes it today.
 	 */
 	import { onDestroy, onMount } from 'svelte';
 	import { enhance, deserialize } from '$app/forms';
@@ -26,6 +31,7 @@
 		fill: 'Fill',
 		withdraw: 'Withdraw',
 		done: 'Done',
+		fail: 'Fail animation',
 		failed: 'Failed',
 		stopped: 'Stopped'
 	};
@@ -86,7 +92,7 @@
 	 * play the Pi never reports the end of just stops running with an outcome,
 	 * so a watchdog turns that into a failure instead of a hang.
 	 */
-	function playStep(action: 'cycleGrab' | 'cycleWithdraw', title: string): Promise<{ ok: boolean; error?: string }> {
+	function playStep(action: 'cycleGrab' | 'cycleWithdraw' | 'cycleFail', title: string): Promise<{ ok: boolean; error?: string }> {
 		return new Promise((resolve) => {
 			let settled = false;
 			let watchdog: ReturnType<typeof setInterval> | null = null;
@@ -113,7 +119,8 @@
 	// ── the scan step (one-slot sweep over the production scanner route) ─
 	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-	async function scanStep(): Promise<{ ok: true; sweepRunId: string; barcode: string } | { ok: false; error: string }> {
+	/** A failure carries the sweep id when the sweep was queued, so the fail route can record it. */
+	async function scanStep(): Promise<{ ok: true; sweepRunId: string; barcode: string } | { ok: false; error: string; sweepRunId?: string }> {
 		if (!calibration?.scanPositionSetId) return { ok: false, error: 'No scan position is taught.' };
 		let res: Response;
 		try {
@@ -146,9 +153,9 @@
 			const scan = (s.scans ?? [])[0];
 			if (s.status === 'completed' && scan?.barcode) return { ok: true, sweepRunId, barcode: String(scan.barcode) };
 			const err = (s.errors ?? [])[0]?.message ?? s.abortReason ?? `sweep ${s.status} with no barcode`;
-			return { ok: false, error: err };
+			return { ok: false, error: err, sweepRunId };
 		}
-		return { ok: false, error: stopAsked ? 'stopped while scanning' : 'the scanner did not answer within 3 minutes' };
+		return { ok: false, error: stopAsked ? 'stopped while scanning' : 'the scanner did not answer within 3 minutes', sweepRunId };
 	}
 
 	// ── the fill step (EmbeddedRunController reports the end) ────────────
@@ -221,8 +228,15 @@
 						break;
 					}
 					if (!s.ok) {
-						await fail('scan', s.error);
-						break;
+						// Nothing read: the fail route — the fail animation plays, then the loop stops.
+						note(`${tag}: scan failed — ${s.error}. Taking the fail route.`, 'warn');
+						const f = await post('cycleScanFailed', { loopId: loop._id, reason: s.error, sweepRunId: s.sweepRunId ?? '' });
+						if (!f.ok) {
+							await fail('scan', `${s.error} (and the fail route could not be entered: ${f.error})`);
+							break;
+						}
+						loop = f.data.loop;
+						continue;
 					}
 					note(`${tag}: read ${s.barcode}.`);
 					const r = await post('cycleScanned', { loopId: loop._id, sweepRunId: s.sweepRunId, barcode: s.barcode });
@@ -231,6 +245,39 @@
 						break;
 					}
 					loop = r.data.loop;
+					// Read, but not a cart that can be filled: the server put the cycle on the fail route.
+					const after = loop!.cycles[loop!.cycles.length - 1];
+					if (after?.step === 'fail') note(`${tag}: ${after.error ?? 'the cart cannot be filled.'} Taking the fail route.`, 'warn');
+				} else if (cycle.step === 'fail') {
+					// The fail route: gantry home, the fail animation, and the loop ends failed.
+					note(`${tag}: homing the OT-2 gantry before the arm moves.`);
+					const h = await post('homeGantry', { loopId: loop._id, before: 'fail' });
+					if (!h.ok) {
+						if (stopAsked) {
+							await refreshLoop();
+							if (loop?.status !== 'running') break;
+						}
+						await fail('fail', `the OT-2 did not report home: ${h.error} — the cart is still on the stage`);
+						break;
+					}
+					note(`${tag}: OT-2 home — fail animation — playing "${loop.failAnimation?.name ?? ''}".`);
+					const p = await playStep('cycleFail', `Fail animation (cycle ${cycle.index})`);
+					if (stopAsked) {
+						// Stop pressed while the arm was playing the fail animation ends the loop on the server.
+						await refreshLoop();
+						if (loop?.status !== 'running') break;
+					}
+					if (!p.ok) {
+						await fail('fail', `${p.error ?? 'play failed'} — the cart may still be on the stage`);
+						break;
+					}
+					const r = await post('cycleFailDone', { loopId: loop._id });
+					if (!r.ok) {
+						await fail('fail', r.error);
+						break;
+					}
+					loop = r.data.loop;
+					note(`Loop stopped: ${STEP_LABEL[cycle.failedStep ?? 'scan']?.toLowerCase() ?? cycle.failedStep} failed on cycle ${cycle.index}, the fail animation played — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.`, 'error');
 				} else if (cycle.step === 'fill') {
 					let run = cycle.opentronsRunId && cycle.waxRunId ? { opentronsRunId: cycle.opentronsRunId, waxRunId: cycle.waxRunId } : null;
 					if (!run) {
@@ -545,14 +592,34 @@
 
 	const fmt = (p: { x: number; y: number; z: number } | null) => (p ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · z ${p.z.toFixed(2)}` : 'not taught');
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '');
+	const TILE_NEUTRAL = 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]';
+	const TILE_DONE = 'border-green-500/40 bg-green-900/15 text-green-300';
+	const TILE_CURRENT = 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]';
+	const TILE_FAILED = 'border-red-500/50 bg-red-900/20 text-red-300';
+	/** The cycle took (or is on) the fail route: a fifth tile shows the fail animation. */
+	const onFailRoute = (cycle: LoopCycleView | null) => !!cycle && (cycle.step === 'fail' || !!cycle.failedStep);
 	const stepClass = (cycle: LoopCycleView | null, step: string) => {
-		if (!cycle) return 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]';
+		if (!cycle) return TILE_NEUTRAL;
 		const i = STEPS.indexOf(step as (typeof STEPS)[number]);
+		if (onFailRoute(cycle)) {
+			// Steps before the one that failed went fine; that one is red; the rest never ran.
+			const f = STEPS.indexOf((cycle.failedStep ?? '') as (typeof STEPS)[number]);
+			if (f >= 0 && i < f) return TILE_DONE;
+			if (i === f) return TILE_FAILED;
+			return TILE_NEUTRAL;
+		}
 		const cur = STEPS.indexOf(cycle.step as (typeof STEPS)[number]);
-		if (cycle.step === 'done' || (cur > i && cur >= 0)) return 'border-green-500/40 bg-green-900/15 text-green-300';
-		if (cur === i) return 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]';
+		if (cycle.step === 'done' || (cur > i && cur >= 0)) return TILE_DONE;
+		if (cur === i) return TILE_CURRENT;
 		if (cycle.step === 'failed' || cycle.step === 'stopped') return 'border-red-500/30 text-red-300/70';
-		return 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]';
+		return TILE_NEUTRAL;
+	};
+	/** The fail-animation tile: playing (cyan), played (amber), or the route itself failed before it played (red). */
+	const failTileClass = (cycle: LoopCycleView | null) => {
+		if (cycle?.step === 'fail') return TILE_CURRENT;
+		if (cycle?.failArmRunId) return 'border-amber-500/50 bg-amber-900/15 text-amber-300';
+		if (cycle?.step === 'failed') return TILE_FAILED;
+		return TILE_NEUTRAL;
 	};
 </script>
 
@@ -563,8 +630,9 @@
 			The arm feeds one cart at a time onto its stage: OT-2 gantry <span class="font-semibold">home</span> → <span class="font-semibold">grab</span> →
 			<span class="font-semibold">scan</span> at the taught position → <span class="font-semibold">fill</span>
 			{#if stage}at the taught cart location with the stage protocol{:else}with the robot's carriage protocol (one cart, deck position {data.settings.cartPosition}){/if}
-			→ gantry <span class="font-semibold">home</span> → <span class="font-semibold">withdraw</span>, for as many runs as you ask. The arm never
-			moves until the OT-2 confirms its gantry is home. The cart-drop unit will slot in before the grab once it is ready.
+			→ gantry <span class="font-semibold">home</span> → <span class="font-semibold">withdraw</span>, for as many runs as you ask. If the scan fails
+			— nothing read, or the cart is not a backed cart — the <span class="font-semibold">fail animation</span> plays instead of the fill and the run stops.
+			The arm never moves until the OT-2 confirms its gantry is home. The cart-drop unit will slot in before the grab once it is ready.
 		</p>
 	</div>
 
@@ -674,10 +742,13 @@
 						{loop.status}{driving ? ' · driving' : loop.status === 'running' ? ' · paused in this browser' : ''}
 					</span>
 				</div>
-				<div class="grid grid-cols-4 gap-2">
+				<div class="grid gap-2 {onFailRoute(currentCycle) ? 'grid-cols-5' : 'grid-cols-4'}">
 					{#each STEPS as s (s)}
 						<div class="rounded border px-2 py-2 text-center text-xs font-semibold {stepClass(currentCycle, s)}">{STEP_LABEL[s]}</div>
 					{/each}
+					{#if onFailRoute(currentCycle)}
+						<div class="rounded border px-2 py-2 text-center text-xs font-semibold {failTileClass(currentCycle)}" title={currentCycle?.error ?? ''}>{STEP_LABEL.fail}</div>
+					{/if}
 				</div>
 				{#if loop.error}<p class="text-xs text-red-300">{loop.error}</p>{/if}
 
@@ -713,7 +784,7 @@
 								{#each loop.cycles as c (c.index)}
 									<tr style="color: var(--color-tron-text)">
 										<td class="pr-2">{c.index}</td>
-										<td class="pr-2">{STEP_LABEL[c.step] ?? c.step}</td>
+										<td class="pr-2">{STEP_LABEL[c.step] ?? c.step}{#if c.failedStep} <span class="opacity-60">(fail route after {STEP_LABEL[c.failedStep]?.toLowerCase() ?? c.failedStep}{c.failArmRunId ? ', fail animation played' : ''})</span>{/if}</td>
 										<td class="pr-2 font-mono">{c.barcode ?? '—'}</td>
 										<td class="pr-2 font-mono">{c.opentronsRunId ? `${c.opentronsRunId.slice(0, 8)}… ${c.opentronsRunFinalStatus ?? ''}` : '—'}</td>
 										<td class={c.error ? 'text-red-300' : ''}>{c.error ?? ''}</td>
@@ -789,6 +860,7 @@
 			</div>
 			<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
 				Chosen once and kept for every run. Made in <a href="/manufacturing/cart-mfg/robot-arm/animate" class="underline" style="color: var(--color-tron-cyan)">Animate</a> (move sets or sequences).
+				The fail animation plays instead of the fill when the scan fails; it may be the withdraw animation or its own.
 			</p>
 			{#if changingAnimations}
 				<form method="POST" action="?/saveAnimations" use:enhance={() => async ({ update }) => { changingAnimations = false; await update(); }} class="mt-3 space-y-3 text-xs">
@@ -806,6 +878,13 @@
 							{#each animationOptions as o (o.value)}<option value={o.value} selected={o.value === animValue(anim.withdrawAnimation)}>{o.label}</option>{/each}
 						</select>
 					</label>
+					<label class="block">
+						<span style="color: var(--color-tron-text-secondary)">Fail — plays instead of the fill when the scan fails (nothing read, or the cart is not a backed cart); the run then stops</span>
+						<select name="fail" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
+							<option value="">— pick —</option>
+							{#each animationOptions as o (o.value)}<option value={o.value} selected={o.value === animValue(anim.failAnimation)}>{o.label}</option>{/each}
+						</select>
+					</label>
 					<div class="flex justify-end gap-2">
 						<button type="button" onclick={() => (changingAnimations = false)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs" style="color: var(--color-tron-text)">Cancel</button>
 						<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save animations</button>
@@ -817,6 +896,8 @@
 					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.grabAnimation?.name ?? '— not chosen —'}{#if anim.grabAnimation}<span class="ml-1 font-normal opacity-60">({anim.grabAnimation.kind === 'sequence' ? 'sequence' : 'move set'})</span>{/if}</dd>
 					<dt style="color: var(--color-tron-text-secondary)">Withdraw</dt>
 					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.withdrawAnimation?.name ?? '— not chosen —'}{#if anim.withdrawAnimation}<span class="ml-1 font-normal opacity-60">({anim.withdrawAnimation.kind === 'sequence' ? 'sequence' : 'move set'})</span>{/if}</dd>
+					<dt style="color: var(--color-tron-text-secondary)">Fail</dt>
+					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.failAnimation?.name ?? '— not chosen —'}{#if anim.failAnimation}<span class="ml-1 font-normal opacity-60">({anim.failAnimation.kind === 'sequence' ? 'sequence' : 'move set'}{anim.withdrawAnimation && animValue(anim.failAnimation) === animValue(anim.withdrawAnimation) ? ', same as withdraw' : ''})</span>{/if}</dd>
 				</dl>
 				{#if anim.animationsChangedAt}
 					<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Last changed {when(anim.animationsChangedAt)}{anim.animationsChangedBy ? ` by ${anim.animationsChangedBy}` : ''}.</p>

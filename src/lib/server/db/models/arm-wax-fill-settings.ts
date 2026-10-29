@@ -9,9 +9,11 @@ import mongoose, { Schema } from 'mongoose';
  * the fill lands on the taught cart location (ArmWaxFillCalibration, taught
  * on the Stage calibration tab);
  * with the ordinary carriage protocol it fills `cartPosition` on `deckId`
- * (the legacy stopgap). The grab and withdraw animations are Animate move
- * sets or sequences, chosen once and kept: the page only lets them change
+ * (the legacy stopgap). The grab, withdraw and fail animations are Animate
+ * move sets or sequences, chosen once and kept: the page only lets them change
  * after an explicit "Change animations", so a run never asks for them again.
+ * The fail animation plays instead of the fill when the scan fails (the fail
+ * route, see $lib/server/arm-wax-fill); it may be the same as the withdraw.
  */
 const animationRefSchema = new Schema(
 	{
@@ -36,6 +38,8 @@ const armWaxFillSettingsSchema = new Schema(
 		testMode: { type: Boolean, default: false },
 		grabAnimation: animationRefSchema,
 		withdrawAnimation: animationRefSchema,
+		/** Plays when a cycle takes the fail route (today: the scan failed). May equal the withdraw animation. */
+		failAnimation: animationRefSchema,
 		animationsChangedAt: Date,
 		animationsChangedBy: { _id: String, username: String },
 		updatedBy: { _id: String, username: String }
