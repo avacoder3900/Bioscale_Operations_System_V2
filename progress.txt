@@ -24692,3 +24692,8 @@ Operator steps: Wax fill tab -> Protocol on the robot -> "Add a stage .py to the
 Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py (and the production ArmStage .py), deploy it, Reset, start the loop.
 Still open: scripts/ot2-bridge.py upload_protocol should return the analysis's errors[] as analysisErrors (needs a daemon
 redeploy to the robots), so a deploy goes red by itself instead of at the next run start.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit b940dfc4 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy b940dfc4 (RTP descriptions under the limit)"
+What this deployment is for: the repo's stage and rehearsal .py files pass the robot's analysis; the library copies still have to be replaced from the Wax fill tab.
