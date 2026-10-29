@@ -30,10 +30,21 @@ import time
 # of the first wax hole, and BIMS stores (live − that tip's probe adjust).
 # Every fill then probes ITS tip and adds that adjust back — the same frame
 # the carriage fill uses, so bims_native / use_tip_calibration behave the same.
+#
+# LIFT RULE (the robot-arm line only): the pipette goes ALL THE WAY UP — a
+# Z-only home to the top of its travel — before EVERY move between stations:
+# the tip rack, the calibrator, the wax tube, the trash and the cart on the
+# stage, and between the cart's rows. The arm and its stage stand far above
+# anything the motion planner knows about (it only sees the labware on the
+# deck), so a planned arc or a direct move at any lower height can hit them.
+# lift() does the home; every move after it is a PLANNED move (no
+# force_direct), which the engine runs as XY at the current — top — height and
+# then straight down at the target, never a diagonal. Only the hops between
+# the holes of one row stay low (5 mm over the cart, inside its own footprint).
 
 metadata = {
     'author': 'Brevitest',
-    'description': 'Robot-arm stage: fills ONE Gen7 cartridge at the taught arm_cart_x/y/z (no deck, no Particle id). Same fill recipe as Wax_Filling_GEN7_Cartridge v4.1.',
+    'description': 'Robot-arm stage: fills ONE Gen7 cartridge at the taught arm_cart_x/y/z (no deck, no Particle id). Same fill recipe as Wax_Filling_GEN7_Cartridge v4.1; the pipette goes all the way up (Z-only home) before every move between stations.',
 }
 
 requirements = {"robotType": "OT-2", "apiLevel": "2.19"}
@@ -56,6 +67,45 @@ COLUMN_GATE = {'2': 'wax_gate4', '4': 'wax_gate3', '6': 'wax_gate2', '8': 'wax_g
 # A taught coordinate below this is "never taught" (the RTP defaults are 0 and
 # the deck's front-left corner is NOT where a cart is). Refused before any motion.
 MIN_TAUGHT_MM = 1.0
+
+
+def _resolve_lift(pipette):
+    """Build lift(): a Z-only home of the pipette's mount, sent through the
+    protocol engine — what InstrumentContext.home() does inside (opentrons 8.7,
+    API 2.19: InstrumentCore.home), minus the plunger, which must not move with
+    wax in the tip. The public API has no other way up: move_to(minimum_z_height=)
+    needs the top height as a number the protocol cannot read, and the engine
+    rejects a minimum above the pipette's reach.
+
+    Resolved BEFORE any motion. If a future robot-server keeps the hook elsewhere
+    the run refuses to start instead of travelling low over the arm."""
+    import inspect
+    try:
+        from opentrons.protocol_engine import commands as pe_commands
+        from opentrons.protocol_engine.types import MotorAxis
+        execute = pipette._core._engine_client.execute_command
+    except Exception as e:  # ImportError / AttributeError on another robot-server
+        raise RuntimeError(
+            'ARM STAGE: cannot reach the protocol engine for the Z-only home '
+            f'({type(e).__name__}: {e}). This robot-server does not keep the hook where '
+            'opentrons 8.7 does; refusing to run rather than travel low over the arm.'
+        )
+    axis = MotorAxis.RIGHT_Z if str(pipette.mount).lower() == 'right' else MotorAxis.LEFT_Z
+    params = pe_commands.HomeParams(axes=[axis])
+    try:
+        n_args = len(inspect.signature(execute).parameters)
+    except (TypeError, ValueError):
+        n_args = 1
+
+    def lift():
+        """ALL THE WAY UP: home the mount's Z axis (top of travel). The next
+        PLANNED move_to travels at this height and comes straight down."""
+        if n_args >= 2:
+            execute(params, [])  # newer clients: (params, command_annotations)
+        else:
+            execute(params)
+
+    return lift
 
 
 def stage_targets(x0, y0, z0, rotation_deg=0.0):
@@ -125,12 +175,8 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="arm_cart_rotation_deg", display_name="Cart rotation on the stage",
         description="How the stage turns the cart vs a carriage slot, degrees CCW from above about the first hole. 0 = gates toward -x, rows toward -y; 180 = turned end for end.",
         default=0.0, minimum=-360.0, maximum=360.0, unit="deg")
-    # How high above the hole rim the tip travels when it arrives at the cart
-    # and when it leaves for the tube. The carriage protocol hardcodes 60; the
-    # stage is raised, so this is tunable in case 60 over the rim is out of reach.
-    parameters.add_float(variable_name="stage_jump_height", display_name="Travel height over the cart (mm)",
-        description="Clearance above the hole rim when arriving at / leaving the cart. Lower it if the stage is too high for 60.",
-        default=60.0, minimum=10.0, maximum=60.0, unit="mm")
+    # No travel-height parameter: the pipette goes ALL THE WAY UP (Z-only home)
+    # before every move between stations — see the LIFT RULE in the header.
 
     # ------------------------------------------------------------------
     # Tip-calibration controls — identical to the carriage protocol. DEFAULT ON:
@@ -271,6 +317,9 @@ def run(protocol: protocol_api.ProtocolContext):
     tiprack = protocol.load_labware('cosmasanddamian_96_tiprack_20ul', 11)
     pipette = protocol.load_instrument('p20_single_gen2', mount='right', tip_racks=[tiprack])
 
+    # LIFT RULE: resolved before any motion; raises if the engine hook is missing.
+    lift = _resolve_lift(pipette)
+
     if bims_native:
         tuberack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
         tiprack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
@@ -280,7 +329,6 @@ def run(protocol: protocol_api.ProtocolContext):
     cart_y = float(protocol.params.arm_cart_y)
     cart_z = float(protocol.params.arm_cart_z)
     cart_rot = float(protocol.params.arm_cart_rotation_deg)
-    jump_height = float(protocol.params.stage_jump_height)
     cart_taught = cart_x >= MIN_TAUGHT_MM and cart_y >= MIN_TAUGHT_MM and cart_z >= MIN_TAUGHT_MM
     if not cart_taught:
         protocol.comment('ARM STAGE: no cart location (arm_cart_x/y/z not set) - the run will refuse to move.')
@@ -479,6 +527,7 @@ def run(protocol: protocol_api.ProtocolContext):
             z_cal = protocol.params.z_cal
 
             if pick_up and pipette.has_tip:
+                lift()
                 pipette.drop_tip()
 
             if pick_up and not protocol.is_simulating() and _tip_index >= len(_all_tips):
@@ -488,6 +537,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 save_tip_state(0)
 
             if pick_up:
+                lift()
                 pipette.pick_up_tip()
                 if not protocol.is_simulating():
                     _tip_index += 1
@@ -504,6 +554,7 @@ def run(protocol: protocol_api.ProtocolContext):
             max_adjust = float(protocol.params.max_tip_adjust)
 
             def _probe_once():
+                lift()  # from the tip rack / the hover / the cart: XY at the top, then down onto the calibrator
                 pipette.move_to(P(cal_x, cal_y, z_cal), speed=None)
 
                 x_pos = cal_x - 0.6
@@ -563,6 +614,7 @@ def run(protocol: protocol_api.ProtocolContext):
 
                 pipette.move_to(P(cal_x + 2.0, cal_y + 1.0, z_cal), force_direct=True, speed=20)
                 pipette.move_to(P(cal_x + 2.0, cal_y + 1.0, z_cal + 20), force_direct=True, speed=20)
+                lift()  # back to the top: the next stop is the tube, the cart or the trash
 
                 adj = { 'x': xOffset, 'y': yOffset }
                 if not x_ok:
@@ -574,7 +626,8 @@ def run(protocol: protocol_api.ProtocolContext):
                 return adj, True, ''
 
             def _no_tip_prompt(attempt, why):
-                pipette.move_to(P(cal_x + 2.0, cal_y + 1.0, z_cal + 60), force_direct=True, speed=20)
+                lift()
+                pipette.move_to(P(cal_x + 2.0, cal_y + 1.0, z_cal + 60), speed=20)  # planned: XY at the top, then down to the hover
                 protocol.comment(f'WARNING: NO TIP DETECTED on the pipette (attempt {attempt}: {why}).')
                 protocol.pause(
                     f'NO TIP DETECTED (attempt {attempt}: {why}). The pipette is raised over the '
@@ -598,12 +651,14 @@ def run(protocol: protocol_api.ProtocolContext):
 
             protocol.comment(f'Tip calibration REJECTED ({why}) - retrying with a fresh tip.')
             if pipette.has_tip:
+                lift()
                 pipette.drop_tip()
             if not protocol.is_simulating() and _tip_index >= len(_all_tips):
                 protocol.pause('TIP TRACKER: tiprack exhausted - refill rack, enable "Tiprack Refilled" on next run, then click Resume to continue with current run from A1')
                 _tip_index = 0
                 pipette.starting_tip = _all_tips[0]
                 save_tip_state(0)
+            lift()
             pipette.pick_up_tip()
             if not protocol.is_simulating():
                 _tip_index += 1
@@ -635,29 +690,26 @@ def run(protocol: protocol_api.ProtocolContext):
         well_prejump_height = 5
 
         def arrive(t, adjust):
-            """Come down onto hole `t` the way the carriage fill does: to the jump
-            height first (an arc with an explicit minimum, because the planner only
-            knows the labware on the deck, not the raised stage), shift by the tip
-            adjust, then straight down to the pre-jump height over the hole.
+            """Come down onto hole `t`: ALL THE WAY UP first (lift), then ONE planned
+            move to the pre-jump height over the hole, tip adjust applied. The
+            engine runs that move as XY at the top and then straight down — the
+            planner only knows the labware on the deck, not the raised stage, so
+            the lift is what keeps the travel clear of the arm and the stage.
 
             Every move at the stage after this one is force_direct: a bare deck
-            point has no labware, so a planned move to it is a deck-high arc (lift
-            to above the tube rack and back) rather than the carriage fill's small
-            in-labware hop - slow, and pointless over one flat cartridge top."""
+            point has no labware, so a planned move to it would arc at deck height
+            - slow, low, and pointless over one flat cartridge top."""
             name, tx, ty, tz = t
             px, py = tx + adjust['x'], ty + adjust['y']
-            pipette.move_to(P(tx, ty, tz + jump_height), minimum_z_height=tz + jump_height)
-            pipette.move_to(P(px, py, tz + jump_height), force_direct=True)
-            protocol.delay(seconds=.3)
-            pipette.move_to(P(px, py, tz + well_prejump_height), force_direct=True)
+            lift()
+            pipette.move_to(P(px, py, tz + well_prejump_height))
             protocol.delay(seconds=.3)
             return px, py
 
         def leave(t, adjust):
-            """Lift straight up to the jump height before any cross-deck travel -
-            the stage is higher than anything the API knows about."""
-            name, tx, ty, tz = t
-            pipette.move_to(P(tx + adjust['x'], ty + adjust['y'], tz + jump_height), force_direct=True)
+            """Straight up, all the way: the Z-only home before any travel away
+            from the cart (the stage is higher than anything the API knows about)."""
+            lift()
 
         calibration_check_wells = ['X2', 'X8', 'V8', 'V2']  # the cart's 4 corners
 
@@ -709,8 +761,8 @@ def run(protocol: protocol_api.ProtocolContext):
 
         def dispense_stage(source, well_volumes, dispense_rates, source_volume, adjust):
             """The carriage protocol's dispense loop over the 12 stage targets:
-            batches never cross a row, every batch arrives via the jump height and
-            leaves by lifting to it, the mid-run tip swap is honoured."""
+            batches never cross a row, every batch arrives after a full lift and
+            leaves by lifting all the way up, the mid-run tip swap is honoured."""
             source_well = tuberack[source]
             first_dispense = True
             well_index = 0
@@ -728,7 +780,8 @@ def run(protocol: protocol_api.ProtocolContext):
                 protocol.comment(f'TIP SWAP requested from BIMS ({mode}) - will continue at well {at_well}.')
                 if mode == 'hand':
                     _cx, _cy, _cz = protocol.params.cal_x, protocol.params.cal_y, protocol.params.z_cal
-                    pipette.move_to(P(_cx + 2.0, _cy + 1.0, _cz + 60), force_direct=True, speed=20)
+                    lift()
+                    pipette.move_to(P(_cx + 2.0, _cy + 1.0, _cz + 60), speed=20)  # planned: XY at the top, then down to the hover
                     protocol.pause(
                         f'TIP SWAP (by hand): the pipette is raised over the calibrator. Pull the old tip '
                         f'off and push a NEW tip firmly on, then click Resume - it will calibrate the new '
@@ -803,10 +856,10 @@ def run(protocol: protocol_api.ProtocolContext):
                     current_volume = well_volumes[gate]
                     current_rate = dispense_rates[gate]
                     # Arriving from the tube (idx 0), the first hole of the run, or a
-                    # row crossing: always via the jump height. The planner cannot
-                    # see the raised stage, so the explicit lift is not optional here.
+                    # row crossing: always ALL THE WAY UP first (arrive → lift). The
+                    # planner cannot see the raised stage, so the lift is not optional.
                     # Within a row: a straight hop to the pre-jump height over the next
-                    # hole (the carriage fill's in-labware arc, done by hand).
+                    # hole (5 mm over the cart, inside its own footprint).
                     crosses_row = idx > 0 and row_key(well_name) != row_key(batch[idx - 1][0])
                     if first_dispense or crosses_row or idx == 0:
                         px, py = arrive(t, adjust)
@@ -838,6 +891,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 pipette.blow_out(location=source_well.top())
 
             if pipette.has_tip:
+                lift()
                 pipette.drop_tip()
 
         # ── Volumes ──────────────────────────────────────────────────────────
@@ -865,6 +919,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     run_calibration_check(check_adjust)
                     protocol.pause('Calibration check done. Click Resume to START WAX DISPENSING with a fresh tip, or Cancel/Stop to end the run.')
                     if pipette.has_tip:
+                        lift()
                         pipette.drop_tip()
                 adjust = pick_up_and_calibrate_tip()
                 dispense_stage(

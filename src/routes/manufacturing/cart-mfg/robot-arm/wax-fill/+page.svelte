@@ -121,7 +121,11 @@
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
 				credentials: 'same-origin',
-				body: JSON.stringify({ robotId, positionSetId: calibration.scanPositionSetId, source: 'wax_filling', contextRef: loop!._id, maxSlots: 1 })
+				// liftBeforeMove: the daemon homes the pipette's Z (all the way up) before
+				// every gantry move of this sweep — the arm and its stage stand above
+				// anything the OT-2's planner knows about. The route also forces it for
+				// the arm's one-slot set.
+				body: JSON.stringify({ robotId, positionSetId: calibration.scanPositionSetId, source: 'wax_filling', contextRef: loop!._id, maxSlots: 1, liftBeforeMove: true })
 			});
 		} catch (e) {
 			return { ok: false, error: `sweep request failed: ${e instanceof Error ? e.message : String(e)}` };
@@ -755,7 +759,7 @@
 					{#if stage}
 						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
 							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
-							<span class="mt-1 block">Cart rotation, dispense depth and travel height are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab.</span>
+							<span class="mt-1 block">Cart rotation and dispense depth are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab. The pipette goes all the way up before every move.</span>
 						</div>
 					{:else}
 						<label class="block">
@@ -872,8 +876,8 @@
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Stage geometry</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}° · travel {calibration?.stageJumpHeightMm ?? 60} mm</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">How the stage holds the cart; the clearance over the rim.</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}° · travel: all the way up</div>
+				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">How the stage holds the cart. Every move between stations starts with a full lift of the pipette.</div>
 			</div>
 		</div>
 	</section>

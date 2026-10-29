@@ -21,9 +21,9 @@ import mongoose, { Schema } from 'mongoose';
  *                 (negative = hover above it) — the stage protocol's
  *                 `dispense_depth`. Taught by jogging a tip to the height over
  *                 the first hole and saving; stored as rim z − live z.
- *   stageRotationDeg / stageJumpHeightMm  the cart's rotation on the stage and the
- *                 travel clearance over the rim (`arm_cart_rotation_deg`,
- *                 `stage_jump_height`).
+ *   stageRotationDeg  the cart's rotation on the stage (`arm_cart_rotation_deg`).
+ *                 (stageJumpHeightMm, the old travel clearance over the rim, is
+ *                 gone: the pipette goes all the way up before every move.)
  *
  * All taught on the Robot Arm → Stage calibration tab from a maintenance run:
  * jog, save the robot's own XYZ (plus the tip probe for the cart location).
@@ -60,7 +60,6 @@ const armWaxFillCalibrationSchema = new Schema(
 			taughtBy: { _id: String, username: String }
 		},
 		stageRotationDeg: { type: Number, default: 0 },
-		stageJumpHeightMm: { type: Number, default: 60 },
 		pipetteMount: { type: String, enum: ['left', 'right'], default: 'left' },
 		pipetteName: String,
 		updatedBy: { _id: String, username: String }

@@ -18,7 +18,15 @@
 	 *                    jogging to it over the first hole (rim − live), NEW for
 	 *                    the stage: the hole is 3.75 mm deep and the stage's Z
 	 *                    frame is its own
-	 *   stage geometry   the cart's rotation on the stage, the travel height
+	 *   stage geometry   the cart's rotation on the stage
+	 *
+	 * LIFT RULE: before EVERY gantry move this page makes — pick up a tip, go
+	 * to the calibrator, a hole, the dispense height, drop a tip — the pipette
+	 * goes ALL THE WAY UP (lift(): a Z-only home), and the move that follows is
+	 * a PLANNED move (forceDirect false), which the OT-2 runs as XY at the top
+	 * and then straight down. The arm and its stage stand above anything the
+	 * planner knows about, so no arc height or direct move is safe here. The
+	 * stage protocol does the same (lift() in Wax_Filling_GEN7_ArmStage.py).
 	 *
 	 * Every save is a page action; all logic is in $lib/server/arm-wax-fill.
 	 */
@@ -30,7 +38,6 @@
 	import {
 		DISPENSE_DEPTH_DEFAULT_MM,
 		DISPENSE_DEPTH_LIMITS,
-		STAGE_JUMP_LIMITS,
 		STAGE_PREJUMP_MM,
 		WAX_HOLE_DEPTH_MM,
 		depthFromLive,
@@ -56,9 +63,6 @@
 	const holes = $derived<StageHole[]>(calibration?.holes ?? stageTargets(0, 0, 0, calibration?.stageRotationDeg ?? 0));
 	const holesTaught = $derived(!!calibration?.holes);
 
-	// Arc height for travel over the raised stage: the planner only knows the
-	// labware on the deck, not the stage. Well inside a p20's reach with a tip.
-	const TEACH_ARC_Z = 120;
 
 	// ── page actions ─────────────────────────────────────────────────────
 	async function post(name: string, fields: Record<string, string> = {}): Promise<{ ok: true; data: any } | { ok: false; error: string; status: number }> {
@@ -223,15 +227,30 @@
 			await api(mx('jog'), { method: 'POST', body: JSON.stringify({ pipetteId, axis, distance }) });
 			await refreshPosition();
 		});
-	async function moveAbs(p: { x: number; y: number; z: number }, opts: { arc?: boolean; direct?: boolean } = {}) {
+	/**
+	 * ALL THE WAY UP: home only the pipette's Z axis (top of travel). Called
+	 * before every move between stations; the planned move after it travels at
+	 * the top and comes straight down at its target.
+	 */
+	async function lift() {
+		await api(mx('home'), { method: 'POST', body: JSON.stringify({ axes: [zAxis] }) });
+	}
+	/**
+	 * `lift`: lift first, then a PLANNED move (XY at the top, straight down).
+	 * `direct`: a straight line from where the tip is — only for the short
+	 * vertical moves over a hole, never for travel.
+	 */
+	async function moveAbs(p: { x: number; y: number; z: number }, opts: { lift?: boolean; direct?: boolean } = {}) {
+		if (opts.lift) await lift();
 		await api(mx('move-to'), {
 			method: 'POST',
-			body: JSON.stringify({ pipetteId, x: p.x, y: p.y, z: p.z, ...(opts.arc ? { minimumZHeight: TEACH_ARC_Z, forceDirect: false } : {}), ...(opts.direct ? { forceDirect: true } : {}) })
+			body: JSON.stringify({ pipetteId, x: p.x, y: p.y, z: p.z, forceDirect: !!opts.direct })
 		});
 	}
 
 	// ── tip: pick up, probe, drop ───────────────────────────────────────
 	async function doPickUpTip(allowRecover = true): Promise<void> {
+		await lift(); // the pick-up's own move then travels at the top
 		const r = await apiRaw(mx('pick-up-tip'), { method: 'POST', body: JSON.stringify({ pipetteId, tiprackLoadName: data.teach?.tiprackLoadName, slot: '11', tipWell }) });
 		if (r.ok) {
 			if (r.body?.nextTipWell) tipWell = r.body.nextTipWell;
@@ -240,6 +259,7 @@
 			return;
 		}
 		if (r.status === 409 && r.body?.code === 'TIP_ALREADY_ATTACHED' && allowRecover) {
+			await lift();
 			await api(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
 			return doPickUpTip(false);
 		}
@@ -248,9 +268,9 @@
 
 	/**
 	 * Pick up a p20 tip and probe it on the tip calibrator (the Studio's sequence):
-	 * travel to the calibrator's approach point, then /api/scanner/calibrate-tip
-	 * attached to this maintenance run so the tip stays on. The adjust it returns
-	 * is what makes the saved cart location tip-neutral.
+	 * lift, travel to the calibrator's approach point at the top of Z, then
+	 * /api/scanner/calibrate-tip attached to this maintenance run so the tip stays
+	 * on. The adjust it returns is what makes the saved cart location tip-neutral.
 	 */
 	async function pickUpAndCalibrateTip() {
 		const cal = data.teach?.calibrator;
@@ -268,8 +288,8 @@
 				msg = `Picking up a tip (${data.teach?.tiprackLoadName} ${tipWell})…`;
 				await doPickUpTip();
 			}
-			msg = `Moving to the tip calibrator (${cal.x}, ${cal.y}, ${cal.approachZ})…`;
-			await moveAbs({ x: cal.x, y: cal.y, z: cal.approachZ }, { arc: true });
+			msg = `Lifting all the way up, then moving to the tip calibrator (${cal.x}, ${cal.y}, ${cal.approachZ})…`;
+			await moveAbs({ x: cal.x, y: cal.y, z: cal.approachZ }, { lift: true });
 			msg = 'Probing the tip on the calibrator (slow limit-switch probe, 1–2 min)…';
 			const res = await api('/api/scanner/calibrate-tip', {
 				method: 'POST',
@@ -295,6 +315,7 @@
 
 	const dropTip = () =>
 		act(async () => {
+			await lift();
 			await api(mx('drop-tip'), { method: 'POST', body: JSON.stringify({ pipetteId }) });
 			hasTip = false;
 			tipAdjust = null;
@@ -305,22 +326,23 @@
 	// ── the stage: visit holes, preview the fill motion ─────────────────
 	const adj = () => ({ x: tipAdjust?.x ?? 0, y: tipAdjust?.y ?? 0 });
 
-	/** 2 mm above a hole's rim, via a high arc, with this tip's adjust (the fill's frame). */
+	/** 2 mm above a hole's rim — all the way up first, then straight down over it — with this tip's adjust (the fill's frame). */
 	const goToHole = (h: StageHole, aboveMm = 2) =>
 		act(async () => {
 			if (!holesTaught) throw new Error('Teach the cart location first — the holes are laid out from it.');
 			if (!hasTip) throw new Error('Pick up a tip first — the holes are taught as the tip end on the rim.');
 			const a = adj();
-			await moveAbs({ x: h.x + a.x, y: h.y + a.y, z: h.z + aboveMm }, { arc: true });
+			await moveAbs({ x: h.x + a.x, y: h.y + a.y, z: h.z + aboveMm }, { lift: true });
 			selectedHole = h.name;
 			msg = `${aboveMm} mm above hole ${h.name} (row ${h.row}, gate ${h.gate})${tipAdjust ? ` with this tip's adjust (${a.x}, ${a.y})` : ' — tip NOT probed, expect it off by this tip\'s bend'}.`;
 			await refreshPosition();
 		});
 
 	/**
-	 * The stage protocol's exact approach at one hole: arrive at the travel
-	 * height, pre-jump, down to the dispense height (taught, else the protocol's
-	 * default hover), dwell, retract. Dispenses nothing.
+	 * The stage protocol's exact approach at one hole: all the way up, over to
+	 * the hole and straight down to the pre-jump height, down to the dispense
+	 * height (taught, else the protocol's default hover), dwell, back to the
+	 * pre-jump height, all the way up. Dispenses nothing.
 	 */
 	const fillMotion = (h: StageHole) =>
 		act(async () => {
@@ -329,32 +351,30 @@
 			motionRunning = true;
 			try {
 				const a = adj();
-				const jump = calibration?.stageJumpHeightMm ?? 60;
 				const zd = dispenseZ(h.z, depthMm);
 				const xy = { x: h.x + a.x, y: h.y + a.y };
-				msg = `Fill motion at ${h.name}: travel height ${jump} mm → pre-jump ${STAGE_PREJUMP_MM} mm → dispense ${depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'}`} the rim…`;
-				await moveAbs({ ...xy, z: h.z + jump }, { arc: true });
-				await moveAbs({ ...xy, z: h.z + STAGE_PREJUMP_MM }, { direct: true });
+				msg = `Fill motion at ${h.name}: all the way up → pre-jump ${STAGE_PREJUMP_MM} mm → dispense ${depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'}`} the rim → all the way up…`;
+				await moveAbs({ ...xy, z: h.z + STAGE_PREJUMP_MM }, { lift: true });
 				await moveAbs({ ...xy, z: zd }, { direct: true });
 				await refreshPosition();
 				await sleep(1500);
 				await moveAbs({ ...xy, z: h.z + STAGE_PREJUMP_MM }, { direct: true });
-				await moveAbs({ ...xy, z: h.z + jump }, { direct: true });
+				await lift();
 				selectedHole = h.name;
-				msg = `Fill motion at ${h.name} done — tip end paused at z ${zd.toFixed(2)}.`;
+				msg = `Fill motion at ${h.name} done — tip end paused at z ${zd.toFixed(2)}, pipette back at the top.`;
 				await refreshPosition();
 			} finally {
 				motionRunning = false;
 			}
 		});
 
-	/** Straight to the dispense height over the first hole (to check or re-teach the depth). */
+	/** To the dispense height over the first hole (to check or re-teach the depth): all the way up, over, straight down. */
 	const goToDispenseHeight = () =>
 		act(async () => {
 			if (!rim) throw new Error('Teach the cart location first.');
 			if (!hasTip) throw new Error('Pick up a tip first.');
 			const a = adj();
-			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { arc: true });
+			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { lift: true });
 			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: dispenseZ(rim.z, depthMm) }, { direct: true });
 			msg = depthMm === null ? `At the protocol's default (${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim) — jog Z and save the depth you want.` : `At the taught dispense height (${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim). Jog Z to change it, then save.`;
 			await refreshPosition();
@@ -514,7 +534,7 @@
 					{:else}
 						<button type="button" onclick={() => void pickUpAndCalibrateTip()} disabled={dis || calibrating || !data.teach?.calibrator}
 							class="rounded border border-purple-400/50 bg-purple-900/20 px-3 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40"
-							title="Picks up a p20 tip from slot 11, travels to the tip calibrator and runs the slow limit-switch probe. Keeps the tip on.">
+							title="Lifts all the way up, picks up a p20 tip from slot 11, lifts again, travels to the tip calibrator and runs the slow limit-switch probe. Keeps the tip on.">
 							{calibrating ? 'Calibrating…' : hasTip ? 'Re-probe this tip' : `Pick up tip (${tipWell}) + calibrate`}
 						</button>
 						<button type="button" onclick={() => void pickUpOnly()} disabled={dis || hasTip} class={plain} style="color: var(--color-tron-text)" title="Just a tip, no probe — enough for the dispense depth and the fill motion, not for the cart location">Pick up tip (no probe)</button>
@@ -614,11 +634,11 @@
 						</label>
 						<button type="button" onclick={() => { const h = holes.find((x) => x.name === selectedHole); if (h) void fillMotion(h); }} disabled={dis || !holesTaught || !hasTip || motionRunning}
 							class="{small} border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10"
-							title="The stage protocol's exact approach at this hole — travel height, pre-jump, dispense height, dwell, retract — without dispensing">
+							title="The stage protocol's exact approach at this hole — all the way up, pre-jump, dispense height, dwell, pre-jump, all the way up — without dispensing">
 							{motionRunning ? 'Running…' : 'Run fill motion'}
 						</button>
 						<span class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-							travel {calibration?.stageJumpHeightMm ?? 60} mm → {STAGE_PREJUMP_MM} mm → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (default, depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → pause → up
+							all the way up → {STAGE_PREJUMP_MM} mm → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (default, depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → pause → {STAGE_PREJUMP_MM} mm → all the way up
 						</span>
 					</div>
 				</div>
@@ -644,7 +664,7 @@
 				<div class="flex gap-2">
 					<button type="button" onclick={() => void saveScanPosition()} disabled={dis || hasTip} class="{primary} flex-1" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save here as scan position</button>
 					{#if calibration?.scanPosition}
-						<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { arc: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={dis} class={plain} style="color: var(--color-tron-text)">Move to</button>
+						<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { lift: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={dis} class={plain} style="color: var(--color-tron-text)">Move to</button>
 					{/if}
 				</div>
 			</section>
@@ -698,15 +718,14 @@
 							<input name="rotationDeg" type="number" step="0.5" min="-360" max="360" value={calibration?.stageRotationDeg ?? 0}
 								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
 						</label>
-						<label class="block">
-							<span style="color: var(--color-tron-text-secondary)">Travel height over the rim (mm)</span>
-							<input name="jumpHeightMm" type="number" step="1" min={STAGE_JUMP_LIMITS.min} max={STAGE_JUMP_LIMITS.max} value={calibration?.stageJumpHeightMm ?? 60}
-								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-						</label>
+						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
+							<span class="block">Travel height</span>
+							<span class="mt-1 block">None to set: the pipette goes <span class="font-semibold">all the way up</span> (top of Z) before every move between the tip rack, the calibrator, the tube and the cart — here and in the fill.</span>
+						</div>
 					</div>
 					<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						Rotation: counter-clockwise from above, about the first hole. 0 = as in a carriage slot (gates toward −x, rows toward −y); 180 = the cart turned end for end.
-						Check it by clicking holes on the map. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is too tall for {STAGE_JUMP_LIMITS.max}.
+						Check it by clicking holes on the map.
 					</p>
 					<div class="flex justify-end">
 						<button type="submit" disabled={data.loopRunning} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>

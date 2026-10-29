@@ -23595,3 +23595,43 @@ Motion over the stage still uses TEACH_ARC_Z = 120 for arcs (the planner cannot 
 run on a robot.
 svelte-check (portable node): 14-error baseline, none in touched files. Unit: stage-geometry.test.ts + the
 protocol's python geometry test + run-lifecycle-records (29) + protocol-freshness (5) pass.
+
+================================================================================
+2026-10-28 — feat/arm-wax-fill-loop — Robot-arm wax fill: the OT-2 pipette goes ALL THE WAY UP before every move (lift rule)
+================================================================================
+Alejandro: when picking up a tip or doing ANY movement on the OT-2 for robot-arm wax filling, bring the pipette
+all the way up first so it cannot hit any structures — every time, but only for the robot-arm wax fill.
+Why it was not already safe: the OT-2's planner only knows the labware on the deck. The arm and its single-cart
+stage stand above that, so the 60 mm "travel height over the rim" arc (stage_jump_height) and the teach page's
+120 mm arc (TEACH_ARC_Z) were guesses, and the daemon's sweep moved direct (diagonal) from home to the scan point.
+How "all the way up" is done without a number (the protocol cannot read its own top-of-Z, and the engine
+rejects a minimum_z_height above the pipette's reach): a Z-ONLY HOME of the pipette's mount, then a PLANNED
+move. opentrons' get_waypoints() travels at the origin height when that is above its arc, so after the home
+the move is XY at the top, then straight down at the target — verified in opentrons 8.7.0 source (the robots'
+version) and in simulation (lift_harness: home {axes:[rightZ]} → moveToCoordinates/pickUpTip/dropTip all
+SUCCEEDED).
+  - protocols/Wax_Filling_GEN7_ArmStage.py: _resolve_lift(pipette) builds lift() = engine `home` for the
+    mount's Z through pipette._core._engine_client.execute_command(HomeParams(axes=[rightZ])) — what
+    pipette.home() does inside minus the plunger (which must not move with wax in the tip). Resolved before
+    any motion; raises (and so fails analysis/upload) if a robot-server moves the hook. lift() before: drop
+    tip, pick up tip (first and retry), the calibrator approach, after the probe (back to the top), the
+    hand-tip-swap / no-tip hover, every arrive() at the cart (first hole, from the tube, row crossing),
+    leave() (now just the lift), the final drop. Moves after a lift are planned (no force_direct); the
+    hover moves lost force_direct too. Only the in-row hops stay at 5 mm over the cart. stage_jump_height
+    RTP removed. 15 lift() calls.
+  - Stage calibration page: lift() = mx home {axes:[zAxis]}; moveAbs({lift}) replaces the arc; lift before
+    pick-up-tip (and the TIP_ALREADY_ATTACHED recovery drop), drop tip, to the calibrator, to a hole, to the
+    scan position, the dispense height; "Run fill motion" = lift → pre-jump 5 → dispense → pre-jump → lift.
+    The "Travel height over the rim" field is gone (text explains the lift). Setup texts updated.
+  - arm-wax-fill.ts: stageJumpHeightMm dropped from CalibrationView / saveStageGeometry (which $unsets the
+    old field) / the readiness note / the RTP form; header documents the rule. stage-geometry.ts: STAGE_JUMP_*
+    gone. Model: field removed. Wax fill tab: summary tile + Setup text.
+  - Scanner sweep: POST /api/scanner/sweep takes liftBeforeMove (the arm page sends it) and forces it for
+    the arm's one-slot set ("Arm wax fill — single cart"); it rides in the daemon payload. scripts/ot2-bridge.py
+    execute_sweep: when set, lift_z (home {axes:[<mount>Z]}) before each slot move and the move is planned
+    (forceDirect false). Production 24-slot sweeps unchanged (direct). THE DAEMON MUST BE REDEPLOYED to the
+    robots (scripts/OT2-BRIDGE-DEPLOYMENT.md / docs/LAB-MAC-RUNBOOK-OT2-BRIDGE.md) for the sweep part.
+Checks: py_compile of both .py; protocols/tests/test_arm_stage_geometry.py ok; stage-geometry.test.ts 4/4;
+svelte-check 14 errors (baseline, none in touched files) / 438 warnings; opentrons 8.7.0 engine harness above.
+Not run on a robot yet; full opentrons_simulate not possible locally (the custom labware definitions live in
+the BIMS database).

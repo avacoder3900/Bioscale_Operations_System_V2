@@ -25,9 +25,14 @@ export const WAX_HOLE_DEPTH_MM = 3.75;
 export const DISPENSE_DEPTH_LIMITS = { min: -2.0, max: 2.5 } as const;
 /** The protocol's default when no depth is taught (hover 1 mm above the rim). */
 export const DISPENSE_DEPTH_DEFAULT_MM = -1.0;
-/** The stage protocol's `stage_jump_height` RTP bounds (travel clearance over the rim). */
-export const STAGE_JUMP_LIMITS = { min: 10, max: 60 } as const;
-export const STAGE_JUMP_DEFAULT_MM = 60;
+/**
+ * No travel height: on the robot-arm line the pipette goes ALL THE WAY UP (a
+ * Z-only home) before every move between stations — tip rack, calibrator,
+ * tube, trash, the cart and between its rows. The arm and its stage stand
+ * above anything the OT-2's planner knows about, so travel happens at the top
+ * of Z and comes straight down at the target. Protocol: lift() in
+ * protocols/Wax_Filling_GEN7_ArmStage.py; teach page: lift() before each move.
+ */
 /** Pre-jump height the fill pauses at over a hole before descending (protocol constant). */
 export const STAGE_PREJUMP_MM = 5;
 
