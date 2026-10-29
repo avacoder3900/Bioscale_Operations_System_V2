@@ -24752,3 +24752,8 @@ NOTHING HAS REACHED THE ROBOT. Until the daemon is redeployed and the new .py de
 Known gaps: smart-abort of a cancelled loop run still keys on the carriage protocol's log lines (carts of an aborted
 production loop may need the Robots page); a loop that fails outside the fail route leaves the run parked - press STOP RUN.
 svelte-check 14 errors / 448 warnings (baseline, none in touched files); vitest 39/39 across the three touched suites.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit 7f94f2e7 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 7f94f2e7 (ARM-WAX-LOOP-B)"
+What this deployment is for: the robot-arm wax-fill loop runs ONE OT-2 run per loop with one tip idling in the wax between carts and the arm moving while the run is parked; inert until the daemon 1.4.0 and the new stage .py reach the robot (handoff doc).
