@@ -1,5 +1,6 @@
 /**
- * Robot-arm wax fill line (/manufacturing/cart-mfg/robot-arm/wax-fill).
+ * Robot-arm wax fill line (/manufacturing/cart-mfg/robot-arm/opentron — the Wax Fill
+ * and Stage Calibration sections of the arm's Opentron page).
  *
  * One cart at a time: the OT-2 gantry is homed, the arm plays its GRAB
  * animation (an Animate move set or sequence) to put a cart on the arm's
@@ -842,9 +843,9 @@ export function readiness(
 	if (settings.robotId && !calibration?.scanPosition) blocking.push('Calibration: teach the scan position.');
 	if (settings.robotId && stage) {
 		const cl = calibration?.cartLocation ?? null;
-		if (!cl) blocking.push('Stage calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
-		else if (!cl.tipAdjust) blocking.push('Stage calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
-		if (cl && !calibration?.dispenseDepth) blocking.push('Stage calibration: teach the dispense depth — jog the tip to the height it should dispense at over the first wax hole and save it.');
+		if (!cl) blocking.push('Stage Calibration: teach the cart location — pick up a tip, calibrate it, jog onto the rim of the first wax hole, save (the protocol reads arm_cart_x/y/z).');
+		else if (!cl.tipAdjust) blocking.push('Stage Calibration: the cart location was taught without a probed tip. Teach it again (pick up a tip, calibrate it, then save) so it is tip-neutral, as the fill expects.');
+		if (cl && !calibration?.dispenseDepth) blocking.push('Stage Calibration: teach the dispense depth — jog the tip to the height it should dispense at over the first wax hole and save it.');
 		if (cl?.tipAdjust && calibration?.dispenseDepth) {
 			notes.push(
 				`The stage protocol fills the taught cart location (tip-neutral; cart rotation ${calibration.stageRotationDeg}°), dispensing ` +
@@ -875,7 +876,7 @@ export interface TeachAid {
 	protocolDeclaresHoleOffsets: boolean;
 }
 
-/** The Stage calibration tab's checklist: what the stage protocol needs from this OT-2, and what is taught. */
+/** The Stage Calibration section's checklist: what the stage protocol needs from this OT-2, and what is taught. */
 export function stageChecklist(calibration: CalibrationView | null, protocol: ProtocolView | null): { key: string; label: string; ok: boolean; detail: string }[] {
 	const cl = calibration?.cartLocation ?? null;
 	const dd = calibration?.dispenseDepth ?? null;
@@ -911,7 +912,7 @@ export function stageChecklist(calibration: CalibrationView | null, protocol: Pr
 	];
 }
 
-/** Everything the Stage calibration tab shows for the OT-2 the arm feeds. */
+/** Everything the Stage Calibration section shows for the OT-2 the arm feeds. */
 export async function loadStageCalibration() {
 	await connectDB();
 	const settings = await getSettings();
@@ -1255,7 +1256,7 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 		throw new ArmWaxFillError('The cart location is not taught tip-neutral (pick up a tip, calibrate it, then save it) — the stage protocol will not be started without it.', 409);
 	}
 	if (stage && !calibration?.dispenseDepth) {
-		throw new ArmWaxFillError('The dispense depth is not taught (Stage calibration tab) — the stage protocol will not be started without it.', 409);
+		throw new ArmWaxFillError('The dispense depth is not taught (Stage Calibration, on the Opentron page) — the stage protocol will not be started without it.', 409);
 	}
 
 	let waxRunId: string = cycle.waxRunId ?? '';
@@ -1328,7 +1329,7 @@ export async function cycleFill(user: User, loopId: string): Promise<{ waxRunId:
 	if (isActionFail(r)) {
 		await revertUnstartedWaxRun(user, waxRunId, cycle.barcode, `start failed: ${r.fail.error}`).catch(() => null);
 		await patchCycle(loopId, cycle.index, { waxRunId: null });
-		throw new ArmWaxFillError(`Wax fill did not start: ${r.fail.error}`, r.fail.status);
+		throw new ArmWaxFillError(`Wax Fill did not start: ${r.fail.error}`, r.fail.status);
 	}
 	await patchCycle(loopId, cycle.index, { opentronsRunId: r.opentronsRunId });
 	await audit(user, 'arm_wax_fill.cycle_fill', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId, opentronsRunId: r.opentronsRunId, barcode: cycle.barcode });

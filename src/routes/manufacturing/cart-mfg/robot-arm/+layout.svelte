@@ -80,17 +80,13 @@
 			icon: 'M5 4l10 8-10 8V4zm12 0h2v16h-2V4z'
 		},
 		{
-			// The arm feeds one cart at a time to an OT-2 running the wax-filling protocol.
-			href: `${BASE}/wax-fill`,
-			label: 'Wax fill',
+			// The arm line's OT-2: Wax Fill (the arm feeds one cart at a time to the
+			// OT-2 running the wax-filling protocol) with Stage Calibration (the
+			// single-cart stage's studio) underneath, each with its own Show / Hide.
+			// Formerly the Wax fill and Stage calibration tabs; their URLs redirect.
+			href: `${BASE}/opentron`,
+			label: 'Opentron',
 			icon: 'M4 7h16M4 7l2 12h12l2-12M9 7V4h6v3m-6 6h6'
-		},
-		{
-			// The arm line's own calibration studio: the single-cart stage on its OT-2
-			// (scan position, tip-neutral cart location, dispense depth, stage geometry).
-			href: `${BASE}/stage-calibration`,
-			label: 'Stage calibration',
-			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-9-3v6m-3-3h6M12 7a5 5 0 110 10 5 5 0 010-10z'
 		},
 		{
 			href: `${BASE}/runs`,

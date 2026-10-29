@@ -43,9 +43,15 @@
 		type StageHole
 	} from '$lib/robot-arm/stage-geometry';
 
-	let { data, form } = $props();
+	import type { PageData } from './$types';
 
-	const WAX_FILL_HREF = '/manufacturing/cart-mfg/robot-arm/wax-fill';
+	// The Stage Calibration section of the Opentron page: `data` is the page's
+	// `stage` slice. Every save here goes over fetch + deserialize, so the page's
+	// `form` (Wax Fill's Setup / Animations saves) is not this section's business.
+	let { data }: { data: PageData['stage'] } = $props();
+
+	// The Wax Fill section sits above this one on the Opentron page.
+	const WAX_FILL_HREF = '#wax-fill';
 	const robotId = $derived(data.robotId as string | null);
 	const robotName = $derived((data.robotName as string | null) ?? 'robot');
 
@@ -972,15 +978,9 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 <div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip">
-	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Stage Calibration Studio</h1>
-			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				The robot arm's single-cart stage. Teach the first wax hole, jog to a hole, capture the real offset, select holes, apply it. Corrections persist in BIMS and the stage protocol reads them at every run start — nothing to upload.
-			</p>
-		</div>
-		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax fill tab →</a>
-	</div>
+	<p class="text-xs" style="color: var(--color-tron-text-secondary)">
+		The robot arm's single-cart stage. Teach the first wax hole, jog to a hole, capture the real offset, select holes, apply it. Corrections persist in BIMS and the stage protocol reads them at every run start — nothing to upload.
+	</p>
 
 	<!-- Pickers -->
 	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
@@ -1013,9 +1013,8 @@
 	</div>
 
 	{#if !robotId}
-		<div class="rounded border border-amber-500/40 bg-amber-900/15 p-3 text-xs text-amber-200">No OT-2 is chosen for the arm yet — pick it in <a href={WAX_FILL_HREF} class="underline">Wax fill → Setup</a>, then come back here.</div>
+		<div class="rounded border border-amber-500/40 bg-amber-900/15 p-3 text-xs text-amber-200">No OT-2 is chosen for the arm yet — pick it in <a href={WAX_FILL_HREF} class="underline">Wax Fill → Setup</a> above, then come back here.</div>
 	{/if}
-	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
 	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
 

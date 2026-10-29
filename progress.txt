@@ -24281,3 +24281,32 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch fix/stage-whole-shift-limit @ commit 8ca8e593 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 8ca8e593 (whole-cart shift uncapped)"
 What this deployment is for: large whole-cart shifts in the Stage Calibration Studio are accepted again.
+
+================================================================================
+2026-10-29 — feat/arm-opentron-page — Robot Arm: Wax Fill + Stage Calibration become one "Opentron" tab, each section with Show / Hide
+================================================================================
+Alejandro (from the Windows workstation; the same change made on the Mac the morning of 10-29 never reached GitHub,
+so it was redone here): capitalize the names (Wax Fill, Stage Calibration), put Stage Calibration UNDERNEATH Wax Fill
+on one subpage named "Opentron", and give each of the two sections its own Hide / Show button, since he usually works
+on one or the other.
+  - New route src/routes/manufacturing/cart-mfg/robot-arm/opentron/: +page.server.ts is the two old server files
+    merged (load returns { wax: loadArmWaxFill(), stage: loadStageCalibration() } - the two loaders share key names
+    like calibration / protocol / teach, so they are namespaced; every action of both files is here, their names never
+    overlapped; stage actions use stageWriter, which also resolves the arm's robotId). +page.svelte renders the two
+    sections stacked with a cyan-bordered Show / Hide button per section. Hiding is CSS-only (class:hidden) so the
+    section stays MOUNTED: Wax Fill drives a running loop from the browser and Stage Calibration holds an open
+    maintenance run (its onDestroy deletes the run), neither may be torn down by folding. The choice is remembered per
+    browser in localStorage (robot-arm:opentron-hidden); a link to #wax-fill / #stage-calibration unfolds its target.
+  - The old pages moved (git mv, history kept) to opentron/WaxFill.svelte and opentron/StageCalibration.svelte as
+    components: props typed as PageData['wax'] / PageData['stage'] from ./$types; their own h2 / h1 headers dropped
+    (the page carries the titles); cross-links are now the in-page anchors; Stage Calibration no longer shows the
+    page's `form` error (all its saves go over fetch + deserialize, so `form` only ever carries Wax Fill's Setup /
+    Animations results). User-visible text capitalized everywhere (tab, headings, links, readiness messages in
+    arm-wax-fill.ts, "Wax Fill did not start").
+  - Tab strip (+layout.svelte): the "Wax fill" and "Stage calibration" tabs are replaced by one "Opentron" tab.
+    wax-fill/+server.ts and stage-calibration/+server.ts answer GET with a 301 to /opentron#wax-fill / #stage-calibration
+    so bookmarks and the "Calibrate wax fill" row button keep working.
+Checks: svelte-check 13 errors (baseline 14; none in touched files), 448 warnings. Dev server on the master worktree
+(port 5190): the four new/changed modules compile, /opentron renders after the merged server file landed (two 500s in
+the log are from the minute between writing the page and writing its server file). Not run against a robot.
+Branch pushed for review on the local server; not merged to master yet.

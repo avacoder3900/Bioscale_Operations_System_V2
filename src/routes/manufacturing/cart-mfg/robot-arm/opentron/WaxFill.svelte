@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Robot Arm — Wax fill. One cart per cycle: grab (arm) → scan (OT-2 gantry
+	 * Robot Arm — Wax Fill (a section of the Opentron page). One cart per cycle: grab (arm) → scan (OT-2 gantry
 	 * scanner at the taught position) → fill (OT-2 wax protocol, one cart) →
 	 * withdraw (arm), for as many runs as asked. This page is the driver: each
 	 * step is a page action whose result lands on the ArmWaxFillRun before the
@@ -18,7 +18,10 @@
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	import type { LoopView, LoopCycleView, CalibrationView } from '$lib/server/arm-wax-fill';
 
-	let { data, form } = $props();
+	import type { ActionData, PageData } from './$types';
+
+	// The Wax Fill section of the Opentron page: `data` is the page's `wax` slice.
+	let { data, form }: { data: PageData['wax']; form: ActionData } = $props();
 
 	const STEP_LABEL: Record<string, string> = {
 		grab: 'Grab',
@@ -536,8 +539,9 @@
 
 	// The calibration for this robot's wax fill (scan position, tip-neutral cart
 	// location, dispense depth, stage geometry) is taught on its own tab, the arm
-	// line's Stage calibration studio; this page only shows what is taught.
-	const STAGE_CALIBRATION_HREF = '/manufacturing/cart-mfg/robot-arm/stage-calibration';
+	// line's Stage Calibration studio; this section only shows what is taught.
+	// The Stage Calibration section sits below this one on the Opentron page.
+	const STAGE_CALIBRATION_HREF = '#stage-calibration';
 
 	const fmt = (p: { x: number; y: number; z: number } | null) => (p ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · z ${p.z.toFixed(2)}` : 'not taught');
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '');
@@ -554,8 +558,7 @@
 
 <div class="space-y-4">
 	<div>
-		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax fill</h2>
-		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+		<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 			The arm feeds one cart at a time onto its stage: OT-2 gantry <span class="font-semibold">home</span> → <span class="font-semibold">grab</span> →
 			<span class="font-semibold">scan</span> at the taught position → <span class="font-semibold">fill</span>
 			{#if stage}at the taught cart location with the stage protocol{:else}with the robot's carriage protocol (one cart, deck position {data.settings.cartPosition}){/if}
@@ -586,9 +589,9 @@
 				</div>
 				<div class="flex flex-wrap items-center gap-1">
 					<a href={STAGE_CALIBRATION_HREF}
-						title="This robot's wax-fill calibration: scan position, tip-neutral cart location, dispense depth, stage geometry (its own tab)"
+						title="This robot's wax-fill calibration: scan position, tip-neutral cart location, dispense depth, stage geometry (the section below)"
 						class="{ctl} border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">
-						Stage calibration
+						Stage Calibration
 					</a>
 					<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
 						{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
@@ -739,7 +742,7 @@
 					{#if stage}
 						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
 							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
-							<span class="mt-1 block">Cart rotation, dispense depth and travel height are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab.</span>
+							<span class="mt-1 block">Cart rotation, dispense depth and travel height are taught in the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage Calibration</a> section below.</span>
 						</div>
 					{:else}
 						<label class="block">
@@ -821,14 +824,14 @@
 		</section>
 	</div>
 
-	<!-- ── Calibration summary (taught on the Stage calibration tab) ────── -->
+	<!-- ── Calibration summary (taught in the Stage Calibration section) ── -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
-				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">What this robot's wax fill runs on. Taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab — the arm line's own studio for the single-cart stage.</p>
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage Calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
+				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">What this robot's wax fill runs on. Taught in the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage Calibration</a> section below — the arm line's own studio for the single-cart stage.</p>
 			</div>
-			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage calibration</a>
+			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage Calibration</a>
 		</div>
 		<div class="grid grid-cols-1 gap-3 text-xs md:grid-cols-2 xl:grid-cols-4">
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">

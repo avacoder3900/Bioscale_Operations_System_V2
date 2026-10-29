@@ -2,7 +2,7 @@ import mongoose, { Schema } from 'mongoose';
 
 /**
  * ArmWaxFillSettings — one document (`_id: 'default'`) for the robot-arm wax
- * fill line (/manufacturing/cart-mfg/robot-arm/wax-fill).
+ * fill line (/manufacturing/cart-mfg/robot-arm/opentron, Wax Fill section).
  *
  * The arm feeds ONE cartridge at a time to an OT-2. With the stage protocol
  * (protocols/Wax_Filling_GEN7_ArmStage.py, which declares arm_cart_x/y/z)
