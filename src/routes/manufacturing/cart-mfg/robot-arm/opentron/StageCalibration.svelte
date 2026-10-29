@@ -776,7 +776,10 @@
 		await moveAbs({ x: calX, y: calY, z }, { arc: true });
 		await refreshPosition();
 	}
-	async function calibrateTip() {
+	// pickUp=false: probe whatever tip is on the pipette now, even if this page does not
+	// know about it (put on by hand, or picked up before a reload). The probe runs in the
+	// open run's attached mode either way, so nothing is picked up or dropped.
+	async function calibrateTip(pickUp = true) {
 		const approachZNow = checkedZ(calZ, 'Approach Z');
 		if (approachZNow === null) return;
 		const probeZNow = checkedZ(probeZ, 'Probe Z');
@@ -788,7 +791,7 @@
 		calibrating = true;
 		await act(async () => {
 			let pickedUpNow = false;
-			if (!hasTip) {
+			if (pickUp && !hasTip) {
 				msg = `Picking up a p20 tip (${tiprack} ${tipWell})…`;
 				await doPickUpTip();
 				pickedUpNow = true;
@@ -819,7 +822,7 @@
 	const pickUpTipAction = () =>
 		act(async () => {
 			await doPickUpTip();
-			msg = `Tip on (no probe) — next fresh ${tipWell}. Enough for Fill motion / depth; Calibrate tip before teaching the first hole.`;
+			msg = `Tip on (not calibrated) — next fresh ${tipWell}. Enough for Fill motion / depth; Calibrate Tip before teaching the first hole.`;
 		});
 	const swapTipAction = () =>
 		act(async () => {
@@ -829,7 +832,7 @@
 			nominal = null;
 			refWell = null;
 			await doPickUpTip();
-			msg = `${dropped ? 'Dropped the old tip and picked' : 'Picked'} a fresh tip — Calibrate tip again before capturing.`;
+			msg = `${dropped ? 'Dropped the old tip and picked' : 'Picked'} a fresh tip — Calibrate Tip again before capturing.`;
 		});
 	const dropTipAction = () =>
 		act(async () => {
@@ -1185,8 +1188,11 @@
 					{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}
 						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point is taught for {robotName} — the probe would drive to the protocol's default. Teach it in the <strong>Tip calibrator</strong> panel below first.</p>
 					{/if}
-					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
-						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : 'Calibrate tip (picks up a p20 tip first)'}
+					<button type="button" onclick={() => calibrateTip()} disabled={busy || calibrating || !pipetteId} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a p20 tip, travels to the tip calibrator, then runs the slow limit-switch probe. Keeps the tip on for tuning.">
+						{calibrating ? 'Calibrating Tip…' : hasTip ? 'Calibrate Tip (Probe, Keeps Tip)' : 'Calibrate Tip (Picks Up A p20 Tip First)'}
+					</button>
+					<button type="button" onclick={() => calibrateTip(false)} disabled={busy || calibrating || !pipetteId} class="mt-1 w-full rounded border border-purple-400/40 px-2 py-1.5 text-[11px] font-semibold text-purple-200 hover:bg-purple-900/20 disabled:opacity-40" title="Probes the tip that is already on the pipette — never picks one up. Travels to the tip calibrator (unless already on it), then runs the slow limit-switch probe.">
+						Calibrate Tip (WITHOUT Picking Up A Tip)
 					</button>
 					{#if !calibrating}
 						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
@@ -1195,9 +1201,9 @@
 							{:else}Moves to ({calX}, {calY}, {calZ}), then probes at z {probeZ}.{/if}
 						</p>
 					{/if}
-					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap tip — drop it, take a fresh one from the rack</button>
-					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}</button>
-					<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop tip (for the scan position)</button>
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate Tip again before capturing.">Swap Tip</button>
+					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick Up Tip (another one)' : 'Pick Up Tip (no probe)'}</button>
+					<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop Tip (for the scan position)</button>
 					{#if tipAdjust}
 						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
 					{/if}
@@ -1228,7 +1234,7 @@
 				</div>
 				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
 					The limit-switch fixture every tip is probed on. Its point is this robot's own (the arm's OT-2 has no deck) and becomes the fill's cal_x / cal_y / z_cal.
-					Teach it: <strong>Open run</strong> → <strong>Pick up tip (no probe)</strong> → <strong>Go to calibrator</strong> → jog the tip onto the fixture → <strong>From live</strong> → <strong>Save</strong>. Then <strong>Calibrate tip</strong> to confirm the probe reads.
+					Teach it: <strong>Open run</strong> → <strong>Pick Up Tip (no probe)</strong> → <strong>Go to calibrator</strong> → jog the tip onto the fixture → <strong>From live</strong> → <strong>Save</strong>. Then <strong>Calibrate Tip</strong> to confirm the probe reads.
 				</p>
 				<div class="mt-2 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
 					<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
@@ -1243,7 +1249,7 @@
 						<input type="number" step="0.1" min="0.3" max="12" bind:value={maxAdjust} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
 				</div>
-				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Approach Z is travel-only — "Calibrate tip" and "Go to calibrator" park there; the probe descends to Probe Z under its own protection. "Calibrate tip" uses what is typed here immediately; Save writes it to production.</p>
+				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Approach Z is travel-only — "Calibrate Tip" and "Go to calibrator" park there; the probe descends to Probe Z under its own protection. "Calibrate Tip" uses what is typed here immediately; Save writes it to production.</p>
 				<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
 				<div class="mt-1 grid grid-cols-2 gap-2">
 					<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the calX / calY / Approach Z fields">From live ↧</button>
