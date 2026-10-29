@@ -10,6 +10,7 @@
  *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type wax-filling [--apply]
  *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type reagent-filling --apply
  *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type wax-filling-arm-stage --apply
+ *   MONGODB_URI=... npx tsx scripts/refresh-protocol-source.ts --type wax-filling-arm-stage-rehearsal-p300 --apply
  *
  * The row is matched by processType AND fileName: two 'wax-filling' rows live
  * side by side (the carriage .py and the robot-arm stage .py), and refreshing
@@ -34,11 +35,15 @@ const FILE_FOR: Record<string, { processType: string; path: string }> = {
 	'reagent-filling': { processType: 'reagent-filling', path: 'protocols/Reagent_Filling_GEN7.py' },
 	// The robot-arm stage variant is ALSO processType 'wax-filling' (the arm's OT-2
 	// runs it as its wax-filling protocol); its row is told apart by fileName.
-	'wax-filling-arm-stage': { processType: 'wax-filling', path: 'protocols/Wax_Filling_GEN7_ArmStage.py' }
+	'wax-filling-arm-stage': { processType: 'wax-filling', path: 'protocols/Wax_Filling_GEN7_ArmStage.py' },
+	// REHEARSAL of the stage fill on the p300 / 200 uL rack with air (no wax), for an
+	// arm OT-2 without a p20. Also processType 'wax-filling' so BIMS's cycleFill drives
+	// it unchanged; told apart by fileName. Never a production protocol.
+	'wax-filling-arm-stage-rehearsal-p300': { processType: 'wax-filling', path: 'protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py' }
 };
 
 if (!processType || !FILE_FOR[processType]) {
-	console.error('Usage: --type wax-filling|reagent-filling|wax-filling-arm-stage [--apply]');
+	console.error('Usage: --type wax-filling|reagent-filling|wax-filling-arm-stage|wax-filling-arm-stage-rehearsal-p300 [--apply]');
 	process.exit(1);
 }
 

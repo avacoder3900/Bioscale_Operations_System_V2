@@ -24281,3 +24281,52 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch fix/stage-whole-shift-limit @ commit 8ca8e593 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 8ca8e593 (whole-cart shift uncapped)"
 What this deployment is for: large whole-cart shifts in the Stage Calibration Studio are accepted again.
+
+2026-10-29 — feat/arm-stage-rehearsal-p300 — Robot Arm stage wax fill REHEARSAL protocol: the whole fill walked on the p300 with 200 uL tips and air, for an arm OT-2 without a p20
+================================================================================
+Alejandro: "can we build a test protocol that follows through the steps of the wax fill, but used the 300 pipette
+tip. This tip wont actually be picking up any wax, I just want to use it to rehearse the protocol." (Earlier in the
+same thread: the p300 cannot do the wax fill itself - the stage protocol loads the p20, budgets 20 uL per trip and
+dispenses ~1.6 uL per gate, below the p300's 20 uL minimum; the Stage Studio's "p300 . reagent (development)" tip type
+only teaches points, it never fills.)
+New protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py - a copy of the stage protocol that changes ONLY what the
+pipette forces:
+  - p300_single_gen2 on a pipette_mount RTP (left/right, default left = where the reagent line keeps it) with the
+    200 uL Biotix rack in slot 11; the tip tracker is the reagent line's (/data/tip_tracker_reagent_<host>.json) so
+    the two protocols never offer each other a used tip.
+  - Volumes are AIR in the p300's range: vol_gate1..4 default 20 uL (bounds 20-50), aspirate_remainder default 20
+    (0-100), 200 uL per trip / 210 tip capacity, so a row of four is one trip exactly as 4 x 1.6 uL is one p20 trip.
+    The p20 recipe's 0.25 uL drip-back at the tube is replaced by a pause (below the p300's range). The tube in A3
+    should be empty; the aspirate depth is still computed from the wax model (dead 50 + 12 x 20 = 290 uL).
+  - Calibrator probe uses the REAGENT recipe (approach cal_x-1.4 / cal_y-7.0 for X, +8.829 / -7.5 for Y, retract
+    straight up over the approach point) because the 200 uL tip meets the fixture differently. The probe depth is its
+    own RTP z_cal_p300 (default 40.8 = zCalReagent) - deliberately NOT z_cal, which BIMS injects for the wax process
+    from the p20 fixture depth (zCalWax 34.491); set it to the Stage Studio's "probe Z p300" for the robot.
+  - Everything BIMS's cycleFill sends is declared with the production names and bounds: arm_cart_x/y/z,
+    arm_cart_rotation_deg (90), dispense_depth, the 36 hole_NN_dx/dy/dz corrections, cal_x/cal_y, bims_native +
+    offsets, use_tip_calibration, max_tip_adjust, run_calibration_check, tiprack_refilled. declaresCartLocation is
+    true, so the Wax fill tab accepts it as the robot's stage protocol and the arm loop (grab -> scan -> fill ->
+    withdraw) rehearses end to end. 'wax' OFF = pick up + probe + drop + home only.
+  - LIFT RULE carried over from 51c80b74 (feat/arm-wax-fill-loop, not yet on master): _resolve_lift() = engine Z-only
+    home of the p300's mount before every move between tip rack, calibrator, tube, trash and the cart, and between
+    rows; no stage_jump_height RTP (BIMS still sends it; undeclared RTPs are ignored). Refuses to start if the
+    engine hook is missing rather than travel low over the arm.
+  - Never fills a cart: banner comment at run start, "AIR" in every dispense log, metadata says REHEARSAL ONLY. A cart
+    location taught with the p300 is flagged 'reagent' in BIMS and must be re-taught with the p20 before production.
+scripts/refresh-protocol-source.ts: new --type wax-filling-arm-stage-rehearsal-p300 (processType 'wax-filling', told
+apart by fileName like the stage row).
+protocols/tests/test_arm_stage_rehearsal_p300.py: loads both protocols with the opentrons/serial stubs and asserts the
+rehearsal's stage_targets equals production's for 5 rotations with per-hole offsets, the shared RTP names and bounds
+match, z_cal and stage_jump_height are absent, z_cal_p300 / pipette_mount present, gate minimums >= 20 uL, the p300 +
+200 uL rack are the only hardware, the reagent tracker and probe offsets are used, no 0.25 uL dispense, and lift() is
+called >= 12 times. python -I: both stage tests pass; py_compile ok. Not run on a robot.
+NOTE found on the way: the stage protocol exists in two versions that do not contain each other - master
+(d6965997..8ca8e593: per-hole RTPs, stage_jump_height, rotation 90) and feat/arm-wax-fill-loop @ 51c80b74 (lift rule,
+no per-hole RTPs, no jump height). The rehearsal is master's cart + the lift rule, i.e. the union; the production
+stage .py still needs the same reconciliation before it goes on the robot. Also: master's stage .py still has the
+pre-2026-10-26 calibrator serial handling (no _serial_arm / pending-byte scan) that Wax_Filling_GEN7_Cartridge.py
+and Reagent_Filling_GEN7.py received - the rehearsal keeps the stage protocol's version so it rehearses what the
+stage fill does today.
+How to run it: upload the .py on /opentrons (process wax-filling), deploy to the arm's OT-2 (the Wax fill tab then
+reads it as the stage protocol), set z_cal_p300 to the robot's p300 probe Z, put an EMPTY tube in A3 and the 200 uL
+rack in slot 11, then run the Wax fill loop as usual. Deploy Wax_Filling_GEN7_ArmStage.py back before any real fill.
