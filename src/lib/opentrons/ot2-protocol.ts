@@ -1185,7 +1185,16 @@ async function bundledDefsMatch(
 	const detRes = await t.get(`/protocols/${protocolId}/analyses/${analysisId}`);
 	if (!detRes.ok) throw new Error(`robot returned ${detRes.status} fetching analysis`);
 	const det = ((await detRes.json()) as any)?.data;
-	if ((det?.errors ?? []).length) throw new Error('protocol analysis completed with errors');
+	if ((det?.errors ?? []).length) {
+		// Quote the robot's own error text: the operator sees this through the
+		// run-start gate and needs the cause, not just the verdict.
+		const why = (det.errors as any[])
+			.map((e) => String(e?.detail ?? e?.errorType ?? '').trim())
+			.filter(Boolean)
+			.slice(0, 3)
+			.join(' | ');
+		throw new Error(`protocol analysis completed with errors${why ? `: ${why}` : ''}`);
+	}
 
 	const has = (k: string) => Object.prototype.hasOwnProperty.call(expected, k);
 	let checked = 0;

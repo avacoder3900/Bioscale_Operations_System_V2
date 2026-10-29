@@ -24660,3 +24660,15 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/arm-wax-fill-stop-run @ commit 91599f45 (rebased onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 91599f45 (arm wax fill STOP RUN)"
 What this deployment is for: a STOP RUN button on the robot-arm Wax fill tab that halts the loop where it stands (arm play stopped, fill or scan cancelled, loop ends stopped) and then brings the OT-2 (every axis) and the arm (Return to home) back to home, OT-2 first. Also restores two "=======" separator lines older entries lost in the previous commit's rebase.
+
+2026-10-29 — feat/stage-cal-follows-protocol — Protocol analysis errors are shown: Wax fill deploy fails on "completed with errors" and quotes them; the run-start gate quotes them too
+================================================================================
+The rehearsal re-deploy at 18:47Z returned the SAME opentronsProtocolId (724a51fb) as the 17:38Z one - the OT-2 reuses a
+byte-identical upload together with its cached analysis - and the loop failed again with "protocol analysis completed
+with errors". deployStageProtocol only refused a FAILED / pending analysis; a 'completed' analysis carrying errors was
+reported as success, and the gate's message named no cause, so nobody could see what the robot objected to.
+Now: deployStageProtocol throws 502 on completed-with-errors with the errors joined in the message, the
+opentrons_protocols 'deploy' audit row carries analysisErrors, and waitForAnalysis quotes up to three error details in
+"protocol analysis completed with errors: ...". (The 18:42Z labware-constant fix stands; whether it changed the bundle
+depends on the robot being in the hardened set - an unchanged protocol id says it was not.)
+Next: deploy the rehearsal again from the Wax fill tab; the message now states the analysis errors.

@@ -993,15 +993,20 @@ export async function deployStageProtocol(user: User, rawLibraryId: unknown): Pr
 		tableName: 'opentrons_protocols',
 		recordId: String(row._id),
 		action: 'deploy',
-		newData: { robotId, opentronsProtocolId: uploaded.opentronsProtocolId, analysisStatus, line: 'queue', from: 'arm-wax-fill', rehearsal },
+		newData: { robotId, opentronsProtocolId: uploaded.opentronsProtocolId, analysisStatus, analysisErrors, line: 'queue', from: 'arm-wax-fill', rehearsal },
 		changedAt: new Date(),
 		changedBy: user.username
 	});
 
-	if (analysisStatus !== 'completed') {
+	// An analysis that 'completed' WITH errors is just as unusable as a failed
+	// one: the run-start freshness gate refuses it ("protocol analysis completed
+	// with errors"). Say so here, with the errors, instead of reporting success.
+	if (analysisStatus !== 'completed' || analysisErrors.length) {
+		const how = analysisStatus === 'failed' ? 'FAILED' : analysisStatus === 'completed' ? 'completed WITH ERRORS' : 'did not complete';
 		throw new ArmWaxFillError(
-			`${fileName} was uploaded to ${robot.name} but its analysis ${analysisStatus === 'failed' ? 'FAILED' : 'did not complete'}` +
-				`${analysisErrors.length ? `: ${analysisErrors.join('; ')}` : ''}. The robot keeps its previous wax-filling protocol.`,
+			`${fileName} was uploaded to ${robot.name} but its analysis ${how}` +
+				`${analysisErrors.length ? `: ${analysisErrors.join(' | ')}` : ''}. ` +
+				`The robot keeps its previous wax-filling protocol${analysisStatus === 'completed' ? ' entry; fix the .py (or the labware it loads), add it to the library again and deploy' : ''}.`,
 			502
 		);
 	}
