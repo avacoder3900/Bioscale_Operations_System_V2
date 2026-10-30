@@ -101,7 +101,7 @@ def add_parameters(parameters: protocol_api.Parameters):
         variable_name="row_pattern_0",
         display_name="Channel C",
         description="Fill channel C on every cartridge (row X on cart 1, row S on cart 2: carts alternate 180 degrees)",
-        default=True
+        default=False
     )
     
     parameters.add_bool(
@@ -203,7 +203,7 @@ def add_parameters(parameters: protocol_api.Parameters):
         variable_name="pause_between_carriers",
         display_name="Pause between carriers",
         description="Drop the tip and pause after cartridge 8 and 16 so the finished cartridges can be removed.",
-        default=True
+        default=False
     )
 
     # Per-gate wax volumes (columns: Gate4=2,10,18 | Gate3=4,12,20 | Gate2=6,14,22 | Gate1=8,16,24)
