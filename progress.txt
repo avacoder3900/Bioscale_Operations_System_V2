@@ -24888,3 +24888,12 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/rehearsal-p20-timing (fast-forwarded onto master; the code commit's sha is in the deploy-log entry after this one)
 What this deployment is for: the p300 rehearsal's plunger times match the p20's, and a finished arm wax-fill loop can be profiled from the robot's own command log.
 Robot side: the rehearsal .py must be re-added to the library and deployed from the Wax fill tab before its next loop; no daemon change.
+
+2026-10-30 — master — deploy log: 49ddf1fb (rehearsal paced like the p20 + Fill profile)
+================================================================================
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/rehearsal-p20-timing @ commit 49ddf1fb (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "feat(robot-arm): rehearsal protocol paced like the p20; Fill profile of a loop's OT-2 run"
+What this deployment is for: the p300 rehearsal's plunger times match the p20's; a finished arm wax-fill loop shows a Fill profile from the robot's command log.
+Robot side still to do: Wax fill tab -> Protocol on the robot -> "Add a stage .py to the library" with
+protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py, then Deploy to robot (analysis must complete with no errors).
