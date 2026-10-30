@@ -24827,3 +24827,19 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit c46553c4 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy c46553c4 (resumed park tolerated, Resume locked)"
 What this deployment is for: a multi-cart arm wax-fill loop survives a park resumed from outside the loop, BIMS never plays an already-running run, and the embedded controller no longer offers Resume for the loop handshake pauses. No robot-side change.
+
+2026-10-30 — feat/stage-cal-follows-protocol — Arm wax fill: a fail SKIPS that loop and the run continues; vocabulary: a RUN is the series, a LOOP is one cart
+================================================================================
+Alejandro: "If a fail animation plays, I want the runs to continue. A fail does not denote the entire loop stopping,
+just that that particular loop is skipped and the operation continues to the next." And the words: "a run is a series
+of loops, a single loop is the actions from grab to withdraw. A run is made of loops, not the other way around."
+  - cycleFailDone (arm-wax-fill.ts): the loop's cycle becomes 'skipped' (new step value), skippedRuns (new counter on
+    ArmWaxFillRun) is bumped, and the next loop is pushed — the protocol already parked for the next cart after the
+    `skip` instruction, so the grab gate (PARKED i+1 / CLEAR i) is satisfied. On the run's last loop, or after Stop,
+    `end` goes out and the run completes/stops with its skipped count. Audit arm_wax_fill.loop_skipped (+ loop_complete
+    carries skippedRuns). A skipped loop counts as one of the requested loops (attempts): cycleWithdraw's `last` and
+    cycleWithdrawDone's `finished` now key on the loop index, not on the filled count.
+  - Readiness note: the fail animation "plays instead of the fill; that loop is skipped and the run continues".
+  - Wax fill tab wording: "Start a run of N loops", "Loop i of N · f filled · s skipped", notes say Loop/Run; the fail
+    note says the loop was skipped and the run goes on. Code identifiers (ArmWaxFillRun, cycles, requestedRuns) unchanged.
+svelte-check 14/448 baseline; vitest arm-loop-protocol 7/7, run-lifecycle-records 32/32. No protocol or daemon change.

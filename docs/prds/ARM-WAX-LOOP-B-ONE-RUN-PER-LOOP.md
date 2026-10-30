@@ -181,3 +181,10 @@ keeps going. A marker is the LAST ARM pause or announcement in the log; a later 
 - The scan position RTP `arm_scan_z` is the NOZZLE height taught with no tip; the protocol moves the tip end to
   `arm_scan_z − tiprack.tip_length` when a tip is on. `arm_cart_z` / `arm_scan_z` maxima are 250.
 - Timed (open-loop) choreography was considered and rejected: the rule stays enforced by state.
+
+### 5.8 Fail route continues; vocabulary (2026-10-30)
+- Words: a **run** is the series the operator starts (N loops on one OT-2); a **loop** is one cart, grab → withdraw;
+  the Opentrons protocol run is the **OT-2 run**. (Code keeps `ArmWaxFillRun` / `cycles` / `requestedRuns`.)
+- A loop that takes the fail route is **skipped**: the fail animation plays (from `ARM CLEAR <i>` / `ARM PARKED <i+1>`),
+  the loop is marked skipped, `skippedRuns` is bumped, and the run goes on to the next cart. A skipped loop counts as
+  one of the requested loops. The run completes after the last loop (filled or skipped) with `end`.

@@ -824,6 +824,8 @@ export interface LoopView {
 	cartPosition: number;
 	requestedRuns: number;
 	completedRuns: number;
+	/** Loops skipped by the fail route (the run continued). */
+	skippedRuns: number;
 	status: 'running' | 'completed' | 'stopped' | 'failed';
 	stopRequested: boolean;
 	grabAnimation: AnimationRef | null;
@@ -853,6 +855,7 @@ function loopView(d: any): LoopView {
 		cartPosition: Number(d.cartPosition) || 1,
 		requestedRuns: Number(d.requestedRuns) || 0,
 		completedRuns: Number(d.completedRuns) || 0,
+		skippedRuns: Number(d.skippedRuns) || 0,
 		status: d.status,
 		stopRequested: !!d.stopRequested,
 		grabAnimation: animRef(d.grabAnimation),
@@ -1192,7 +1195,7 @@ export function readiness(
 				'The arm plays only while the robot reports that pause (ARM PARKED); the run leaves the tube only after the arm has settled, and never goes to the calibrator or over the stage while the arm moves.'
 		);
 	}
-	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill and the loop stops.`);
+	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
 	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
 	return { blocking, notes };
@@ -1409,6 +1412,7 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 		cartPosition: settings.cartPosition,
 		requestedRuns,
 		completedRuns: 0,
+		skippedRuns: 0,
 		status: 'running',
 		grabAnimation: settings.grabAnimation,
 		withdrawAnimation: settings.withdrawAnimation,
@@ -2078,9 +2082,12 @@ export async function cycleFail(user: User, loopId: string): Promise<{ play: Pla
 }
 
 /**
- * The fail animation ended: the cycle is failed and the loop ends — the fail
- * route always stops the run. `end` goes to the protocol (tip to the trash,
- * home); loopFinish then records the run's end.
+ * The fail animation ended: THIS LOOP is skipped (the cart is off the stage
+ * again) and the run goes on to the next cart (Alejandro, 2026-10-30 — a fail
+ * no longer ends the run). The protocol already parked for the next cart after
+ * the skip. On the run's last loop, or after Stop, `end` goes to the protocol
+ * and the run completes with its skipped count; loopFinish records the OT-2
+ * run's end.
  */
 export async function cycleFailDone(user: User, loopId: string): Promise<LoopView> {
 	const { loop, cycle } = await runningLoop(loopId);
@@ -2088,20 +2095,23 @@ export async function cycleFailDone(user: User, loopId: string): Promise<LoopVie
 	const now = new Date();
 	const failedStep = cycle.failedStep ?? 'scan';
 	const msg = cycle.error ?? 'failed';
-	await patchCycle(loopId, cycle.index, { step: 'failed', endedAt: now });
-	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'failed', error: `${failedStep}: ${msg} The fail animation played.`, endedAt: now } });
-	const robot = await loopRobot(loop);
-	const endNote = await sendEnd(user, loop, robot, cycle.index);
-	if (endNote) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: `${failedStep}: ${msg} The fail animation played. ${endNote}` } });
-	await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', loopId, {
-		cycle: cycle.index,
-		step: failedStep,
-		error: msg,
-		failRoute: true,
-		failArmRunId: cycle.failArmRunId ?? null,
-		completedRuns: Number(loop.completedRuns ?? 0),
-		endSent: !endNote
-	});
+	const skippedRuns = Number(loop.skippedRuns ?? 0) + 1;
+	await patchCycle(loopId, cycle.index, { step: 'skipped', endedAt: now });
+	const finished = Number(cycle.index) >= Number(loop.requestedRuns);
+	const skipped = { cycle: cycle.index, step: failedStep, error: msg, failArmRunId: cycle.failArmRunId ?? null, skippedRuns, completedRuns: Number(loop.completedRuns ?? 0) };
+	if (finished || loop.stopRequested) {
+		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { skippedRuns, status: finished ? 'completed' : 'stopped', endedAt: now } });
+		if (!loop.ending) {
+			const robot = await loopRobot(loop);
+			const endNote = await sendEnd(user, loop, robot, cycle.index);
+			if (endNote) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: endNote } });
+		}
+		await audit(user, 'arm_wax_fill.loop_skipped', 'arm_wax_fill_runs', loopId, { ...skipped, last: true });
+		await audit(user, finished ? 'arm_wax_fill.loop_complete' : 'arm_wax_fill.loop_stopped', 'arm_wax_fill_runs', loopId, { completedRuns: Number(loop.completedRuns ?? 0), skippedRuns, requestedRuns: loop.requestedRuns });
+		return (await getLoop(loopId))!;
+	}
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { skippedRuns }, $push: { cycles: { index: cycle.index + 1, step: 'grab', startedAt: now } } });
+	await audit(user, 'arm_wax_fill.loop_skipped', 'arm_wax_fill_runs', loopId, { ...skipped, next: cycle.index + 1 });
 	return (await getLoop(loopId))!;
 }
 
@@ -2241,7 +2251,7 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
 	const robot = await loopRobot(loop);
-	const last = Number(loop.completedRuns ?? 0) + 1 >= Number(loop.requestedRuns) || !!loop.stopRequested;
+	const last = Number(cycle.index) >= Number(loop.requestedRuns) || !!loop.stopRequested;
 	let endNote: string | null = null;
 	if (last) {
 		// `end` is an instruction + resume, which needs the run PAUSED: wait for the
@@ -2266,7 +2276,7 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 	const now = new Date();
 	const completedRuns = Number(loop.completedRuns ?? 0) + 1;
 	await patchCycle(loopId, cycle.index, { step: 'done', endedAt: now });
-	const finished = completedRuns >= Number(loop.requestedRuns);
+	const finished = Number(cycle.index) >= Number(loop.requestedRuns);
 	if (finished || loop.stopRequested) {
 		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns, status: finished ? 'completed' : 'stopped', endedAt: now } });
 		// Stop requested during this withdraw: the end has not gone out yet.
@@ -2275,7 +2285,7 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 			const endNote = await sendEnd(user, loop, robot, cycle.index);
 			if (endNote) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: endNote } });
 		}
-		await audit(user, finished ? 'arm_wax_fill.loop_complete' : 'arm_wax_fill.loop_stopped', 'arm_wax_fill_runs', loopId, { completedRuns, requestedRuns: loop.requestedRuns });
+		await audit(user, finished ? 'arm_wax_fill.loop_complete' : 'arm_wax_fill.loop_stopped', 'arm_wax_fill_runs', loopId, { completedRuns, skippedRuns: Number(loop.skippedRuns ?? 0), requestedRuns: loop.requestedRuns });
 		return { loop: (await getLoop(loopId))!, next: false };
 	}
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns }, $push: { cycles: { index: cycle.index + 1, step: 'grab', startedAt: now } } });

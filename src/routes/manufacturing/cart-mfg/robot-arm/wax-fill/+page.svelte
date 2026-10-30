@@ -234,7 +234,7 @@
 				const cycle = loop.cycles[loop.cycles.length - 1];
 				if (!cycle) break;
 				const loopId = loop._id;
-				const tag = `Cycle ${cycle.index}/${loop.requestedRuns}`;
+				const tag = `Loop ${cycle.index}/${loop.requestedRuns}`;
 				if (cycle.step === 'grab') {
 					if (stopAsked) break;
 					// The run must be parked (tip in the wax tube) for this cart before the arm swings in;
@@ -264,7 +264,7 @@
 					}
 					if (broke) break;
 					note(`${tag}: OT-2 parked — grab — playing "${loop?.grabAnimation?.name ?? ''}".`);
-					const p = await playStep('cycleGrab', `Grab (cycle ${cycle.index})`);
+					const p = await playStep('cycleGrab', `Grab (loop ${cycle.index})`);
 					if (stopAsked) {
 						// Stop ended the loop on the server while the arm was moving.
 						await refreshLoop();
@@ -362,7 +362,7 @@
 				} else if (cycle.step === 'withdraw') {
 					const last = loop.completedRuns + 1 >= loop.requestedRuns || loop.stopRequested;
 					note(`${tag}: withdraw — playing "${loop.withdrawAnimation?.name ?? ''}"${last ? ' (last cart: the OT-2 trashes its tip and homes meanwhile)' : ''}.`);
-					const p = await playStep('cycleWithdraw', `Withdraw (cycle ${cycle.index})`);
+					const p = await playStep('cycleWithdraw', `Withdraw (loop ${cycle.index})`);
 					if (stopAsked) {
 						// Stop pressed while the arm was withdrawing ends the loop on the server; a Stop
 						// pressed during the fill leaves it running and cycleWithdrawDone ends it below.
@@ -379,7 +379,7 @@
 						break;
 					}
 					loop = r.data.loop;
-					note(r.data.next ? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.` : `Loop ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled.`);
+					note(r.data.next ? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.` : `Run ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled${loop!.skippedRuns ? `, ${loop!.skippedRuns} skipped` : ''}.`);
 				} else if (cycle.step === 'fail') {
 					// The fail route: skip (the gantry back to the tube), the fail animation once parked, the loop ends failed.
 					if (!cycle.skipSeq) note(`${tag}: fail route — sending the OT-2 back to the wax tube first.`);
@@ -398,7 +398,7 @@
 					}
 					if (broke || loop!.status !== 'running') break;
 					note(`${tag}: OT-2 parked — fail animation — playing "${loop?.failAnimation?.name ?? ''}".`);
-					const p = await playStep('cycleFail', `Fail animation (cycle ${cycle.index})`);
+					const p = await playStep('cycleFail', `Fail animation (loop ${cycle.index})`);
 					if (stopAsked) {
 						await refreshLoop();
 						if (loop?.status !== 'running') break;
@@ -413,7 +413,14 @@
 						break;
 					}
 					loop = r.data.loop;
-					note(`Loop stopped: ${STEP_LABEL[cycle.failedStep ?? 'scan']?.toLowerCase() ?? cycle.failedStep} failed on cycle ${cycle.index}, the fail animation played — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.`, 'error');
+					// The fail route skips THIS loop; the run goes on (the while loop picks up the next grab).
+					const what = STEP_LABEL[cycle.failedStep ?? 'scan']?.toLowerCase() ?? cycle.failedStep;
+					note(
+						loop!.status === 'running'
+							? `${tag} skipped (${what} failed: ${cycle.error ?? ''}) — the fail animation played; on to the next cart.`
+							: `Run ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled, ${loop!.skippedRuns} skipped (loop ${cycle.index}: ${what} failed).`,
+						'warn'
+					);
 				} else {
 					await refreshLoop();
 					break;
@@ -445,7 +452,7 @@
 				return;
 			}
 			loop = r.data.loop;
-			note(`Loop started: ${loop!.requestedRuns} run${loop!.requestedRuns === 1 ? '' : 's'} on ${loop!.robot.name}.`);
+			note(`Run started: ${loop!.requestedRuns} loop${loop!.requestedRuns === 1 ? '' : 's'} (carts) on ${loop!.robot.name}.`);
 		} finally {
 			busy = false;
 		}
@@ -692,7 +699,7 @@
 		try {
 			const r = await post('resetLoop');
 			if (!r.ok) {
-				say(`Loop reset failed: ${r.error}`, 'error');
+				say(`Run reset failed: ${r.error}`, 'error');
 				return;
 			}
 			if (r.data.loop) {
@@ -902,7 +909,7 @@
 					</label>
 					<button type="submit" disabled={busy || haltBusy || data.readiness.blocking.length > 0}
 						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-sm font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
-						{busy ? 'Starting…' : `Start ${runs} ${rehearsal ? 'rehearsal ' : ''}run${runs === 1 ? '' : 's'}`}
+						{busy ? 'Starting…' : `Start a ${rehearsal ? 'rehearsal ' : ''}run of ${runs} loop${runs === 1 ? '' : 's'}`}
 					</button>
 				</form>
 			{/if}
@@ -948,8 +955,8 @@
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3 space-y-3">
 				<div class="flex flex-wrap items-center justify-between gap-2 text-xs">
 					<span style="color: var(--color-tron-text)">
-						<span class="font-semibold">Cycle {currentCycle?.index ?? 0} of {loop.requestedRuns}</span>
-						· {loop.completedRuns} filled · {loop.robot.name}
+						<span class="font-semibold">Loop {currentCycle?.index ?? 0} of {loop.requestedRuns}</span>
+						· {loop.completedRuns} filled{#if loop.skippedRuns} · {loop.skippedRuns} skipped{/if} · {loop.robot.name}
 						{#if currentCycle?.barcode}· cart <span class="font-mono" style="color: var(--color-tron-cyan)">{currentCycle.barcode}</span>{/if}
 					</span>
 					<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider

@@ -26,7 +26,8 @@ const animationRefSchema = new Schema(
 const cycleSchema = new Schema(
 	{
 		index: { type: Number, required: true }, // 1-based
-		step: { type: String, enum: [...ARM_WAX_FILL_STEPS, 'fail', 'failed', 'stopped'], default: 'grab' },
+		// 'skipped' (2026-10-30): the fail animation played and the run went on to the next cart.
+		step: { type: String, enum: [...ARM_WAX_FILL_STEPS, 'fail', 'failed', 'skipped', 'stopped'], default: 'grab' },
 		startedAt: Date,
 		endedAt: Date,
 		grabArmRunId: String,
@@ -68,6 +69,8 @@ const armWaxFillRunSchema = new Schema(
 		cartPosition: Number,
 		requestedRuns: { type: Number, required: true },
 		completedRuns: { type: Number, default: 0 },
+		/** Loops that took the fail route (the cart was taken off again) — the run went on. */
+		skippedRuns: { type: Number, default: 0 },
 		status: { type: String, enum: ['running', 'completed', 'stopped', 'failed'], default: 'running', index: true },
 		stopRequested: { type: Boolean, default: false },
 		grabAnimation: animationRefSchema,
