@@ -166,3 +166,18 @@ cart's volume. The lift rule applies to every move that leaves the tube or the s
 - Run `failed` / `stopped` / `succeeded` while a cycle is mid-way → the loop fails (succeeded only legitimately after
   `end`).
 - The EmbeddedRunController's auto-resume of the initial off-deck pause must never resume an `ARM …` pause.
+
+### 5.7 Announcements (added 2026-10-30, Alejandro's overlap)
+Plain `protocol.comment()` lines BIMS reads from the run's command log; the arm may move from them on while the run
+keeps going. A marker is the LAST ARM pause or announcement in the log; a later one retires it.
+- `ARM CALIBRATED` — after the once-per-loop probe. Until `ARM PARKED 1` the OT-2 only visits the tube. **Grab of
+  cart 1 starts here.**
+- `ARM CLEAR <i>` — after `lift()` and the planned move to the tube top have completed (never over the stage), before
+  the re-aspirate/park (fill, skip) or tip-to-trash + home (end). **Withdraw / fail animation of cart i start here;
+  the next grab follows the withdraw at once.**
+- Gates (BIMS `armMayMove`): grab(1) = PARKED 1 | running after CALIBRATED; grab(i) = PARKED i | running after
+  CLEAR i−1; withdraw/fail(i) = PARKED i+1 | running after CLEAR i; scan start = PARKED i only. `end` needs a paused
+  run (it is an instruction + resume), so the last cart's withdraw waits for the park, sends `end`, then plays.
+- The scan position RTP `arm_scan_z` is the NOZZLE height taught with no tip; the protocol moves the tip end to
+  `arm_scan_z − tiprack.tip_length` when a tip is on. `arm_cart_z` / `arm_scan_z` maxima are 250.
+- Timed (open-loop) choreography was considered and rejected: the rule stays enforced by state.

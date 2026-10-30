@@ -24757,3 +24757,39 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit 7f94f2e7 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy 7f94f2e7 (ARM-WAX-LOOP-B)"
 What this deployment is for: the robot-arm wax-fill loop runs ONE OT-2 run per loop with one tip idling in the wax between carts and the arm moving while the run is parked; inert until the daemon 1.4.0 and the new stage .py reach the robot (handoff doc).
+
+2026-10-30 — feat/stage-cal-follows-protocol — ARM-WAX-LOOP-B second pass after the first robot run: tip-aware scan move, RTP bounds, the arm moves on 'ARM CALIBRATED' / 'ARM CLEAR <i>', the robot's error is quoted
+================================================================================
+First loop on the robot (14:36Z, run e071e484): (1) start -> 'ARM PARKED 1' took 66 s with the arm idle; (2) the run
+died 45 s into the scan move and the engine's cleanup dropped the tip ("dropped the tip before attempting to fill");
+(3) the earlier attempt at 14:30Z never created a run: POST /runs answered 500 "unhandled errors in a TaskGroup".
+Causes and fixes:
+  - (3) arm_scan_z = 200.1 (the taught scan Z) exceeded the RTP's maximum 200.0; the OT-2 does not refuse that cleanly.
+    Both stage .py: arm_cart_z / arm_scan_z maximum 250.0. BIMS startLoop: assertFormWithinSchema checks every param_*
+    against the robot schema's min/max BEFORE POST /runs and names the value and the bound.
+  - (2) the scan position is taught on the Stage Calibration tab with NO tip (nozzle height, 200.1 near the top of Z);
+    the loop scans with its tip on and move_to places the TIP END at z, so the nozzle would have had to go z + tip
+    length — unreachable. go_to_scan_position now targets tip end = scan_z - tiprack.tip_length when a tip is attached
+    (logged 'ARM SCAN: nozzle at z=…, tip end at z=…, tip length …'); the RTP description says nozzle Z, taught tip-less.
+    runEndedMidLoop now quotes GET /runs/{id} errors[].detail in the loop error ("Robot: …").
+  - (1) Alejandro's overlap, in his words: the OT-2 initialises and calibrates its tip; once calibrated the arm may
+    start while the OT-2 preps and loiters in the wax; after the grab the scan goes forward by itself; after the last
+    hole, as the OT-2 retreats to the wax, the arm withdraws and immediately grabs the next cart. Implemented as two
+    protocol ANNOUNCEMENTS (comments) BIMS reads from the run's command log:
+      'ARM CALIBRATED' — right after the once-per-loop probe (gantry at the top above the calibrator); the OT-2 then
+        only goes to the tube (first aspirate, park) until 'ARM PARKED 1'. The grab of cart 1 starts here.
+      'ARM CLEAR <i>' — after lift() AND the planned move to the tube top completed (never over the stage, not even at
+        the top), before the re-aspirate/park (fill, skip) or the tip-to-trash + home (end). The withdraw / fail
+        animation of cart i starts here; the next grab follows the withdraw immediately.
+    BIMS (arm-loop-protocol.ts parseArmComment / ArmMarker / armMayMove; arm-wax-fill.ts readRunPause reads the last
+    50 commands for running AND paused runs and keeps the LAST ARM marker — a later marker, e.g. a resumed pause on the
+    way to the scan, retires an earlier CLEAR): grab(1) = PARKED 1 or running-after-CALIBRATED; grab(i) = PARKED i or
+    running-after-CLEAR i-1; withdraw/fail(i) = PARKED i+1 or running-after-CLEAR i; scan start = PARKED i strictly
+    (the page waits for it before cycleScanStart). The last cart's withdraw waits for PARKED so `end` (an instruction
+    + resume, which needs a paused run) goes out first and the tip-to-trash + home overlap the withdraw; sendEnd waits
+    for the park the same way. Timed (open-loop) choreography was discussed and rejected: a probe retry, a tip-rack
+    pause or a slow home would put the gantry over the stage with the arm moving, and every animation/protocol edit
+    would need re-timing on both robots; the announcements give the overlap with the rule enforced by state.
+Protocol tests (loop, rehearsal, geometry, rtp_limits) ok; svelte-check 14/448 baseline; vitest 36/36.
+Operator: add BOTH stage .py files to the library again from the Wax fill tab and deploy the rehearsal (the daemon
+1.4.0 is already on the robot; its md5 is unchanged). Then a 1-cart loop, then 3 carts; audit_log has the step times.

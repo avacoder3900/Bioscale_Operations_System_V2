@@ -154,7 +154,7 @@ def check_surface(m, src, label):
     m.add_parameters(p)
     c = p.by_name['cartridges']
     assert (c['default'], c['minimum'], c['maximum']) == (1, 1, 24), c
-    for ax, mx in (('x', 400.0), ('y', 400.0), ('z', 200.0)):
+    for ax, mx in (('x', 400.0), ('y', 400.0), ('z', 250.0)):
         s = p.by_name['arm_scan_' + ax]
         assert (s['default'], s['minimum'], s['maximum']) == (0.0, 0.0, mx), s
     assert m.MIN_TAUGHT_MM == 1.0 and m.SIM_CART[2] > 0 and m.SIM_SCAN[2] > 0
@@ -176,6 +176,36 @@ def check_surface(m, src, label):
     assert 'def dispense_stage(' not in src, 'the per-cart dispense_stage is gone'
     # The untaught scan position is refused before motion, like the cart.
     assert "arm_scan_x/y/z are not set (0)" in src
+    # The scan move is tip-aware: arm_scan_z is the NOZZLE height (taught with no
+    # tip); with the loop's tip on, the tip-end target is lowered by the rack's
+    # tip length (2026-10-30: asking for the tip end at the nozzle height failed the run).
+    assert 'target_z = max(MIN_TAUGHT_MM, scan_z - tip_len)' in src and 'tiprack.tip_length' in src
+    assert "ARM SCAN: nozzle at z=" in src
+    assert 'taught with NO tip' in p.by_name['arm_scan_z']['description']
+    # Start-up (2026-10-30, Alejandro's overlap): ONE tip picked up and PROBED at
+    # start-up, then 'ARM CALIBRATED' (the arm may grab from here), then the tube
+    # (aspirate + park) and 'ARM PARKED 1'. No probe anywhere in the fill branch.
+    assert 'pick_up_tip_for_loop' not in src and 'adjust is None' not in src
+    assert 'adjust = pick_up_and_calibrate_tip(pick_up=False)' not in src, 'no deferred probe (the tip-swap re-probe is the only pick_up=False)'
+    assert src.count('= pick_up_and_calibrate_tip()') == 2, 'the optional calibration check + the loop start-up'
+    assert "protocol.comment('ARM CALIBRATED')" in src
+    i_probe = src.index('        adjust = pick_up_and_calibrate_tip()')
+    i_calibrated = src.index("protocol.comment('ARM CALIBRATED')")
+    i_parked = src.index('        holding = park_for(cart, source_volume, 0)\n')
+    i_loop = src.index('        while True:\n            rec = next_instruction(cart)')
+    assert i_probe < i_calibrated < i_parked < i_loop, 'order: probe, ARM CALIBRATED, aspirate + park (PARKED 1), loop'
+    # 'ARM CLEAR <i>' is emitted only after the planned move to the tube top has
+    # completed: in park_for (fill / skip) and in finish (end), and nowhere else.
+    assert src.count("protocol.comment(f'ARM CLEAR {clear_of}')") == 2
+    for fn in ('def park_for(', 'def finish('):
+        body = src[src.index(fn):]
+        body = body[:body.index('\n        def ') if '\n        def ' in body else len(body)]
+        i_tube = body.index('pipette.move_to(source_well.top())')
+        i_clear = body.index("protocol.comment(f'ARM CLEAR {clear_of}')")
+        assert i_tube < i_clear, fn + ': CLEAR must follow the move to the tube'
+    assert 'holding = park_for(cart, source_volume, 0, clear_of=filled)' in src
+    assert 'holding = park_for(cart, source_volume, holding, clear_of=skipped)' in src
+    assert 'finish(holding, clear_of)' in src
     # The lift rule is untouched: the lift hook and the lifts around every station.
     assert 'def _resolve_lift' in src and src.count('lift()') >= 14, src.count('lift()')
     # Analysis never touches serial: no probe, baseline zero.

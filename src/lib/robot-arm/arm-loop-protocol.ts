@@ -54,3 +54,54 @@ export function isArmPauseMessage(message: unknown): boolean {
 export function isParkedFor(pause: ArmPause | null, cart: number): boolean {
 	return !!pause && pause.kind === 'PARKED' && pause.cart === cart;
 }
+
+/**
+ * ARM-WAX-LOOP-B overlap (Alejandro, 2026-10-30): besides the pauses, the
+ * protocol ANNOUNCES two moments with a plain comment, and the arm may move
+ * from them on while the run keeps going:
+ *   'ARM CALIBRATED'  — the once-per-loop probe is done; the OT-2 now only
+ *                       visits the tube (aspirate, park) until 'ARM PARKED 1'.
+ *   'ARM CLEAR <i>'   — cart i's fill (or skip / end) has left the stage and
+ *                       arrived at the tube; the OT-2 now only re-aspirates and
+ *                       parks (or trashes the tip and homes) until the next pause.
+ * A marker is the LAST ARM pause or announcement in the run's command log; a
+ * later marker (a resumed pause on the way to the scan, say) retires it.
+ */
+export type ArmMarkerKind = ArmPauseKind | 'CALIBRATED' | 'CLEAR';
+
+export interface ArmMarker {
+	kind: ArmMarkerKind;
+	/** The cart for PARKED / AT_SCAN / NO_INSTRUCTION / CLEAR; 0 for CALIBRATED. */
+	cart: number;
+	/** True for a waitForResume the run is paused at right now. */
+	paused: boolean;
+}
+
+const COMMENT_RE = /^\s*ARM\s+(CALIBRATED|CLEAR)(?:\s+(\d+))?\b/;
+
+/** 'ARM CLEAR 2' → { kind: 'CLEAR', cart: 2 }; 'ARM CALIBRATED' → { kind: 'CALIBRATED', cart: 0 }; other comments → null. */
+export function parseArmComment(message: unknown): { kind: 'CALIBRATED' | 'CLEAR'; cart: number } | null {
+	if (typeof message !== 'string') return null;
+	const m = COMMENT_RE.exec(message);
+	if (!m) return null;
+	return { kind: m[1] as 'CALIBRATED' | 'CLEAR', cart: m[2] ? Number(m[2]) : 0 };
+}
+
+export interface ArmMoveWant {
+	/** The pause that always allows the move: 'ARM PARKED <parked>'. */
+	parked: number;
+	/** Also allowed while the run is RUNNING after 'ARM CLEAR <orClear>' (nothing later in the log). */
+	orClear?: number;
+	/** Also allowed while the run is RUNNING after 'ARM CALIBRATED' (nothing later in the log). */
+	orCalibrated?: boolean;
+}
+
+/** May the arm move now, given the run's status and its last ARM marker? */
+export function armMayMove(status: string, last: ArmMarker | null, want: ArmMoveWant): boolean {
+	if (!last) return false;
+	if (last.kind === 'PARKED' && last.cart === want.parked && last.paused && status === 'paused') return true;
+	if (status !== 'running') return false;
+	if (want.orCalibrated && last.kind === 'CALIBRATED') return true;
+	if (want.orClear != null && last.kind === 'CLEAR' && last.cart === want.orClear) return true;
+	return false;
+}

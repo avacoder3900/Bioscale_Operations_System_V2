@@ -74,7 +74,7 @@ import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health'
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
 import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, robotDelete, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
-import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause } from '$lib/robot-arm/arm-loop-protocol';
+import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, parseArmComment, type ArmMarker, type ArmMoveWant } from '$lib/robot-arm/arm-loop-protocol';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
@@ -1465,7 +1465,9 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 
 	// 3. The ordinary start (freshness gate, create, play). The protocol homes,
 	//    takes its one tip, probes it, aspirates and parks → `ARM PARKED 1`.
-	const started = await startRunQueue('wax', loopRunForm(waxRunId, protocol, calibration, requestedRuns), user);
+	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns);
+	await assertFormWithinSchema(String(robot._id), loopForm);
+	const started = await startRunQueue('wax', loopForm, user);
 	if (isActionFail(started)) {
 		await revertUnstartedWaxRun(user, waxRunId, `start failed: ${started.fail.error}`).catch(() => null);
 		await abort(`Wax fill did not start: ${started.fail.error}`);
@@ -1614,6 +1616,8 @@ interface RunPauseRead {
 	message: string | null;
 	/** The message parsed as one of this line's pauses, else null. */
 	pause: ArmPause | null;
+	/** The last ARM pause or announcement in the run's command log (see armMayMove), else null. */
+	last: ArmMarker | null;
 }
 
 /**
@@ -1634,26 +1638,63 @@ async function readRunPause(robot: any, runId: string): Promise<RunPauseRead> {
 		throw new ArmWaxFillError(`The OT-2 run could not be read (${e instanceof Error ? e.message : String(e)}).`, 502);
 	}
 	const status = String(run?.status ?? 'unknown');
-	if (status !== 'paused') return { status, message: null, pause: null };
-	const PAGE = 20;
+	if (status !== 'paused' && status !== 'running') return { status, message: null, pause: null, last: null };
+	// The tail of the command log: the current pause (if any) and the last ARM
+	// announcement. Without a cursor the robot centres the page on the current
+	// command; re-read from the end when that page does not reach the end.
+	const PAGE = 50;
 	let cmds: any[] = [];
 	try {
 		let page = await read(`/runs/${runId}/commands?pageLength=${PAGE}`);
 		cmds = Array.isArray(page?.data) ? page.data : [];
-		if (!cmds.some((c) => c?.commandType === 'waitForResume' && c?.status === 'running')) {
-			const total = Number(page?.meta?.totalLength ?? 0);
-			if (total > cmds.length) {
-				page = await read(`/runs/${runId}/commands?cursor=${Math.max(0, total - PAGE)}&pageLength=${PAGE}`);
-				cmds = Array.isArray(page?.data) ? page.data : [];
-			}
+		const total = Number(page?.meta?.totalLength ?? 0);
+		const end = Number(page?.meta?.cursor ?? 0) + cmds.length;
+		if (total > 0 && end < total) {
+			page = await read(`/runs/${runId}/commands?cursor=${Math.max(0, total - PAGE)}&pageLength=${PAGE}`);
+			cmds = Array.isArray(page?.data) ? page.data : [];
 		}
 	} catch {
 		cmds = [];
 	}
 	const waits = cmds.filter((c) => c?.commandType === 'waitForResume');
-	const cur = waits.find((c) => c.status === 'running') ?? waits[waits.length - 1] ?? null;
+	const cur = status === 'paused' ? (waits.find((c) => c.status === 'running') ?? waits[waits.length - 1] ?? null) : null;
 	const message = cur?.params?.message ? String(cur.params.message) : null;
-	return { status, message, pause: parseArmPause(message) };
+	let last: ArmMarker | null = null;
+	for (const c of cmds) {
+		if (c?.commandType === 'waitForResume') {
+			const p = parseArmPause(c?.params?.message);
+			if (p) last = { kind: p.kind, cart: p.cart, paused: c.status === 'running' };
+		} else if (c?.commandType === 'comment') {
+			const a = parseArmComment(c?.params?.message);
+			if (a) last = { kind: a.kind, cart: a.cart, paused: false };
+		}
+	}
+	return { status, message, pause: parseArmPause(message), last };
+}
+
+/**
+ * The arm may move: parked for `want.parked`, or — the overlap Alejandro asked
+ * for — the run still RUNNING right after 'ARM CALIBRATED' (start-up: it now
+ * only aspirates and parks) or after 'ARM CLEAR <i>' (it has left the stage
+ * for the tube: re-aspirate and park, or trash the tip and home). Anything
+ * else — a resumed pause on its way to the scan or the holes, the calibrator,
+ * an ended run — refuses.
+ */
+async function assertArmMayMove(robot: any, loop: any, want: ArmMoveWant, what: string): Promise<RunPauseRead> {
+	if (!loop.opentronsRunId) throw new ArmWaxFillError(`This loop has no robot run — the arm will not ${what}.`, 409);
+	const r = await readRunPause(robot, String(loop.opentronsRunId));
+	if (armMayMove(r.status, r.last, want)) return r;
+	const where =
+		r.status !== 'paused' && r.status !== 'running'
+			? `is ${r.status}`
+			: r.status === 'paused'
+				? r.message
+					? `is paused at "${r.message}"`
+					: 'is paused without an ARM note'
+				: r.last
+					? `is running after "ARM ${r.last.kind}${r.last.cart ? ` ${r.last.cart}` : ''}"`
+					: 'is running with no ARM announcement yet';
+	throw new ArmWaxFillError(`The OT-2 run ${where} — not clear of the calibrator and the stage for cart ${want.parked - (want.orClear != null ? 1 : 0)}; the arm will not ${what}.`, 409);
 }
 
 /** Resume the run (the OT-2's action for it is 'play'; it has no 'resume'). */
@@ -1668,6 +1709,16 @@ async function resumeRun(robot: any, runId: string): Promise<void> {
 		const body: any = await res.json().catch(() => ({}));
 		throw new ArmWaxFillError(`The OT-2 refused to resume its run (${body?.message ?? body?.errors?.[0]?.detail ?? `HTTP ${res.status}`}).`, 502);
 	}
+}
+
+/** What the grab of `cart` needs: parked for it, or running after CALIBRATED (cart 1) / after CLEAR of the previous cart. */
+function grabWant(cart: number): ArmMoveWant {
+	return cart === 1 ? { parked: 1, orCalibrated: true } : { parked: cart, orClear: cart - 1 };
+}
+
+/** What the withdraw / fail animation of `cart` needs: parked for the next cart, or running after CLEAR of this one. */
+function afterCartWant(cart: number): ArmMoveWant {
+	return { parked: cart + 1, orClear: cart };
 }
 
 /** The arm moves only while the run is paused at `ARM PARKED <cart>`: the tip in the wax tube, nothing over the stage. */
@@ -1693,7 +1744,13 @@ const AWAIT_BUDGET_MS = 85_000;
  * instruction for that cart is written again and the run resumed; with none
  * outstanding nothing is safe to send and the wait fails.
  */
-async function awaitPause(user: User, loop: any, robot: any, expect: ArmPause, maxWaitMs = AWAIT_BUDGET_MS): Promise<AwaitResult> {
+async function awaitPause(
+	user: User,
+	loop: any,
+	robot: any,
+	expect: ArmPause & { orClear?: number; orCalibrated?: boolean },
+	maxWaitMs = AWAIT_BUDGET_MS
+): Promise<AwaitResult> {
 	const runId = String(loop.opentronsRunId ?? '');
 	if (!runId) throw new ArmWaxFillError('This loop has no robot run.', 409);
 	const deadline = Date.now() + maxWaitMs;
@@ -1701,6 +1758,10 @@ async function awaitPause(user: User, loop: any, robot: any, expect: ArmPause, m
 		const r = await readRunPause(robot, runId);
 		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
 		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
+		// The announcements: the arm may already move while the run keeps going.
+		if (expect.kind === 'PARKED' && (expect.orClear != null || expect.orCalibrated) && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orCalibrated: expect.orCalibrated })) {
+			return { done: true, read: r };
+		}
 		if (r.pause?.kind === 'NO_INSTRUCTION') {
 			const p = loop.pendingInstruction;
 			if (p && p.action !== 'start' && Number(p.cart) === r.pause.cart) {
@@ -1727,6 +1788,26 @@ async function awaitPause(user: User, loop: any, robot: any, expect: ArmPause, m
  */
 async function runEndedMidLoop(user: User, loop: any, cycle: any, step: string, status: string): Promise<LoopView> {
 	let note = '';
+	// The robot's own reason (GET /runs/{id} → data.errors[].detail) — the first
+	// loop on the robot failed at the scan move and the page said only "ended failed".
+	let detail = '';
+	if (loop.opentronsRunId) {
+		try {
+			const robot = await loopRobot(loop);
+			const r = await robotGet(robot, `/runs/${loop.opentronsRunId}`);
+			if (r.ok) {
+				const errs = (((await r.json()) as any)?.data?.errors ?? []) as any[];
+				const why = errs
+					.map((e) => String(e?.detail ?? e?.errorType ?? '').trim())
+					.filter(Boolean)
+					.slice(0, 2)
+					.join(' | ');
+				if (why) detail = ` Robot: ${why}`;
+			}
+		} catch {
+			/* best effort */
+		}
+	}
 	if (loop.waxRunId) {
 		const fin = await recordRunFinishedQueue('wax', String(loop.waxRunId), status, user).catch((e) => ({ fail: { status: 500, error: (e as Error).message } }));
 		if (isActionFail(fin)) note += ` The wax run's end could not be recorded (${fin.fail.error}).`;
@@ -1738,13 +1819,17 @@ async function runEndedMidLoop(user: User, loop: any, cycle: any, step: string, 
 		}
 	}
 	await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { runFinished: true, ending: true, opentronsRunFinalStatus: status } });
-	return failLoop(user, String(loop._id), step, `The robot run ended ${status} before the cycle finished.${note}`, { opentronsRunFinalStatus: status });
+	return failLoop(user, String(loop._id), step, `The robot run ended ${status} before the cycle finished.${detail}${note}`, { opentronsRunFinalStatus: status, robotError: detail || null });
 }
 
 /** Send `end` and resume: the protocol lifts, trashes the tip and homes. Best effort — the note says when it could not. */
 async function sendEnd(user: User, loop: any, robot: any, cart: number): Promise<string | null> {
 	if (loop.ending || !loop.opentronsRunId) return null;
 	try {
+		// The resume that carries `end` needs the run paused at the park; after a
+		// CLEAR the park is seconds away.
+		const w = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cart + 1 }, 60_000);
+		if (!w.done) throw new Error(w.terminal ? `the robot run ended ${w.terminal}` : 'the run did not park within 60 s');
 		await writeInstruction(user, loop, robot, 'end', cart, null);
 		await resumeRun(robot, String(loop.opentronsRunId));
 		await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { ending: true } });
@@ -1773,11 +1858,15 @@ async function loopRobot(loop: any): Promise<any> {
  */
 export async function cycleAwaitParked(user: User, loopId: string): Promise<{ done: boolean; loop: LoopView }> {
 	const { loop, cycle } = await runningLoop(loopId);
-	expectStep(cycle, 'grab');
+	// Before the grab (cycles after the first) or before the scan (every cycle:
+	// on cycle 1 the grab overlapped the OT-2's start-up, so the run may still
+	// be homing / taking its tip / parking when the scan is due).
+	if (cycle.step !== 'grab' && cycle.step !== 'scan') expectStep(cycle, 'grab');
 	const robot = await loopRobot(loop);
-	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index });
-	if (!r.done && r.terminal) return { done: true, loop: await runEndedMidLoop(user, loop, cycle, 'grab', r.terminal) };
-	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: 'grab', message: r.read.message });
+	const want: ArmMoveWant = cycle.step === 'grab' ? grabWant(cycle.index) : { parked: cycle.index };
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index, orClear: want.orClear, orCalibrated: want.orCalibrated });
+	if (!r.done && r.terminal) return { done: true, loop: await runEndedMidLoop(user, loop, cycle, String(cycle.step), r.terminal) };
+	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: cycle.step, message: r.read.message });
 	return { done: r.done, loop: (await getLoop(loopId))! };
 }
 
@@ -1787,7 +1876,7 @@ export async function cycleGrab(user: User, loopId: string): Promise<{ play: Pla
 	expectStep(cycle, 'grab');
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
 	const robot = await loopRobot(loop);
-	await assertRunParked(robot, loop, cycle.index, 'grab');
+	await assertArmMayMove(robot, loop, grabWant(cycle.index), 'grab');
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
 	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date() });
 	await audit(user, 'arm_wax_fill.cycle_grab', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
@@ -1913,7 +2002,8 @@ export async function cycleFillWait(user: User, loopId: string): Promise<{ pendi
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fill');
 	const robot = await loopRobot(loop);
-	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1 });
+	// Done as soon as the run announces 'ARM CLEAR <i>' (left the stage, at the tube); PARKED <i+1> also counts.
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1, orClear: cycle.index });
 	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'fill', r.terminal) };
 	if (!r.done) return { pending: true, loop: (await getLoop(loopId))! };
 	await patchCycle(loopId, cycle.index, { step: 'withdraw', filledAt: new Date() });
@@ -1947,7 +2037,7 @@ export async function cycleFailPrepare(user: User, loopId: string): Promise<{ pe
 		await patchCycle(loopId, cycle.index, { skipSeq: seq });
 		await audit(user, 'arm_wax_fill.cycle_skip_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq });
 	}
-	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1 });
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1, orClear: cycle.index });
 	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'fail', r.terminal) };
 	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: 'fail', message: r.read.message });
 	return { pending: !r.done, loop: (await getLoop(loopId))! };
@@ -1959,7 +2049,7 @@ export async function cycleFail(user: User, loopId: string): Promise<{ play: Pla
 	expectStep(cycle, 'fail');
 	if (!cycle.skipSeq) throw new ArmWaxFillError('The skip instruction has not been sent yet — the gantry may still be over the stage.', 409);
 	const robot = await loopRobot(loop);
-	await assertRunParked(robot, loop, cycle.index + 1, 'play the fail animation');
+	await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'play the fail animation');
 	const p = await play(user, animRef(loop.failAnimation), 'fail');
 	await patchCycle(loopId, cycle.index, { failArmRunId: p.runId });
 	await audit(user, 'arm_wax_fill.cycle_fail', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, failedStep: cycle.failedStep ?? null, armRunId: p.runId, durationS: p.durationS });
@@ -2056,6 +2146,40 @@ async function revertUnstartedWaxRun(user: User, waxRunId: string, reason: strin
 }
 
 /**
+ * Every param_* the form carries must sit inside the min/max the robot's
+ * protocol schema declares for it. The OT-2 does not refuse an out-of-range
+ * run-time parameter cleanly: POST /runs dies with a bare 500 "unhandled
+ * errors in a TaskGroup" (2026-10-30: the taught scan Z of 200.1 against a
+ * 200.0 maximum). Say which value and which bound instead.
+ */
+async function assertFormWithinSchema(robotId: string, form: FormData): Promise<void> {
+	const entry = await currentProtocolEntry(robotId, 'wax-filling').catch(() => null);
+	const schema = ((entry?.parametersSchema ?? []) as any[]).filter((p) => p && typeof p.variableName === 'string');
+	const problems: string[] = [];
+	for (const def of schema) {
+		if (def.type !== 'int' && def.type !== 'float') continue;
+		const raw = form.get(`param_${def.variableName}`);
+		if (raw === null) continue;
+		const v = Number(raw.toString());
+		if (!Number.isFinite(v)) {
+			problems.push(`${def.variableName} = "${raw}" is not a number`);
+			continue;
+		}
+		const min = Number(def.min);
+		const max = Number(def.max);
+		if ((Number.isFinite(min) && v < min) || (Number.isFinite(max) && v > max)) {
+			problems.push(`${def.variableName} = ${v} is outside the protocol's ${Number.isFinite(min) ? min : '…'}–${Number.isFinite(max) ? max : '…'} range`);
+		}
+	}
+	if (problems.length) {
+		throw new ArmWaxFillError(
+			`The run was not started: ${problems.join('; ')}. Either re-teach that value on the Stage Calibration tab or deploy the current stage .py (its limits may be wider than the one on the robot).`,
+			409
+		);
+	}
+}
+
+/**
  * The run-time parameters of the loop's one run: the taught, tip-neutral cart
  * location, the stage rotation, the dispense depth, the per-hole corrections,
  * the taught scan position (arm_scan_x/y/z) and how many carts the run serves
@@ -2096,10 +2220,18 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
 	const robot = await loopRobot(loop);
-	await assertRunParked(robot, loop, cycle.index + 1, 'withdraw');
 	const last = Number(loop.completedRuns ?? 0) + 1 >= Number(loop.requestedRuns) || !!loop.stopRequested;
 	let endNote: string | null = null;
-	if (last) endNote = await sendEnd(user, loop, robot, cycle.index);
+	if (last) {
+		// `end` is an instruction + resume, which needs the run PAUSED: wait for the
+		// park (a few seconds after CLEAR), send it, then the withdraw overlaps the
+		// protocol's tip-to-trash and home.
+		const w = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1 });
+		if (!w.done && w.terminal) throw new ArmWaxFillError(`The OT-2 run ended ${w.terminal} before the last cart's park — the arm will not withdraw. Press STOP RUN.`, 409);
+		endNote = await sendEnd(user, loop, robot, cycle.index);
+	} else {
+		await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'withdraw');
+	}
 	const p = await play(user, animRef(loop.withdrawAnimation), 'withdraw');
 	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId });
 	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS, last, endSent: last && !endNote });

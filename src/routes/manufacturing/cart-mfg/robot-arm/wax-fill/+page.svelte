@@ -239,7 +239,7 @@
 					if (stopAsked) break;
 					// The run must be parked (tip in the wax tube) for this cart before the arm swings in;
 					// the server refuses cycleGrab otherwise.
-					note(cycle.index === 1 ? `${tag}: waiting for the OT-2 to home, take its tip, probe it, aspirate and park in the wax…` : `${tag}: checking the OT-2 is parked in the wax.`);
+					note(cycle.index === 1 ? `${tag}: waiting for the OT-2 to home, take its tip and calibrate it — the grab starts the moment it announces ARM CALIBRATED, while it aspirates and parks.` : `${tag}: the OT-2 is clear of the stage — grab.`);
 					let parked = false;
 					let broke = false;
 					while (!parked) {
@@ -283,6 +283,31 @@
 				} else if (cycle.step === 'scan') {
 					if (stopAsked) break;
 					if (!cycle.scanSeq) {
+						// The scan sends the gantry over the stage: the run must be parked first
+						// (on cycle 1 its start-up may still be finishing under the grab).
+						let parkedForScan = false;
+						let scanBroke = false;
+						while (!parkedForScan) {
+							const w = await post('awaitParked', { loopId: loopId });
+							if (stopAsked) {
+								await refreshLoop();
+								scanBroke = true;
+								break;
+							}
+							if (!w.ok) {
+								await fail('scan', `the OT-2 did not report parked: ${w.error}`);
+								scanBroke = true;
+								break;
+							}
+							loop = w.data.loop;
+							if (loop!.status !== 'running') {
+								scanBroke = true;
+								break;
+							}
+							parkedForScan = !!w.data.done;
+							if (!parkedForScan) note(`${tag}: waiting for the OT-2 to finish its start-up and park before the scan…`);
+						}
+						if (scanBroke) break;
 						note(`${tag}: sending the OT-2 to the scan position.`);
 						const s = await post('cycleScanStart', { loopId: loopId });
 						if (!s.ok) {

@@ -318,7 +318,7 @@ def add_parameters(parameters: protocol_api.Parameters):
         default=0.0, minimum=0.0, maximum=400.0, unit="mm")
     parameters.add_float(variable_name="arm_cart_z", display_name="Arm cart Z (deck mm)",
         description="Taught Z of the first wax hole's RIM (tip end). 0 = not taught (run refuses).",
-        default=0.0, minimum=0.0, maximum=200.0, unit="mm")
+        default=0.0, minimum=0.0, maximum=250.0, unit="mm")
     parameters.add_float(variable_name="arm_cart_rotation_deg", display_name="Cart rotation on the stage",
         description="CCW from above about the first hole. 90 = the arm's stage, gates to the front; 0 = carriage.",
         default=90.0, minimum=-360.0, maximum=360.0, unit="deg")
@@ -334,8 +334,8 @@ def add_parameters(parameters: protocol_api.Parameters):
         description="Taught Y of the scan position over the stage. 0 = not taught (run refuses).",
         default=0.0, minimum=0.0, maximum=400.0, unit="mm")
     parameters.add_float(variable_name="arm_scan_z", display_name="Arm scan Z (deck mm)",
-        description="Taught Z of the scan position (tip end). 0 = not taught (run refuses).",
-        default=0.0, minimum=0.0, maximum=200.0, unit="mm")
+        description="Nozzle Z of the scan position, taught with NO tip. 0 = not taught (run refuses).",
+        default=0.0, minimum=0.0, maximum=250.0, unit="mm")
     # No travel-height parameter: the pipette goes ALL THE WAY UP (Z-only home)
     # before every move between stations — see the LIFT RULE in the header.
 
@@ -1209,26 +1209,50 @@ def run(protocol: protocol_api.ProtocolContext):
 
         def go_to_scan_position():
             """ALL THE WAY UP, then one planned move to the taught scan point (the
-            engine runs it as XY at the top, then straight down)."""
+            engine runs it as XY at the top, then straight down). The point was
+            taught on the Stage Calibration tab with NO tip, so arm_scan_z is the
+            NOZZLE height (the barcode scanner rides on the gantry). With the
+            loop's tip on, move_to() places the TIP END, so the target is lowered
+            by the rack's tip length; asking for the tip end at the nozzle height
+            put the nozzle out of reach and failed the run (2026-10-30)."""
             lift()
-            pipette.move_to(P(scan_x, scan_y, scan_z))
+            target_z = scan_z
+            if pipette.has_tip:
+                tip_len = float(tiprack.tip_length)
+                target_z = max(MIN_TAUGHT_MM, scan_z - tip_len)
+                protocol.comment(f'ARM SCAN: nozzle at z={scan_z}, tip end at z={target_z:.2f}, tip length {tip_len:.2f}')
+            else:
+                protocol.comment(f'ARM SCAN: nozzle at z={scan_z} (no tip)')
+            pipette.move_to(P(scan_x, scan_y, target_z))
 
-        def park_for(cart_index, source_volume, holding):
-            """Lift, go to the tube and park: with the next cart's first batch when a
-            cart remains and nothing is held yet; otherwise as the tip is."""
+        def park_for(cart_index, source_volume, holding, aspirate=True, clear_of=None):
+            """Lift, go to the tube, say the stage is clear, then park: with the next
+            cart's first batch when a cart remains and nothing is held yet; otherwise
+            as the tip is. clear_of = the cart just left (fill / skip): 'ARM CLEAR <i>'
+            is emitted only once the planned move to the tube top has COMPLETED -
+            the gantry is then at slot 10, never over the stage - so BIMS may let the
+            arm withdraw that cart while the tip re-aspirates and parks. None at
+            start-up (the tip comes from the calibrator, not the stage)."""
             lift()
-            if not holding and cart_index <= cartridges:
+            pipette.move_to(source_well.top())
+            if clear_of is not None:
+                protocol.comment(f'ARM CLEAR {clear_of}')
+            if aspirate and not holding and cart_index <= cartridges:
                 batch, batch_volume = batches[0]
                 holding = aspirate_batch(source_well, batch_volume, source_volume)
             park(source_well, source_volume, holding)
             protocol.pause(f'ARM PARKED {cart_index}')
             return holding
 
-        def finish(holding):
-            """end: give the held wax back to the tube, trash the tip, home."""
+        def finish(holding, clear_of):
+            """end: lift, to the tube (give the held wax back), say the stage is
+            clear, trash the tip, home. 'ARM CLEAR <i>' only after the move to the
+            tube top has completed - the gantry is at slot 10, not over the stage."""
+            lift()
+            pipette.move_to(source_well.top())
             if holding and wax:
-                lift()
                 pipette.blow_out(location=source_well.top())
+            protocol.comment(f'ARM CLEAR {clear_of}')
             if pipette.has_tip:
                 lift()
                 pipette.drop_tip()
@@ -1246,9 +1270,15 @@ def run(protocol: protocol_api.ProtocolContext):
                 lift()
                 pipette.drop_tip()
 
-        # ONE tip for the whole loop (Alejandro, 2026-10-29): picked up and probed
-        # once here; never changed between carts.
+        # ONE tip for the whole loop (Alejandro, 2026-10-29): picked up and PROBED
+        # once here, never changed between carts. The overlap Alejandro specified
+        # (2026-10-30): the OT-2 starts and calibrates its tip while the arm waits;
+        # 'ARM CALIBRATED' is the moment the arm may start its first grab - from
+        # here to 'ARM PARKED 1' the OT-2 only visits the wax tube (never the
+        # calibrator or the stage again). The probe routine's reject-retry with a
+        # fresh tip is unchanged.
         adjust = pick_up_and_calibrate_tip()
+        protocol.comment('ARM CALIBRATED')
         protocol.comment(f'ARM LOOP: one tip for the whole loop ({cartridges} cart(s)); adjust x={adjust["x"]}, y={adjust["y"]}')
         cart = 1
         holding = park_for(cart, source_volume, 0)
@@ -1264,17 +1294,24 @@ def run(protocol: protocol_api.ProtocolContext):
                     if action != 'scan':
                         break
             if action == 'end':
-                finish(holding)
+                try:
+                    clear_of = int(rec.get('cart'))
+                except (TypeError, ValueError):
+                    clear_of = cart
+                finish(holding, clear_of)
                 break
             if action == 'fill':
+                filled = cart
                 source_volume, adjust = fill_cart(cart, rec.get('barcode'), source_well, well_volumes, dispense_rates,
                                                   source_volume, adjust, batches, first_loaded=holding > 0)
                 cart += 1
-                holding = park_for(cart, source_volume, 0)
+                # Leaves the stage: lift, tube top, 'ARM CLEAR <filled>', re-aspirate, park.
+                holding = park_for(cart, source_volume, 0, clear_of=filled)
             elif action == 'skip':
                 protocol.comment(f'ARM CART {cart} SKIPPED')
+                skipped = cart
                 cart += 1
-                holding = park_for(cart, source_volume, holding)
+                holding = park_for(cart, source_volume, holding, clear_of=skipped)
             else:
                 protocol.comment(f'ARM LOOP: unknown instruction {action!r} - ignored.')
     finally:
