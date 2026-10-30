@@ -115,6 +115,30 @@ def main():
     assert reh.REHEARSAL_MIN_VOLUME_UL == 20.0
     assert reh.REHEARSAL_MAX_PER_ASPIRATION_UL == 200 and reh.REHEARSAL_TIP_CAPACITY_UL == 210
 
+    # ── p20 timing mimic: every plunger action takes the p20's time ─────────
+    # The mimic follows the production recipe's defaults, so a recipe change shows up here.
+    for g in ('vol_gate4', 'vol_gate3', 'vol_gate2', 'vol_gate1'):
+        assert close(q.by_name[g]['default'], reh.P20_GATE_UL), g
+    assert close(q.by_name['aspirate_remainder']['default'], reh.P20_REMAINDER_UL)
+    # One trip of air (a row of 4 x 20 uL + the 20 uL remainder) lasts as long as
+    # the p20's trip (4 x 1.6 uL + 11.5 uL at 7.56 uL/s).
+    air_trip = 4 * 20.0 + p.by_name['aspirate_remainder']['default']
+    assert close(air_trip / reh.p20_aspirate_flow(air_trip, 4), (4 * 1.6 + 11.5) / 7.56)
+    # One hole of air lasts as long as the p20's 1.6 uL, whatever the air volume or gate rate.
+    assert close(20.0 / reh.p20_dispense_flow(20.0), 1.6 / 7.56)
+    assert close(50.0 / reh.p20_dispense_flow(50.0), 1.6 / 7.56)
+    # Blow-out: the same 4.5 mm stroke on both GEN2 singles, timed like the p20's.
+    assert close(4.5 * reh.P300_UL_PER_MM / reh.p20_blow_out_flow(), 4.5 * reh.P20_UL_PER_MM / reh.P20_FLOW_UL_S)
+    # The drip-back pause is the p20's drip time (0.25 uL at half speed), not a round half second.
+    assert close(reh.P20_DRIP_S, 0.25 / (7.56 * 0.5))
+    assert 'protocol.delay(seconds=P20_DRIP_S)' in src and 'delay(seconds=.5)' not in src
+    assert 'pipette.flow_rate.aspirate = p20_aspirate_flow(aspirate_volume, holes)' in src
+    assert 'pipette.flow_rate.dispense = p20_dispense_flow(current_volume)' in src
+    assert 'pipette.flow_rate.blow_out = p20_blow_out_flow()' in src
+    assert src.count('aspirate_batch(source_well, batch_volume, source_volume, len(batch))') == 2
+    # The production file leaves the flow rates at the p20's defaults: those ARE the recipe.
+    assert 'flow_rate' not in open(PRODUCTION, encoding='utf-8').read()
+
     # ── Hardware: the p300 on the 200 uL rack, never the p20 ───────────────
     assert reh.REHEARSAL_PIPETTE == 'p300_single_gen2'
     assert reh.REHEARSAL_TIPRACK == 'cosmas_and_damian_biotix_96_200ul_tiprack'
@@ -142,7 +166,7 @@ def main():
         assert needle in src, needle
     assert len([ln for ln in src.splitlines() if 'pipette.drop_tip()' in ln]) == 4, 'one tip per loop: no drop between carts'
 
-    print('ok: rehearsal p300 protocol = production stage cart + p300 air volumes')
+    print('ok: rehearsal p300 protocol = production stage cart + p300 air volumes, plunger paced like the p20')
 
 
 if __name__ == '__main__':

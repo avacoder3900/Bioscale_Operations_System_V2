@@ -24848,3 +24848,43 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit c2a1faf9 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy c2a1faf9 (fail skips the loop, run continues)"
 What this deployment is for: on the arm wax-fill line a failed scan skips that loop and the run continues with the next cart; the tab counts skipped loops and uses run/loop wording. No robot-side change.
+
+2026-10-30 — feat/rehearsal-p20-timing — Rehearsal protocol paced like the p20 (aspirate, dispense, blow-out, drip) + Fill profile of a loop's OT-2 run
+================================================================================
+Alejandro's investigation into the arm wax-fill line's speed found the p300 air rehearsal under-reports the
+production p20 fill only in its plunger times (the moves, lifts, trips and fixed delays are the same code). He asked
+for items 1 and 2 of the fix list (not the tube-depth model or the start-up port cache), and for the profiler.
+
+Rehearsal protocol (protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py; needs re-adding to the library + deploy):
+  - p20 timing mimic constants at the top (P20_FLOW_UL_S 7.56, P20_GATE_UL 1.6, P20_REMAINDER_UL 11.5, drip 0.25 uL at
+    half speed) and three pure helpers: p20_aspirate_flow(air_volume, holes), p20_dispense_flow(air_volume),
+    p20_blow_out_flow(). aspirate_batch takes the batch's hole count and sets flow_rate.aspirate per trip so 100 uL of
+    air takes the p20's 2.37 s (17.9 uL at 7.56) -> 42.2 uL/s; dispense_batch sets flow_rate.dispense per hole so
+    20 uL takes the p20's 0.65 s for 1.6 uL -> 94.5 uL/s (the gate rate multiplier cancels); flow_rate.blow_out set
+    once after load_instrument from the GEN2 plunger strokes (same 4.5 mm bottom->blowOut on both, nominal uL/mm
+    20/28 vs 300/34) -> 93.4 uL/s; the drip-back pause is P20_DRIP_S = 0.066 s instead of a round 0.5 s.
+  - The blow-out stroke figures come from the pipette model specs from memory; the fill profile (below) is the check,
+    the first production run is the truth. The production file still touches no flow rate (its defaults ARE the recipe).
+  - test_arm_stage_rehearsal_p300.py pins the mimic to the production file's RTP defaults (gate volumes, remainder) and
+    checks each matched time; all five protocol tests pass.
+
+Fill profile (the profiler Alejandro asked for):
+  - src/lib/robot-arm/run-profile.ts (pure, 5 vitest tests): from GET /runs/{id}/commands (every command carries
+    startedAt / completedAt) cut the run at the 'ARM PARKED <i>' pauses into Start-up / Cart i / Wind-down and bucket
+    the seconds: lifts (Z-only homes), tube (labware moves + plunger), stage (bare-point moves near arm_cart + in-place
+    dispenses), scan move, calibrator, tip rack, trash, home, delays, 'Parked (arm)' (PARKED pauses = the OT-2 idle
+    while the arm withdraws/grabs + handshakes), 'At scan' (AT_SCAN pauses), engine gaps between commands, other;
+    counts lifts / trips / holes per phase; notes for NO_INSTRUCTION re-pauses, missing taught points, runs that
+    never parked. Bare-point moves classify by the nearest taught point within 40 mm (arm_cart / arm_scan / cal RTPs).
+  - src/lib/server/arm-wax-fill-profile.ts: reads the loop's run (GET /runs/{id} for status, times, runTimeParameters;
+    the command log in pages of 100 over the ordinary robot proxy) and saves the profile on the ArmWaxFillRun
+    (fillProfile, Schema.Types.Mixed) once the run is terminal, because the robot keeps only its last runs.
+  - GET /api/robot-arm/wax-fill/profile?loopId=...[&refresh=1] -> { profile }.
+  - Wax fill tab: a "Fill profile" button on the finished loop's panel and a "Profile" button per Recent loop; the
+    table shows one row per phase with only the buckets that have time, plus lifts / trips / holes.
+Tests: protocol tests 5/5; vitest run-profile 5/5 + arm-loop-protocol 7/7; svelte-check 14/448 baseline.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/rehearsal-p20-timing (fast-forwarded onto master; the code commit's sha is in the deploy-log entry after this one)
+What this deployment is for: the p300 rehearsal's plunger times match the p20's, and a finished arm wax-fill loop can be profiled from the robot's own command log.
+Robot side: the rehearsal .py must be re-added to the library and deployed from the Wax fill tab before its next loop; no daemon change.

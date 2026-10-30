@@ -77,6 +77,53 @@ REHEARSAL_MIN_VOLUME_UL = 20.0
 REHEARSAL_MAX_PER_ASPIRATION_UL = 200
 REHEARSAL_TIP_CAPACITY_UL = 210
 
+# ── p20 timing mimic ─────────────────────────────────────────────────────────
+# The rehearsal moves AIR volumes the p300 accepts, but every PLUNGER action is
+# paced to take as long as the p20's does in production, so a rehearsed cart is
+# TIMED like a filled one (the moves, lifts and fixed delays are already the
+# same code). Opentrons GEN2 single-channel default flow rates, uL/s:
+#   p20 GEN2    7.56 aspirate / 7.56 dispense / 7.56 blow-out
+#   p300 GEN2  92.86 for all three
+# The production recipe (Wax_Filling_GEN7_ArmStage.py defaults): 1.6 uL per
+# gate, an 11.5 uL remainder per trip, and a 0.25 uL drip-back at half speed.
+# The test pins these to the production file's RTP defaults.
+P20_FLOW_UL_S = 7.56
+P300_DEFAULT_FLOW_UL_S = 92.86
+P20_GATE_UL = 1.6
+P20_REMAINDER_UL = 11.5
+P20_DRIP_UL = 0.25
+P20_DRIP_RATE = 0.5
+#: How long the p20's drip-back takes; the rehearsal pauses that long instead
+#: (the p300 cannot move a quarter microlitre).
+P20_DRIP_S = P20_DRIP_UL / (P20_FLOW_UL_S * P20_DRIP_RATE)
+# Blow-out: both GEN2 singles travel the same 4.5 mm from the plunger bottom to
+# the blow-out stop (model specs: p20 bottom -8.5 / blowOut -13.0, p300 bottom
+# -14.5 / blowOut -19.0), so the time is that stroke in uL-equivalents over the
+# flow rate. Nominal uL per mm = capacity over the 28 / 34 mm working stroke.
+# The fill profile (Wax fill tab) is the check; the first production run is the truth.
+P20_UL_PER_MM = 20.0 / 28.0
+P300_UL_PER_MM = 300.0 / 34.0
+
+
+def p20_aspirate_flow(air_volume_ul, holes):
+    """p300 aspirate flow rate (uL/s) so a rehearsal trip of `air_volume_ul`
+    takes as long as the p20's trip for the same `holes`: holes x 1.6 uL plus
+    the 11.5 uL remainder, at 7.56 uL/s."""
+    p20_volume = holes * P20_GATE_UL + P20_REMAINDER_UL
+    return float(air_volume_ul) * P20_FLOW_UL_S / p20_volume
+
+
+def p20_dispense_flow(air_volume_ul):
+    """p300 dispense flow rate (uL/s) so one hole's `air_volume_ul` takes as
+    long as the p20's 1.6 uL. The gate's rate multiplier applies to both, so
+    it cancels."""
+    return float(air_volume_ul) * P20_FLOW_UL_S / P20_GATE_UL
+
+
+def p20_blow_out_flow():
+    """p300 blow-out flow rate (uL/s) so its blow-out stroke takes as long as the p20's."""
+    return P20_FLOW_UL_S * P300_UL_PER_MM / P20_UL_PER_MM
+
 # ── Single-cart geometry (verbatim from the stage protocol) ──────────────────
 # From gen4deck_gen7cartridge_001 (BIMS live definition, 2026-08-19): within
 # one cartridge the four wax holes of a row (deck columns 2,4,6,8 = gates
@@ -504,6 +551,11 @@ def run(protocol: protocol_api.ProtocolContext):
         mount = 'left'
     pipette = protocol.load_instrument(REHEARSAL_PIPETTE, mount=mount, tip_racks=[tiprack])
     protocol.comment(f'REHEARSAL: {REHEARSAL_PIPETTE} on the {mount} mount, {REHEARSAL_TIPRACK} in slot 11.')
+    # p20 timing mimic (constants at the top): the blow-out is matched once here;
+    # aspirate and dispense are matched per call, from the volume each one moves.
+    pipette.flow_rate.blow_out = p20_blow_out_flow()
+    protocol.comment(f'REHEARSAL timing: plunger paced like the p20 - blow-out {pipette.flow_rate.blow_out:.1f} uL/s, '
+                     f'drip pause {P20_DRIP_S:.2f} s; aspirate and dispense flow set per call.')
 
     # LIFT RULE: resolved before any motion; raises if the engine hook is missing.
     lift = _resolve_lift(pipette)
@@ -1040,19 +1092,22 @@ def run(protocol: protocol_api.ProtocolContext):
             pipette.move_to(source_well.top(-2.3))
             protocol.delay(seconds=3)
             pipette.touch_tip(v_offset=-2.3)
-            # The wax recipe drips 0.25 uL back here; that is below the p300's
-            # range, so the rehearsal only pauses where the drip would be.
+            # The wax recipe drips a quarter microlitre back here; that is below
+            # the p300's range, so the rehearsal pauses exactly as long as that
+            # drip takes on the p20 (P20_DRIP_S) where the drip would be.
             pipette.move_to(source_well.top())
-            protocol.delay(seconds=.5)
+            protocol.delay(seconds=P20_DRIP_S)
 
-        def aspirate_batch(source_well, batch_volume, source_volume):
+        def aspirate_batch(source_well, batch_volume, source_volume, holes):
             """Into the tube (a PLANNED move: lift() ran before leaving the last
-            station) and aspirate one batch + the remainder."""
+            station) and aspirate one batch + the remainder, paced so the air
+            takes as long as the p20's wax for the same `holes` would."""
             aspirate_volume = batch_volume + aspirate_remainder
             below_rim = tube_depth_for(source_volume, aspirate_volume)
             if below_rim is None:
                 raise RuntimeError('ARM LOOP: cannot aspirate any deeper - the wax tube is too low. Refill it and start the loop again.')
             if wax:
+                pipette.flow_rate.aspirate = p20_aspirate_flow(aspirate_volume, holes)
                 pipette.aspirate(aspirate_volume, source_well.top(-below_rim))
                 protocol.delay(seconds=2)
             else:
@@ -1100,6 +1155,8 @@ def run(protocol: protocol_api.ProtocolContext):
                 # given a bare deck point would plan its own deck-high arc first).
                 pipette.move_to(P(px, py, tz + well_z_depth), force_direct=True)
                 if wax:
+                    # Paced like the p20's 1.6 uL at this gate's rate.
+                    pipette.flow_rate.dispense = p20_dispense_flow(current_volume)
                     pipette.dispense(current_volume, rate=current_rate)
                 dispensed_volume += current_volume
                 last_done = t
@@ -1137,7 +1194,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     loaded = False
                     settle_after_aspirate(source_well)
                 else:
-                    aspirate_batch(source_well, batch_volume, source_volume)
+                    aspirate_batch(source_well, batch_volume, source_volume, len(batch))
                 protocol.comment(f'Processing wells {targets.index(batch[0]) + 1} to {targets.index(batch[-1]) + 1} of {len(targets)}')
                 dispensed_volume, swap_at = dispense_batch(batch, well_volumes, dispense_rates, adjust)
                 source_volume -= dispensed_volume
@@ -1239,7 +1296,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 protocol.comment(f'ARM CLEAR {clear_of}')
             if aspirate and not holding and cart_index <= cartridges:
                 batch, batch_volume = batches[0]
-                holding = aspirate_batch(source_well, batch_volume, source_volume)
+                holding = aspirate_batch(source_well, batch_volume, source_volume, len(batch))
             park(source_well, source_volume, holding)
             protocol.pause(f'ARM PARKED {cart_index}')
             return holding

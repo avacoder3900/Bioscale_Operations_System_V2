@@ -32,6 +32,7 @@
 	import type { RobotHealth } from '$lib/server/opentrons/health';
 	import EmbeddedRunController from '$lib/components/manufacturing/EmbeddedRunController.svelte';
 	import type { LoopView, LoopCycleView, CalibrationView } from '$lib/server/arm-wax-fill';
+	import { BUCKET_LABEL, type ProfileBucket, type RunProfile } from '$lib/robot-arm/run-profile';
 
 	let { data, form } = $props();
 
@@ -769,6 +770,39 @@
 		}
 	}
 
+	// ── Fill profile: where the OT-2 run's seconds went, from its own command log ──
+	// GET /api/robot-arm/wax-fill/profile reads the run back from the robot (cached on
+	// the loop once the run is over) and buckets it per cart and per station.
+	let profile = $state<RunProfile | null>(null);
+	let profileLoopId = $state<string | null>(null);
+	let profileBusy = $state(false);
+	let profileError = $state<string | null>(null);
+	const PROFILE_COLUMNS: ProfileBucket[] = ['lift', 'tube', 'stage', 'scan', 'delay', 'atScan', 'parked', 'gap', 'calibrator', 'tiprack', 'trash', 'home', 'otherPause', 'other'];
+	const shownBuckets = $derived(profile ? PROFILE_COLUMNS.filter((b) => profile!.phases.some((ph) => ph.buckets[b] > 0.05)) : []);
+	const secs = (s: number) => (s >= 100 ? s.toFixed(0) : s.toFixed(1));
+
+	async function loadProfile(id: string, refresh = false) {
+		if (profileBusy) return;
+		profileBusy = true;
+		profileError = null;
+		profileLoopId = id;
+		try {
+			const res = await fetch(`/api/robot-arm/wax-fill/profile?loopId=${encodeURIComponent(id)}${refresh ? '&refresh=1' : ''}`, { credentials: 'same-origin' });
+			const body = await res.json().catch(() => ({}));
+			if (!res.ok) {
+				profile = null;
+				profileError = body?.error ?? `HTTP ${res.status}`;
+				return;
+			}
+			profile = body.profile ?? null;
+		} catch (e) {
+			profile = null;
+			profileError = e instanceof Error ? e.message : String(e);
+		} finally {
+			profileBusy = false;
+		}
+	}
+
 	const ctl = 'rounded border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50';
 	const ctlPlain = `${ctl} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]`;
 
@@ -973,6 +1007,14 @@
 					{/if}
 				</div>
 				{#if loop.error}<p class="text-xs text-red-300">{loop.error}</p>{/if}
+				{#if loop.opentronsRunId && loop.status !== 'running'}
+					<div>
+						<button type="button" onclick={() => void loadProfile(loop!._id)} disabled={profileBusy} class={ctlPlain}
+							title="Read this loop's OT-2 run back from the robot and lay its seconds out per cart and per station">
+							{profileBusy && profileLoopId === loop._id ? 'Reading the run…' : 'Fill profile'}
+						</button>
+					</div>
+				{/if}
 
 				{#if playback.running}
 					<div class="text-xs" style="color: var(--color-tron-text-secondary)">
@@ -1021,6 +1063,62 @@
 			</div>
 		{/if}
 	</section>
+
+	<!-- ── Fill profile (where the OT-2 run's seconds went) ─────────────── -->
+	{#if profileLoopId}
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2" aria-label="Fill profile">
+			<div class="flex flex-wrap items-center justify-between gap-2">
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Fill profile · loop <span class="font-mono normal-case tracking-normal">{profileLoopId.slice(0, 8)}…</span></h3>
+				<div class="flex items-center gap-1">
+					<button type="button" onclick={() => void loadProfile(profileLoopId!, true)} disabled={profileBusy} class={ctlPlain} title="Read the run from the robot again (the saved profile is replaced)">
+						{profileBusy ? 'Reading…' : 'Re-read from the robot'}
+					</button>
+					<button type="button" onclick={() => { profile = null; profileLoopId = null; profileError = null; }} class={ctlPlain}>Hide</button>
+				</div>
+			</div>
+			{#if profileError}<p class="text-xs text-red-300">{profileError}</p>{/if}
+			{#if profile}
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s start to end{/if} · read {when(profile.generatedAt)}.
+					Seconds from the robot's own command timestamps. <span class="font-semibold">Parked (arm)</span> is the OT-2 idle in the wax while the arm withdraws and grabs (and the handshakes between);
+					<span class="font-semibold">At scan</span> is the gantry holding over the stage while the barcode is read; <span class="font-semibold">Gaps</span> is engine time between commands.
+				</p>
+				<div class="overflow-x-auto">
+					<table class="w-full text-left text-[11px]">
+						<thead style="color: var(--color-tron-text-secondary)">
+							<tr>
+								<th class="pr-3 py-1">Phase</th>
+								<th class="pr-3">Total s</th>
+								{#each shownBuckets as b (b)}<th class="pr-3">{BUCKET_LABEL[b]}</th>{/each}
+								<th class="pr-3">Lifts</th>
+								<th class="pr-3">Trips</th>
+								<th>Holes</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each profile.phases as ph, i (i)}
+								<tr style="color: var(--color-tron-text)">
+									<td class="pr-3 py-0.5">{ph.label}{#if ph.outcome === 'filled'} <span class="text-green-300">✓</span>{/if}</td>
+									<td class="pr-3 font-mono font-semibold">{secs(ph.totalS)}</td>
+									{#each shownBuckets as b (b)}<td class="pr-3 font-mono">{ph.buckets[b] > 0.05 ? secs(ph.buckets[b]) : '—'}</td>{/each}
+									<td class="pr-3 font-mono">{ph.counts.lifts}</td>
+									<td class="pr-3 font-mono">{ph.counts.aspirates}</td>
+									<td class="font-mono">{ph.counts.holes}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+				{#if profile.notes.length}
+					<ul class="space-y-0.5 text-[11px] text-amber-300">
+						{#each profile.notes as n, i (i)}<li>· {n}</li>{/each}
+					</ul>
+				{/if}
+			{:else if profileBusy}
+				<p class="text-xs" style="color: var(--color-tron-text-secondary)">Reading the run's command log from the robot…</p>
+			{/if}
+		</section>
+	{/if}
 
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 		<!-- ── Setup ─────────────────────────────────────────────────── -->
@@ -1236,7 +1334,7 @@
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent loops</h3>
 			<table class="mt-2 w-full text-left text-xs">
-				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th>Note</th></tr></thead>
+				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
 				<tbody>
 					{#each data.recentLoops as l (l._id)}
 						<tr style="color: var(--color-tron-text)">
@@ -1245,7 +1343,14 @@
 							<td class="pr-3">{l.robot.name}</td>
 							<td class="pr-3 font-mono">{l.completedRuns} / {l.requestedRuns}</td>
 							<td class="pr-3 {l.status === 'completed' ? 'text-green-300' : l.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">{l.status}</td>
-							<td class="text-[11px]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
+							<td class="pr-3 text-[11px]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
+							<td class="py-1">
+								{#if l.opentronsRunId}
+									<button type="button" onclick={() => void loadProfile(l._id)} disabled={profileBusy} class={ctlPlain} title="Where this loop's OT-2 run spent its seconds">
+										{profileBusy && profileLoopId === l._id ? 'Reading…' : 'Profile'}
+									</button>
+								{/if}
+							</td>
 						</tr>
 					{/each}
 				</tbody>
