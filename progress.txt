@@ -24897,3 +24897,51 @@ Retrieve this exact code: git checkout master at the commit titled "feat(robot-a
 What this deployment is for: the p300 rehearsal's plunger times match the p20's; a finished arm wax-fill loop shows a Fill profile from the robot's command log.
 Robot side still to do: Wax fill tab -> Protocol on the robot -> "Add a stage .py to the library" with
 protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py, then Deploy to robot (analysis must complete with no errors).
+
+2026-10-30 — feat/rehearsal-p20-timing — Arm wax-fill speed fixes: arrival check, withdraw + grab as one play, daemon scan_at_pause, channels, ARM PROBING, bounded end-of-play polls
+================================================================================
+Alejandro's six observations from the 16:07Z 3-cart rehearsal loop (knd28QliKaR0Ib2BxeMWD), and what the audit log
+showed: a 63 s stall after withdraw 2 (one end-of-play poll hung, the loop did not fail), then a grab the Pi
+"finished" without the arm moving — BIMS trusted the session end and sent the OT-2 to scan an empty stage (37 s
+reading nothing). He asked for all six built and tested.
+
+1. First grab while the tip is probed — both stage protocols announce 'ARM PROBING' right before the loop's own
+   probe (pick_up_and_calibrate_tip(announce=...); the calibration-check tour never announces). arm-loop-protocol:
+   PROBING marker, ArmMoveWant.orProbing, armMayMove allows it for cart 1 only. Setup option grabDuringProbe
+   (default ON) on ArmWaxFillSettings; readiness note warns the grab path must keep clear of the calibrator.
+2+5. Scan handshake — ot2-bridge 1.5.0 scan_at_pause (queue line, detached thread): polls the run locally every
+   0.2 s for 'ARM AT_SCAN <cart>', reads the scanner at once (5 s window + one retry, was 15 s), answers with
+   barcode / pause / runStatus / waitedMs; run ended, a foreign pause or the 90 s timeout answer with pause null.
+   BIMS: cycleScanStart queues it right after the scan instruction + resume (scanCommandId on the cycle);
+   cycleScanRead waits for the answer only — no relayed GETs; a daemon that does not know the kind ("unknown
+   command kind") falls back to the old awaitPause + read_scanner path. AWAIT_POLL 1.5 s -> 0.75 s, BRIDGE_POLL
+   0.5 s -> 0.25 s. 4 daemon tests (42 total).
+3. Channels — both stage protocols declare row_pattern_0/1/2 (Channel C = row X, B = row W, A = row V; all off =
+   all on, as the carriage line reads it), filter the 12 targets by row, and the calibration-check tour keeps only
+   corners in filled rows. Setup: three checkboxes (channels.c/b/a, at least one), sent with the run
+   (loopRunForm); ProtocolView.declaresChannels tells the page when the robot's .py predates them.
+4. Withdraw + next grab as ONE play — robot-arm-animation playChain(refs) joins move sets / sequences like a
+   sequence (auto join) and writes one path; cycleWithdraw uses it when another cart follows and Setup's chainGrab
+   (default ON) is on (the gate is the one both moves already had: PARKED i+1 | CLEAR i). cycleWithdrawDone
+   verifies arrival at the GRAB's end and opens the next cycle at 'scan' (cycle.chainedGrab).
+6a. Arrival check — animationEnd(ref) + checkArrival(target): after every loop play (grab, withdraw, chained,
+   fail animation) BIMS reads the arm and compares servos 1-5 with the animation's last pose (150 steps). A miss
+   raises 'ARM DID NOT ARRIVE: ...' (audit arm_not_arrived with target / positions / worst servo); the page keeps
+   the loop open where it is (Resume replays the step), the OT-2 is never moved.
+6b. End-of-play poll — Playback: every request bounded (8 s poll, 60 s action), the poll runs every 0.5 s from
+   1 s before the path's end and carries the run id; the shared ?/playback action answers from the Pi's own
+   replay.stop webhook (RobotArmRun.events) before asking the Pi; the +20 s give-up runs before the poll, not after
+   a hung one. Loop plays settle with torque only (settle droop=off -> afterPlay({droop:false})).
+Docs: PRD §5.8 (the contract additions); docs/HANDOFF-ARM-LOOP-SPEED-DEPLOY-2026-10-30.md (daemon 1.5.0 md5
+4b5691f80e560f16aa6d1500e5fce973 + both protocols to the robot). Memory rule amended (first grab at PROBING is a
+Setup option).
+Tests: protocol tests 5/5 (+ channel_rows, PROBING, RTP surface); daemon unittest 42/42; vitest arm-loop-protocol
+9/9, run-profile 5/5, robot-arm dir 219/219; full unit suite: ot2-protocol.run stale-bundle test fails on master
+before this change too (pre-existing), sonic leave-one-out is load-flaky (passes alone); svelte-check 14/448
+baseline.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/rehearsal-p20-timing (fast-forwarded onto master; sha in the deploy-log entry after this one)
+What this deployment is for: the arm wax-fill loop verifies the arm arrived after every play, plays withdraw + grab
+as one path, starts the first grab at ARM PROBING, fills only the ticked channels, and gets its scan from the daemon
+the moment the run pauses — once the robot side (daemon 1.5.0, both stage .py) is deployed per the handoff.

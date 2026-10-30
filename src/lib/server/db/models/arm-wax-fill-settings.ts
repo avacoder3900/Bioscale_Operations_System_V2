@@ -14,6 +14,12 @@ import mongoose, { Schema } from 'mongoose';
  * after an explicit "Change animations", so a run never asks for them again.
  * The fail animation plays instead of the fill when the scan fails (the fail
  * route, see $lib/server/arm-wax-fill); it may be the same as the withdraw.
+ *
+ * 2026-10-30 (the speed work): `channels` picks which rows of the cart the
+ * stage protocol fills (sent as the carriage line's row_pattern_0/1/2);
+ * `grabDuringProbe` lets the first grab start at 'ARM PROBING' instead of
+ * 'ARM CALIBRATED'; `chainGrab` plays a cart's withdraw and the next cart's
+ * grab as one arm path.
  */
 const animationRefSchema = new Schema(
 	{
@@ -36,6 +42,20 @@ const armWaxFillSettingsSchema = new Schema(
 		waxSourceLot: String,
 		/** Unknown barcodes become synthetic backed carts (same as the wax wizard's test mode). */
 		testMode: { type: Boolean, default: false },
+		/**
+		 * Which channels (rows of four wax holes) the stage fill does. On the stage the
+		 * cart has one taught orientation: C = row X (the first row from the taught
+		 * hole), B = row W, A = row V. Sent to the protocol as row_pattern_0/1/2.
+		 */
+		channels: {
+			c: { type: Boolean, default: true },
+			b: { type: Boolean, default: true },
+			a: { type: Boolean, default: true }
+		},
+		/** The arm's first grab may start while the OT-2 probes its tip ('ARM PROBING'), not only after ('ARM CALIBRATED'). */
+		grabDuringProbe: { type: Boolean, default: true },
+		/** Between carts the withdraw and the next grab play as ONE arm path (one play, no tail between them). */
+		chainGrab: { type: Boolean, default: true },
 		grabAnimation: animationRefSchema,
 		withdrawAnimation: animationRefSchema,
 		/** Plays when a cycle takes the fail route (today: the scan failed). May equal the withdraw animation. */

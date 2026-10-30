@@ -102,9 +102,21 @@ def main():
     p = _Params()
     m.add_parameters(p)
     for name in ('arm_cart_x', 'arm_cart_y', 'arm_cart_z', 'arm_cart_rotation_deg', 'dispense_depth',
-                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z'):
+                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z',
+                 'row_pattern_0', 'row_pattern_1', 'row_pattern_2'):
         assert name in p.names, name
     assert 'stage_jump_height' not in p.names, 'travel height RTP is gone: the fill lifts all the way up'
+    # Channels (2026-10-30): the carriage line's checkboxes pick the rows; all off = all on.
+    class _P:
+        pass
+    pp = _P()
+    pp.row_pattern_0, pp.row_pattern_1, pp.row_pattern_2 = True, False, True
+    assert m.channel_rows(pp) == ['X', 'V']
+    pp.row_pattern_0 = False
+    assert m.channel_rows(pp) == ['V']
+    pp.row_pattern_2 = False
+    assert m.channel_rows(pp) == ['X', 'W', 'V'], 'every box off fills everything, as the carriage line reads it'
+    assert m.STAGE_ROW_CHANNEL == {'X': 'row_pattern_0', 'W': 'row_pattern_1', 'V': 'row_pattern_2'}
     assert callable(m._resolve_lift)
     hole_params = [n for n in p.names if n.startswith('hole_')]
     assert len(hole_params) == 36 and hole_params[0] == 'hole_01_dx' and hole_params[-1] == 'hole_12_dz', hole_params[:3]

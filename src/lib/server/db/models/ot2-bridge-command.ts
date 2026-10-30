@@ -17,7 +17,8 @@ const ot2BridgeCommandSchema = new Schema({
 	// kind 'read_scanner': trigger + read the gantry scanner over serial, no motion → { barcode | null, raw }
 	// kind 'write_file': write one JSON file on the robot (only /data/arm_loop.json) → { written, bytes }
 	// Both for ARM-WAX-LOOP-B (docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5.5).
-	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request', 'read_scanner', 'write_file'], required: true },
+	// kind 'scan_at_pause' (1.5.0): watch the loop's run locally for 'ARM AT_SCAN <cart>' and read the scanner the moment it lands → { barcode | null, raw, error, pause, waitedMs }
+	kind: { type: String, enum: ['http', 'sweep', 'deck_scan', 'upload_protocol', 'restart_robot_server', 'auto_resume_run', 'calibrate_tip', 'tip_swap_request', 'read_scanner', 'write_file', 'scan_at_pause'], required: true },
 	// kind 'http': relay this request to http://localhost:31950 on the robot
 	request: {
 		method: String,

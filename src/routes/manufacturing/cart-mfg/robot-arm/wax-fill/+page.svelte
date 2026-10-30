@@ -174,7 +174,7 @@
 				if (playback.outcome === 'finished') done({ ok: true });
 				else done({ ok: false, error: playback.outcome ?? 'play did not finish' });
 			};
-			void playback.play(action, { loopId: loop!._id }, title).then(() => {
+			void playback.play(action, { loopId: loop!._id }, title, { loop: true }).then(() => {
 				if (playback.error) return done({ ok: false, error: playback.error });
 				watchdog = setInterval(() => {
 					if (!playback.running && playback.outcome && playback.outcome !== 'finished') done({ ok: false, error: playback.outcome });
@@ -220,6 +220,18 @@
 		if (r.ok) loop = r.data.loop;
 	}
 
+	/**
+	 * A *Done step refused because the arm did not reach its animation's end (the
+	 * server read the arm). The loop stays open where it is: Resume plays that
+	 * step again; nothing else moves. Returns true when it was that refusal.
+	 */
+	function arrivalMiss(r: { ok: false; error: string; status: number }): boolean {
+		if (!r.error.startsWith('ARM DID NOT ARRIVE:')) return false;
+		note(r.error, 'error');
+		pageError = r.error;
+		return true;
+	}
+
 	async function refreshLoop() {
 		if (!loop) return;
 		const r = await post('loopState', { loopId: loop._id });
@@ -240,7 +252,13 @@
 					if (stopAsked) break;
 					// The run must be parked (tip in the wax tube) for this cart before the arm swings in;
 					// the server refuses cycleGrab otherwise.
-					note(cycle.index === 1 ? `${tag}: waiting for the OT-2 to home, take its tip and calibrate it — the grab starts the moment it announces ARM CALIBRATED, while it aspirates and parks.` : `${tag}: the OT-2 is clear of the stage — grab.`);
+					note(
+						cycle.index === 1
+							? data.settings.grabDuringProbe
+								? `${tag}: waiting for the OT-2 to home and take its tip — the grab starts the moment it announces ARM PROBING (the probe, the first aspirate and the park overlap the grab).`
+								: `${tag}: waiting for the OT-2 to home, take its tip and calibrate it — the grab starts the moment it announces ARM CALIBRATED, while it aspirates and parks.`
+							: `${tag}: the OT-2 is clear of the stage — grab.`
+					);
 					let parked = false;
 					let broke = false;
 					while (!parked) {
@@ -277,7 +295,7 @@
 					}
 					const r = await post('cycleGrabDone', { loopId: loopId });
 					if (!r.ok) {
-						await fail('grab', r.error);
+						if (!arrivalMiss(r)) await fail('grab', r.error);
 						break;
 					}
 					loop = r.data.loop;
@@ -361,9 +379,14 @@
 					if (broke || loop!.status !== 'running') break;
 					note(`${tag}: filled — the OT-2 is parked in the wax.`);
 				} else if (cycle.step === 'withdraw') {
-					const last = loop.completedRuns + 1 >= loop.requestedRuns || loop.stopRequested;
-					note(`${tag}: withdraw — playing "${loop.withdrawAnimation?.name ?? ''}"${last ? ' (last cart: the OT-2 trashes its tip and homes meanwhile)' : ''}.`);
-					const p = await playStep('cycleWithdraw', `Withdraw (loop ${cycle.index})`);
+					const last = cycle.index >= loop.requestedRuns || loop.stopRequested;
+					const chained = !last && data.settings.chainGrab && !!loop.grabAnimation;
+					note(
+						chained
+							? `${tag}: withdraw + the next cart's grab as one arm path — playing "${loop.withdrawAnimation?.name ?? ''}" then "${loop.grabAnimation?.name ?? ''}" (the OT-2 stays parked in the wax).`
+							: `${tag}: withdraw — playing "${loop.withdrawAnimation?.name ?? ''}"${last ? ' (last cart: the OT-2 trashes its tip and homes meanwhile)' : ''}.`
+					);
+					const p = await playStep('cycleWithdraw', chained ? `Withdraw + grab (loops ${cycle.index} → ${cycle.index + 1})` : `Withdraw (loop ${cycle.index})`);
 					if (stopAsked) {
 						// Stop pressed while the arm was withdrawing ends the loop on the server; a Stop
 						// pressed during the fill leaves it running and cycleWithdrawDone ends it below.
@@ -376,11 +399,16 @@
 					}
 					const r = await post('cycleWithdrawDone', { loopId: loopId });
 					if (!r.ok) {
-						await fail('withdraw', r.error);
+						if (!arrivalMiss(r)) await fail('withdraw', r.error);
 						break;
 					}
 					loop = r.data.loop;
-					note(r.data.next ? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled.` : `Run ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled${loop!.skippedRuns ? `, ${loop!.skippedRuns} skipped` : ''}.`);
+					const nextCycle = loop!.cycles[loop!.cycles.length - 1];
+					note(
+						r.data.next
+							? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled${nextCycle?.step === 'scan' ? '; the next cart is already on the stage (its grab played with the withdraw)' : ''}.`
+							: `Run ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled${loop!.skippedRuns ? `, ${loop!.skippedRuns} skipped` : ''}.`
+					);
 				} else if (cycle.step === 'fail') {
 					// The fail route: skip (the gantry back to the tube), the fail animation once parked, the loop ends failed.
 					if (!cycle.skipSeq) note(`${tag}: fail route — sending the OT-2 back to the wax tube first.`);
@@ -410,7 +438,7 @@
 					}
 					const r = await post('cycleFailDone', { loopId: loopId });
 					if (!r.ok) {
-						await fail('fail', r.error);
+						if (!arrivalMiss(r)) await fail('fail', r.error);
 						break;
 					}
 					loop = r.data.loop;
@@ -1151,6 +1179,26 @@
 							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
 				</div>
+				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
+					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels to fill (rows of 4 wax holes)</legend>
+					<div class="flex flex-wrap gap-4">
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> C <span style="color: var(--color-tron-text-secondary)">(row X, first from the taught hole)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> B <span style="color: var(--color-tron-text-secondary)">(row W, middle)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> A <span style="color: var(--color-tron-text-secondary)">(row V, last)</span></label>
+					</div>
+					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+						Sent to the stage protocol as the carriage line's channel checkboxes. Each row is one tube trip: two channels = two trips per cart.
+						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot predates these checkboxes and fills all three rows — add the current stage .py to the library and deploy it.</span>{/if}
+					</p>
+				</fieldset>
+				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
+					<input type="checkbox" name="grabDuringProbe" checked={data.settings.grabDuringProbe} class="mt-0.5" />
+					<span>First grab starts while the tip is being calibrated (ARM PROBING) instead of after (ARM CALIBRATED). <span class="text-amber-300">The grab path must keep clear of the tip calibrator.</span></span>
+				</label>
+				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
+					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
+					<span>Withdraw and the next grab play as one arm path (one play per hand-over; the OT-2 is parked in the wax throughout).</span>
+				</label>
 				<label class="flex items-center gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="testMode" checked={data.settings.testMode} />
 					Test mode — a barcode the system does not know becomes a synthetic backed cart (as in the wax wizard's test mode)

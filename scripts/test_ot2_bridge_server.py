@@ -628,5 +628,93 @@ class ArmLoopCommandTests(unittest.TestCase):
         self.assertNotIn("write_file", bridge.DIRECT_JOB_KINDS)
 
 
+class ScanAtPauseTests(unittest.TestCase):
+    """ot2-bridge 1.5.0: scan_at_pause watches the run locally and reads the
+    scanner the moment it pauses at 'ARM AT_SCAN <cart>'. Run inline (_sync)."""
+
+    def setUp(self):
+        self.results = []
+        self._post = bridge._post_result
+        bridge._post_result = lambda cid, payload: self.results.append((cid, payload)) or True
+        self._fetch = bridge._fetch_run
+        self._msg = bridge._current_pause_message
+        self._poll = bridge.SCAN_AT_PAUSE_POLL_S
+        bridge.SCAN_AT_PAUSE_POLL_S = 0.005
+
+    def tearDown(self):
+        bridge._post_result = self._post
+        bridge._fetch_run = self._fetch
+        bridge._current_pause_message = self._msg
+        bridge.SCAN_AT_PAUSE_POLL_S = self._poll
+
+    def _script(self, states):
+        """Each poll of the run advances through (status, pause message); the last state repeats."""
+        it = iter(states)
+        cur = {"v": states[0]}
+
+        def fetch(run_id, timeout=6):
+            try:
+                cur["v"] = next(it)
+            except StopIteration:
+                pass
+            return {"status": cur["v"][0]}
+
+        bridge._fetch_run = fetch
+        bridge._current_pause_message = lambda run_id: cur["v"][1]
+
+    def _run(self, payload, port=None):
+        port = port or FakePort()
+        bridge.execute_scan_at_pause("s1", payload, port, _sync=True)
+        cid, res = self.results[-1]
+        self.assertEqual(cid, "s1")
+        return res, port
+
+    def test_reads_the_scanner_once_the_run_pauses_at_scan(self):
+        self._script([("running", None), ("running", None), ("paused", "ARM AT_SCAN 2")])
+        res, port = self._run({"runId": "r", "cart": 2, "pauseTimeoutS": 5, "scanTimeoutS": 3})
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["body"]["barcode"], "CART-123")
+        self.assertEqual(res["body"]["raw"], "deadbeef")
+        self.assertEqual(res["body"]["pause"], "ARM AT_SCAN 2")
+        self.assertEqual(res["body"]["runStatus"], "paused")
+        self.assertEqual(port.scans, 1)
+
+    def test_waits_through_the_park_and_another_carts_scan(self):
+        self._script([("paused", "ARM PARKED 2"), ("running", None), ("paused", "ARM AT_SCAN 1"), ("paused", "ARM AT_SCAN 2")])
+        res, port = self._run({"runId": "r", "cart": 2, "pauseTimeoutS": 5})
+        self.assertEqual(res["body"]["barcode"], "CART-123")
+        self.assertEqual(res["body"]["pause"], "ARM AT_SCAN 2")
+        self.assertEqual(port.scans, 1)
+
+    def test_run_end_foreign_pause_and_timeout_read_nothing(self):
+        self._script([("running", None), ("failed", None)])
+        res, port = self._run({"runId": "r", "cart": 1, "pauseTimeoutS": 5})
+        self.assertIsNone(res["body"]["barcode"])
+        self.assertIsNone(res["body"]["pause"])
+        self.assertIn("ended failed", res["body"]["error"])
+        self.assertEqual(port.scans, 0)
+
+        self._script([("paused", "TIP TRACKER: tiprack exhausted")])
+        res, port = self._run({"runId": "r", "cart": 1, "pauseTimeoutS": 5})
+        self.assertIsNone(res["body"]["pause"])
+        self.assertIn("paused at", res["body"]["error"])
+        self.assertEqual(port.scans, 0)
+
+        self._script([("running", None)])
+        res, port = self._run({"runId": "r", "cart": 1, "pauseTimeoutS": 0.05})
+        self.assertIsNone(res["body"]["pause"])
+        self.assertIn("did not reach ARM AT_SCAN 1", res["body"]["error"])
+        self.assertEqual(port.scans, 0)
+
+    def test_requires_run_and_cart_and_is_dispatched(self):
+        bridge.execute_scan_at_pause("bad", {}, FakePort(), _sync=True)
+        self.assertFalse(self.results[-1][1]["ok"])
+        self.assertIn("required", self.results[-1][1]["error"])
+        bridge.execute_command({"_id": "d1", "kind": "scan_at_pause", "payload": {"runId": "r"}}, FakePort())
+        self.assertEqual(self.results[-1][0], "d1")
+        self.assertIn("required", self.results[-1][1]["error"])
+        self.assertNotIn("scan_at_pause", bridge.DIRECT_JOB_KINDS)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -12,9 +12,15 @@
  * (afterPlay on the server): torque straight back on if the Pi dropped it,
  * and, for a captured (reading) pose at the end, the droop correction. Not
  * after Stop — the arm is mid-path then. `onend` lets the page refresh.
+ *
+ * 2026-10-30: every request carries a timeout, so a poll that hangs (one did,
+ * for a minute, on the arm wax-fill line) can no longer stall the end of a
+ * play; the poll runs every half second near the end and sends the run id,
+ * which lets the server answer from the Pi's own `replay.stop` webhook
+ * without a Pi round trip. A loop play (`{ loop: true }`) settles with torque
+ * only — no droop learning, the loop checks the arm's arrival itself.
  */
 import { deserialize } from '$app/forms';
-import { announceBusFree } from './bus-free';
 
 export interface PlayStarted {
 	runId: string;
@@ -23,6 +29,12 @@ export interface PlayStarted {
 	frames: number;
 	warnings: string[];
 }
+
+/** How long past the path's end the helper keeps asking before it gives up on the Pi. */
+const END_GRACE_S = 20;
+const POLL_EVERY_MS = 500;
+const POLL_TIMEOUT_MS = 8_000;
+const ACTION_TIMEOUT_MS = 60_000;
 
 export class Playback {
 	running = $state(false);
@@ -41,25 +53,31 @@ export class Playback {
 	/** Called once a play has ended and the after-play step is done (or after Stop). */
 	onend: (() => void) | null = null;
 	private timer: ReturnType<typeof setInterval> | null = null;
+	private loopPlay = false;
 
 	readonly elapsedS = $derived(this.running ? Math.max(0, (this.now - this.startedAt) / 1000) : 0);
 
-	/** POST a page action and return its parsed result. */
-	private async action(name: string, fields: Record<string, string>) {
+	/** POST a page action and return its parsed result. Every call is bounded. */
+	private async action(name: string, fields: Record<string, string>, timeoutMs = ACTION_TIMEOUT_MS) {
 		const fd = new FormData();
 		for (const [k, v] of Object.entries(fields)) fd.set(k, v);
-		const res = await fetch(`?/${name}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+		const res = await fetch(`?/${name}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' }, signal: AbortSignal.timeout(timeoutMs) });
 		return deserialize(await res.text());
 	}
 
-	/** Start: `action` is the page's play action (playMoveSet / playSequence / play). */
-	async play(action: string, fields: Record<string, string>, title: string) {
+	/**
+	 * Start: `action` is the page's play action (playMoveSet / playSequence / play).
+	 * `loop: true` marks a robot-arm wax-fill loop play: the after-play settle only
+	 * puts torque back on (no droop learning).
+	 */
+	async play(action: string, fields: Record<string, string>, title: string, opts: { loop?: boolean } = {}) {
 		if (this.busy || this.running) return;
 		this.busy = true;
 		this.error = null;
 		this.outcome = null;
 		this.settled = null;
 		this.warnings = [];
+		this.loopPlay = !!opts.loop;
 		try {
 			const r = await this.action(action, fields);
 			if (r.type === 'failure') {
@@ -79,7 +97,7 @@ export class Playback {
 			this.startedAt = Date.now();
 			this.now = this.startedAt;
 			this.running = true;
-			this.timer = setInterval(() => void this.tick(), 1000);
+			this.timer = setInterval(() => void this.tick(), POLL_EVERY_MS);
 		} catch (e) {
 			this.error = `Play failed: ${e instanceof Error ? e.message : String(e)}`;
 		} finally {
@@ -90,21 +108,24 @@ export class Playback {
 	private polling = false;
 	private async tick() {
 		this.now = Date.now();
-		// Ask the Pi only once the path should be nearly done, then every second.
-		if (this.elapsedS < this.durationS - 1.5 || this.polling) return;
+		if (!this.running) return;
+		// A play the Pi never reports the end of: give up rather than hang the page.
+		if (this.elapsedS > this.durationS + END_GRACE_S) return this.finish('the Pi did not report the end — check the Control tab');
+		// Ask only once the path should be nearly done, then every half second.
+		if (this.elapsedS < this.durationS - 1 || this.polling) return;
 		this.polling = true;
 		try {
-			const r = await this.action('playback', {});
+			const r = await this.action('playback', this.runId ? { runId: this.runId } : {}, POLL_TIMEOUT_MS);
+			if (!this.running) return; // gave up (or stopped) while this poll was out
 			if (r.type === 'success' && r.data && (r.data as { active?: unknown }).active === null) {
 				this.finish('finished');
 				void this.settle();
 			}
 		} catch {
-			/* keep polling */
+			/* a slow or failed poll: the next tick asks again */
 		} finally {
 			this.polling = false;
 		}
-		if (this.running && this.elapsedS > this.durationS + 20) this.finish('the Pi did not report the end — check the Control tab');
 	}
 
 	async stop() {
@@ -117,7 +138,6 @@ export class Playback {
 				const s = r.data.stop as { torqueOn: boolean; error: string | null };
 				this.finish(s.torqueOn ? 'stopped — the arm is holding its position' : `stopped, but torque could NOT be re-enabled (${s.error}) — the arm may be limp`);
 			} else this.finish('stopped');
-			announceBusFree('playback');
 			this.onend?.();
 		} catch (e) {
 			this.error = `Stop failed: ${e instanceof Error ? e.message : String(e)}`;
@@ -126,13 +146,13 @@ export class Playback {
 		}
 	}
 
-	/** Automatic, after a play ends: torque back on, then droop correction for captured poses. */
+	/** Automatic, after a play ends: torque back on, then droop correction for captured poses (not for loop plays). */
 	private async settle() {
 		const runId = this.runId;
 		if (!runId) return;
 		this.settled = 'Holding the last pose…';
 		try {
-			const r = await this.action('settle', { runId });
+			const r = await this.action('settle', { runId, ...(this.loopPlay ? { droop: 'off' } : {}) });
 			type PiPose = { poseName: string; trim: number[]; residual: number[]; rounds: number; ok: boolean };
 			type Settle = {
 				poseName: string;
@@ -145,7 +165,7 @@ export class Playback {
 			const s = r.type === 'success' ? (r.data as { settle?: Settle } | undefined)?.settle : null;
 			const torque = s?.torqueError ? `Torque could NOT be turned back on (${s.torqueError}) — the arm may be limp. ` : '';
 			if (!s) this.settled = r.type === 'failure' ? String((r.data as { error?: string } | undefined)?.error ?? '') : null;
-			else if (s.skipped === 'nothing to settle for this play' || s.skipped === 'already settled' || (!s.skipped && !s.pi && !s.droop)) this.settled = torque || null;
+			else if (s.skipped === 'nothing to settle for this play' || s.skipped === 'already settled' || s.skipped === 'loop play — no droop learning' || (!s.skipped && !s.pi && !s.droop)) this.settled = torque || null;
 			else if (s.skipped) this.settled = `${torque}Droop correction skipped: ${s.skipped}.`;
 			else if (s.pi) {
 				// The Pi settled each held pose during the replay (closed-loop route); nothing moved afterwards.
@@ -162,7 +182,6 @@ export class Playback {
 		} catch (e) {
 			this.settled = `After-play check failed: ${e instanceof Error ? e.message : String(e)}`;
 		}
-		announceBusFree('playback');
 		this.onend?.();
 	}
 

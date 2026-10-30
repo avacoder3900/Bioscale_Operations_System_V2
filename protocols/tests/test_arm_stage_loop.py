@@ -166,6 +166,10 @@ def check_surface(m, src, label):
     assert "protocol.comment(f'ARM CART {cart_index} FILLED {barcode}')" in src
     assert "protocol.comment(f'ARM CART {cart} SKIPPED')" in src
     assert "protocol.comment('ARM LOOP END')" in src
+    # 2026-10-30: the loop's probe announces itself (the first grab may start there) - once, by the loop only.
+    assert "pick_up_and_calibrate_tip(announce='ARM PROBING')" in src
+    assert src.count("pick_up_and_calibrate_tip(announce=") == 1
+    assert "protocol.comment('ARM CALIBRATED')" in src
     assert "raise RuntimeError('ARM LOOP: no start record in /data/arm_loop.json')" in src
 
     # One tip for the loop: the only drop_tip sites are the probe's own retry
@@ -187,9 +191,9 @@ def check_surface(m, src, label):
     # (aspirate + park) and 'ARM PARKED 1'. No probe anywhere in the fill branch.
     assert 'pick_up_tip_for_loop' not in src and 'adjust is None' not in src
     assert 'adjust = pick_up_and_calibrate_tip(pick_up=False)' not in src, 'no deferred probe (the tip-swap re-probe is the only pick_up=False)'
-    assert src.count('= pick_up_and_calibrate_tip()') == 2, 'the optional calibration check + the loop start-up'
+    assert src.count('= pick_up_and_calibrate_tip(') == 2, 'the optional calibration check + the loop start-up (which announces ARM PROBING)'
     assert "protocol.comment('ARM CALIBRATED')" in src
-    i_probe = src.index('        adjust = pick_up_and_calibrate_tip()')
+    i_probe = src.index("        adjust = pick_up_and_calibrate_tip(announce='ARM PROBING')")
     i_calibrated = src.index("protocol.comment('ARM CALIBRATED')")
     i_parked = src.index('        holding = park_for(cart, source_volume, 0)\n')
     i_loop = src.index('        while True:\n            rec = next_instruction(cart)')

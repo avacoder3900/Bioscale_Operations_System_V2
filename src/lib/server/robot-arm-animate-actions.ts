@@ -128,22 +128,31 @@ export const sharedAnimateActions = {
 	},
 
 	// Automatic, after a play / go-to ends on its own: torque back on; droop correction for captured poses.
+	// `droop=off` (the arm wax-fill loop): torque only, no droop learning.
 	settle: async ({ request, locals }: Ev) => {
 		if (!writer(locals)) return fail(401, { error: 'Unauthorized' });
-		const runId = field(await request.formData(), 'runId');
+		const d = await request.formData();
+		const runId = field(d, 'runId');
 		if (!runId) return fail(400, { error: 'No run.' });
 		try {
-			return { settle: JSON.parse(JSON.stringify(await afterPlay(who(locals), runId))) };
+			return { settle: JSON.parse(JSON.stringify(await afterPlay(who(locals), runId, { droop: field(d, 'droop') !== 'off' }))) };
 		} catch (err) {
 			return failFrom(err);
 		}
 	},
 
-	playback: async ({ locals }: Ev) => {
+	// With `runId`, the Pi's replay.stop webhook for that run answers first (no Pi round trip).
+	playback: async ({ request, locals }: Ev) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:read');
+		let runId: string | null = null;
 		try {
-			return { active: await playbackActive() };
+			runId = field(await request.formData(), 'runId');
+		} catch {
+			runId = null;
+		}
+		try {
+			return { active: await playbackActive(runId) };
 		} catch (err) {
 			return fail(502, { error: (err as Error).message });
 		}

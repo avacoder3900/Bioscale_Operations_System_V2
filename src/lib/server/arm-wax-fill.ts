@@ -107,6 +107,11 @@ import {
 	playSequence,
 	playbackActive,
 	stopPlayback,
+	animationEnd,
+	checkArrival,
+	playChain,
+	type AnimationEnd,
+	type ArrivalCheck,
 	type PlayResult
 } from '$lib/server/robot-arm-animation';
 
@@ -124,6 +129,20 @@ export class ArmWaxFillError extends Error {
 export const SCAN_SET_TITLE = 'Arm wax fill — single cart';
 /** Protocol run-time parameters the cart location is sent as, when declared. */
 export const CART_LOCATION_RTPS = ['arm_cart_x', 'arm_cart_y', 'arm_cart_z'] as const;
+/**
+ * The three wax channels, each one row of four holes, with the RTP names the
+ * carriage protocol's checkboxes use (the stage protocols declare the same).
+ * On the stage the cart has one taught orientation: C is row X (the first row
+ * from the taught hole), B row W, A row V.
+ */
+export const CHANNELS = [
+	{ key: 'c', rtp: 'row_pattern_0', label: 'C (row X)' },
+	{ key: 'b', rtp: 'row_pattern_1', label: 'B (row W)' },
+	{ key: 'a', rtp: 'row_pattern_2', label: 'A (row V)' }
+] as const;
+export type ChannelKey = (typeof CHANNELS)[number]['key'];
+/** Prefix of the error a *Done step raises when the arm did not reach its animation's end; the page keeps the loop open on it. */
+export const ARRIVAL_MISS = 'ARM DID NOT ARRIVE:';
 /**
  * Declared only by protocols/Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py — the
  * stage fill walked on the p300 with 200 µL tips and AIR. A robot carrying it
@@ -204,6 +223,12 @@ export interface SettingsView {
 	cartPosition: number;
 	waxSourceLot: string | null;
 	testMode: boolean;
+	/** Which channels (rows of four holes) the stage fill does: C = row X, B = row W, A = row V. */
+	channels: Record<ChannelKey, boolean>;
+	/** The arm's first grab may start while the OT-2 probes its tip (ARM PROBING), not only after (ARM CALIBRATED). */
+	grabDuringProbe: boolean;
+	/** The withdraw of a cart and the grab of the next play as ONE arm path. */
+	chainGrab: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
 	failAnimation: AnimationRef | null;
@@ -221,6 +246,9 @@ function settingsView(d: any): SettingsView {
 		cartPosition: Number(d?.cartPosition) || 1,
 		waxSourceLot: d?.waxSourceLot ?? null,
 		testMode: !!d?.testMode,
+		channels: { c: d?.channels?.c !== false, b: d?.channels?.b !== false, a: d?.channels?.a !== false },
+		grabDuringProbe: d?.grabDuringProbe !== false,
+		chainGrab: d?.chainGrab !== false,
 		grabAnimation: animRef(d?.grabAnimation),
 		withdrawAnimation: animRef(d?.withdrawAnimation),
 		failAnimation: animRef(d?.failAnimation),
@@ -236,11 +264,23 @@ export async function getSettings(): Promise<SettingsView> {
 
 export async function saveSetup(
 	user: User,
-	input: { robotId: unknown; cartPosition: unknown; waxSourceLot: unknown; testMode: boolean }
+	input: {
+		robotId: unknown;
+		cartPosition: unknown;
+		waxSourceLot: unknown;
+		testMode: boolean;
+		channels?: Record<ChannelKey, boolean>;
+		grabDuringProbe?: boolean;
+		chainGrab?: boolean;
+	}
 ): Promise<SettingsView> {
 	await connectDB();
 	const robotId = String(input.robotId ?? '').trim();
 	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds.');
+	const channels: Record<ChannelKey, boolean> = { c: input.channels?.c !== false, b: input.channels?.b !== false, a: input.channels?.a !== false };
+	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
+	const grabDuringProbe = input.grabDuringProbe !== false;
+	const chainGrab = input.chainGrab !== false;
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
 	const cartPosition = input.cartPosition === null || input.cartPosition === undefined || String(input.cartPosition).trim() === '' ? 1 : Math.round(num(input.cartPosition, 'Cart position'));
@@ -249,7 +289,7 @@ export async function saveSetup(
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, grabDuringProbe, chainGrab, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -258,7 +298,10 @@ export async function saveSetup(
 		cartPosition,
 		waxSourceLot,
 		testMode: !!input.testMode,
-		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode }
+		channels,
+		grabDuringProbe,
+		chainGrab,
+		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, grabDuringProbe: before.grabDuringProbe, chainGrab: before.chainGrab }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -768,6 +811,8 @@ export interface ProtocolView {
 	protocolName: string;
 	/** The protocol declares arm_cart_x/y/z, so the taught cart location is sent to it. */
 	declaresCartLocation: boolean;
+	/** The protocol declares the channel checkboxes (row_pattern_0/1/2), so Setup's channels are sent to it. */
+	declaresChannels: boolean;
 	/** The p300 / air REHEARSAL of the stage fill (declares z_cal_p300): walks every station, dispenses nothing. */
 	rehearsal: boolean;
 	/** The protocol serves a whole loop in one run (declares cartridges + arm_scan_x/y/z — ARM-WAX-LOOP-B §5.3). */
@@ -811,6 +856,10 @@ export interface LoopCycleView {
 	skipSeq: number | null;
 	scanReadAt: string | null;
 	filledAt: string | null;
+	/** The withdraw play also carried the next cart's grab (one arm path); that cycle starts at 'scan'. */
+	chainedGrab: boolean;
+	/** The daemon's scan_at_pause command for this cycle's scan, when one was queued. */
+	scanCommandId: string | null;
 	/** When the OT-2 confirmed its gantry home before each arm move (cycleHomeGantry). */
 	gantryHomedForGrabAt: string | null;
 	gantryHomedForWithdrawAt: string | null;
@@ -881,6 +930,8 @@ function loopView(d: any): LoopView {
 				skipSeq: c.skipSeq ?? null,
 				scanReadAt: iso(c.scanReadAt),
 				filledAt: iso(c.filledAt),
+				chainedGrab: !!c.chainedGrab,
+				scanCommandId: c.scanCommandId ?? null,
 				gantryHomedForGrabAt: iso(c.gantryHomedForGrabAt),
 				gantryHomedForWithdrawAt: iso(c.gantryHomedForWithdrawAt),
 				gantryHomedForFailAt: iso(c.gantryHomedForFailAt),
@@ -926,7 +977,8 @@ async function protocolFor(robotId: string | null): Promise<ProtocolView | null>
 		protocolName,
 		declaresCartLocation: CART_LOCATION_RTPS.every((k) => declared.has(k)),
 		rehearsal: declared.has(REHEARSAL_RTP) || /rehearsal/i.test(protocolName),
-		declaresLoop: declared.has('cartridges') && ['arm_scan_x', 'arm_scan_y', 'arm_scan_z'].every((k) => declared.has(k))
+		declaresLoop: declared.has('cartridges') && ['arm_scan_x', 'arm_scan_y', 'arm_scan_z'].every((k) => declared.has(k)),
+		declaresChannels: CHANNELS.every((c) => declared.has(c.rtp))
 	};
 }
 
@@ -1192,8 +1244,18 @@ export function readiness(
 	if (settings.robotId) {
 		notes.push(
 			'One OT-2 run and ONE tip serve the whole loop: the protocol takes the tip, probes it once, and between carts parks it in the wax tube (the wax stays warm) and pauses. ' +
-				'The arm plays only while the robot reports that pause (ARM PARKED); the run leaves the tube only after the arm has settled, and never goes to the calibrator or over the stage while the arm moves.'
+				'The arm plays only while the robot reports that pause (ARM PARKED) or an announcement that it is clear; the run leaves the tube only after the arm has settled and arrived, and never goes over the stage while the arm moves.'
 		);
+		const on = CHANNELS.filter((c) => settings.channels[c.key]);
+		if (!on.length) blocking.push('Setup: tick at least one channel (C, B or A) to fill.');
+		else if (protocol?.declaresChannels)
+			notes.push(`Channels ${on.map((c) => c.label).join(', ')}: ${on.length} row${on.length === 1 ? '' : 's'} of 4 holes per cart${on.length < 3 ? ` — the other row${on.length === 2 ? '' : 's'} skipped, ${on.length} tube trip${on.length === 1 ? '' : 's'} instead of 3` : ''}.`);
+		else if (protocol && on.length < 3)
+			notes.push(`Channels: the protocol on the robot predates the channel checkboxes and fills all 3 rows; add the current stage .py to the library and deploy it to fill only ${on.map((c) => c.label).join(', ')}.`);
+		if (settings.grabDuringProbe)
+			notes.push('The arm starts its FIRST grab as soon as the OT-2 begins probing its tip (ARM PROBING), while the gantry is at the calibrator: the grab path must keep clear of the calibrator. Turn this off in Setup to wait for ARM CALIBRATED.');
+		if (settings.chainGrab) notes.push('Between carts the withdraw and the next grab play as one arm path; the OT-2 is parked in the wax throughout.');
+		notes.push('After every arm play the arm is read against the animation\'s last pose; if it did not get there the loop stops where it is and the OT-2 is not moved.');
 	}
 	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
@@ -1469,7 +1531,7 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 
 	// 3. The ordinary start (freshness gate, create, play). The protocol homes,
 	//    takes its one tip, probes it, aspirates and parks → `ARM PARKED 1`.
-	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns);
+	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns, settings);
 	await assertFormWithinSchema(String(robot._id), loopForm);
 	const started = await startRunQueue('wax', loopForm, user);
 	if (isActionFail(started)) {
@@ -1524,6 +1586,47 @@ async function play(user: User, ref: AnimationRef | null, what: string): Promise
 	}
 }
 
+/**
+ * Did the arm actually get where the animation ends? The Pi reports a replay
+ * "finished" even when nothing moved (torque off, a wedged session — seen
+ * 2026-10-30: a grab that never played, and the OT-2 was sent to scan an empty
+ * stage). So every loop play is followed by a read of the arm against the
+ * animation's last pose BEFORE the loop advances; a miss leaves the cycle
+ * where it is (Resume plays the step again) and never moves the OT-2.
+ */
+async function assertArrived(user: User, loopId: string, cycle: any, ref: AnimationRef | null, what: string, armRunId: string | null): Promise<void> {
+	if (!ref) return;
+	let end: AnimationEnd;
+	let check: ArrivalCheck;
+	try {
+		end = await animationEnd(ref);
+		check = await checkArrival(end.target);
+	} catch (err) {
+		throw new ArmWaxFillError(
+			`${ARRIVAL_MISS} the arm could not be checked after the ${what} (${err instanceof Error ? err.message : String(err)}). The OT-2 was NOT moved. Press Resume to play the ${what} again, or STOP RUN.`,
+			502
+		);
+	}
+	await audit(user, check.ok ? 'arm_wax_fill.arm_arrived' : 'arm_wax_fill.arm_not_arrived', 'arm_wax_fill_runs', loopId, {
+		cycle: cycle.index,
+		what,
+		armRunId,
+		pose: end.name,
+		target: end.target,
+		positions: check.positions,
+		off: check.off,
+		worst: check.worst,
+		tol: check.tol
+	});
+	if (!check.ok) {
+		throw new ArmWaxFillError(
+			`${ARRIVAL_MISS} the arm did not reach the end of the ${what} ("${end.name}": servo ${check.worst!.servo} is ${check.worst!.steps} steps off, limit ${check.tol}). ` +
+				`The OT-2 was NOT moved. Check the arm — torque, the Pi's run ${armRunId ?? ''} on the Control tab — then press Resume to play the ${what} again from where the arm is, or STOP RUN.`,
+			409
+		);
+	}
+}
+
 // ── The OT-2 run is the gate: the arm moves only while the run is PARKED ──
 //
 // ARM-WAX-LOOP-B (docs/prds/ARM-WAX-LOOP-B-ONE-RUN-PER-LOOP.md §5): ONE OT-2
@@ -1558,43 +1661,61 @@ export async function armLineGantryHomedAgoS(loopId: string, robotId: string): P
 
 const waitMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-const BRIDGE_POLL_MS = 500;
+const BRIDGE_POLL_MS = 250;
+type BridgeKind = 'read_scanner' | 'write_file' | 'scan_at_pause';
+/** How long the daemon's scan_at_pause waits for the run to reach `ARM AT_SCAN <i>` (the lift + the move take ~5 s). */
+const SCAN_PAUSE_TIMEOUT_S = 90;
+/** The scanner's read window per attempt (one retry follows): a cart that is there decodes on the first burst. */
+const SCAN_READ_WINDOW_S = 5;
 
-/**
- * Enqueue a queue-line command for the robot's bridge daemon and wait for its
- * result body (the way /api/scanner/calibrate-tip does). `read_scanner` and
- * `write_file` touch no motion: the daemon's serial scanner and its filesystem.
- */
-async function bridgeCommand(
-	robot: any,
-	user: User,
-	kind: 'read_scanner' | 'write_file',
-	payload: Record<string, unknown>,
-	timeoutMs: number
-): Promise<any> {
+/** The daemon answered a command with failed / expired. */
+class BridgeCommandFailed extends ArmWaxFillError {
+	constructor(kind: BridgeKind, status: string, error: string | null) {
+		super(`The robot's bridge ${status} the ${kind} command${error ? `: ${error}` : ''}.`, 502);
+	}
+}
+
+/** Enqueue a queue-line command for the robot's bridge daemon; returns its id. */
+async function enqueueBridgeCommand(robot: any, user: User, kind: BridgeKind, payload: Record<string, unknown>, ttlMs: number): Promise<string> {
 	const cmd = await Ot2BridgeCommand.create({
 		_id: generateId(),
 		robotId: String(robot._id),
 		deviceId: bridgeDeviceIdForRobot(robot),
 		kind,
 		payload,
-		ttlMs: timeoutMs + 30_000,
+		ttlMs,
 		requestedBy: user.username
 	});
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const doc = (await Ot2BridgeCommand.findById(cmd._id).select('status result error').lean()) as any;
-		if (doc?.status === 'completed') return doc.result?.body ?? {};
-		if (doc?.status === 'failed' || doc?.status === 'expired') {
-			throw new ArmWaxFillError(`The robot's bridge ${doc.status} the ${kind} command${doc.error ? `: ${doc.error}` : ''}.`, 502);
-		}
-		await waitMs(BRIDGE_POLL_MS);
+	return String(cmd._id);
+}
+
+/** Wait up to `waitMs` for a queued command's result body; `done: false` when it is still pending. Throws BridgeCommandFailed. */
+async function pollBridgeCommand(id: string, kind: BridgeKind, waitMs: number): Promise<{ done: true; body: any } | { done: false }> {
+	const deadline = Date.now() + waitMs;
+	for (;;) {
+		const doc = (await Ot2BridgeCommand.findById(id).select('status result error').lean()) as any;
+		if (doc?.status === 'completed') return { done: true, body: doc.result?.body ?? {} };
+		if (doc?.status === 'failed' || doc?.status === 'expired') throw new BridgeCommandFailed(kind, doc.status, doc.error ?? null);
+		if (Date.now() >= deadline) return { done: false };
+		await waitMs_(BRIDGE_POLL_MS);
 	}
+}
+const waitMs_ = waitMs;
+
+/**
+ * Enqueue a queue-line command for the robot's bridge daemon and wait for its
+ * result body (the way /api/scanner/calibrate-tip does). `read_scanner` and
+ * `write_file` touch no motion: the daemon's serial scanner and its filesystem.
+ */
+async function bridgeCommand(robot: any, user: User, kind: BridgeKind, payload: Record<string, unknown>, timeoutMs: number): Promise<any> {
+	const id = await enqueueBridgeCommand(robot, user, kind, payload, timeoutMs + 30_000);
+	const r = await pollBridgeCommand(id, kind, timeoutMs);
+	if (r.done) return r.body;
 	await Ot2BridgeCommand.updateOne(
-		{ _id: cmd._id, status: { $in: ['pending', 'claimed'] } },
+		{ _id: id, status: { $in: ['pending', 'claimed'] } },
 		{ $set: { status: 'expired', error: 'BIMS gave up waiting for the bridge daemon', completedAt: new Date() } }
 	).catch(() => {});
-	throw new ArmWaxFillError(`The robot's bridge did not answer the ${kind} command within ${Math.round(timeoutMs / 1000)} s — is the bridge daemon online (and does it know read_scanner / write_file)?`, 504);
+	throw new ArmWaxFillError(`The robot's bridge did not answer the ${kind} command within ${Math.round(timeoutMs / 1000)} s — is the bridge daemon online (and does it know ${kind})?`, 504);
 }
 
 /**
@@ -1733,8 +1854,8 @@ async function resumeRun(robot: any, runId: string): Promise<void> {
 }
 
 /** What the grab of `cart` needs: parked for it, or running after CALIBRATED (cart 1) / after CLEAR of the previous cart. */
-function grabWant(cart: number): ArmMoveWant {
-	return cart === 1 ? { parked: 1, orCalibrated: true } : { parked: cart, orClear: cart - 1 };
+function grabWant(cart: number, grabDuringProbe = false): ArmMoveWant {
+	return cart === 1 ? { parked: 1, orCalibrated: true, orProbing: grabDuringProbe } : { parked: cart, orClear: cart - 1 };
 }
 
 /** What the withdraw / fail animation of `cart` needs: parked for the next cart, or running after CLEAR of this one. */
@@ -1753,7 +1874,7 @@ async function assertRunParked(robot: any, loop: any, cart: number, what: string
 
 type AwaitResult = { done: true; read: RunPauseRead } | { done: false; terminal: string | null; read: RunPauseRead };
 
-const AWAIT_POLL_MS = 1500;
+const AWAIT_POLL_MS = 750;
 /** One page action's wait budget (the action's maxDuration is 120 s). */
 const AWAIT_BUDGET_MS = 85_000;
 
@@ -1769,7 +1890,7 @@ async function awaitPause(
 	user: User,
 	loop: any,
 	robot: any,
-	expect: ArmPause & { orClear?: number; orCalibrated?: boolean; uninstructed?: boolean },
+	expect: ArmPause & { orClear?: number; orCalibrated?: boolean; orProbing?: boolean; uninstructed?: boolean },
 	maxWaitMs = AWAIT_BUDGET_MS
 ): Promise<AwaitResult> {
 	const runId = String(loop.opentronsRunId ?? '');
@@ -1780,7 +1901,7 @@ async function awaitPause(
 		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
 		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
 		// The announcements, and a park resumed from outside the loop that never moved.
-		if (expect.kind === 'PARKED' && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orCalibrated: expect.orCalibrated }, { prev: r.prev, uninstructed: expect.uninstructed })) {
+		if (expect.kind === 'PARKED' && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orCalibrated: expect.orCalibrated, orProbing: expect.orProbing }, { prev: r.prev, uninstructed: expect.uninstructed })) {
 			return { done: true, read: r };
 		}
 		if (expect.kind === 'AT_SCAN' && atScanFor(r.status, r.last, r.prev, expect.cart)) return { done: true, read: r };
@@ -1888,8 +2009,8 @@ export async function cycleAwaitParked(user: User, loopId: string): Promise<{ do
 	// be homing / taking its tip / parking when the scan is due).
 	if (cycle.step !== 'grab' && cycle.step !== 'scan') expectStep(cycle, 'grab');
 	const robot = await loopRobot(loop);
-	const want: ArmMoveWant = cycle.step === 'grab' ? grabWant(cycle.index) : { parked: cycle.index };
-	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index, orClear: want.orClear, orCalibrated: want.orCalibrated, uninstructed: !cycle.scanSeq });
+	const want: ArmMoveWant = cycle.step === 'grab' ? grabWant(cycle.index, (await getSettings()).grabDuringProbe) : { parked: cycle.index };
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index, orClear: want.orClear, orCalibrated: want.orCalibrated, orProbing: want.orProbing, uninstructed: !cycle.scanSeq });
 	if (!r.done && r.terminal) return { done: true, loop: await runEndedMidLoop(user, loop, cycle, String(cycle.step), r.terminal) };
 	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: cycle.step, message: r.read.message });
 	return { done: r.done, loop: (await getLoop(loopId))! };
@@ -1901,7 +2022,7 @@ export async function cycleGrab(user: User, loopId: string): Promise<{ play: Pla
 	expectStep(cycle, 'grab');
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
 	const robot = await loopRobot(loop);
-	await assertArmMayMove(robot, loop, grabWant(cycle.index), 'grab', { uninstructed: !cycle.scanSeq });
+	await assertArmMayMove(robot, loop, grabWant(cycle.index, (await getSettings()).grabDuringProbe), 'grab', { uninstructed: !cycle.scanSeq });
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
 	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date() });
 	await audit(user, 'arm_wax_fill.cycle_grab', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
@@ -1910,8 +2031,9 @@ export async function cycleGrab(user: User, loopId: string): Promise<{ play: Pla
 
 /** The grab play ended (and was settled): on to the scan. */
 export async function cycleGrabDone(user: User, loopId: string): Promise<LoopView> {
-	const { cycle } = await runningLoop(loopId);
+	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'grab');
+	await assertArrived(user, loopId, cycle, animRef(loop.grabAnimation), 'grab', cycle.grabArmRunId ?? null);
 	await patchCycle(loopId, cycle.index, { step: 'scan' });
 	return (await getLoop(loopId))!;
 }
@@ -1928,8 +2050,25 @@ export async function cycleScanStart(user: User, loopId: string): Promise<LoopVi
 	await assertArmMayMove(robot, loop, { parked: cycle.index }, 'send the scan instruction', { uninstructed: true });
 	const seq = await writeInstruction(user, loop, robot, 'scan', cycle.index, null);
 	await resumeRun(robot, String(loop.opentronsRunId));
-	await patchCycle(loopId, cycle.index, { scanSeq: seq });
-	await audit(user, 'arm_wax_fill.cycle_scan_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq });
+	// The daemon watches the run LOCALLY for `ARM AT_SCAN <i>` and reads the scanner
+	// the moment it lands (one queue command, answered from its own thread), so
+	// cycleScanRead only waits for that answer — no relayed polling of the run and
+	// no second command. A daemon that predates scan_at_pause fails the command
+	// ("unknown command kind") and cycleScanRead falls back to polling the run.
+	let scanCommandId: string | null = null;
+	try {
+		scanCommandId = await enqueueBridgeCommand(
+			robot,
+			user,
+			'scan_at_pause',
+			{ runId: String(loop.opentronsRunId), cart: cycle.index, pauseTimeoutS: SCAN_PAUSE_TIMEOUT_S, scanTimeoutS: SCAN_READ_WINDOW_S },
+			SCAN_PAUSE_TIMEOUT_S * 1000 + 60_000
+		);
+	} catch (e) {
+		await audit(user, 'arm_wax_fill.scan_command_not_queued', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, error: e instanceof Error ? e.message : String(e) });
+	}
+	await patchCycle(loopId, cycle.index, { scanSeq: seq, scanCommandId });
+	await audit(user, 'arm_wax_fill.cycle_scan_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq, scanCommandId });
 	return (await getLoop(loopId))!;
 }
 
@@ -1944,19 +2083,55 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
 	expectStep(cycle, 'scan');
 	if (!cycle.scanSeq) throw new ArmWaxFillError('The scan instruction has not been sent yet.', 409);
 	const robot = await loopRobot(loop);
-	const r = await awaitPause(user, loop, robot, { kind: 'AT_SCAN', cart: cycle.index });
-	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'scan', r.terminal) };
-	if (!r.done) return { pending: true, loop: (await getLoop(loopId))! };
 	let barcode = '';
 	let raw = '';
-	try {
-		const body = await bridgeCommand(robot, user, 'read_scanner', { timeoutS: 15 }, 45_000);
-		barcode = String(body?.barcode ?? '').trim();
-		raw = String(body?.raw ?? '');
-	} catch (e) {
-		const why = e instanceof Error ? e.message : String(e);
-		await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
-		return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', `the scanner could not be read: ${why}`) };
+	let viaDaemon = false;
+	if (cycle.scanCommandId) {
+		// The daemon's scan_at_pause reads the scanner the moment the run pauses at the scan position; wait for its answer.
+		let answer: { done: true; body: any } | { done: false } | null = null;
+		try {
+			answer = await pollBridgeCommand(String(cycle.scanCommandId), 'scan_at_pause', AWAIT_BUDGET_MS);
+		} catch (e) {
+			if (e instanceof BridgeCommandFailed && /unknown command kind/i.test(e.message)) {
+				// The daemon predates scan_at_pause (1.5.0): poll the run from here instead.
+				await audit(user, 'arm_wax_fill.scan_command_unknown', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, scanCommandId: cycle.scanCommandId });
+				await patchCycle(loopId, cycle.index, { scanCommandId: null });
+				cycle.scanCommandId = null;
+			} else {
+				const why = e instanceof Error ? e.message : String(e);
+				await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
+				return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', `the scanner could not be read: ${why}`) };
+			}
+		}
+		if (cycle.scanCommandId && answer) {
+			if (!answer.done) return { pending: true, loop: (await getLoop(loopId))! };
+			const body = answer.body ?? {};
+			viaDaemon = true;
+			await audit(user, 'arm_wax_fill.scan_at_pause', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, pause: body.pause ?? null, runStatus: body.runStatus ?? null, waitedMs: body.waitedMs ?? null, attempts: body.attempts ?? null, error: body.error ?? null });
+			if (!body.pause) {
+				// Never reached the scan position: the run ended, is paused elsewhere, or the wait ran out.
+				const status = String(body.runStatus ?? '');
+				if (OT2_RUN_TERMINAL.has(status)) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'scan', status) };
+				await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
+				return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', `the OT-2 did not reach the scan position: ${body.error ?? 'no answer from the daemon'}`) };
+			}
+			barcode = String(body.barcode ?? '').trim();
+			raw = String(body.raw ?? '');
+		}
+	}
+	if (!viaDaemon) {
+		const r = await awaitPause(user, loop, robot, { kind: 'AT_SCAN', cart: cycle.index });
+		if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'scan', r.terminal) };
+		if (!r.done) return { pending: true, loop: (await getLoop(loopId))! };
+		try {
+			const body = await bridgeCommand(robot, user, 'read_scanner', { timeoutS: SCAN_READ_WINDOW_S }, 45_000);
+			barcode = String(body?.barcode ?? '').trim();
+			raw = String(body?.raw ?? '');
+		} catch (e) {
+			const why = e instanceof Error ? e.message : String(e);
+			await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
+			return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', `the scanner could not be read: ${why}`) };
+		}
 	}
 	await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
 	await audit(user, 'arm_wax_fill.scan_read', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode: barcode || null, raw: raw.slice(0, 200) });
@@ -2092,6 +2267,7 @@ export async function cycleFail(user: User, loopId: string): Promise<{ play: Pla
 export async function cycleFailDone(user: User, loopId: string): Promise<LoopView> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fail');
+	await assertArrived(user, loopId, cycle, animRef(loop.failAnimation), 'fail animation', cycle.failArmRunId ?? null);
 	const now = new Date();
 	const failedStep = cycle.failedStep ?? 'scan';
 	const msg = cycle.error ?? 'failed';
@@ -2217,8 +2393,10 @@ async function assertFormWithinSchema(robotId: string, form: FormData): Promise<
  * (cartridges). computeRunParameters only reads the RTPs the robot's schema
  * declares, so nothing else is sent.
  */
-function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: CalibrationView, requestedRuns: number): FormData {
+function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: CalibrationView, requestedRuns: number, settings: SettingsView): FormData {
 	const form = new FormData();
+	// Which rows to fill (the carriage line's checkboxes, declared by the current stage .py).
+	for (const c of CHANNELS) form.set(`param_${c.rtp}`, settings.channels[c.key] ? 'true' : 'false');
 	form.set('runId', waxRunId);
 	form.set('opentronsProtocolId', protocol.opentronsProtocolId);
 	const cl = calibration.cartLocation!;
@@ -2247,7 +2425,7 @@ function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: Cali
  * the protocol's tip-to-trash and home overlap the withdraw (the trash and
  * home are neither the calibrator nor the stage).
  */
-export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number; endSent: boolean; endNote: string | null }> {
+export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number; endSent: boolean; endNote: string | null; chainedGrab: boolean }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
 	const robot = await loopRobot(loop);
@@ -2263,16 +2441,35 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 	} else {
 		await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'withdraw', { uninstructed: true });
 	}
-	const p = await play(user, animRef(loop.withdrawAnimation), 'withdraw');
-	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId });
-	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS, last, endSent: last && !endNote });
-	return { play: p, cycle: cycle.index, endSent: last && !endNote, endNote };
+	// Another cart follows: play the withdraw AND the next grab as ONE path (one
+	// play, one end-of-play tail). The gate is the same for both — parked for the
+	// next cart, or CLEAR of this one — and the OT-2 stays in the tube throughout.
+	const withdrawRef = animRef(loop.withdrawAnimation);
+	const grabRef = animRef(loop.grabAnimation);
+	let chainedGrab = !last && (await getSettings()).chainGrab && !!withdrawRef && !!grabRef;
+	let p: PlayResult;
+	if (chainedGrab) {
+		try {
+			p = await playChain(user, [withdrawRef!, grabRef!], `${withdrawRef!.name ?? 'withdraw'} + ${grabRef!.name ?? 'grab'}`);
+		} catch (err) {
+			if (err instanceof AnimateError) throw new ArmWaxFillError(`withdraw + grab: ${err.message}`, err.status);
+			throw err;
+		}
+	} else {
+		chainedGrab = false;
+		p = await play(user, withdrawRef, 'withdraw');
+	}
+	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId, chainedGrab });
+	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS, last, endSent: last && !endNote, chainedGrab });
+	return { play: p, cycle: cycle.index, endSent: last && !endNote, endNote, chainedGrab };
 }
 
 /** The withdraw play ended: the cycle is done; the next one starts, or the loop ends and the run is finishing. */
 export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ loop: LoopView; next: boolean }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
+	const chained = !!cycle.chainedGrab;
+	await assertArrived(user, loopId, cycle, animRef(chained ? loop.grabAnimation : loop.withdrawAnimation), chained ? 'withdraw + grab' : 'withdraw', cycle.withdrawArmRunId ?? null);
 	const now = new Date();
 	const completedRuns = Number(loop.completedRuns ?? 0) + 1;
 	await patchCycle(loopId, cycle.index, { step: 'done', endedAt: now });
@@ -2288,8 +2485,12 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 		await audit(user, finished ? 'arm_wax_fill.loop_complete' : 'arm_wax_fill.loop_stopped', 'arm_wax_fill_runs', loopId, { completedRuns, skippedRuns: Number(loop.skippedRuns ?? 0), requestedRuns: loop.requestedRuns });
 		return { loop: (await getLoop(loopId))!, next: false };
 	}
-	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns }, $push: { cycles: { index: cycle.index + 1, step: 'grab', startedAt: now } } });
-	await audit(user, 'arm_wax_fill.cycle_done', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, completedRuns, next: cycle.index + 1 });
+	// A chained play already grabbed the next cart: that cycle starts at the scan.
+	const nextCycle = chained
+		? { index: cycle.index + 1, step: 'scan', startedAt: now, grabArmRunId: cycle.withdrawArmRunId ?? null }
+		: { index: cycle.index + 1, step: 'grab', startedAt: now };
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns }, $push: { cycles: nextCycle } });
+	await audit(user, 'arm_wax_fill.cycle_done', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, completedRuns, next: cycle.index + 1, chainedGrab: chained });
 	return { loop: (await getLoop(loopId))!, next: true };
 }
 

@@ -32,6 +32,26 @@ describe('arm-loop-protocol pause messages', () => {
 	});
 });
 
+describe('ARM PROBING — the first grab may start while the tip is probed (2026-10-30)', async () => {
+	const { armMayMove, parseArmComment } = await import('./arm-loop-protocol');
+	it('parses the announcements, PROBING and CALIBRATED with cart 0', () => {
+		expect(parseArmComment('ARM PROBING')).toEqual({ kind: 'PROBING', cart: 0 });
+		expect(parseArmComment('ARM CALIBRATED')).toEqual({ kind: 'CALIBRATED', cart: 0 });
+		expect(parseArmComment('ARM CLEAR 3')).toEqual({ kind: 'CLEAR', cart: 3 });
+		expect(parseArmComment('ARM PARKED 1')).toBeNull();
+		expect(parseArmComment('Tip calibration OK')).toBeNull();
+	});
+	it('lets the first grab start at PROBING only when asked, and only while the run is running', () => {
+		const probing = { kind: 'PROBING' as const, cart: 0, paused: false };
+		expect(armMayMove('running', probing, { parked: 1, orCalibrated: true })).toBe(false);
+		expect(armMayMove('running', probing, { parked: 1, orCalibrated: true, orProbing: true })).toBe(true);
+		expect(armMayMove('paused', probing, { parked: 1, orCalibrated: true, orProbing: true })).toBe(false);
+		expect(armMayMove('running', { kind: 'CALIBRATED', cart: 0, paused: false }, { parked: 1, orCalibrated: true, orProbing: true })).toBe(true);
+		// Never a later cart's grab: PROBING is a start-up marker only.
+		expect(armMayMove('running', probing, { parked: 2, orClear: 1, orProbing: true })).toBe(false);
+	});
+});
+
 describe('armMayMove — a park resumed from outside the loop (2026-10-30)', async () => {
 	const { armMayMove, atScanFor } = await import('./arm-loop-protocol');
 	const parked = (cart: number, paused: boolean) => ({ kind: 'PARKED' as const, cart, paused });

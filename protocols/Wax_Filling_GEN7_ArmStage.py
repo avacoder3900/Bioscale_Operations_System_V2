@@ -72,6 +72,17 @@ STAGE_WELL_NAMES = [r + c for r in STAGE_ROWS for c in STAGE_COLS]  # X2 X4 X6 X
 # Column -> gate mapping (same as the carriage protocol's first carrier).
 COLUMN_GATE = {'2': 'wax_gate4', '4': 'wax_gate3', '6': 'wax_gate2', '8': 'wax_gate1'}
 
+# Stage row -> the channel checkbox that fills it (C, B, A; the carriage line's RTP names).
+STAGE_ROW_CHANNEL = {'X': 'row_pattern_0', 'W': 'row_pattern_1', 'V': 'row_pattern_2'}
+
+
+def channel_rows(params):
+    """The stage rows this run fills, from the channel checkboxes, in fill
+    order. Every box off means all three (a run that fills nothing is a mistake,
+    not a choice — the carriage line reads it the same way)."""
+    rows = [r for r in STAGE_ROWS if bool(getattr(params, STAGE_ROW_CHANNEL[r], True))]
+    return rows or list(STAGE_ROWS)
+
 # A taught coordinate below this is "never taught" (the RTP defaults are 0 and
 # the deck's front-left corner is NOT where a cart is). Refused before any motion.
 MIN_TAUGHT_MM = 1.0
@@ -302,6 +313,17 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="arm_scan_z", display_name="Arm scan Z (deck mm)",
         description="Nozzle Z of the scan position, taught with NO tip. 0 = not taught (run refuses).",
         default=0.0, minimum=0.0, maximum=250.0, unit="mm")
+    # ── Which channels (rows) to fill ────────────────────────────────────────
+    # The carriage protocol's checkboxes, same names (row_pattern_0/1/2), one
+    # row of four holes each. On the stage the cart has ONE taught orientation,
+    # so channel C is always row X (the first row from the taught hole), B row
+    # W, A row V. Unticked rows are skipped: fewer tube trips per cart.
+    parameters.add_bool(variable_name="row_pattern_0", display_name="Channel C",
+        description="Fill channel C (row X, the first row from the taught hole) on every cart.", default=True)
+    parameters.add_bool(variable_name="row_pattern_1", display_name="Channel B",
+        description="Fill channel B (row W, the middle row) on every cart.", default=True)
+    parameters.add_bool(variable_name="row_pattern_2", display_name="Channel A",
+        description="Fill channel A (row V, the last row from the taught hole) on every cart.", default=True)
     # No travel-height parameter: the pipette goes ALL THE WAY UP (Z-only home)
     # before every move between stations — see the LIFT RULE in the header.
 
@@ -498,8 +520,14 @@ def run(protocol: protocol_api.ProtocolContext):
         for i in range(1, len(STAGE_WELL_NAMES) + 1)
     ]
     targets = stage_targets(cart_x, cart_y, cart_z, cart_rot, hole_offsets)
+    fill_rows = channel_rows(protocol.params)
+    if len(fill_rows) < len(STAGE_ROWS):
+        skipped_rows = [r for r in STAGE_ROWS if r not in fill_rows]
+        targets = [t for t in targets if get_well_row(t[0]) in fill_rows]
+        protocol.comment(f'ARM STAGE: channels - filling rows {", ".join(fill_rows)} ({len(targets)} holes per cart); '
+                         f'skipping {", ".join(skipped_rows)}.')
     protocol.comment(f'ARM STAGE: first wax hole at x={cart_x} y={cart_y} z={cart_z}, rotation {cart_rot} deg; '
-                     f'12 holes: ' + ', '.join(f'{n}({x:.2f},{y:.2f},{z:.2f})' for n, x, y, z in targets))
+                     f'{len(targets)} holes: ' + ', '.join(f'{n}({x:.2f},{y:.2f},{z:.2f})' for n, x, y, z in targets))
     corrected = [(STAGE_WELL_NAMES[i], o) for i, o in enumerate(hole_offsets) if any(abs(v) > 1e-9 for v in o)]
     if corrected:
         protocol.comment('ARM STAGE: per-hole corrections: ' + ', '.join(f'{n} ({o[0]:+.2f},{o[1]:+.2f},{o[2]:+.2f})' for n, o in corrected))
@@ -716,7 +744,7 @@ def run(protocol: protocol_api.ProtocolContext):
             """Absolute deck point as a Location (no labware: the stage is not labware)."""
             return types.Location(types.Point(x=x, y=y, z=z), None)
 
-        def pick_up_and_calibrate_tip(pick_up=True):
+        def pick_up_and_calibrate_tip(pick_up=True, announce=None):
             """Verbatim from the carriage protocol (Locations carry no labware)."""
             nonlocal _tip_index
             cal_x = protocol.params.cal_x
@@ -835,6 +863,12 @@ def run(protocol: protocol_api.ProtocolContext):
                     f'then click Resume to calibrate that tip. Cancel/Stop to end the run.'
                 )
 
+            if announce:
+                # 'ARM PROBING' (the loop's own probe): BIMS may start the arm's FIRST
+                # grab from here when Setup says so - the grab path keeps clear of
+                # the calibrator (Alejandro, 2026-10-30). Only the loop passes it;
+                # the calibration-check tour (over the stage) never announces.
+                protocol.comment(announce)
             adj, ok, why = _probe_once()
             if ok:
                 protocol.comment(f'Tip calibration OK: adjust x={adj["x"]}, y={adj["y"]}')
@@ -916,9 +950,11 @@ def run(protocol: protocol_api.ProtocolContext):
         def run_calibration_check(adjust):
             well_z_depth = -float(protocol.params.dispense_depth) + z_offset
             by_name = {t[0]: t for t in targets}
-            n = len(calibration_check_wells)
+            # Only the corners in the rows this run fills (channels); the first and last hole when none is.
+            check_wells = [w for w in calibration_check_wells if w in by_name] or [targets[0][0], targets[-1][0]]
+            n = len(check_wells)
             last = None
-            for i, well_name in enumerate(calibration_check_wells):
+            for i, well_name in enumerate(check_wells):
                 t = by_name[well_name]
                 px, py = arrive(t, adjust)
                 pipette.move_to(P(px, py, t[3] + well_z_depth), force_direct=True)
@@ -1248,7 +1284,7 @@ def run(protocol: protocol_api.ProtocolContext):
         # here to 'ARM PARKED 1' the OT-2 only visits the wax tube (never the
         # calibrator or the stage again). The probe routine's reject-retry with a
         # fresh tip is unchanged.
-        adjust = pick_up_and_calibrate_tip()
+        adjust = pick_up_and_calibrate_tip(announce='ARM PROBING')
         protocol.comment('ARM CALIBRATED')
         protocol.comment(f'ARM LOOP: one tip for the whole loop ({cartridges} cart(s)); adjust x={adjust["x"]}, y={adjust["y"]}')
         cart = 1

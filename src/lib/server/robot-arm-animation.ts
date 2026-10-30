@@ -842,7 +842,7 @@ export interface AfterPlayResult extends SettleResult {
  * target here and learn it. Goal poses need neither — they were played
  * exactly as set. Runs once per play.
  */
-export async function afterPlay(user: User, runId: string): Promise<AfterPlayResult> {
+export async function afterPlay(user: User, runId: string, opts: { droop?: boolean } = {}): Promise<AfterPlayResult> {
 	await connectDB();
 	const base = { torqueRestored: false, torqueError: null as string | null, arm: null as ArmNow | null };
 	// Torque first, whatever else happens: a limp arm is the worst end state.
@@ -876,6 +876,10 @@ export async function afterPlay(user: User, runId: string): Promise<AfterPlayRes
 	// Claim it first so a double call (two tabs, a retry) settles once.
 	const claim = await model.updateOne({ _id: doc._id, 'lastPlay.runId': runId, 'lastPlay.settledAt': null }, { $set: { 'lastPlay.settledAt': new Date() } });
 	if (!claim.modifiedCount) return { ...base, poseName: '', droop: null, pi: null, skipped: 'already settled' };
+	// A loop play (the robot-arm wax-fill line): torque is enough. Droop learning
+	// would wait on the Pi's settle report and may nudge the arm; the loop reads
+	// the arm itself to check it arrived (checkArrival).
+	if (opts.droop === false) return { ...base, poseName: '', droop: null, pi: null, skipped: 'loop play — no droop learning' };
 	const fromPi = await learnFromPiSettle(user, runId);
 	if (fromPi) return { ...base, poseName: fromPi[fromPi.length - 1].poseName, droop: null, pi: { poses: fromPi }, skipped: null };
 	const pose = (await RobotArmPose.findById(end.poseId).select('-lastPlay').lean()) as any;
@@ -1414,9 +1418,96 @@ export async function stopPlayback(user: User): Promise<StopResult> {
 	return { stoppedRunId, torqueOn, error: torqueOn ? null : error };
 }
 
-export async function playbackActive(): Promise<{ runId: string; kind: string } | null> {
+/**
+ * Is a session using the arm? With `runId`, the Pi's own `replay.stop` webhook
+ * for that run (already in robot_arm_runs) answers first — no Pi round trip,
+ * so a Pi slow to answer cannot stall the end of a play (2026-10-30: one
+ * end-of-play poll hung for a minute on the arm wax-fill line).
+ */
+export async function playbackActive(runId?: string | null): Promise<{ runId: string; kind: string } | null> {
+	if (runId) {
+		await connectDB();
+		const run = (await RobotArmRun.findOne({ runId }).select('events').lean()) as any;
+		if (Array.isArray(run?.events) && run.events.some((e: any) => e?.type === 'replay.stop')) return null;
+	}
 	const a = (await robotArm.getActive()).active;
 	return a ? { runId: a.run_id, kind: a.kind } : null;
+}
+
+// ── loop plays: arrival check and chained plays (the arm wax-fill line) ─────
+
+/** Steps a servo may be off the end pose of a loop play and still count as arrived (the droop "near" band). */
+export const ARRIVAL_TOL_STEPS = 150;
+/** Servos checked for arrival: 1–5. The gripper (6) stops on the cart, not at its goal. */
+const ARRIVAL_SERVOS = [1, 2, 3, 4, 5];
+
+export interface AnimationEnd {
+	/** "<animation> · <last pose>" for messages. */
+	name: string;
+	/** Where the animation leaves the arm: its last pose's target (trim-free). */
+	target: number[];
+}
+
+/** Where a move set or sequence leaves the arm. */
+export async function animationEnd(ref: { kind: 'move_set' | 'sequence'; id: string }): Promise<AnimationEnd> {
+	const r = ref.kind === 'sequence' ? await resolveSequence(ref.id) : await resolveMoveSet(ref.id);
+	const poses = r.keyframes.filter((k) => !k.fire);
+	const last = poses[poses.length - 1];
+	if (!last) throw new AnimateError(`"${r.summary.name}" has no poses.`, 409);
+	return { name: `${r.summary.name} · ${last.name}`, target: (last.target ?? last.positions).map(Number) };
+}
+
+export interface ArrivalCheck {
+	ok: boolean;
+	positions: number[];
+	/** Per servo: where the arm is minus where it should be (steps). */
+	off: number[];
+	worst: { servo: number; steps: number } | null;
+	tol: number;
+}
+
+/**
+ * Did the arm actually get there? The Pi reports a replay "finished" even when
+ * nothing moved (torque off, a wedged session — 2026-10-30: a grab that never
+ * played, and the OT-2 was then sent to scan an empty stage). Read the arm and
+ * compare it with the animation's end on servos 1–5. No motion.
+ */
+export async function checkArrival(target: number[], tol = ARRIVAL_TOL_STEPS): Promise<ArrivalCheck> {
+	const now = await readArm();
+	const off = now.positions.map((p, i) => p - (Number.isFinite(target[i]) ? target[i] : p));
+	let worst: { servo: number; steps: number } | null = null;
+	for (const sid of ARRIVAL_SERVOS) {
+		const d = Math.abs(off[sid - 1] ?? 0);
+		if (!worst || d > worst.steps) worst = { servo: sid, steps: d };
+	}
+	return { ok: !worst || worst.steps <= tol, positions: now.positions, off, worst, tol };
+}
+
+/**
+ * Play several move sets / sequences as ONE path, joined the way a sequence
+ * joins its sets (an automatic transition from the last pose of one to the
+ * first of the next). The arm wax-fill line plays "withdraw + next grab" this
+ * way: one play and one end-of-play tail per cart hand-over instead of two.
+ * lastPlay lands on the LAST ref — its end is where the arm is left. The arm MOVES.
+ */
+export async function playChain(user: User, refs: { kind: 'move_set' | 'sequence'; id: string }[], title: string): Promise<PlayResult> {
+	if (!refs.length) throw new AnimateError('Nothing to play.');
+	const items: SequenceItem[] = [];
+	for (const ref of refs) {
+		const r = ref.kind === 'sequence' ? await resolveSequence(ref.id) : await resolveMoveSet(ref.id);
+		if (!r.keyframes.length) throw new AnimateError(`"${r.summary.name}" has no poses.`, 409);
+		items.push({ name: r.summary.name, keyframes: r.keyframes, join: { durationS: null, easing: 'ease' } });
+	}
+	const last = refs[refs.length - 1];
+	return writeAndPlay(user, {
+		title,
+		keyframes: flattenSequence(items),
+		rateHz: DEFAULT_RATE_HZ,
+		kind: last.kind,
+		id: last.id,
+		auditAction: 'robot_arm.animate.play_chain',
+		auditExtra: { chain: refs.map((r) => `${r.kind}:${r.id}`), title }
+	});
 }
 
 // ── save to Pi ───────────────────────────────────────────────────────────

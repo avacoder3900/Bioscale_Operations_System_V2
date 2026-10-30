@@ -188,3 +188,32 @@ keeps going. A marker is the LAST ARM pause or announcement in the log; a later 
 - A loop that takes the fail route is **skipped**: the fail animation plays (from `ARM CLEAR <i>` / `ARM PARKED <i+1>`),
   the loop is marked skipped, `skippedRuns` is bumped, and the run goes on to the next cart. A skipped loop counts as
   one of the requested loops. The run completes after the last loop (filled or skipped) with `end`.
+
+### 5.8 Speed fixes (added 2026-10-30, after the first 3-cart loop; Alejandro's six observations)
+- **`ARM PROBING`** — a comment the protocol emits right before the loop's own tip probe (only that probe; the
+  optional calibration-check tour never announces). With Setup's "first grab starts while the tip is being
+  calibrated" ON (default) BIMS lets the grab of cart 1 start at PROBING instead of CALIBRATED: the gantry is at
+  the calibrator while the arm travels, so the grab path must keep clear of it. Gate: grab(1) = PARKED 1 | running
+  after CALIBRATED | running after PROBING (option on). Never for a later cart.
+- **Channels** — both stage protocols declare the carriage line's `row_pattern_0/1/2` (Channel C = row X, the first
+  row from the taught hole; B = row W; A = row V; every box off = all three). BIMS sends Setup's channel checkboxes
+  with the run; the fill skips unticked rows (one tube trip per row). The calibration-check tour visits only corners
+  in filled rows.
+- **Arrival check** — after every loop play (grab, withdraw, withdraw + grab, fail animation) BIMS reads the arm and
+  compares servos 1–5 with the animation's last pose (`ARRIVAL_TOL_STEPS` = 150). A miss (`ARM DID NOT ARRIVE:`)
+  leaves the cycle where it is — Resume plays the step again — and never moves the OT-2. Audits
+  `arm_wax_fill.arm_arrived` / `arm_not_arrived` carry target, positions and the worst servo.
+- **Withdraw + grab as one play** — with Setup's "chain" ON (default) and another cart to come, `cycleWithdraw` plays
+  the withdraw and the next grab as one path (`playChain`: an automatic join between them, like a sequence). The gate
+  is the one both already had (PARKED i+1 | CLEAR i); the OT-2 is parked throughout. `cycleWithdrawDone` checks
+  arrival at the GRAB's end and opens the next cycle at `scan` (`chainedGrab` on the finished cycle).
+- **Daemon `scan_at_pause`** (ot2-bridge 1.5.0, queue line only) payload `{ runId, cart, pauseTimeoutS?, scanTimeoutS? }`
+  → `{ barcode | null, raw, error, attempts, pause, runStatus, waitedMs }`. The daemon polls the run locally
+  (0.2 s) until it pauses at `ARM AT_SCAN <cart>`, reads the scanner at once (5 s window, one retry) and answers;
+  `pause` null = never got there (run ended / foreign pause / timeout, `error` says which). `cycleScanStart` queues
+  it right after the scan instruction + resume; `cycleScanRead` only waits for its answer. A daemon that does not know
+  the kind fails it with "unknown command kind" and BIMS falls back to polling the run + `read_scanner`.
+- **End-of-play poll** — the page's `?/playback` carries the run id; the server answers from the Pi's own
+  `replay.stop` webhook first (no Pi round trip). Every page request to the Pi is bounded (8 s poll, 60 s action),
+  the poll runs every 0.5 s near the end, and loop plays settle with torque only (no droop learning). BIMS-side polls:
+  AWAIT_POLL 750 ms (was 1.5 s), BRIDGE_POLL 250 ms (was 500).

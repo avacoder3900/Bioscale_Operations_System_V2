@@ -65,6 +65,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 const who = (locals: App.Locals) => ({ _id: locals.user!._id, username: locals.user!.username });
 const field = (d: FormData, k: string) => d.get(k)?.toString() ?? null;
+/** An HTML checkbox: present as 'on' when ticked, absent when not. */
+const checked = (d: FormData, k: string) => {
+	const v = field(d, k);
+	return v === 'on' || v === 'true';
+};
 
 function failFrom(err: unknown) {
 	if (err instanceof ArmWaxFillError) return fail(err.status, { error: err.message });
@@ -96,7 +101,10 @@ export const actions: Actions = {
 				robotId: field(d, 'robotId'),
 				cartPosition: field(d, 'cartPosition'),
 				waxSourceLot: field(d, 'waxSourceLot'),
-				testMode: field(d, 'testMode') === 'on' || field(d, 'testMode') === 'true'
+				testMode: checked(d, 'testMode'),
+				channels: { c: checked(d, 'channelC'), b: checked(d, 'channelB'), a: checked(d, 'channelA') },
+				grabDuringProbe: checked(d, 'grabDuringProbe'),
+				chainGrab: checked(d, 'chainGrab')
 			});
 			return { success: 'Setup saved.' };
 		} catch (err) {

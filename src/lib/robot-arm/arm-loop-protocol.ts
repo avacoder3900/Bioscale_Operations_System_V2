@@ -57,8 +57,14 @@ export function isParkedFor(pause: ArmPause | null, cart: number): boolean {
 
 /**
  * ARM-WAX-LOOP-B overlap (Alejandro, 2026-10-30): besides the pauses, the
- * protocol ANNOUNCES two moments with a plain comment, and the arm may move
- * from them on while the run keeps going:
+ * protocol ANNOUNCES moments with a plain comment, and the arm may move from
+ * them on while the run keeps going:
+ *   'ARM PROBING'     — the OT-2 is about to probe its tip on the calibrator
+ *                       (once per loop; a rejected tip repeats it). The grab of
+ *                       cart 1 may start HERE when Setup's "grab during the
+ *                       probe" is on (Alejandro, 2026-10-30): the grab path
+ *                       keeps clear of the calibrator. Off, the grab waits for
+ *                       CALIBRATED as before.
  *   'ARM CALIBRATED'  — the once-per-loop probe is done; the OT-2 now only
  *                       visits the tube (aspirate, park) until 'ARM PARKED 1'.
  *   'ARM CLEAR <i>'   — cart i's fill (or skip / end) has left the stage and
@@ -67,24 +73,25 @@ export function isParkedFor(pause: ArmPause | null, cart: number): boolean {
  * A marker is the LAST ARM pause or announcement in the run's command log; a
  * later marker (a resumed pause on the way to the scan, say) retires it.
  */
-export type ArmMarkerKind = ArmPauseKind | 'CALIBRATED' | 'CLEAR';
+export type ArmAnnouncementKind = 'PROBING' | 'CALIBRATED' | 'CLEAR';
+export type ArmMarkerKind = ArmPauseKind | ArmAnnouncementKind;
 
 export interface ArmMarker {
 	kind: ArmMarkerKind;
-	/** The cart for PARKED / AT_SCAN / NO_INSTRUCTION / CLEAR; 0 for CALIBRATED. */
+	/** The cart for PARKED / AT_SCAN / NO_INSTRUCTION / CLEAR; 0 for PROBING and CALIBRATED. */
 	cart: number;
 	/** True for a waitForResume the run is paused at right now. */
 	paused: boolean;
 }
 
-const COMMENT_RE = /^\s*ARM\s+(CALIBRATED|CLEAR)(?:\s+(\d+))?\b/;
+const COMMENT_RE = /^\s*ARM\s+(PROBING|CALIBRATED|CLEAR)(?:\s+(\d+))?\b/;
 
-/** 'ARM CLEAR 2' → { kind: 'CLEAR', cart: 2 }; 'ARM CALIBRATED' → { kind: 'CALIBRATED', cart: 0 }; other comments → null. */
-export function parseArmComment(message: unknown): { kind: 'CALIBRATED' | 'CLEAR'; cart: number } | null {
+/** 'ARM CLEAR 2' → { kind: 'CLEAR', cart: 2 }; 'ARM CALIBRATED' / 'ARM PROBING' → cart 0; other comments → null. */
+export function parseArmComment(message: unknown): { kind: ArmAnnouncementKind; cart: number } | null {
 	if (typeof message !== 'string') return null;
 	const m = COMMENT_RE.exec(message);
 	if (!m) return null;
-	return { kind: m[1] as 'CALIBRATED' | 'CLEAR', cart: m[2] ? Number(m[2]) : 0 };
+	return { kind: m[1] as ArmAnnouncementKind, cart: m[2] ? Number(m[2]) : 0 };
 }
 
 export interface ArmMoveWant {
@@ -94,6 +101,8 @@ export interface ArmMoveWant {
 	orClear?: number;
 	/** Also allowed while the run is RUNNING after 'ARM CALIBRATED' (nothing later in the log). */
 	orCalibrated?: boolean;
+	/** Also allowed while the run is RUNNING after 'ARM PROBING' — the first grab, when Setup says so. */
+	orProbing?: boolean;
 }
 
 export interface ArmMoveContext {
@@ -118,6 +127,7 @@ export function armMayMove(status: string, last: ArmMarker | null, want: ArmMove
 	if (ctx.uninstructed && last.kind === 'NO_INSTRUCTION' && last.cart === want.parked && last.paused && status === 'paused' && ctx.prev?.kind === 'PARKED' && ctx.prev.cart === want.parked) return true;
 	if (ctx.uninstructed && last.kind === 'PARKED' && last.cart === want.parked && !last.paused && status === 'running') return true;
 	if (status !== 'running') return false;
+	if (want.orProbing && want.parked === 1 && last.kind === 'PROBING') return true; // start-up only: the first grab
 	if (want.orCalibrated && last.kind === 'CALIBRATED') return true;
 	if (want.orClear != null && last.kind === 'CLEAR' && last.cart === want.orClear) return true;
 	return false;

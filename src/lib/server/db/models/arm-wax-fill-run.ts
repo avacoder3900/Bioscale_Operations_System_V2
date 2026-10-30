@@ -49,6 +49,10 @@ const cycleSchema = new Schema(
 		skipSeq: Number,
 		scanReadAt: Date,
 		filledAt: Date,
+		/** 2026-10-30: the withdraw play also carried the NEXT cart's grab (one arm path); the next cycle starts at 'scan'. */
+		chainedGrab: Boolean,
+		/** 2026-10-30: the daemon's scan_at_pause command for this cycle's scan (it reads the scanner the moment the run pauses at the scan position). */
+		scanCommandId: String,
 		/**
 		 * When the OT-2 reported its gantry home before each arm move. cycleGrab /
 		 * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp,

@@ -86,9 +86,16 @@ def main():
                  'use_tip_calibration', 'max_tip_adjust', 'run_calibration_check', 'tiprack_refilled',
                  'bims_native', 'offset_x', 'offset_y', 'offset_z', 'cal_x', 'cal_y', 'aspirate_remainder',
                  'vol_gate4', 'vol_gate3', 'vol_gate2', 'vol_gate1', 'wax', 'min_tip_clearance',
-                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z'):
+                 'cartridges', 'arm_scan_x', 'arm_scan_y', 'arm_scan_z',
+                 'row_pattern_0', 'row_pattern_1', 'row_pattern_2'):
         assert name in p.names, name
         assert name in q.names, 'production lost ' + name
+    # Channels and the ARM PROBING announcement: the same in both files.
+    assert reh.STAGE_ROW_CHANNEL == prod.STAGE_ROW_CHANNEL
+    for s in (src, open(PRODUCTION, encoding='utf-8').read()):
+        assert "pick_up_and_calibrate_tip(announce='ARM PROBING')" in s
+        assert s.count("protocol.comment(announce)") == 1
+        assert 'check_wells = [w for w in calibration_check_wells if w in by_name]' in s
     hole_params = [n for n in p.names if n.startswith('hole_')]
     assert hole_params == [n for n in q.names if n.startswith('hole_')]
     assert len(hole_params) == 36 and hole_params[0] == 'hole_01_dx' and hole_params[-1] == 'hole_12_dz'

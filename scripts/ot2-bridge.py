@@ -107,7 +107,7 @@ except ImportError:
 # read_scanner (trigger + read the scanner over serial, no maintenance run, no motion:
 # the protocol itself parks the gantry at the scan position) and write_file (the
 # instruction record /data/arm_loop.json the running protocol polls after each pause).
-VERSION = "ot2-bridge/1.4.0"  # 1.4.0: read_scanner + write_file for the arm wax-fill loop (one run per loop)
+VERSION = "ot2-bridge/1.5.0"  # 1.5.0: scan_at_pause (the arm loop's scan read the moment the run pauses at the scan position); 1.4.0: read_scanner + write_file
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -2347,6 +2347,121 @@ def execute_read_scanner(command_id: str, payload: dict, port: ScannerPort) -> N
         _post_result(command_id, {"ok": False, "error": str(e)})
 
 
+# ARM-WAX-LOOP-B (1.5.0): scan_at_pause — watch the loop's run LOCALLY for its
+# 'ARM AT_SCAN <cart>' pause and read the scanner the moment it lands. One
+# queue command replaces BIMS's relayed polling of the run plus a second
+# read_scanner command (each hop through the queue cost seconds; 2026-10-30
+# the scan took 8–17 s after the resume). Runs on its own thread, like
+# auto_resume_run, so the single worker stays free; the scanner port's own
+# lock serialises the read against a sweep.
+SCAN_AT_PAUSE_POLL_S = 0.2
+SCAN_AT_PAUSE_TIMEOUT_S = float(os.environ.get("SCAN_AT_PAUSE_TIMEOUT_S", "90"))
+
+
+def _current_pause_message(run_id: str) -> Optional[str]:
+    """The message of the waitForResume the run is paused at, from the commands
+    page the robot centres on its current command. None when it cannot be read
+    or the run is not at a waitForResume."""
+    try:
+        r = ot2_request("GET", "/runs/{}/commands?pageLength=20".format(run_id), timeout=6)
+        if r.status_code >= 400:
+            return None
+        cmds = ((r.json() or {}).get("data")) or []
+    except Exception:
+        return None
+    waits = [c for c in cmds if (c or {}).get("commandType") == "waitForResume"]
+    cur = next((c for c in waits if c.get("status") == "running"), waits[-1] if waits else None)
+    if not cur:
+        return None
+    msg = (cur.get("params") or {}).get("message")
+    return str(msg) if msg is not None else ""
+
+
+def _scan_at_pause_watch(command_id: str, run_id: str, cart: int, pause_timeout_s: float,
+                         scan_timeout_s: float, port: ScannerPort) -> None:
+    want = "ARM AT_SCAN {}".format(cart)
+    want_re = re.compile(r"^\s*" + re.escape(want) + r"\b")
+    t0 = time.time()
+    deadline = t0 + pause_timeout_s
+    last_msg = None
+
+    def _body(**kw):
+        body = {"barcode": None, "raw": None, "error": None, "attempts": 0, "pause": None,
+                "runStatus": None, "waitedMs": int((time.time() - t0) * 1000)}
+        body.update(kw)
+        return body
+
+    while time.time() < deadline:
+        data = _fetch_run(run_id)
+        status = data.get("status") if data else None
+        if status in TERMINAL_RUN_STATES:
+            _post_result(command_id, {"ok": True, "status": 200, "body": _body(
+                error="the run ended {} before reaching the scan position".format(status), runStatus=status)})
+            return
+        if status == "paused":
+            msg = _current_pause_message(run_id)
+            if msg is not None:
+                last_msg = msg
+            if msg is not None and want_re.match(msg):
+                scan = scan_with_retry(port, scan_timeout_s, True)
+                log.info("scan_at_pause %s: %s after %.1fs -> %s", command_id, want, time.time() - t0,
+                         scan["barcode"] or scan["error"])
+                _post_result(command_id, {"ok": True, "status": 200, "body": _body(
+                    barcode=scan["barcode"] or None, raw=scan["rawPayload"], error=scan["error"],
+                    attempts=scan["attempts"], pause=msg, runStatus=status)})
+                return
+            if msg is not None and msg.strip() and not msg.lstrip().startswith("ARM "):
+                # An operator / engine pause (tip tracker, no tip, ...): not ours to wait out.
+                _post_result(command_id, {"ok": True, "status": 200, "body": _body(
+                    error="the run is paused at \"{}\", not at the scan position".format(msg[:120]),
+                    runStatus=status)})
+                return
+        time.sleep(SCAN_AT_PAUSE_POLL_S)
+    _post_result(command_id, {"ok": True, "status": 200, "body": _body(
+        error="the run did not reach {} within {:.0f} s (last pause: {})".format(want, pause_timeout_s, last_msg or "none"))})
+
+
+def execute_scan_at_pause(command_id: str, payload: dict, port: ScannerPort, _sync: bool = False) -> None:
+    """payload: { runId, cart, pauseTimeoutS?, scanTimeoutS? } -> body { barcode | null,
+    raw, error, attempts, pause (the AT_SCAN message when it was read there, else
+    null), runStatus, waitedMs }. Detached: the watch runs on its own thread and
+    posts the result itself (_sync=True runs it inline, for tests)."""
+    run_id = (payload or {}).get("runId")
+    try:
+        cart = int((payload or {}).get("cart"))
+    except (TypeError, ValueError):
+        cart = 0
+    if not run_id or cart < 1:
+        _post_result(command_id, {"ok": False, "error": "scan_at_pause: runId and cart (>= 1) are required"})
+        return
+    try:
+        pause_timeout_s = float(payload.get("pauseTimeoutS") or SCAN_AT_PAUSE_TIMEOUT_S)
+    except (TypeError, ValueError):
+        pause_timeout_s = SCAN_AT_PAUSE_TIMEOUT_S
+    try:
+        scan_timeout_s = float(payload.get("scanTimeoutS") or SCAN_TIMEOUT)
+    except (TypeError, ValueError):
+        scan_timeout_s = SCAN_TIMEOUT
+    job = _direct_job_for(command_id)
+    if job is not None:
+        job.detached = True
+
+    def _watch():
+        _worker_ctx.direct_job = job
+        try:
+            _scan_at_pause_watch(command_id, run_id, cart, pause_timeout_s, scan_timeout_s, port)
+        except Exception as e:
+            log.error("scan_at_pause %s: watcher raised: %s", command_id, e)
+            _post_result(command_id, {"ok": False, "error": str(e)})
+        finally:
+            _worker_ctx.direct_job = None
+
+    if _sync:
+        _watch()
+        return
+    threading.Thread(target=_watch, name="scan-at-pause-" + str(run_id)[:8], daemon=True).start()
+
+
 def execute_write_file(command_id: str, payload: dict) -> None:
     """ARM-WAX-LOOP-B §5.5: write the loop instruction record. Only ARM_LOOP_FILE_PATH
     is allowed — this is a channel into ONE file the protocol polls, not a general
@@ -2436,6 +2551,8 @@ def execute_command(cmd: dict, port: ScannerPort) -> None:
         execute_read_scanner(command_id, cmd.get("payload") or {}, port)
     elif kind == "write_file":
         execute_write_file(command_id, cmd.get("payload") or {})
+    elif kind == "scan_at_pause":
+        execute_scan_at_pause(command_id, cmd.get("payload") or {}, port)
     else:
         log.warning("Unknown command kind '%s' (id=%s)", kind, command_id)
         _post_result(command_id, {"ok": False, "error": "unknown command kind: {}".format(kind)})
