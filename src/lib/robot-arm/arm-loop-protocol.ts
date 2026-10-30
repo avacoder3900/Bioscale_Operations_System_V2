@@ -96,12 +96,36 @@ export interface ArmMoveWant {
 	orCalibrated?: boolean;
 }
 
+export interface ArmMoveContext {
+	/** The ARM marker before `last` in the log (for a NO_INSTRUCTION: where the run was paused when it got resumed). */
+	prev?: ArmMarker | null;
+	/**
+	 * BIMS has sent NO instruction for this park yet. Then a park that was resumed
+	 * from outside the loop (the controller's Resume, 2026-10-30) has not moved the
+	 * gantry: the protocol only polls the instruction file where it stands, then
+	 * pauses 'ARM NO_INSTRUCTION <i>' — still in the wax tube. Both states count as
+	 * parked. Once BIMS HAS sent an instruction a running run after that park is on
+	 * its way to the stage and never counts.
+	 */
+	uninstructed?: boolean;
+}
+
 /** May the arm move now, given the run's status and its last ARM marker? */
-export function armMayMove(status: string, last: ArmMarker | null, want: ArmMoveWant): boolean {
+export function armMayMove(status: string, last: ArmMarker | null, want: ArmMoveWant, ctx: ArmMoveContext = {}): boolean {
 	if (!last) return false;
 	if (last.kind === 'PARKED' && last.cart === want.parked && last.paused && status === 'paused') return true;
+	// A park resumed without an instruction: paused again as NO_INSTRUCTION, or still polling.
+	if (ctx.uninstructed && last.kind === 'NO_INSTRUCTION' && last.cart === want.parked && last.paused && status === 'paused' && ctx.prev?.kind === 'PARKED' && ctx.prev.cart === want.parked) return true;
+	if (ctx.uninstructed && last.kind === 'PARKED' && last.cart === want.parked && !last.paused && status === 'running') return true;
 	if (status !== 'running') return false;
 	if (want.orCalibrated && last.kind === 'CALIBRATED') return true;
 	if (want.orClear != null && last.kind === 'CLEAR' && last.cart === want.orClear) return true;
 	return false;
+}
+
+/** The run is effectively at 'ARM AT_SCAN <cart>': paused there, or paused NO_INSTRUCTION right after it (resumed from outside, never moved). */
+export function atScanFor(status: string, last: ArmMarker | null, prev: ArmMarker | null, cart: number): boolean {
+	if (status !== 'paused' || !last || !last.paused) return false;
+	if (last.kind === 'AT_SCAN' && last.cart === cart) return true;
+	return last.kind === 'NO_INSTRUCTION' && last.cart === cart && prev?.kind === 'AT_SCAN' && prev.cart === cart;
 }

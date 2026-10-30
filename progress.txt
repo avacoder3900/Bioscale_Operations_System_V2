@@ -24798,3 +24798,27 @@ Deployment: production - via Vercel GitHub integration on the push to master
 Source: branch feat/stage-cal-follows-protocol @ commit ef066626 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy ef066626 (ARM-WAX-LOOP-B announcements)"
 What this deployment is for: the arm moves on the protocol announcements ARM CALIBRATED / ARM CLEAR, the scan move is tip-aware, out-of-range run-time parameters are refused with a clear message; the two stage .py files must be re-added to the library and the rehearsal deployed.
+
+2026-10-30 — feat/stage-cal-follows-protocol — ARM-WAX-LOOP-B: a park resumed from outside the loop no longer kills a multi-cart loop; Resume locked for the loop's handshake pauses
+================================================================================
+First 1-cart loop on the robot completed (15:16-15:20Z: calibrated 53 s after start, grab 41 s, scan 16 s, fill 75 s,
+withdraw 22 s; the announcements worked - run_parked audits with message null = CALIBRATED / CLEAR). The 2-cart loop
+(15:22Z) filled cart 1 and then died at cart 2's grab: "The OT-2 run was resumed from outside this loop and is waiting
+for an instruction (ARM NO_INSTRUCTION 2)". The protocol had parked for cart 2 and that pause was resumed by something
+other than the loop (the daemon's auto_resume_run is not armed for loop runs and only watches a run's FIRST pause; the
+tab's controller has auto-resume off; its Resume button was still offered during the park). Resumed without an
+instruction the protocol polls the file for 60 s where it stands (still in the wax) and pauses 'ARM NO_INSTRUCTION 2';
+awaitPause treated that as unexplained and threw.
+Fix:
+  - arm-loop-protocol.ts armMayMove(ctx): while BIMS has sent NO instruction for a park (uninstructed), both
+    'NO_INSTRUCTION <i>' paused right after 'PARKED <i>' and a 'PARKED <i>' that is running (resumed, polling) count as
+    parked - the gantry never moved. atScanFor: 'NO_INSTRUCTION <i>' right after 'AT_SCAN <i>' is still at the scan
+    position. readRunPause keeps the marker BEFORE the last one (prev). Every gate passes uninstructed = "no scan sent
+    for this cart yet" (grab, scan start) or true (fill wait, fail prepare, withdraw, fail, end).
+  - resumeRun: a run that is already RUNNING is not played (the robot refuses it); the instruction write is enough,
+    the protocol's poll picks it up.
+  - EmbeddedRunController lockArmPauses (the Wax fill tab passes true): Resume is disabled for any pause the operator
+    did not make in that controller, with a title saying why; a note under the controller says the same.
+  - Audits: arm_wax_fill.cycle_done (the hand-off to the next cart) and arm_wax_fill.await_timeout (a wait that ran out
+    its 85 s budget, with status / message / last / prev) so a stall is readable next time.
+Tests: arm-loop-protocol 7/7; svelte-check 14/448 baseline. No protocol or daemon change.

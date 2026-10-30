@@ -39,6 +39,7 @@
 		onStatusChange,
 		pollMs = 2000,
 		autoResumeInitial = true,
+		lockArmPauses = false,
 		session: sharedSession = null
 	} = $props<{
 		robotId: string;
@@ -58,6 +59,14 @@
 		 * pause is the protocol's own `ARM PARKED 1`, which only the loop may resume.
 		 */
 		autoResumeInitial?: boolean;
+		/**
+		 * The robot-arm wax-fill loop: the run's pauses ('ARM PARKED <i>', 'ARM AT_SCAN
+		 * <i>') are the loop's handshake and the loop resumes them itself. A Resume
+		 * pressed here resumed the park for cart 2 on 2026-10-30 and left the protocol
+		 * waiting for an instruction. With this on, Resume works only after a Pause
+		 * pressed in this controller.
+		 */
+		lockArmPauses?: boolean;
 		session?: RobotSession | null;
 	}>();
 
@@ -473,7 +482,8 @@
 		<button
 			type="button"
 			onclick={() => handleAction('play')}
-			disabled={!canPlay || !!actionInFlight}
+			disabled={!canPlay || !!actionInFlight || (lockArmPauses && displayStatus === 'paused' && !operatorPaused)}
+			title={lockArmPauses && displayStatus === 'paused' && !operatorPaused ? 'This pause is the loop\'s own handshake (parked in the wax / at the scan position) — the loop resumes it itself. Resume is only for a Pause you pressed here.' : ''}
 			class="flex-1 rounded border border-green-500/50 bg-green-900/20 px-4 py-2 text-sm font-medium text-green-300 transition-colors hover:bg-green-900/40 disabled:cursor-not-allowed disabled:opacity-30"
 		>
 			▶ {displayStatus === 'paused' ? 'Resume' : 'Play'}

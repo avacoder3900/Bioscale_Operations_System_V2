@@ -978,7 +978,8 @@
 
 				{#if loop.opentronsRunId && !loop.runFinished}
 					<!-- The loop's one run, for the whole loop. Watch only: its ARM pauses are the loop's to resume, never the controller's auto-resume. -->
-					<EmbeddedRunController robotId={loop.robot._id} robotName={loop.robot.name} opentronsRunId={loop.opentronsRunId} autoResumeInitial={false} onStatusChange={onRunStatus} />
+					<EmbeddedRunController robotId={loop.robot._id} robotName={loop.robot.name} opentronsRunId={loop.opentronsRunId} autoResumeInitial={false} lockArmPauses={true} onStatusChange={onRunStatus} />
+					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">The run's "ARM PARKED" / "ARM AT_SCAN" pauses are the loop's handshake — the loop resumes them itself; Resume above is only for a Pause you press here.</p>
 				{/if}
 
 				{#if log.length}

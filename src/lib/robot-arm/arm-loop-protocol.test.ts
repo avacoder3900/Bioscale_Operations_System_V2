@@ -31,3 +31,22 @@ describe('arm-loop-protocol pause messages', () => {
 		expect(isParkedFor(null, 2)).toBe(false);
 	});
 });
+
+describe('armMayMove — a park resumed from outside the loop (2026-10-30)', async () => {
+	const { armMayMove, atScanFor } = await import('./arm-loop-protocol');
+	const parked = (cart: number, paused: boolean) => ({ kind: 'PARKED' as const, cart, paused });
+	const noInstr = (cart: number) => ({ kind: 'NO_INSTRUCTION' as const, cart, paused: true });
+	it('NO_INSTRUCTION right after the park counts as parked while nothing was sent', () => {
+		expect(armMayMove('paused', noInstr(2), { parked: 2 }, { prev: parked(2, false), uninstructed: true })).toBe(true);
+		expect(armMayMove('paused', noInstr(2), { parked: 2 }, { prev: parked(2, false), uninstructed: false })).toBe(false);
+		expect(armMayMove('paused', noInstr(2), { parked: 2 }, { prev: { kind: 'AT_SCAN', cart: 2, paused: false }, uninstructed: true })).toBe(false);
+	});
+	it('a resumed park still polling counts as parked only while nothing was sent', () => {
+		expect(armMayMove('running', parked(2, false), { parked: 2 }, { uninstructed: true })).toBe(true);
+		expect(armMayMove('running', parked(2, false), { parked: 2 }, { uninstructed: false })).toBe(false);
+	});
+	it('AT_SCAN resumed from outside is still at the scan position', () => {
+		expect(atScanFor('paused', noInstr(1), { kind: 'AT_SCAN', cart: 1, paused: false }, 1)).toBe(true);
+		expect(atScanFor('paused', noInstr(1), parked(1, false), 1)).toBe(false);
+	});
+});
