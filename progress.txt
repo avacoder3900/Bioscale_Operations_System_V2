@@ -24843,3 +24843,8 @@ of loops, a single loop is the actions from grab to withdraw. A run is made of l
   - Wax fill tab wording: "Start a run of N loops", "Loop i of N · f filled · s skipped", notes say Loop/Run; the fail
     note says the loop was skipped and the run goes on. Code identifiers (ArmWaxFillRun, cycles, requestedRuns) unchanged.
 svelte-check 14/448 baseline; vitest arm-loop-protocol 7/7, run-lifecycle-records 32/32. No protocol or daemon change.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit c2a1faf9 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy c2a1faf9 (fail skips the loop, run continues)"
+What this deployment is for: on the arm wax-fill line a failed scan skips that loop and the run continues with the next cart; the tab counts skipped loops and uses run/loop wording. No robot-side change.
