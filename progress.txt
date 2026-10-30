@@ -24945,3 +24945,12 @@ Source: branch feat/rehearsal-p20-timing (fast-forwarded onto master; sha in the
 What this deployment is for: the arm wax-fill loop verifies the arm arrived after every play, plays withdraw + grab
 as one path, starts the first grab at ARM PROBING, fills only the ticked channels, and gets its scan from the daemon
 the moment the run pauses — once the robot side (daemon 1.5.0, both stage .py) is deployed per the handoff.
+
+2026-10-30 — master — deploy log: 5bc2db4e (arm wax-fill speed fixes)
+================================================================================
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/rehearsal-p20-timing @ commit 5bc2db4e (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "feat(robot-arm): arm wax-fill speed fixes — arrival check, withdraw + grab as one play, daemon scan_at_pause, channels, ARM PROBING, bounded end-of-play polls"
+What this deployment is for: see the entry above. BIMS side live now; the loop keeps working against the old daemon and
+old protocols (fallbacks), and gets the full gains once docs/HANDOFF-ARM-LOOP-SPEED-DEPLOY-2026-10-30.md is done:
+ot2-bridge 1.5.0 (md5 4b5691f80e560f16aa6d1500e5fce973) + both stage .py re-added to the library and deployed.
