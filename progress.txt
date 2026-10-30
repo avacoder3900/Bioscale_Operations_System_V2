@@ -24822,3 +24822,8 @@ Fix:
   - Audits: arm_wax_fill.cycle_done (the hand-off to the next cart) and arm_wax_fill.await_timeout (a wait that ran out
     its 85 s budget, with status / message / last / prev) so a stall is readable next time.
 Tests: arm-loop-protocol 7/7; svelte-check 14/448 baseline. No protocol or daemon change.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit c46553c4 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy c46553c4 (resumed park tolerated, Resume locked)"
+What this deployment is for: a multi-cart arm wax-fill loop survives a park resumed from outside the loop, BIMS never plays an already-running run, and the embedded controller no longer offers Resume for the loop handshake pauses. No robot-side change.
