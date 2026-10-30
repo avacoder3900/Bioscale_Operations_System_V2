@@ -24793,3 +24793,8 @@ Causes and fixes:
 Protocol tests (loop, rehearsal, geometry, rtp_limits) ok; svelte-check 14/448 baseline; vitest 36/36.
 Operator: add BOTH stage .py files to the library again from the Wax fill tab and deploy the rehearsal (the daemon
 1.4.0 is already on the robot; its md5 is unchanged). Then a 1-cart loop, then 3 carts; audit_log has the step times.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/stage-cal-follows-protocol @ commit ef066626 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "docs(progress): log production deploy ef066626 (ARM-WAX-LOOP-B announcements)"
+What this deployment is for: the arm moves on the protocol announcements ARM CALIBRATED / ARM CLEAR, the scan move is tip-aware, out-of-range run-time parameters are refused with a clear message; the two stage .py files must be re-added to the library and the rehearsal deployed.
