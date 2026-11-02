@@ -36,12 +36,13 @@
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
 			auditScan?: ActionResult; audit?: ActionResult; pull?: ActionResult;
-			looseScan?: ActionResult; looseResolve?: ActionResult;
+			looseScan?: ActionResult; looseResolve?: ActionResult; finishRoll?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
 
 	function fmtM(cm: number): string { return `${(cm / 100).toFixed(2)} m`; }
+	let finishRollAsk = $state(false); // Finish Roll confirm row
 	const advanceThermoseal = $derived.by(() => {
 		const a = form?.advance;
 		if (!a?.success || !a.thermoseal || typeof a.thermoseal !== 'object') return null;
@@ -680,6 +681,7 @@
 		}
 		if (typeof form.pull?.code === 'string' && form.pull.code.startsWith('BADGE')) pullBadge = '';
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
+		if (form.finishRoll?.success) finishRollAsk = false;
 		if (form.looseResolve?.success) {
 			looseDest = {}; loosePicking = null;
 			if (looseFocus && ((form.looseResolve as any).result?.barcodes ?? []).includes(looseFocus)) looseFocus = null;
@@ -1772,6 +1774,18 @@
 						<div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--color-tron-bg-tertiary)]">
 							<div class="h-full {pct <= 10 ? 'bg-red-400' : pct <= 25 ? 'bg-[var(--color-tron-yellow)]' : 'bg-[var(--color-tron-cyan)]'}" style="width: {pct}%"></div>
 						</div>
+						<!-- Finish Roll (user, 2026-11-02): marks the open roll used up. -->
+						<form method="POST" action="?/finishRoll" use:enhance={enhanceBusy} class="mt-1.5 flex flex-wrap items-center gap-2">
+							<input type="hidden" name="rollId" value={ts.roll.id} />
+							{#if finishRollAsk}
+								<span class="text-[var(--color-tron-text)]">Finish roll {ts.roll.id.slice(0, 8)}? {fmtM(ts.roll.remainingCm)} left becomes 0.</span>
+								<button type="submit" disabled={busy} class="rounded border border-red-500/60 px-2 py-0.5 text-red-300 hover:bg-red-900/20 disabled:opacity-50">Confirm</button>
+								<button type="button" onclick={() => { finishRollAsk = false; }} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)]">Cancel</button>
+							{:else}
+								<button type="button" onclick={() => { finishRollAsk = true; }} class="rounded border border-red-500/60 px-2 py-0.5 text-red-300 hover:bg-red-900/20">Finish Roll</button>
+							{/if}
+							{#if form?.finishRoll?.error}<span class="text-[var(--color-tron-error)]">{form.finishRoll.error}</span>{/if}
+						</form>
 					{:else}
 						<p class="mt-1 text-[var(--color-tron-text-secondary)]">No roll open — the first move to Unpressed pulls one{#if ts.nextLot} (lot {ts.nextLot.lotId}){/if}.</p>
 					{/if}

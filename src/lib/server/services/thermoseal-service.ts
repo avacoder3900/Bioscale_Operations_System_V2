@@ -202,6 +202,31 @@ export async function openRoll(input: { lotId?: string; user: Operator; forCycle
 	return { roll: roll.toObject(), alert };
 }
 
+/**
+ * Finish Roll (user, 2026-11-02): the press ran out before the gauge did, so the
+ * open roll is marked used up — the same state consumeThermoseal leaves an
+ * exhausted roll in. No inventory moves: the roll was debited when it was opened.
+ * The length written off goes on the roll and in the audit log.
+ */
+export async function finishRoll(input: { rollId: string; user: Operator }): Promise<{ rollId: string; writtenOffCm: number }> {
+	await connectDB();
+	const roll = await ThermosealRoll.findOne({ _id: input.rollId, status: 'active' }).lean() as any;
+	if (!roll) throw new ThermosealError('That roll is no longer open — reload the board.', 409);
+	const left = round2(Math.max(0, roll.lengthCm - roll.consumedCm));
+	const now = new Date();
+	await ThermosealRoll.updateOne(
+		{ _id: roll._id, status: 'active' },
+		{ $set: { consumedCm: roll.lengthCm, status: 'exhausted', exhaustedAt: now, finishedEarly: { at: now, by: { _id: input.user._id, username: input.user.username }, writtenOffCm: left } } }
+	);
+	await AuditLog.create({
+		_id: generateId(),
+		userId: input.user._id, username: input.user.username,
+		action: 'THERMOSEAL_ROLL_FINISHED', collectionName: 'thermoseal_rolls', documentId: roll._id,
+		changedAt: now, oldData: { consumedCm: roll.consumedCm, status: 'active' }, newData: { consumedCm: roll.lengthCm, status: 'exhausted', writtenOffCm: left }
+	});
+	return { rollId: roll._id, writtenOffCm: left };
+}
+
 // ── consumption ───────────────────────────────────────────────────────────
 
 export interface ConsumeResult {

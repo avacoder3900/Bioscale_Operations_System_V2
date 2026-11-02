@@ -14,7 +14,7 @@ import {
 	looseCarts, scanIntoLoose, resolveLoose, type MissingAction
 } from '$lib/server/services/bucket-service';
 import { parseLooseDecision } from '$lib/server/services/bucket-loose';
-import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
+import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles, finishRoll, ThermosealError } from '$lib/server/services/thermoseal-service';
 import { lotRemaining, lotsWithStock, fifoLot } from '$lib/server/services/lot-remaining';
 import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -284,6 +284,21 @@ export const actions: Actions = {
 			});
 			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
 		})();
+	},
+
+	// Finish Roll (user, 2026-11-02): mark the open thermoseal roll used up.
+	finishRoll: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		try {
+			const r = await finishRoll({ rollId: String(d.get('rollId') ?? ''), user: op(locals) });
+			return { finishRoll: { success: true, ...r } };
+		} catch (e) {
+			if (e instanceof ThermosealError) return fail(e.status, { finishRoll: { error: e.message } });
+			throw e;
+		}
 	},
 
 	advance: async ({ request, locals }) => {

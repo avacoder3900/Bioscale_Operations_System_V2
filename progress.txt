@@ -25032,3 +25032,12 @@ Move To Oven (Loose panel, bucket audit) and Cart State Change > Backed with No 
 those alternatives as the reason (shows in the Bucket Log), plus a 'retire' bucket_transactions row and
 an audit_log row, by alejandro. Same writes as retireBucket, done by a one-off script because the
 service cannot load outside SvelteKit ($env).
+
+2026-11-02 — master — Finish Roll button (thermoseal)
+================================================================================
+We ran out of thermoseal before the gauge did. Thermoseal strip on the bucket board: Finish Roll ->
+"Finish roll <id>? <x> m left becomes 0." -> Confirm / Cancel. finishRoll() in thermoseal-service
+sets the active roll consumedCm = lengthCm, status 'exhausted', exhaustedAt, and a new finishedEarly
+{at, by, writtenOffCm} on the roll (ThermosealRoll model) + an AuditLog THERMOSEAL_ROLL_FINISHED row.
+No inventory moves (the roll was debited when opened). Next Barcoded -> Unpressed pulls a new roll as
+before. Action ?/finishRoll (manufacturing:write). npm run check: 13 errors, baseline.

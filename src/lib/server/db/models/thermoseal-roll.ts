@@ -27,6 +27,8 @@ const thermosealRollSchema = new Schema({
 	openedBy: { _id: String, username: String },
 	openedForCycleId: String,      // bucket pass whose advance pulled this roll
 	exhaustedAt: Date,
+	// Finish Roll on the bucket board (2026-11-02): ran out before the gauge did.
+	finishedEarly: { at: Date, by: { _id: String, username: String }, writtenOffCm: Number },
 	retiredAt: Date,
 	retiredReason: String,
 	inventoryTxId: String          // the −1 roll consumption transaction
