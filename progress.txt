@@ -24996,3 +24996,9 @@ Source: branch feat/bucket-loose @ commit 39af83b7 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at commit 39af83b7
 What this deployment is for: Loose pile, audit Keep / Move To Loose / Move To Oven / Trash, never-scanned
 stickers born in the audited pass, audit scan queue fix (10 carts read as 13), "in progress" wording.
+
+2026-11-02 — master — Find a cart keeps focus between scans
+================================================================================
+The box was disabled during each lookup, which dropped focus; the operator had to click back in
+before every scan. Now never disabled, cleared on Enter, newest scan's answer shown (seq guard).
+File: buckets/+page.svelte. npm run check: 13 errors, baseline, none in touched files.

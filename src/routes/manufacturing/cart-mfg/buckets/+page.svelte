@@ -164,17 +164,23 @@
 			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed', hit: null };
 		}
 	}
+	// The box stays focused and is cleared on each scan, so the gun can keep
+	// scanning into it (user, 2026-11-02). The newest scan's answer wins.
+	let cartFindSeq = 0;
 	async function findCart() {
 		const code = cartFind.trim();
-		if (!code || cartFindBusy) return;
+		cartFind = '';
+		if (!code) return;
+		const seq = ++cartFindSeq;
 		cartFindBusy = true;
 		try {
 			const r = await lookupCart(code);
+			if (seq !== cartFindSeq) return;
 			cartFindOk = r.ok;
 			cartFindLine = r.line;
 			cartFindHit = r.hit;
 		} finally {
-			cartFindBusy = false;
+			if (seq === cartFindSeq) cartFindBusy = false;
 		}
 	}
 	// Pill colours for a cart's own status: the bucket stages follow the column
@@ -1500,11 +1506,11 @@
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 				<label for="cartFind" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Find a cart</label>
 				<div class="mt-1 flex items-center gap-2">
-					<input id="cartFind" type="text" bind:value={cartFind} autocomplete="off" disabled={cartFindBusy}
+					<input id="cartFind" type="text" bind:value={cartFind} autocomplete="off"
 						placeholder="Scan a cart QR…"
 						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findCart(); } }}
 						class="min-h-[44px] w-full min-w-0 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] placeholder:font-sans placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
-					<button type="button" onclick={findCart} disabled={cartFindBusy || !cartFind.trim()}
+					<button type="button" onclick={findCart} disabled={!cartFind.trim()}
 						class="min-h-[44px] shrink-0 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{cartFindBusy ? 'Looking…' : 'Find'}</button>
 				</div>
 				{#if cartFindHit}
