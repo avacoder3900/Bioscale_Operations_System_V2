@@ -25017,3 +25017,8 @@ File: buckets/+page.svelte. npm run check: 13 errors, baseline, none in touched 
 - Trash on a cart born loose and never in a bucket hard-deletes it (no debit happened); others scrap.
 - CLAUDE.md Common Pitfalls: barcode scan boxes must never block input (third time this bit us).
 Files: CLAUDE.md, bucket-service.ts, buckets/+page.svelte. npm run check: 13 errors, baseline.
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/9XFHZc5sxYgLZr2idxsq1jr1HCGy
+Source: branch feat/bucket-loose @ commit 2be01093 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 2be01093
+What this deployment is for: Loose list picker + scan bubble, glued-scan fix, Loose accepts any status.
