@@ -24987,3 +24987,12 @@ Bucket audit rework (user, 2026-11-02). Reviewed on a local dev server (worktree
 - Models: bucket-cycle missingActions enum + loose/oven, foreign action + adopted/born;
   bucket-transaction type + 'loose'. No new indexes.
 - npm run check: 13 errors, none in touched files (baseline; 0 new). bucket-loose tests 8/8.
+
+2026-11-02 — master — deploy log: 39af83b7 (bucket Loose pile + audit changes)
+================================================================================
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/7WV8teVjgh9Y7gwd3vwrfT69ibUz
+Source: branch feat/bucket-loose @ commit 39af83b7 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 39af83b7
+What this deployment is for: Loose pile, audit Keep / Move To Loose / Move To Oven / Trash, never-scanned
+stickers born in the audited pass, audit scan queue fix (10 carts read as 13), "in progress" wording.
