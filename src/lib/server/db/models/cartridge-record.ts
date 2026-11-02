@@ -29,6 +29,18 @@ const cartridgeRecordSchema = new Schema({
 		scannedInBy: operatorRef
 	},
 
+	// Loose (user, 2026-11-02): status 'loose' = alive, on no pass, waiting for a
+	// decision — Put In Bucket, Move To Oven or Trash. Written with the status and
+	// unset by whatever resolves it. See services/bucket-loose.ts.
+	loose: {
+		at: Date,
+		by: operatorRef,
+		fromBucketId: String,        // the pass it fell out of, if any (a sticker nobody scanned is born here with none)
+		fromCycleId: String,
+		priorStatus: String,         // what it was before it went loose
+		reason: String
+	},
+
 	backing: {
 		lotId: String,               // LEGACY: BackingLot._id (bucket barcode) — not written since WAX-FLOW-2
 		parentLotRecordId: String,   // LotRecord._id — the WI-01 batch
@@ -200,6 +212,7 @@ const cartridgeRecordSchema = new Schema({
 			// with the bucket to 'backing' ("Backed"). 'pressed' was the stage between
 			// Unpressed and Backed until 2026-10-02 — kept so historical rows validate.
 			'barcoded', 'unpressed', 'pressed',
+			'loose', // Loose pile (2026-11-02): alive, on no pass, awaiting Put In Bucket / Move To Oven / Trash — services/bucket-loose.ts
 			'raw', // pre-rename value (BUCKET-SYSTEM_PLAN), kept so historical rows still validate
 			'backing', 'wax_filling', 'wax_filled', 'wax_qc', 'wax_ready', 'wax_rejected', 'reagent_filling', 'reagent_filled',
 			// Reagent inspection flow (REAGENT-TOPSEAL-IMPLICIT, supersedes

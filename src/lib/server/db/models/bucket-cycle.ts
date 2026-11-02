@@ -44,17 +44,22 @@ const auditRunSchema = new Schema({
 	scanned: { type: [String], default: [] },   // every code scanned in the tub
 	present: { type: [String], default: [] },   // members that were found
 	missing: { type: [String], default: [] },   // members that were NOT scanned (see missingActions)
-	// What the operator chose for a missing member: scrapped, or taken off the pass
-	// as a loose cart. A member with no entry here stayed on the pass.
+	// What the operator chose for a missing member: 'discard' (Trash), 'loose'
+	// (Move To Loose), 'oven' (Move To Oven), or the legacy 'release' (taken off the
+	// pass, status unchanged — before Loose existed, 2026-11-02). A member with no
+	// entry here stayed on the pass.
 	missingActions: {
-		type: [{ _id: false, barcode: String, action: { type: String, enum: ['discard', 'release'] } }],
+		type: [{ _id: false, barcode: String, action: { type: String, enum: ['discard', 'release', 'loose', 'oven'] } }],
 		default: []
 	},
+	// Codes scanned in the tub that were not members: moved / discarded / returned
+	// strays, plus (2026-11-02) 'adopted' = a loose cart that joined this pass and
+	// 'born' = a sticker nobody had scanned, started in Loose.
 	foreign: {
 		type: [{
 			_id: false,
 			barcode: String,
-			action: { type: String, enum: ['moved', 'discarded', 'returned'] },
+			action: { type: String, enum: ['moved', 'discarded', 'returned', 'adopted', 'born'] },
 			fromCycleId: String,             // the open pass it was a member of, if any
 			destinationBucketId: String,     // 'moved'
 			destinationCycleId: String

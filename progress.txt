@@ -24954,3 +24954,36 @@ Retrieve this exact code: git checkout master at the commit titled "feat(robot-a
 What this deployment is for: see the entry above. BIMS side live now; the loop keeps working against the old daemon and
 old protocols (fallbacks), and gets the full gains once docs/HANDOFF-ARM-LOOP-SPEED-DEPLOY-2026-10-30.md is done:
 ot2-bridge 1.5.0 (md5 4b5691f80e560f16aa6d1500e5fce973) + both stage .py re-added to the library and deployed.
+
+
+================================================================================
+2026-11-02 — feat/bucket-loose — Loose pile for lost carts; audit Keep / Move To Loose / Move To Oven / Trash
+================================================================================
+Bucket audit rework (user, 2026-11-02). Reviewed on a local dev server (worktree
+../Bioscale_V2-wt-loose, port 5191), then merged to master at the user's request.
+
+- New cart status 'loose' (CartridgeRecord enum + a `loose` stamp: at/by/fromBucketId/fromCycleId/
+  priorStatus/reason). Pure helpers + unit tests in services/bucket-loose.ts / bucket-loose.test.ts.
+- Audit, missing member: Keep · Move To Loose · Move To Oven · Trash (Trash = old "Write off";
+  "Take off pass" removed from the UI, 'release' still accepted for old audits). Move To Oven =
+  status 'backing' on no pass with backing.manualBackedAt, same as State Change "No bucket", so
+  wax filling loads it. Journal only required for Trash.
+- Audit, scans: a sticker nobody ever scanned no longer blocks the submit — it starts life in the
+  audited pass at that pass's stage (shell + label debited like a scan-in). A loose cart found in the
+  tub joins the audited pass. Big "Scanned" counter above Just scanned.
+- Fix: audit scan box counted 13 scans for 10 carts. Root cause: the box was disabled during each
+  ?/auditScan round trip, so a gun typing the next label lost characters and the remainder arrived as
+  separate fragment scans. Now never disabled; Enter queues, one worker posts in order (the scan-in
+  box's 2026-09-25 pattern). Server backstop: an unknown code that is not a whole cart barcode
+  (UUID or CART-000123, isCartBarcode) is 'ineligible', never born.
+- Loose panel under the board: scan a cart in (members are pulled off their pass; unknown stickers
+  are born here), then Put In Bucket (any open pass, cart takes its stage), Move To Oven, or Trash,
+  per cart or all at once. No badge anywhere in the Loose flow. A loose cart scanned into a Barcoded
+  pass on the board is adopted instead of refused. No inventory moves except Trash (shell + label scrap).
+- Wording: "in process" → "in progress" (lanes, pull button, errors, ledger reason); header blurb
+  removed; New Bucket, Master Override, Cart State Change, Badge Required: On/Off, Wax Filling,
+  Scan bucket QR…, Scan cart QR, Change Log, Bucket Log. Find a cart moved to the top-right of the
+  controls strip.
+- Models: bucket-cycle missingActions enum + loose/oven, foreign action + adopted/born;
+  bucket-transaction type + 'loose'. No new indexes.
+- npm run check: 13 errors, none in touched files (baseline; 0 new). bucket-loose tests 8/8.

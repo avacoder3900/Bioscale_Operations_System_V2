@@ -51,6 +51,8 @@ import { splitMergedBarcodes, hardDeleteUnfinalizedCartridges } from './cartridg
 import { generateBarcode } from './barcode-generator';
 import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, type ConsumeResult } from './thermoseal-service';
 import { lotRemaining, fifoLot } from './lot-remaining';
+import { LOOSE_STATUS, LOOSE_LABEL, partitionMissingActions, type MissingAction, type LooseDecision } from './bucket-loose';
+export { LOOSE_STATUS, LOOSE_LABEL, type MissingAction, type LooseDecision } from './bucket-loose';
 
 export const BUCKET_STAGES = ['barcoded', 'unpressed', 'backing'] as const;
 export type BucketStage = (typeof BUCKET_STAGES)[number];
@@ -131,6 +133,7 @@ export function boardStage(s: unknown): BucketStage | null {
 export function stageLabel(s: unknown): string {
 	if (isBucketStage(s)) return STAGE_LABELS[s];
 	if (s === LEGACY_PRESSED_STAGE) return 'Pressed (legacy)';
+	if (s === LOOSE_STATUS) return LOOSE_LABEL;
 	return typeof s === 'string' && s ? s : 'unknown';
 }
 
@@ -158,7 +161,7 @@ interface TxInput {
 	bucketId: string;
 	cycleId?: string | null;
 	type: 'mint' | 'relabel' | 'nickname' | 'create' | 'scan_in' | 'unscan' | 'advance' | 'scrap' | 'consume' | 'oven'
-		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit' | 'pull';
+		| 'merge_in' | 'merge_out' | 'release' | 'quarantine' | 'retire' | 'void' | 'audit' | 'pull' | 'loose';
 	fromStage?: string | null;
 	toStage?: string | null;
 	qtyBefore?: number;
@@ -499,6 +502,16 @@ export function assertNotMergedBarcode(code: string): void {
 	if (splitMergedBarcodes(code ?? '')) {
 		throw new BucketError(`Two barcodes were read as one (${(code ?? '').trim().length} characters). Scan one cart at a time.`);
 	}
+}
+
+/**
+ * A whole cart label: a minted UUID sticker, or a legacy CART-000123. Used where
+ * an unknown code would create a cart without a human looking at it (an audit's
+ * never-scanned stickers), so a partial read can never become a cart.
+ */
+export function isCartBarcode(code: string): boolean {
+	const s = (code ?? '').trim();
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) || /^CART-\d{6}$/i.test(s);
 }
 
 export async function assertNotBucketLabel(code: string): Promise<void> {
@@ -924,8 +937,16 @@ export async function scanCartIn(input: ScanCartInput): Promise<{ quantity: numb
 
 	if (!cycle || cycle.status !== 'open') throw new BucketError('Pass is not open.', 404);
 	if (cycle.stage !== 'barcoded') throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} is at ${STAGE_LABELS[cycle.stage as BucketStage]} — carts can only be scanned in while a bucket is at Barcoded.`);
-	if (cycle.inProcessAt) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has been pulled into in process — carts can no longer be scanned into it.`, 409);
+	if (cycle.inProcessAt) throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has been pulled into in progress — carts can no longer be scanned into it.`, 409);
 	if (bucketLabelId) throw new BucketError(`${barcode} is the QR sticker on production bucket ${bucketLabelId}, not a cartridge.`, 409, 'BUCKET_LABEL');
+	if (existing && existing.status === LOOSE_STATUS) {
+		// A loose cart scanned into a Barcoded pass joins it (user, 2026-11-02) —
+		// that is the "put it in any bucket" promise of Loose. Nothing is debited:
+		// its shell + label were paid for at its first birth, or it was born loose
+		// from a sticker nobody scanned (scanIntoLoose / an audit).
+		const quantity = await adoptLooseCarts(cycle, [barcode], { _id: gate.operator._id, username: gate.operator.username }, input.user, `scanned into ${cycleLabel(cycle.bucketId, cycle.cycleNumber)} on the board`);
+		return { quantity, barcode, operator: gate.operator.username };
+	}
 	if (existing) {
 		const where = existing.bucket?.bucketId ? ` (in bucket ${existing.bucket.bucketId})` : '';
 		throw new BucketError(`${barcode} already exists as a cartridge with status "${existing.status ?? 'unknown'}"${where} — a sticker is born once.`, 409);
@@ -1140,7 +1161,7 @@ export async function advanceCycle(input: AdvanceCycleInput): Promise<{ cycle: a
 	// Lanes (2026-10-05): Done only exists in an in-process lane. A pass is pulled
 	// (pullIntoProcess — the badge handoff) before it can be finished, at both stages.
 	if ((from === 'barcoded' || from === 'unpressed') && !cycle.inProcessAt) {
-		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has not been pulled into in process yet — pull it with a badge before marking it done.`, 409, 'NOT_PULLED');
+		throw new BucketError(`${cycleLabel(cycle.bucketId, cycle.cycleNumber)} has not been pulled into in progress yet — pull it with a badge before marking it done.`, 409, 'NOT_PULLED');
 	}
 
 	const discardIds = cleanCodes(input.discardedIds);
@@ -1277,7 +1298,7 @@ export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: stri
 	// Barcoded pulls toward Unpressed, Unpressed toward Backed. A legacy 'pressed' pass sits in the Unpressed column (boardStage), so it pulls the same way.
 	const pullable = ['barcoded', 'unpressed', LEGACY_PRESSED_STAGE];
 	if (!pullable.includes(cycle.stage)) throw new BucketError(`${label} is at ${stageLabel(cycle.stage)} — there is nothing to pull it into.`);
-	if (cycle.inProcessAt) throw new BucketError(`${label} is already in process${cycle.inProcessBy?.username ? ` (${cycle.inProcessBy.username})` : ''}.`, 409);
+	if (cycle.inProcessAt) throw new BucketError(`${label} is already in progress${cycle.inProcessBy?.username ? ` (${cycle.inProcessBy.username})` : ''}.`, 409);
 	if ((cycle.cartridgeIds ?? []).length === 0) throw new BucketError('Scan at least one cart into the bucket before pulling it.');
 	const toward = nextStage(cycle.stage as BucketStatus);
 	const towardLabel = toward ? STAGE_LABELS[toward] : STAGE_LABELS.backing;
@@ -1307,7 +1328,7 @@ export async function pullIntoProcess(input: PullInput): Promise<{ cycleId: stri
 	const members: string[] = cycle.cartridgeIds ?? [];
 	await logTx({
 		bucketId: cycle.bucketId, cycleId: cycle._id, type: 'pull', fromStage: cycle.stage, toStage: cycle.stage,
-		qtyBefore: members.length, qtyAfter: members.length, reason: `pulled into ${towardLabel} — in process`, relatedId: cycle.custodyId ?? undefined,
+		qtyBefore: members.length, qtyAfter: members.length, reason: `pulled into ${towardLabel} — in progress`, relatedId: cycle.custodyId ?? undefined,
 		cartridgeIds: members, operator: gate.operator, enteredBy: input.user, attribution: { ...gate.attribution, custodyId }
 	});
 	await audit('bucket_cycles', cycle._id, 'PULL', gate.operator, { inProcessAt: now, inProcessBy: op.username, custodyId, badgeId: gate.badgeId ?? null, enteredBy: input.user.username }, { custodyId: cycle.custodyId ?? null });
@@ -1369,6 +1390,249 @@ export async function inOvenCarts(limit = 200): Promise<{ count: number; ids: st
 		CartridgeRecord.find(q).select('_id').sort({ statusUpdatedOn: -1 }).limit(limit).lean() as any as Promise<{ _id: string }[]>
 	]);
 	return { count, ids: rows.map(r => r._id) };
+}
+
+// ── Loose pile (user, 2026-11-02) ─────────────────────────────────────────
+// See bucket-loose.ts for what Loose is. Three shared writers — setLoose,
+// sendToOven, adoptLooseCarts — so the audit, the board scan-in and the Loose
+// panel cannot drift apart.
+
+/** Carts go loose: status 'loose' plus the stamp saying where they fell out of. Pass membership is the caller's job. */
+async function setLoose(ids: string[], from: { bucketId: string | null; cycleId: string | null; stage: string | null }, by: Operator, reason: string, now: Date): Promise<void> {
+	const stamp: Record<string, unknown> = { at: now, by, reason };
+	if (from.bucketId) stamp.fromBucketId = from.bucketId;
+	if (from.cycleId) stamp.fromCycleId = from.cycleId;
+	if (from.stage) stamp.priorStatus = from.stage;
+	const set: Record<string, unknown> = { status: LOOSE_STATUS, statusUpdatedOn: now.toISOString(), loose: stamp };
+	if (from.stage) set.priorStatus = from.stage;
+	await CartridgeRecord.updateMany(
+		{ _id: { $in: ids } },
+		{ $set: set, $push: { notes: { _id: generateId(), body: `Loose: ${reason}`, phase: 'bucket', author: by, createdAt: now } } }
+	);
+}
+
+/**
+ * Straight to Backed on no pass — the place Move to oven leaves carts: counted as
+ * Backed, listed under "In oven", loadable by wax filling. Same stamp State
+ * Change's no-bucket override writes; manualBackedAt is what wax filling's cancel
+ * path reads as proof of a real cart (a never-bucketed cart without it would be
+ * hard-deleted as a test-mode synthetic).
+ */
+async function sendToOven(ids: string[], priorStatus: string | null, by: Operator, reason: string, now: Date): Promise<void> {
+	const set: Record<string, unknown> = {
+		status: BACKED_STATUS, statusUpdatedOn: now.toISOString(),
+		'backing.recordedAt': now, 'backing.operator': by, 'backing.manualBackedAt': now
+	};
+	if (priorStatus) set.priorStatus = priorStatus;
+	await CartridgeRecord.updateMany(
+		{ _id: { $in: ids } },
+		{ $set: set, $unset: { loose: 1 }, $push: { notes: { _id: generateId(), body: `Moved to oven: ${reason}`, phase: 'bucket', author: by, createdAt: now } } }
+	);
+}
+
+/**
+ * Loose carts join an open pass and take its stage. Shared by the board scan-in
+ * (a loose cart scanned into a Barcoded pass), the audit (a loose cart found in
+ * the tub) and the Loose panel's Put In Bucket. No inventory moves. Returns the
+ * pass's new quantity.
+ */
+async function adoptLooseCarts(cycle: any, ids: string[], by: Operator, user: Operator, reason: string): Promise<number> {
+	const before: number = cycle.quantity ?? (cycle.cartridgeIds ?? []).length;
+	const after = before + ids.length;
+	const now = new Date();
+	const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
+	await BucketCycle.updateOne({ _id: cycle._id }, { $addToSet: { cartridgeIds: { $each: ids } }, $set: { quantity: after } });
+	await CartridgeRecord.updateMany(
+		{ _id: { $in: ids } },
+		{
+			$set: {
+				status: cycle.stage, priorStatus: LOOSE_STATUS, statusUpdatedOn: now.toISOString(),
+				bucket: { bucketId: cycle.bucketId, cycleId: cycle._id, scannedInAt: now, scannedInBy: by },
+				'backing.bucketCycleId': cycle._id, 'backing.bucketBarcode': cycle.bucketId
+			},
+			$unset: { loose: 1 },
+			$push: { notes: { _id: generateId(), body: `From Loose into ${label} (${stageLabel(cycle.stage)}): ${reason}`, phase: 'bucket', author: by, createdAt: now } }
+		}
+	);
+	await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'merge_in', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: after, reason: `${ids.length} loose cart(s) put in: ${reason}`, cartridgeIds: ids, operator: by, enteredBy: user });
+	await audit('bucket_cycles', cycle._id, 'LOOSE_IN', by, { cartridgeIds: ids, quantity: after, reason }, { quantity: before });
+	return after;
+}
+
+export interface LooseCart {
+	cartridgeId: string;
+	since: string | null;         // when it went loose
+	by: string | null;
+	fromBucketId: string | null;  // the pass it fell out of, if any
+	fromLabel: string | null;     // "BKT-000123 #4"
+	priorStatus: string | null;   // what it was before (null = born loose)
+	reason: string | null;
+}
+
+/** Every cart in the Loose pile, newest first. */
+export async function looseCarts(limit = 500): Promise<{ count: number; carts: LooseCart[] }> {
+	await connectDB();
+	const q = { status: LOOSE_STATUS };
+	const [count, rows] = await Promise.all([
+		CartridgeRecord.countDocuments(q),
+		CartridgeRecord.find(q).select('_id statusUpdatedOn loose').sort({ statusUpdatedOn: -1 }).limit(limit).lean() as any as Promise<any[]>
+	]);
+	const cycleIds = Array.from(new Set(rows.map(r => r.loose?.fromCycleId).filter(Boolean))) as string[];
+	const cycles = cycleIds.length ? await BucketCycle.find({ _id: { $in: cycleIds } }).select('_id bucketId cycleNumber').lean() as any[] : [];
+	const labelOf = new Map<string, string>(cycles.map(c => [c._id, cycleLabel(c.bucketId, c.cycleNumber)]));
+	return {
+		count,
+		carts: rows.map(r => ({
+			cartridgeId: r._id,
+			since: r.loose?.at ? new Date(r.loose.at).toISOString() : (r.statusUpdatedOn ?? null),
+			by: r.loose?.by?.username ?? null,
+			fromBucketId: r.loose?.fromBucketId ?? null,
+			fromLabel: r.loose?.fromCycleId ? (labelOf.get(r.loose.fromCycleId) ?? null) : null,
+			priorStatus: r.loose?.priorStatus ?? null,
+			reason: r.loose?.reason ?? null
+		}))
+	};
+}
+
+export interface LooseScanInput { barcode: string; reason?: string; user: Operator; }
+export interface LooseScanResult {
+	barcode: string;
+	outcome: 'born' | 'pulled' | 'freed' | 'already';  // born: new sticker · pulled: off an open pass · freed: was on no pass · already: was loose
+	from: string | null;
+	priorStatus: string | null;
+}
+
+/**
+ * A cart scanned into the Loose pile. An unknown sticker is born here; a member
+ * of an open pass is pulled off it (the pass closes if that empties it, like an
+ * override); a cart on no pass (in oven, taken off) is simply set loose; a loose
+ * cart is reported as already here. Anything past the buckets (wax filled, …) is
+ * refused — that is State Change's job. No badge, no inventory.
+ */
+export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanResult> {
+	await connectDB();
+	const barcode = (input.barcode ?? '').trim();
+	if (!barcode) throw new BucketError('Scan the cartridge QR.');
+	if (/^BKT-\d+$/i.test(barcode)) throw new BucketError('That is a bucket id, not a cartridge sticker.');
+	if (isBadgeCode(barcode)) throw new BucketError('That is a badge, not a cartridge sticker.', 400, 'BADGE');
+	const [cart, bucketLabelId] = await Promise.all([
+		CartridgeRecord.findById(barcode).select('_id status bucket').lean() as Promise<any>,
+		resolveBucketId(barcode)
+	]);
+	if (bucketLabelId) throw new BucketError(`${barcode} is the QR sticker on production bucket ${bucketLabelId}, not a cartridge.`, 409, 'BUCKET_LABEL');
+	const now = new Date();
+	const by = input.user;
+	const why = (input.reason ?? '').trim();
+
+	if (!cart) {
+		const reason = `scanned into Loose on the board, never scanned into a bucket${why ? `: ${why}` : ''}`;
+		try {
+			await CartridgeRecord.create({
+				_id: barcode, status: LOOSE_STATUS, statusUpdatedOn: now.toISOString(),
+				loose: { at: now, by, reason },
+				notes: [{ _id: generateId(), body: `Born loose: ${reason}`, phase: 'bucket', author: by, createdAt: now }]
+			});
+		} catch (e: any) {
+			if (e?.code === 11000) throw new BucketError(`${barcode} was just scanned somewhere else.`, 409);
+			throw e;
+		}
+		await audit('cartridge_records', barcode, 'INSERT', by, { status: LOOSE_STATUS, bornLoose: true, reason });
+		return { barcode, outcome: 'born', from: null, priorStatus: null };
+	}
+
+	const status = String(cart.status ?? '');
+	if (status === LOOSE_STATUS) return { barcode, outcome: 'already', from: cart.bucket?.bucketId ?? null, priorStatus: null };
+	if (!isBucketStatus(status)) throw new BucketError(`${barcode} is ${status} — past the buckets. Use State Change for it.`);
+
+	const reason = `scanned into Loose on the board${why ? `: ${why}` : ''}`;
+	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: barcode }).lean() as any;
+	if (home) {
+		const label = cycleLabel(home.bucketId, home.cycleNumber);
+		const before: number = home.quantity ?? (home.cartridgeIds ?? []).length;
+		const after = Math.max(0, before - 1);
+		await BucketCycle.updateOne({ _id: home._id }, { $pull: { cartridgeIds: barcode }, $set: { quantity: after } });
+		await logTx({ bucketId: home.bucketId, cycleId: home._id, type: 'loose', fromStage: home.stage, toStage: LOOSE_STATUS, qtyBefore: before, qtyAfter: after, reason: `${barcode} ${reason}`, cartridgeIds: [barcode], operator: by });
+		await setLoose([barcode], { bucketId: home.bucketId, cycleId: home._id, stage: status }, by, `${reason} — pulled out of ${label}`, now);
+		if (after === 0) await closeCycle({ ...home, quantity: 0 }, 'consumed', by);
+		await audit('cartridge_records', barcode, 'LOOSE', by, { status: LOOSE_STATUS, fromCycleId: home._id, reason }, { status, cycleId: home._id });
+		return { barcode, outcome: 'pulled', from: label, priorStatus: status };
+	}
+	await setLoose([barcode], { bucketId: cart.bucket?.bucketId ?? null, cycleId: cart.bucket?.cycleId ?? null, stage: status }, by, reason, now);
+	await audit('cartridge_records', barcode, 'LOOSE', by, { status: LOOSE_STATUS, reason }, { status });
+	return { barcode, outcome: 'freed', from: cart.bucket?.bucketId ?? null, priorStatus: status };
+}
+
+export interface LooseResolveInput {
+	barcodes: string[];
+	decision: LooseDecision;        // 'bucket' = Put In Bucket · 'oven' = Move To Oven · 'trash' = Trash
+	destinationBucketId?: string;   // 'bucket': sticker or BKT id of a bucket with an open pass
+	reason?: string;                // optional, goes on the notes + ledger rows
+	user: Operator;
+}
+export interface LooseResolveResult {
+	barcodes: string[];
+	decision: LooseDecision;
+	destination: { bucketId: string; cycleId: string; cycleNumber: number; stage: string } | null;
+}
+
+/**
+ * Decide for carts in the Loose pile: Put In Bucket (they join that bucket's open
+ * pass and take its stage, whatever it is), Move To Oven (Backed on no pass — wax
+ * filling loads them), or Trash (scrapped; shell + label written off as scrap
+ * against no lot). No badge (user, 2026-11-02: badges slow the floor down).
+ */
+export async function resolveLoose(input: LooseResolveInput): Promise<LooseResolveResult> {
+	await connectDB();
+	const ids = cleanCodes(input.barcodes);
+	if (ids.length === 0) throw new BucketError('Pick at least one loose cart.');
+	const rows = await CartridgeRecord.find({ _id: { $in: ids } }).select('_id status loose').lean() as any[];
+	const notLoose = ids.filter(id => rows.find(r => r._id === id)?.status !== LOOSE_STATUS);
+	if (notLoose.length) throw new BucketError(`Not in Loose any more: ${notLoose.join(', ')} — reload the board.`, 409);
+	const now = new Date();
+	const by = input.user;
+	const why = (input.reason ?? '').trim();
+	// Ledger rows go on the bucket each cart fell out of (when known), so a pass's
+	// log tells the whole story of its lost carts.
+	const fromBuckets = Array.from(new Set(rows.map(r => r.loose?.fromBucketId).filter(Boolean))) as string[];
+	const ofBucket = (bucketId: string) => rows.filter(r => r.loose?.fromBucketId === bucketId);
+
+	if (input.decision === 'bucket') {
+		const destRaw = (input.destinationBucketId ?? '').trim();
+		if (!destRaw) throw new BucketError('Pick the bucket the cart(s) go into.');
+		const destId = await resolveBucketId(destRaw);
+		if (!destId) throw new BucketError(`"${destRaw}" is not a known bucket.`, 404);
+		const open = await getOpenCycle(destId);
+		if (!open) throw new BucketError(`Bucket ${destId} has no open pass — start one on the board first.`);
+		await adoptLooseCarts(open, ids, by, by, `Put In Bucket from Loose${why ? `: ${why}` : ''}`);
+		return { barcodes: ids, decision: 'bucket', destination: { bucketId: destId, cycleId: open._id, cycleNumber: open.cycleNumber, stage: open.stage } };
+	}
+
+	if (input.decision === 'oven') {
+		await sendToOven(ids, LOOSE_STATUS, by, `from Loose${why ? `: ${why}` : ''}`, now);
+		for (const bucketId of fromBuckets) {
+			const mine = ofBucket(bucketId);
+			await logTx({ bucketId, cycleId: mine[0]?.loose?.fromCycleId ?? null, type: 'oven', fromStage: LOOSE_STATUS, toStage: BACKED_STAGE, qtyBefore: 0, qtyAfter: 0, reason: `${mine.length} loose cart(s) moved to oven${why ? `: ${why}` : ''}`, cartridgeIds: mine.map(r => r._id), operator: by });
+		}
+		for (const id of ids) await audit('cartridge_records', id, 'LOOSE_TO_OVEN', by, { status: BACKED_STATUS, reason: why || undefined }, { status: LOOSE_STATUS });
+		return { barcodes: ids, decision: 'oven', destination: null };
+	}
+
+	const reason = `trashed from Loose${why ? `: ${why}` : ''}`;
+	await CartridgeRecord.updateMany(
+		{ _id: { $in: ids } },
+		{ $set: { status: 'scrapped', priorStatus: LOOSE_STATUS, statusUpdatedOn: now.toISOString() }, $unset: { loose: 1 }, $push: { notes: { _id: generateId(), body: `Trashed from Loose${why ? `: ${why}` : ''}`, phase: 'bucket', author: by, createdAt: now } } }
+	);
+	const removalId = generateId();
+	await ManualCartridgeRemoval.create({ _id: removalId, cartridgeIds: ids, bucketId: fromBuckets.length === 1 ? fromBuckets[0] : undefined, cartridgeCount: ids.length, reason, journal: why || undefined, operator: by, removedAt: now });
+	for (const pn of [SHELL_PART, LABEL_PART]) {
+		await debitScrap(pn, undefined, ids.length, null, by, reason, `Loose pile: ${ids.length}x ${pn} trashed${why ? ` — ${why}` : ''}`);
+	}
+	for (const bucketId of fromBuckets) {
+		const mine = ofBucket(bucketId);
+		await logTx({ bucketId, cycleId: mine[0]?.loose?.fromCycleId ?? null, type: 'scrap', fromStage: LOOSE_STATUS, toStage: LOOSE_STATUS, qtyBefore: 0, qtyAfter: 0, reason: `${mine.length} loose cart(s) ${reason}`, journal: why || undefined, relatedId: removalId, cartridgeIds: mine.map(r => r._id), operator: by });
+	}
+	for (const id of ids) await audit('cartridge_records', id, 'LOOSE_TRASH', by, { status: 'scrapped', reason: why || undefined }, { status: LOOSE_STATUS });
+	return { barcodes: ids, decision: 'trash', destination: null };
 }
 
 export interface ReturnInput {
@@ -1627,7 +1891,9 @@ export async function reportResidual(input: ResidualInput): Promise<{ bucket: an
 
 export interface AuditScanResult {
 	barcode: string;
-	finding: 'member' | 'foreign' | 'ineligible' | 'unknown' | 'bucket';
+	// 'loose' (2026-11-02): a cart from the Loose pile found in the tub — it can join this pass.
+	// 'unknown' is a sticker nobody ever scanned — it can start life in Loose.
+	finding: 'member' | 'foreign' | 'ineligible' | 'unknown' | 'bucket' | 'loose';
 	status: string | null;
 	stage: BucketStage | null;
 	homeBucketId: string | null;   // the open pass this cart is a member of, if any
@@ -1651,11 +1917,15 @@ export async function auditScan(cycleId: string, barcode: string): Promise<Audit
 	if (asBucket) return { ...base, finding: 'bucket', note: `${code} is bucket ${asBucket}, not a cart.` };
 
 	const cart = await CartridgeRecord.findById(code).select('_id status').lean() as any;
-	if (!cart) return { ...base, finding: 'unknown', note: `${code} is not a known cartridge — it was never scanned into a bucket.` };
+	if (!cart && !isCartBarcode(code)) return { ...base, finding: 'ineligible', note: `${code} is not a full cart barcode (${code.length} characters) — a partial read. Remove it and scan again.` };
+	if (!cart) return { ...base, finding: 'unknown', note: `${code} is not a known cartridge — it was never scanned into a bucket. It starts life in this bucket.` };
 
 	const status = String(cart.status ?? '');
 	if ((cycle.cartridgeIds ?? []).includes(code)) {
 		return { ...base, status, stage: boardStage(status), finding: 'member', note: `${code} belongs here.` };
+	}
+	if (status === LOOSE_STATUS) {
+		return { ...base, status, finding: 'loose', note: `${code} is in the Loose pile — Put In Bucket adds it to this pass.` };
 	}
 
 	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: code }).select('_id bucketId cycleNumber stage').lean() as any;
@@ -1679,10 +1949,13 @@ export interface AuditCycleInput {
 	scanned: string[];                                            // every code scanned in the tub
 	moves?: { barcode: string; destinationBucketId: string }[];    // foreign carts → where they belong
 	discards?: string[];                                          // foreign carts to scrap
-	// Members that were not in the tub: keep them on the pass (default), scrap them,
-	// or take them off the pass without scrapping (they are somewhere else).
-	missingActions?: { barcode: string; action: 'discard' | 'release' }[];
-	journal?: string;                                             // required when anything is removed
+	// Members that were not in the tub: keep them on the pass (default), Trash them
+	// ('discard'), Move To Loose ('loose'), Move To Oven ('oven'), or the legacy
+	// 'release' (off the pass, status unchanged).
+	missingActions?: { barcode: string; action: MissingAction }[];
+	adopt?: string[];                                             // loose carts found in the tub: they join this pass (2026-11-02)
+	born?: string[];                                              // stickers nobody ever scanned, found in the tub: they start life in this pass
+	journal?: string;                                             // required when anything is trashed
 	badge?: string | null;                                        // scanned badge code; required when carts are discarded or written off and badge mode is 'required'
 	user: Operator;                                               // the web session (= enteredBy)
 }
@@ -1696,8 +1969,12 @@ export interface AuditCycleResult {
 	missing: string[];
 	moved: { barcode: string; fromCycleId: string | null; destinationBucketId: string; destinationCycleId: string; newPass: boolean; returned: boolean }[];
 	discarded: string[];
-	missingDiscarded: string[];   // members not found, scrapped
-	missingReleased: string[];    // members not found, taken off the pass as loose carts
+	missingDiscarded: string[];   // members not found, trashed
+	missingReleased: string[];    // members not found, taken off the pass (legacy, pre-Loose)
+	missingLoose: string[];       // members not found, moved to the Loose pile
+	missingOven: string[];        // members not found, sent straight to Backed on no pass
+	adopted: string[];            // loose carts found in the tub, now members
+	born: string[];               // unknown stickers found in the tub, born in this pass
 	quantityAfter: number;
 }
 
@@ -1718,20 +1995,33 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	const members: string[] = cycle.cartridgeIds ?? [];
 	const present = members.filter(id => scanned.includes(id));
 	const missing = members.filter(id => !scanned.includes(id));
-	const foreign = scanned.filter(id => !members.includes(id));
+	// Loose carts found in the tub join this pass; stickers nobody ever scanned
+	// start life in Loose (user, 2026-11-02). Neither is a stray to move or discard.
+	const adopt = cleanCodes(input.adopt).filter(id => scanned.includes(id) && !members.includes(id));
+	const born = cleanCodes(input.born).filter(id => scanned.includes(id) && !members.includes(id) && !adopt.includes(id));
+	const foreign = scanned.filter(id => !members.includes(id) && !adopt.includes(id) && !born.includes(id));
 
 	const discards = cleanCodes(input.discards).filter(id => foreign.includes(id));
 	const moves = (input.moves ?? []).filter(m => foreign.includes(m.barcode) && !discards.includes(m.barcode));
 	const undecided = foreign.filter(id => !discards.includes(id) && !moves.some(m => m.barcode === id));
 	if (undecided.length) throw new BucketError(`Say what happens to: ${undecided.join(', ')} — move each one to a bucket or discard it.`);
 
-	const missingActions = (input.missingActions ?? []).filter(m => missing.includes(m.barcode));
-	const missingDiscards = missingActions.filter(m => m.action === 'discard').map(m => m.barcode);
-	const missingReleases = missingActions.filter(m => m.action === 'release').map(m => m.barcode);
+	const plan = partitionMissingActions(missing, input.missingActions);
+	const { discards: missingDiscards, releases: missingReleases, loose: missingLoose, oven: missingOven } = plan;
+	const goneIds = [...missingDiscards, ...missingReleases, ...missingLoose, ...missingOven];
+	const missingActions: { barcode: string; action: MissingAction }[] = [
+		...missingDiscards.map(barcode => ({ barcode, action: 'discard' as const })),
+		...missingReleases.map(barcode => ({ barcode, action: 'release' as const })),
+		...missingLoose.map(barcode => ({ barcode, action: 'loose' as const })),
+		...missingOven.map(barcode => ({ barcode, action: 'oven' as const }))
+	];
 
+	// A journal is required when carts are trashed (and for the legacy take-off).
+	// Move To Loose / Move To Oven need none: the audit itself is the reason, and
+	// the cart carries where it came from (user, 2026-11-02).
 	const journal = (input.journal ?? '').trim();
 	if ((discards.length || missingDiscards.length || missingReleases.length) && !journal) {
-		throw new BucketError('A journal entry describing why carts were discarded or taken off the pass is required.');
+		throw new BucketError('A journal entry describing why carts were trashed or taken off the pass is required.');
 	}
 	// Discarding carts (a stray discarded, a missing member written off) is
 	// badge-gated (user, 2026-09-30); moves and take-offs are not, but a badge
@@ -1750,6 +2040,24 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	if (unknown.length) throw new BucketError(`Not known cartridges: ${unknown.join(', ')}`);
 	const tooFar = carts.filter(c => !isBucketStatus(c.status));
 	if (tooFar.length) throw new BucketError(`Past the buckets, so the board will not move them: ${tooFar.map(c => `${c._id} (${c.status})`).join(', ')} — take them out of the tub.`);
+	if (adopt.length) {
+		const rows = await CartridgeRecord.find({ _id: { $in: adopt } }).select('_id status').lean() as any[];
+		const notLoose = adopt.filter(id => rows.find(r => r._id === id)?.status !== LOOSE_STATUS);
+		if (notLoose.length) throw new BucketError(`Not in Loose any more: ${notLoose.join(', ')} — scan them again.`, 409);
+	}
+	if (born.length) {
+		const badgeCode = born.find(id => isBadgeCode(id));
+		if (badgeCode) throw new BucketError(`${badgeCode} is a badge, not a cart — remove it from the scans.`);
+		const partial = born.filter(id => !isCartBarcode(id));
+		if (partial.length) throw new BucketError(`Not full cart barcodes (partial reads): ${partial.join(', ')} — remove them and scan again.`);
+		const [known, labels] = await Promise.all([
+			CartridgeRecord.find({ _id: { $in: born } }).select('_id').lean() as Promise<any[]>,
+			Promise.all(born.map(id => resolveBucketId(id)))
+		]);
+		if (known.length) throw new BucketError(`Already cartridges: ${known.map(k => k._id).join(', ')} — scan them again.`, 409);
+		const asBucket = born.filter((_, i) => labels[i]);
+		if (asBucket.length) throw new BucketError(`Bucket stickers, not carts: ${asBucket.join(', ')} — remove them from the scans.`);
+	}
 
 	// Where each foreign cart is a member today (so it can be pulled out of that pass).
 	const homes = foreign.length
@@ -1869,12 +2177,14 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		}
 	}
 
-	// Members that were not in the tub and the operator chose to remove. Scrapped
-	// carts leave the pass and give their parts back as scrap; released carts leave
-	// the pass and stay alive as loose carts (the leftover flow can re-home them).
-	if (missingDiscards.length || missingReleases.length) {
-		const goneIds = [...missingDiscards, ...missingReleases];
+	// Members that were not in the tub and the operator chose to remove. Trashed
+	// carts leave the pass and give their parts back as scrap; released carts (the
+	// legacy take-off) leave with their status unchanged; Move To Loose parks them
+	// in the Loose pile; Move To Oven sends them straight to Backed on no pass, where
+	// wax filling can load them (user, 2026-11-02).
+	if (goneIds.length) {
 		const before = cycle.quantity ?? members.length;
+		let running = before;
 		await BucketCycle.updateOne(
 			{ _id: cycle._id },
 			{ $pull: { cartridgeIds: { $in: goneIds } }, $set: { quantity: Math.max(0, before - goneIds.length) } }
@@ -1893,15 +2203,61 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 			for (const pn of partsAtStage(stage)) {
 				await debitScrap(pn, lotFor(cycle.sourceLots, pn), missingDiscards.length, cycle._id, by, `audit write-off: ${journal}`, `Audit of ${cycle.bucketId}: ${missingDiscards.length}x ${pn} at ${STAGE_LABELS[stage]} written off (not in the tub) — ${journal}`);
 			}
-			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scrap', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: Math.max(0, before - missingDiscards.length), reason: `audit: ${missingDiscards.length} member(s) not in the tub, written off: ${journal}`, journal, cartridgeIds: missingDiscards, operator: by, enteredBy: input.user, attribution });
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scrap', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: running, qtyAfter: Math.max(0, running - missingDiscards.length), reason: `audit: ${missingDiscards.length} member(s) not in the tub, trashed: ${journal}`, journal, cartridgeIds: missingDiscards, operator: by, enteredBy: input.user, attribution });
+			running = Math.max(0, running - missingDiscards.length);
 		}
 		if (missingReleases.length) {
 			await CartridgeRecord.updateMany(
 				{ _id: { $in: missingReleases } },
 				{ $set: { statusUpdatedOn: now.toISOString() }, $push: { notes: { _id: generateId(), body: `Not found in bucket ${cycle.bucketId} during an audit, taken off the pass: ${journal}`, phase: 'bucket', author: by, createdAt: now } } }
 			);
-			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: Math.max(0, before - goneIds.length), reason: `audit: ${missingReleases.length} member(s) not in the tub, taken off the pass (still loose): ${journal}`, journal, cartridgeIds: missingReleases, operator: input.user });
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'unscan', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: running, qtyAfter: Math.max(0, running - missingReleases.length), reason: `audit: ${missingReleases.length} member(s) not in the tub, taken off the pass (still loose): ${journal}`, journal, cartridgeIds: missingReleases, operator: input.user });
+			running = Math.max(0, running - missingReleases.length);
 		}
+		if (missingLoose.length) {
+			const why = `not found in ${cycle.bucketId} during an audit${journal ? `: ${journal}` : ''}`;
+			await setLoose(missingLoose, { bucketId: cycle.bucketId, cycleId: cycle._id, stage: cycle.stage }, by, why, now);
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'loose', fromStage: cycle.stage, toStage: LOOSE_STATUS, qtyBefore: running, qtyAfter: Math.max(0, running - missingLoose.length), reason: `audit: ${missingLoose.length} member(s) not in the tub, moved to Loose${journal ? `: ${journal}` : ''}`, journal: journal || undefined, cartridgeIds: missingLoose, operator: input.user });
+			for (const id of missingLoose) await audit('cartridge_records', id, 'LOOSE', input.user, { status: LOOSE_STATUS, fromCycleId: cycle._id, why }, { status: cycle.stage, cycleId: cycle._id });
+			running = Math.max(0, running - missingLoose.length);
+		}
+		if (missingOven.length) {
+			const why = `not found in ${cycle.bucketId} during an audit, sent on to the oven${journal ? `: ${journal}` : ''}`;
+			await sendToOven(missingOven, cycle.stage, by, why, now);
+			await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'oven', fromStage: cycle.stage, toStage: BACKED_STAGE, qtyBefore: running, qtyAfter: Math.max(0, running - missingOven.length), reason: `audit: ${missingOven.length} member(s) not in the tub, moved to oven${journal ? `: ${journal}` : ''}`, journal: journal || undefined, cartridgeIds: missingOven, operator: input.user });
+			for (const id of missingOven) await audit('cartridge_records', id, 'LOOSE_TO_OVEN', input.user, { status: BACKED_STATUS, fromCycleId: cycle._id, why }, { status: cycle.stage, cycleId: cycle._id });
+		}
+	}
+
+	// Loose carts found in the tub join this pass; stickers nobody ever scanned start
+	// life in Loose, stamped with the tub they turned up in (user, 2026-11-02).
+	if (adopt.length) {
+		const current = await BucketCycle.findById(cycle._id).select('_id bucketId cycleNumber stage quantity cartridgeIds').lean() as any;
+		await adoptLooseCarts(current ?? cycle, adopt, by, input.user, `found in ${cycle.bucketId} during an audit`);
+	}
+	// Stickers nobody ever scanned, found in the tub, start life in THIS pass at its
+	// stage (user, 2026-11-02: what is in the tub is where it belongs). Same birth as
+	// a scan-in: bucket stamp, source lots, one shell + one label debited.
+	if (born.length) {
+		const label = cycleLabel(cycle.bucketId, cycle.cycleNumber);
+		const shellLot = lotFor(cycle.sourceLots, SHELL_PART);
+		const labelLot = lotFor(cycle.sourceLots, LABEL_PART);
+		const why = `found in ${cycle.bucketId} during an audit, never scanned into a bucket`;
+		for (const id of born) {
+			await CartridgeRecord.create({
+				_id: id, status: cycle.stage, statusUpdatedOn: now.toISOString(),
+				bucket: { bucketId: cycle.bucketId, cycleId: cycle._id, scannedInAt: now, scannedInBy: by },
+				backing: { cartridgeBlankLot: shellLot ?? null, barcodeLabelLot: labelLot ?? null, bucketCycleId: cycle._id, bucketBarcode: cycle.bucketId },
+				notes: [{ _id: generateId(), body: `Born in ${label} (${stageLabel(cycle.stage)}): ${why}`, phase: 'bucket', author: by, createdAt: now }]
+			});
+			await audit('cartridge_records', id, 'INSERT', by, { status: cycle.stage, bucketId: cycle.bucketId, cycleId: cycle._id, fromAuditOf: cycle.bucketId, enteredBy: input.user.username });
+		}
+		const current = await BucketCycle.findById(cycle._id).select('quantity cartridgeIds').lean() as any;
+		const before: number = current?.quantity ?? (current?.cartridgeIds ?? []).length;
+		await BucketCycle.updateOne({ _id: cycle._id }, { $addToSet: { cartridgeIds: { $each: born } }, $set: { quantity: before + born.length } });
+		await debit(SHELL_PART, shellLot, born.length, cycle._id, by, `Audit of ${label}: ${born.length}x ${SHELL_PART} shell for never-scanned carts, lot ${shellLot ?? '(none)'}`);
+		await debit(LABEL_PART, labelLot, born.length, cycle._id, by, `Audit of ${label}: ${born.length}x ${LABEL_PART} label for never-scanned carts, lot ${labelLot ?? '(none)'}`);
+		await logTx({ bucketId: cycle.bucketId, cycleId: cycle._id, type: 'scan_in', fromStage: cycle.stage, toStage: cycle.stage, qtyBefore: before, qtyAfter: before + born.length, reason: `audit: ${born.length} never-scanned sticker(s) found in the tub, started life here`, cartridgeIds: born, operator: input.user });
 	}
 
 	// The audited pass itself: members never scanned stay members; the run is recorded.
@@ -1911,7 +2267,9 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		at: now, by, scanned, present, missing, missingActions,
 		foreign: [
 			...moved.map(m => ({ barcode: m.barcode, action: m.returned ? 'returned' : 'moved', fromCycleId: m.fromCycleId ?? undefined, destinationBucketId: m.destinationBucketId, destinationCycleId: m.destinationCycleId })),
-			...discards.map(barcode => ({ barcode, action: 'discarded', fromCycleId: homeOf.get(barcode)?._id ?? undefined }))
+			...discards.map(barcode => ({ barcode, action: 'discarded', fromCycleId: homeOf.get(barcode)?._id ?? undefined })),
+			...adopt.map(barcode => ({ barcode, action: 'adopted', destinationBucketId: cycle.bucketId, destinationCycleId: cycle._id })),
+			...born.map(barcode => ({ barcode, action: 'born' }))
 		]
 	};
 	await BucketCycle.updateOne(
@@ -1921,9 +2279,11 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 			$push: {
 				audits: record,
 				...(missing.length ? { discrepancies: { type: 'shortfall', qty: missing.length, at: now, note: `audit: ${missing.length} member(s) not found in the tub`
-					+ (missingDiscards.length ? `, ${missingDiscards.length} written off` : '')
+					+ (missingDiscards.length ? `, ${missingDiscards.length} trashed` : '')
 					+ (missingReleases.length ? `, ${missingReleases.length} taken off the pass` : '')
-					+ (missing.length - missingDiscards.length - missingReleases.length > 0 ? `, ${missing.length - missingDiscards.length - missingReleases.length} left on the pass` : '') } } : {})
+					+ (missingLoose.length ? `, ${missingLoose.length} moved to Loose` : '')
+					+ (missingOven.length ? `, ${missingOven.length} moved to oven` : '')
+					+ (missing.length - goneIds.length > 0 ? `, ${missing.length - goneIds.length} left on the pass` : '') } } : {})
 			}
 		}
 	);
@@ -1933,10 +2293,14 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 		qtyBefore: cycle.quantity ?? members.length, qtyAfter: quantityAfter,
 		reason: `audit: ${present.length}/${members.length} members found`
 			+ (missing.length ? `, ${missing.length} missing` : '')
-			+ (missingDiscards.length ? `, ${missingDiscards.length} written off` : '')
+			+ (missingDiscards.length ? `, ${missingDiscards.length} trashed` : '')
 			+ (missingReleases.length ? `, ${missingReleases.length} taken off the pass` : '')
+			+ (missingLoose.length ? `, ${missingLoose.length} moved to Loose` : '')
+			+ (missingOven.length ? `, ${missingOven.length} moved to oven` : '')
 			+ (moved.length ? `, ${moved.length} moved out` : '')
-			+ (discards.length ? `, ${discards.length} discarded` : ''),
+			+ (discards.length ? `, ${discards.length} discarded` : '')
+			+ (adopt.length ? `, ${adopt.length} loose cart(s) put in` : '')
+			+ (born.length ? `, ${born.length} never-scanned sticker(s) started life here` : ''),
 		journal: journal || undefined,
 		relatedId: removalId,
 		cartridgeIds: scanned,
@@ -1947,7 +2311,8 @@ export async function auditCycle(input: AuditCycleInput): Promise<AuditCycleResu
 	return {
 		cycleId: cycle._id, bucketId: cycle.bucketId, cycleNumber: cycle.cycleNumber,
 		expected: members.length, present, missing, moved, discarded: discards,
-		missingDiscarded: missingDiscards, missingReleased: missingReleases, quantityAfter
+		missingDiscarded: missingDiscards, missingReleased: missingReleases, missingLoose, missingOven,
+		adopted: adopt, born, quantityAfter
 	};
 }
 
