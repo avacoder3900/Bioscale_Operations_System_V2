@@ -25022,3 +25022,13 @@ Deployment: production - via Vercel GitHub integration on the push to master (Gi
 Source: branch feat/bucket-loose @ commit 2be01093 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at commit 2be01093
 What this deployment is for: Loose list picker + scan bubble, glued-scan fix, Loose accepts any status.
+
+2026-11-02 — master — retired BKT-000006 "For Oven Use Only"
+================================================================================
+Data change only (user request). The bucket was a shortcut: carts already past backing were moved in
+with State Change, clicked through Unpressed/Backed and Moved to oven so wax filling would take them,
+charging shell + label + thermoseal again each run (9 passes, 2026-09-30 to 2026-11-02). Replaced by
+Move To Oven (Loose panel, bucket audit) and Cart State Change > Backed with No bucket. Retired with
+those alternatives as the reason (shows in the Bucket Log), plus a 'retire' bucket_transactions row and
+an audit_log row, by alejandro. Same writes as retireBucket, done by a one-off script because the
+service cannot load outside SvelteKit ($env).
