@@ -25041,3 +25041,8 @@ sets the active roll consumedCm = lengthCm, status 'exhausted', exhaustedAt, and
 {at, by, writtenOffCm} on the roll (ThermosealRoll model) + an AuditLog THERMOSEAL_ROLL_FINISHED row.
 No inventory moves (the roll was debited when opened). Next Barcoded -> Unpressed pulls a new roll as
 before. Action ?/finishRoll (manufacturing:write). npm run check: 13 errors, baseline.
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/EAPCyDKVYfTiTGcrMWuwHbiGyzaY
+Source: branch feat/bucket-loose @ commit 9ec1ad01 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 9ec1ad01
+What this deployment is for: Finish Roll button on the bucket board's thermoseal strip.
