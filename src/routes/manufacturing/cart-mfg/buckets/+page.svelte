@@ -680,7 +680,10 @@
 		}
 		if (typeof form.pull?.code === 'string' && form.pull.code.startsWith('BADGE')) pullBadge = '';
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
-		if (form.looseResolve?.success) looseDest = {};
+		if (form.looseResolve?.success) {
+			looseDest = {}; loosePicking = null;
+			if (looseFocus && ((form.looseResolve as any).result?.barcodes ?? []).includes(looseFocus)) looseFocus = null;
+		}
 		if (form.start?.success && typeof form.start.cycleId === 'string') {
 			// The badge that started this pass is this pass's badge: re-key it to the
 			// new pass so the cart scans that follow do not ask for it a second time.
@@ -710,6 +713,16 @@
 	let looseScanMsg = $state('');
 	let looseScanOk = $state(true);
 	let looseDest = $state<Record<string, string>>({}); // cart id (or '*' for the All row) → destination bucket
+	let loosePicking = $state<string | null>(null);     // row whose bucket picker is open (cart id or '*')
+	let looseOpen = $state<string | null>(null);        // row whose details are dropped down
+	let looseFocus = $state<string | null>(null);       // last cart scanned into the Loose box: shown in the bubble
+	let looseBubbleOpen = $state(true);                 // bubble details: open by default, reopened on each scan
+	const looseFocusCart = $derived(looseFocus ? (data.loose.carts.find(lc => lc.cartridgeId === looseFocus) ?? null) : null);
+	// Everything but the barcode goes in the hover title.
+	function looseInfo(lc: LooseCart): string {
+		const from = lc.fromLabel ? `From ${lc.fromLabel}` : lc.fromBucketId ? `From ${lc.fromBucketId}` : 'Never in a bucket';
+		return [from, lc.priorStatus ? `was ${stageLabel(lc.priorStatus)}` : '', `${dwell(lc.since)} ago`, lc.by ?? '', lc.reason ?? ''].filter(Boolean).join(' · ');
+	}
 	const looseOptions = $derived(boardCycles.map(c => ({
 		bucketId: c.bucketId,
 		label: `${nameOf(c)} · ${c.bucketId} #${c.cycleNumber} · ${labelFor(c.stage)}${c.inProcessAt ? ' — in progress' : ''} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'}`
@@ -718,32 +731,44 @@
 		const picked = looseDest[key];
 		return picked && looseOptions.some(o => o.bucketId === picked) ? picked : (looseOptions[0]?.bucketId ?? '');
 	}
-	async function scanIntoLoose() {
+	// Never block the box (CLAUDE.md, barcode scan boxes): Enter clears it and
+	// queues the code; one worker posts in order. Waiting on the previous scan
+	// glued labels together and saved them as carts (user, 2026-11-02).
+	let looseQueue: string[] = [];
+	function scanIntoLoose() {
 		const code = looseScanInput.trim();
-		if (!code || looseScanBusy) return;
-		looseScanInput = ''; looseScanMsg = '';
+		looseScanInput = '';
+		if (!code || looseQueue.includes(code)) return;
+		looseQueue.push(code);
+		if (!looseScanBusy) pumpLoose();
+	}
+	async function pumpLoose() {
 		looseScanBusy = true;
 		try {
-			const fd = new FormData();
-			fd.set('barcode', code);
-			const res = await fetch('?/looseScan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-			const result = deserialize(await res.text());
-			if (result.type === 'success') {
-				const r = (result.data as any)?.looseScan as { outcome: string; from: string | null; priorStatus: string | null } | undefined;
-				looseScanOk = true;
-				looseScanMsg = r?.outcome === 'born' ? `${code} was never in a bucket — it starts life in Loose.`
-					: r?.outcome === 'pulled' ? `${code} pulled out of ${r.from} into Loose.`
-					: r?.outcome === 'freed' ? `${code} was ${stageLabel(r.priorStatus)} on no pass — now in Loose.`
-					: `${code} is already in Loose.`;
-				await invalidateAll();
-			} else if (result.type === 'failure') { looseScanOk = false; looseScanMsg = (result.data as any)?.looseScan?.error ?? `Error ${result.status}`; }
-			else if (result.type === 'error') { looseScanOk = false; looseScanMsg = result.error?.message ?? 'Scan failed'; }
-			else { looseScanOk = false; looseScanMsg = 'Scan failed'; }
-		} catch (e) {
-			looseScanOk = false; looseScanMsg = e instanceof Error ? e.message : 'Scan failed';
+			while (looseQueue.length > 0) {
+				const code = looseQueue[0];
+				try {
+					const fd = new FormData();
+					fd.set('barcode', code);
+					const res = await fetch('?/looseScan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+					const result = deserialize(await res.text());
+					if (result.type === 'success') {
+						// The scanned cart gets the compact action bubble under the box.
+						looseScanOk = true;
+						looseScanMsg = '';
+						looseFocus = code;
+						looseBubbleOpen = true;
+						loosePicking = null;
+					} else if (result.type === 'failure') { looseScanOk = false; looseScanMsg = `${code}: ${(result.data as any)?.looseScan?.error ?? `Error ${result.status}`}`; }
+					else if (result.type === 'error') { looseScanOk = false; looseScanMsg = `${code}: ${result.error?.message ?? 'Scan failed'}`; }
+				} catch (e) {
+					looseScanOk = false; looseScanMsg = `${code}: ${e instanceof Error ? e.message : 'Scan failed'}`;
+				}
+				looseQueue.shift();
+			}
+			await invalidateAll();
 		} finally {
 			looseScanBusy = false;
-			setTimeout(() => document.getElementById('looseScan')?.focus(), 30);
 		}
 	}
 	const looseBtn = 'rounded border px-2 py-0.5 text-[10px] disabled:opacity-40';
@@ -871,6 +896,30 @@
 		</label>
 	{:else}
 		<input type="hidden" name="badge" value={badge} />
+	{/if}
+{/snippet}
+
+{#snippet looseActions(key: string, n: number)}
+	<!-- Put In Bucket opens the bucket picker; Confirm submits it (user, 2026-11-02). -->
+	{#if loosePicking === key}
+		<input type="hidden" name="destinationBucketId" value={looseDestFor(key)} />
+		{#if looseOptions.length > 0}
+			<select value={looseDestFor(key)} onchange={(e) => { looseDest = { ...looseDest, [key]: (e.currentTarget as HTMLSelectElement).value }; }} class="{inputCls} w-auto max-w-[300px] text-[10px]">
+				{#each looseOptions as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
+			</select>
+		{:else}
+			<span class="text-[var(--color-tron-yellow)]">No open buckets</span>
+		{/if}
+		<span class="flex shrink-0 gap-1">
+			<button type="submit" name="decision" value="bucket" disabled={busy || !looseDestFor(key)} class={looseBtnBucket}>Confirm</button>
+			<button type="button" onclick={() => { loosePicking = null; }} class="{looseBtn} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]">Cancel</button>
+		</span>
+	{:else}
+		<span class="flex shrink-0 gap-1">
+			<button type="button" onclick={() => { loosePicking = key; }} disabled={busy} class={looseBtnBucket}>Put In Bucket</button>
+			<button type="submit" name="decision" value="oven" disabled={busy} class={looseBtnOven}>Move To Oven</button>
+			<button type="submit" name="decision" value="trash" disabled={busy} class={looseBtnTrash} onclick={confirmTrash(n)}>Trash</button>
+		</span>
 	{/if}
 {/snippet}
 
@@ -1659,32 +1708,31 @@
 			{#if looseScanBusy}<span class="pb-2 text-[var(--color-tron-text-secondary)]">Checking…</span>{/if}
 		</div>
 		{#if looseScanMsg}<p class="mt-1 text-xs {looseScanOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-error)]'}">{looseScanMsg}</p>{/if}
+		{#if looseFocusCart}
+			{@const fc = looseFocusCart}
+			<!-- Bubble for the cart just scanned (user, 2026-11-02): its id and the three actions. -->
+			<form method="POST" action="?/looseResolve" use:enhance={enhanceBusy} class="mt-2 flex flex-wrap items-center gap-2 rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 px-2 py-1.5">
+				<input type="hidden" name="barcodes" value={fc.cartridgeId} />
+				<button type="button" onclick={() => { looseBubbleOpen = !looseBubbleOpen; }} class="min-w-0 flex-1 truncate text-left font-mono text-xs text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={looseInfo(fc)}>{fc.cartridgeId}</button>
+				{@render looseActions(`@${fc.cartridgeId}`, 1)}
+				{#if looseBubbleOpen}<p class="w-full text-[10px] text-[var(--color-tron-text-secondary)]">{looseInfo(fc)}</p>{/if}
+			</form>
+		{/if}
 		{#if form?.looseResolve?.error}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{form.looseResolve.error}</p>{/if}
 		{#if form?.looseResolve?.success}
 			{@const r = (form.looseResolve as any).result}
-			<p class="mt-1 text-xs text-[var(--color-tron-cyan)]">{r.barcodes.length} cart{r.barcodes.length === 1 ? '' : 's'} {r.decision === 'bucket' && r.destination ? `put in ${r.destination.bucketId} #${r.destination.cycleNumber} at ${labelFor(r.destination.stage)}` : r.decision === 'oven' ? `moved to oven — see In oven under ${data.backedLabel}` : 'trashed'}.</p>
+			<p class="mt-1 text-xs text-[var(--color-tron-cyan)]">{r.barcodes.length} cart{r.barcodes.length === 1 ? '' : 's'} {r.decision === 'bucket' && r.destination ? `put in ${r.destination.bucketId} #${r.destination.cycleNumber}` : r.decision === 'oven' ? 'moved to oven' : 'trashed'}.</p>
 		{/if}
 
 		{#if data.loose.count === 0}
 			<p class="mt-2 text-[var(--color-tron-text-secondary)]">Nothing loose.</p>
 		{:else}
-			{#if looseOptions.length === 0}
-				<p class="mt-2 text-[var(--color-tron-yellow)]">No open pass to put a cart in — start one on the board first. Move To Oven and Trash still work.</p>
-			{/if}
 			{#if data.loose.carts.length > 1}
-				<!-- All at once: one destination, one decision for every cart listed. -->
+				<!-- All at once: one decision for every cart listed. -->
 				<form method="POST" action="?/looseResolve" use:enhance={enhanceBusy} class="mt-2 flex flex-wrap items-center gap-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1.5">
 					<input type="hidden" name="barcodes" value={data.loose.carts.map(lc => lc.cartridgeId).join(',')} />
-					<input type="hidden" name="destinationBucketId" value={looseDestFor('*')} />
-					<span class="text-[var(--color-tron-text-secondary)]">All {data.loose.carts.length}:</span>
-					{#if looseOptions.length > 0}
-						<select value={looseDestFor('*')} onchange={(e) => { looseDest = { ...looseDest, '*': (e.currentTarget as HTMLSelectElement).value }; }} class="{inputCls} w-auto max-w-[340px] text-[10px]">
-							{#each looseOptions as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
-						</select>
-					{/if}
-					<button type="submit" name="decision" value="bucket" disabled={busy || !looseDestFor('*')} class={looseBtnBucket}>Put In Bucket</button>
-					<button type="submit" name="decision" value="oven" disabled={busy} class={looseBtnOven} title="Straight to {data.backedLabel} on no pass — wax filling will take them">Move To Oven</button>
-					<button type="submit" name="decision" value="trash" disabled={busy} class={looseBtnTrash} onclick={confirmTrash(data.loose.carts.length)}>Trash</button>
+					<span class="flex-1 text-[var(--color-tron-text-secondary)]">All {data.loose.carts.length}</span>
+					{@render looseActions('*', data.loose.carts.length)}
 				</form>
 			{/if}
 			<ul class="mt-2 max-h-[440px] space-y-1 overflow-y-auto">
@@ -1692,29 +1740,14 @@
 					<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1.5">
 						<form method="POST" action="?/looseResolve" use:enhance={enhanceBusy} class="flex flex-wrap items-center gap-2">
 							<input type="hidden" name="barcodes" value={lc.cartridgeId} />
-							<input type="hidden" name="destinationBucketId" value={looseDestFor(lc.cartridgeId)} />
-							<div class="min-w-[220px] flex-1">
-								<a href="/cartridge-admin?search={encodeURIComponent(lc.cartridgeId)}" class="font-mono text-xs text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={lc.cartridgeId}>{lc.cartridgeId}</a>
-								<p class="text-[var(--color-tron-text-secondary)]">
-									{#if lc.fromLabel}from {lc.fromLabel}{:else if lc.fromBucketId}from {lc.fromBucketId}{:else}never in a bucket{/if}{#if lc.priorStatus} · was {stageLabel(lc.priorStatus)}{/if} · {dwell(lc.since)} ago{#if lc.by} · {lc.by}{/if}
-								</p>
-								{#if lc.reason}<p class="truncate text-[var(--color-tron-text-secondary)]" title={lc.reason}>{lc.reason}</p>{/if}
-							</div>
-							{#if looseOptions.length > 0}
-								<select value={looseDestFor(lc.cartridgeId)} onchange={(e) => { looseDest = { ...looseDest, [lc.cartridgeId]: (e.currentTarget as HTMLSelectElement).value }; }} class="{inputCls} w-auto max-w-[300px] text-[10px]">
-									{#each looseOptions as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
-								</select>
-							{/if}
-							<span class="flex shrink-0 gap-1">
-								<button type="submit" name="decision" value="bucket" disabled={busy || !looseDestFor(lc.cartridgeId)} class={looseBtnBucket} title="Joins the chosen bucket's open pass at that pass's stage">Put In Bucket</button>
-								<button type="submit" name="decision" value="oven" disabled={busy} class={looseBtnOven} title="Straight to {data.backedLabel} on no pass — wax filling will take it">Move To Oven</button>
-								<button type="submit" name="decision" value="trash" disabled={busy} class={looseBtnTrash} onclick={confirmTrash(1)}>Trash</button>
-							</span>
+							<button type="button" onclick={() => { looseOpen = looseOpen === lc.cartridgeId ? null : lc.cartridgeId; }} class="min-w-0 flex-1 truncate text-left font-mono text-xs text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={looseInfo(lc)}>{lc.cartridgeId}</button>
+							{@render looseActions(lc.cartridgeId, 1)}
+							{#if looseOpen === lc.cartridgeId}<p class="w-full text-[var(--color-tron-text-secondary)]">{looseInfo(lc)}</p>{/if}
 						</form>
 					</li>
 				{/each}
 			</ul>
-			{#if data.loose.count > data.loose.carts.length}<p class="mt-1 text-[var(--color-tron-text-secondary)]">+{data.loose.count - data.loose.carts.length} more — resolve some to see them.</p>{/if}
+			{#if data.loose.count > data.loose.carts.length}<p class="mt-1 text-[var(--color-tron-text-secondary)]">+{data.loose.count - data.loose.carts.length} more</p>{/if}
 		{/if}
 	</div>
 

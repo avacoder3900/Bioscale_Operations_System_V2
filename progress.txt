@@ -25002,3 +25002,18 @@ stickers born in the audited pass, audit scan queue fix (10 carts read as 13), "
 The box was disabled during each lookup, which dropped focus; the operator had to click back in
 before every scan. Now never disabled, cleared on Enter, newest scan's answer shown (seq guard).
 File: buckets/+page.svelte. npm run check: 13 errors, baseline, none in touched files.
+
+2026-11-02 — master — Loose list rework, Loose scan box fix, scan-box rule in CLAUDE.md
+================================================================================
+- Loose rows: barcode only; click drops down the details (also the hover title). Put In Bucket opens
+  the bucket picker; Confirm submits, Cancel closes. Same on the All row.
+- Bubble under the Loose scan box for the last scanned cart: id (details open by default), Put In
+  Bucket / Move To Oven / Trash.
+- Fix: Loose scan box glued labels together and saved them as carts (<uuid><uuid>). Root cause: Enter
+  was ignored while the previous scan was checked, so the next label appended to the box. Now cleared
+  on Enter + queued in order. Server: scanIntoLoose calls assertNotMergedBarcode and refuses unknown
+  codes that are not a whole cart barcode (isCartBarcode).
+- Loose scan accepts any status (was refused past the buckets), like State Change.
+- Trash on a cart born loose and never in a bucket hard-deletes it (no debit happened); others scrap.
+- CLAUDE.md Common Pitfalls: barcode scan boxes must never block input (third time this bit us).
+Files: CLAUDE.md, bucket-service.ts, buckets/+page.svelte. npm run check: 13 errors, baseline.

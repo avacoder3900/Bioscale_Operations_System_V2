@@ -1506,8 +1506,8 @@ export interface LooseScanResult {
  * A cart scanned into the Loose pile. An unknown sticker is born here; a member
  * of an open pass is pulled off it (the pass closes if that empties it, like an
  * override); a cart on no pass (in oven, taken off) is simply set loose; a loose
- * cart is reported as already here. Anything past the buckets (wax filled, …) is
- * refused — that is State Change's job. No badge, no inventory.
+ * cart is reported as already here. Any status is accepted, past the buckets
+ * included (wax filled, scrapped, …), as State Change does. No badge, no inventory.
  */
 export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanResult> {
 	await connectDB();
@@ -1515,6 +1515,7 @@ export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanRes
 	if (!barcode) throw new BucketError('Scan the cartridge QR.');
 	if (/^BKT-\d+$/i.test(barcode)) throw new BucketError('That is a bucket id, not a cartridge sticker.');
 	if (isBadgeCode(barcode)) throw new BucketError('That is a badge, not a cartridge sticker.', 400, 'BADGE');
+	assertNotMergedBarcode(barcode);
 	const [cart, bucketLabelId] = await Promise.all([
 		CartridgeRecord.findById(barcode).select('_id status bucket').lean() as Promise<any>,
 		resolveBucketId(barcode)
@@ -1525,6 +1526,7 @@ export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanRes
 	const why = (input.reason ?? '').trim();
 
 	if (!cart) {
+		if (!isCartBarcode(barcode)) throw new BucketError(`Not a full cart barcode (${barcode.length} characters) — scan it again.`);
 		const reason = `scanned into Loose on the board, never scanned into a bucket${why ? `: ${why}` : ''}`;
 		try {
 			await CartridgeRecord.create({
@@ -1542,7 +1544,9 @@ export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanRes
 
 	const status = String(cart.status ?? '');
 	if (status === LOOSE_STATUS) return { barcode, outcome: 'already', from: cart.bucket?.bucketId ?? null, priorStatus: null };
-	if (!isBucketStatus(status)) throw new BucketError(`${barcode} is ${status} — past the buckets. Use State Change for it.`);
+	// Any status is accepted, like State Change (user, 2026-11-02): a wax-filled cart
+	// found out of place, or a scrapped one whose barcode is being reused. The old
+	// status is kept in loose.priorStatus, priorStatus and the note.
 
 	const reason = `scanned into Loose on the board${why ? `: ${why}` : ''}`;
 	const home = await BucketCycle.findOne({ status: 'open', cartridgeIds: barcode }).lean() as any;
@@ -1585,7 +1589,7 @@ export async function resolveLoose(input: LooseResolveInput): Promise<LooseResol
 	await connectDB();
 	const ids = cleanCodes(input.barcodes);
 	if (ids.length === 0) throw new BucketError('Pick at least one loose cart.');
-	const rows = await CartridgeRecord.find({ _id: { $in: ids } }).select('_id status loose').lean() as any[];
+	const rows = await CartridgeRecord.find({ _id: { $in: ids } }).select('_id status loose bucket').lean() as any[];
 	const notLoose = ids.filter(id => rows.find(r => r._id === id)?.status !== LOOSE_STATUS);
 	if (notLoose.length) throw new BucketError(`Not in Loose any more: ${notLoose.join(', ')} — reload the board.`, 409);
 	const now = new Date();
@@ -1617,6 +1621,20 @@ export async function resolveLoose(input: LooseResolveInput): Promise<LooseResol
 		return { barcodes: ids, decision: 'oven', destination: null };
 	}
 
+	// Born loose and never in a bucket: nothing was debited and nothing references it
+	// (most often a bad scan), so the record is deleted, not scrapped (2026-11-02).
+	const neverReal = rows.filter(r => !r.bucket?.cycleId && !r.loose?.priorStatus).map(r => r._id as string);
+	if (neverReal.length) {
+		await hardDeleteUnfinalizedCartridges({ _id: { $in: neverReal } }, { reason: `trashed from Loose, never in a bucket${why ? `: ${why}` : ''}`, user: by, statuses: [LOOSE_STATUS] });
+	}
+	const scrapIds = ids.filter(id => !neverReal.includes(id));
+	if (scrapIds.length === 0) return { barcodes: ids, decision: 'trash', destination: null };
+	return trashLooseCarts(scrapIds, rows.filter(r => scrapIds.includes(r._id)), by, why, now, ids);
+}
+
+async function trashLooseCarts(ids: string[], rows: any[], by: Operator, why: string, now: Date, all: string[]): Promise<LooseResolveResult> {
+	const fromBuckets = Array.from(new Set(rows.map(r => r.loose?.fromBucketId).filter(Boolean))) as string[];
+	const ofBucket = (bucketId: string) => rows.filter(r => r.loose?.fromBucketId === bucketId);
 	const reason = `trashed from Loose${why ? `: ${why}` : ''}`;
 	await CartridgeRecord.updateMany(
 		{ _id: { $in: ids } },
@@ -1632,7 +1650,7 @@ export async function resolveLoose(input: LooseResolveInput): Promise<LooseResol
 		await logTx({ bucketId, cycleId: mine[0]?.loose?.fromCycleId ?? null, type: 'scrap', fromStage: LOOSE_STATUS, toStage: LOOSE_STATUS, qtyBefore: 0, qtyAfter: 0, reason: `${mine.length} loose cart(s) ${reason}`, journal: why || undefined, relatedId: removalId, cartridgeIds: mine.map(r => r._id), operator: by });
 	}
 	for (const id of ids) await audit('cartridge_records', id, 'LOOSE_TRASH', by, { status: 'scrapped', reason: why || undefined }, { status: LOOSE_STATUS });
-	return { barcodes: ids, decision: 'trash', destination: null };
+	return { barcodes: all, decision: 'trash', destination: null };
 }
 
 export interface ReturnInput {
