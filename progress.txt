@@ -25113,3 +25113,15 @@ got the same wired relay as B07 (iMac launchd com.bims.ot2relay-b14, en7:8898; n
   false negative on this Pi).
 Tests: scripts/test_ot2_bridge_server.py 45/45 (+3 RestartWindowTests); health.test.ts 8/8 (+4);
 npm run check 16 errors (baseline, none in touched files). Daemon rollout: see the deploy-log entry.
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success 19:11Z)
+  https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/EDk7xgWwvjZbBsYoj4evKsRAME8h
+Source: branch fix/robot-restart-window @ commit 4f33c6b0 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 4f33c6b0
+What this deployment is for: "Restarting" badge instead of "Engine hung" during a robot-server boot, Recover
+refuses a second restart (409), RobotBoard disables Recover meanwhile. Live: /_app/version.json 1793732968844.
+Daemon rollout: ot2-bridge 1.6.0 (md5 fd023814) deployed to B14 at 19:09Z over the wired link
+(backup /data/ot2-bridge/ot2-bridge.py.bak-20261103-v14; heartbeat reports version 1.6.0, restarting:null).
+B07 and R04 still run 1.4.0 (all three were on 1.4.0 — the repo's 1.5.0 was never deployed); both were
+mid-fill at 19:10Z, so they get 1.6.0 in their next idle window: scp -O scripts/ot2-bridge.py
+root@<robot>:/data/ot2-bridge/ot2-bridge.py && systemctl restart ot2-bridge (gate: no current run, no
+maintenance run). Until then the BIMS-side window (restart command within 4 min) covers them.
