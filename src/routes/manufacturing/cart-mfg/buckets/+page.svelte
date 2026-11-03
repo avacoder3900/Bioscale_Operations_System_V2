@@ -3,7 +3,7 @@
 	import { deserialize, enhance } from '$app/forms';
 	import { goto, invalidateAll } from '$app/navigation';
 	import { page } from '$app/stores';
-	import type { BoardBucket, BoardCycle, BucketStage, CartStatusLine, ChangeLogRow, RegistryRow, StageCounts } from '$lib/server/services/bucket-service';
+	import type { BoardBucket, BoardCycle, BucketStage, CartStatusLine, ChangeLogRow, RegistryRow, StageCounts, LooseCart } from '$lib/server/services/bucket-service';
 
 	type ActionResult = { success?: boolean; error?: string; code?: string | null; [k: string]: unknown };
 	interface Props {
@@ -25,6 +25,7 @@
 				openRestockTaskId: string | null; rollsExhausted: number;
 			} | null;
 			inOven: { count: number; ids: string[] };
+			loose: { count: number; carts: LooseCart[] };
 			canAdmin: boolean;
 			badgeMode: 'off' | 'required';
 			canBadgeAdmin: boolean;
@@ -35,11 +36,13 @@
 			start?: ActionResult; advance?: ActionResult; scrap?: ActionResult;
 			residual?: ActionResult; retire?: ActionResult; thermosealToggles?: ActionResult; moveToOven?: ActionResult;
 			auditScan?: ActionResult; audit?: ActionResult; pull?: ActionResult;
+			looseScan?: ActionResult; looseResolve?: ActionResult; finishRoll?: ActionResult;
 		} | null;
 	}
 	let { data, form }: Props = $props();
 
 	function fmtM(cm: number): string { return `${(cm / 100).toFixed(2)} m`; }
+	let finishRollAsk = $state(false); // Finish Roll confirm row
 	const advanceThermoseal = $derived.by(() => {
 		const a = form?.advance;
 		if (!a?.success || !a.thermoseal || typeof a.thermoseal !== 'object') return null;
@@ -162,17 +165,23 @@
 			return { ok: false, line: e instanceof Error ? e.message : 'Lookup failed', hit: null };
 		}
 	}
+	// The box stays focused and is cleared on each scan, so the gun can keep
+	// scanning into it (user, 2026-11-02). The newest scan's answer wins.
+	let cartFindSeq = 0;
 	async function findCart() {
 		const code = cartFind.trim();
-		if (!code || cartFindBusy) return;
+		cartFind = '';
+		if (!code) return;
+		const seq = ++cartFindSeq;
 		cartFindBusy = true;
 		try {
 			const r = await lookupCart(code);
+			if (seq !== cartFindSeq) return;
 			cartFindOk = r.ok;
 			cartFindLine = r.line;
 			cartFindHit = r.hit;
 		} finally {
-			cartFindBusy = false;
+			if (seq === cartFindSeq) cartFindBusy = false;
 		}
 	}
 	// Pill colours for a cart's own status: the bucket stages follow the column
@@ -182,7 +191,8 @@
 		barcoded: 'text-gray-300 border-gray-500/40 bg-gray-700/20',
 		unpressed: 'text-blue-300 border-blue-500/40 bg-blue-900/20',
 		pressed: 'text-blue-300 border-blue-500/40 bg-blue-900/20',
-		backing: 'text-[var(--color-tron-purple)] border-[var(--color-tron-purple)]/40 bg-[var(--color-tron-purple)]/10'
+		backing: 'text-[var(--color-tron-purple)] border-[var(--color-tron-purple)]/40 bg-[var(--color-tron-purple)]/10',
+		loose: 'text-[var(--color-tron-yellow)] border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/10'
 	};
 	const cartStatusTintDefault = 'text-[var(--color-tron-text)] border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]';
 	// The "where" pill: green when the cart is a member of an open pass, yellow
@@ -271,18 +281,19 @@
 		for (const c of boardCycles) m[c.stage]?.push(c);
 		return m;
 	});
-	// Board lanes (user, 2026-10-05, second pass): Barcoded → Unpressed — in process →
-	// Unpressed → Backed — in process → Backed. An "in process" lane is not a stage: it
+	// Board lanes (user, 2026-10-05, second pass): Barcoded → Unpressed — in progress →
+	// Unpressed → Backed — in progress → Backed. An "in progress" lane is not a stage: it
 	// is a pass that an operator has PULLED with their badge (?/pull — the custody
 	// handoff) to work it toward the next stage. So a pulled Barcoded pass shows under
-	// "Unpressed — in process" and a pulled Unpressed pass under "Backed — in process";
-	// Done (the stage advance) only exists in those two lanes.
+	// "Unpressed — in progress" and a pulled Unpressed pass under "Backed — in progress";
+	// Done (the stage advance) only exists in those two lanes. ("in process" → "in
+	// progress", user, 2026-11-02.)
 	type Lane = { key: string; tint: string; label: string; hint: string; cycles: BoardCycle[] };
 	const lanes = $derived.by((): Lane[] => [
 		{ key: 'barcoded', tint: 'barcoded', label: labelFor('barcoded'), hint: 'scanning carts in', cycles: cyclesByStage.barcoded.filter(c => !c.inProcessAt) },
-		{ key: 'unpressed_wip', tint: 'unpressed', label: `${labelFor('unpressed')} — in process`, hint: 'pulled, badge on', cycles: cyclesByStage.barcoded.filter(c => !!c.inProcessAt) },
+		{ key: 'unpressed_wip', tint: 'unpressed', label: `${labelFor('unpressed')} — in progress`, hint: 'pulled, badge on', cycles: cyclesByStage.barcoded.filter(c => !!c.inProcessAt) },
 		{ key: 'unpressed', tint: 'unpressed', label: labelFor('unpressed'), hint: 'waiting to be pulled', cycles: cyclesByStage.unpressed.filter(c => !c.inProcessAt) },
-		{ key: 'backing_wip', tint: 'backing', label: `${labelFor('backing')} — in process`, hint: 'pulled, badge on', cycles: cyclesByStage.unpressed.filter(c => !!c.inProcessAt) },
+		{ key: 'backing_wip', tint: 'backing', label: `${labelFor('backing')} — in progress`, hint: 'pulled, badge on', cycles: cyclesByStage.unpressed.filter(c => !!c.inProcessAt) },
 		{ key: 'backing', tint: 'backing', label: labelFor('backing'), hint: '', cycles: cyclesByStage.backing }
 	]);
 	const allIdleBuckets = $derived([...data.board.available, ...data.board.quarantined]);
@@ -305,7 +316,9 @@
 	// operator sees "belongs here" / "wrong tub" as they go.
 	type AuditScan = {
 		barcode: string;
-		finding: 'member' | 'foreign' | 'ineligible' | 'unknown' | 'bucket';
+		// 'unknown' = a sticker nobody ever scanned → starts life in Loose on submit;
+		// 'loose' = a cart from the Loose pile → joins this pass on submit (user, 2026-11-02).
+		finding: 'member' | 'foreign' | 'ineligible' | 'unknown' | 'bucket' | 'loose';
 		status: string | null;
 		stage: BucketStage | null;
 		homeBucketId: string | null;
@@ -319,21 +332,40 @@
 	let auditError = $state('');
 	let auditAction = $state<Record<string, 'move' | 'discard'>>({});   // barcode → what happens to it
 	let auditDest = $state<Record<string, string>>({});                 // barcode → destination bucket
-	type MissingAction = 'keep' | 'discard' | 'release';
+	// Missing member (user, 2026-11-02): Keep (default) · Move To Loose · Move To Oven · Trash.
+	type MissingAction = 'keep' | 'loose' | 'oven' | 'discard';
 	let auditMissingAction = $state<Record<string, MissingAction>>({}); // member not found → what happens to it
 	const auditForeign = $derived(auditScans.filter(a => a.finding === 'foreign'));
-	const auditIneligible = $derived(auditScans.filter(a => a.finding === 'ineligible' || a.finding === 'unknown' || a.finding === 'bucket'));
+	const auditIneligible = $derived(auditScans.filter(a => a.finding === 'ineligible' || a.finding === 'bucket'));
+	// Unknown stickers start life in Loose; loose carts found here join this pass.
+	// Neither blocks the submit — remove the scan if that is wrong.
+	const auditBorn = $derived(auditScans.filter(a => a.finding === 'unknown').map(a => a.barcode));
+	const auditAdopt = $derived(auditScans.filter(a => a.finding === 'loose').map(a => a.barcode));
 	const auditPresent = $derived(auditScans.filter(a => a.finding === 'member').map(a => a.barcode));
 	const auditMissing = $derived((panelCycle?.cartridgeIds ?? []).filter(id => !auditPresent.includes(id)));
 	const auditDiscards = $derived(auditForeign.filter(a => auditAction[a.barcode] === 'discard').map(a => a.barcode));
 	const auditMissingActions = $derived(auditMissing
 		.filter(id => auditMissingAction[id] && auditMissingAction[id] !== 'keep')
-		.map(id => ({ barcode: id, action: auditMissingAction[id] as 'discard' | 'release' })));
+		.map(id => ({ barcode: id, action: auditMissingAction[id] as Exclude<MissingAction, 'keep'> })));
 	const auditRemovedMissing = $derived(auditMissingActions.length);
+	const auditMissingTrashed = $derived(auditMissingActions.filter(m => m.action === 'discard').length);
+	// A journal is required only when carts are trashed; Move To Loose / Move To Oven need none.
+	const auditJournalRequired = $derived(auditDiscards.length > 0 || auditMissingTrashed > 0);
+	function auditPill(f: AuditScan['finding']): { cls: string; text: string } {
+		if (f === 'member') return { cls: 'border-green-500/40 text-green-300', text: 'belongs here' };
+		if (f === 'foreign') return { cls: 'border-[var(--color-tron-yellow)]/50 text-[var(--color-tron-yellow)]', text: 'wrong tub' };
+		if (f === 'unknown') return { cls: 'border-green-500/40 text-green-300', text: 'new · joins here' };
+		if (f === 'loose') return { cls: 'border-[var(--color-tron-cyan)]/50 text-[var(--color-tron-cyan)]', text: 'loose → joins this pass' };
+		return { cls: 'border-red-500/40 text-red-300', text: 'cannot handle' };
+	}
+	function auditNoteCls(f: AuditScan['finding']): string {
+		return f === 'ineligible' || f === 'bucket' ? 'text-red-300' : 'text-[var(--color-tron-text-secondary)]';
+	}
 	// Only the cart just scanned is shown while scanning; carts that still need a
 	// decision (wrong tub / cannot handle) stay listed, newest first.
 	const auditLast = $derived(auditScans.length > 0 ? auditScans[auditScans.length - 1] : null);
-	const auditPending = $derived([...auditScans].reverse().filter(a => a.finding !== 'member'));
+	// New stickers and loose carts join this pass on submit, so they need no decision.
+	const auditPending = $derived([...auditScans].reverse().filter(a => a.finding !== 'member' && a.finding !== 'unknown' && a.finding !== 'loose'));
 	// Where a foreign cart can go: its own open pass first, then open passes at its
 	// stage, then empty buckets (a new pass opens there at the cart's stage).
 	function auditOptions(a: AuditScan): { bucketId: string; label: string }[] {
@@ -358,34 +390,51 @@
 	const auditReady = $derived(auditScans.length > 0
 		&& auditIneligible.length === 0
 		&& auditMoves.every(m => !!m.destinationBucketId));
-	function resetAudit() { auditScans = []; auditInput = ''; auditError = ''; auditAction = {}; auditDest = {}; auditMissingAction = {}; }
+	function resetAudit() { auditQueue = []; auditScans = []; auditInput = ''; auditError = ''; auditAction = {}; auditDest = {}; auditMissingAction = {}; }
 	function openAudit(c: BoardCycle) {
 		panel = { kind: 'cycle', cycleId: c.cycleId, mode: 'audit' };
 		resetLists();
 		setTimeout(() => document.getElementById('auditScan')?.focus(), 30);
 	}
-	async function scanForAudit() {
+	// Same pattern as the scan-in box (2026-09-25): the input is never disabled and
+	// Enter drains it onto a queue, so a gun typing the next label while the last
+	// one is being checked loses nothing. Disabling the box mid-scan split labels
+	// into fragments that counted as extra scans (user, 2026-11-02: 10 carts → 13).
+	let auditQueue: { code: string; cycleId: string }[] = [];
+	function scanForAudit() {
 		const code = auditInput.trim();
-		if (!code || auditBusy || panel.kind !== 'cycle') return;
-		auditInput = ''; auditError = '';
-		if (auditScans.some(a => a.barcode === code)) { auditError = `${code} was already scanned.`; return; }
+		auditInput = '';
+		if (!code || panel.kind !== 'cycle') return;
+		auditError = '';
+		if (auditScans.some(a => a.barcode === code) || auditQueue.some(q => q.code === code)) { auditError = `${code} was already scanned.`; return; }
+		auditQueue.push({ code, cycleId: panel.cycleId });
+		if (!auditBusy) pumpAudit();
+	}
+	async function pumpAudit() {
 		auditBusy = true;
 		try {
-			const fd = new FormData();
-			fd.set('cycleId', panel.cycleId);
-			fd.set('barcode', code);
-			const res = await fetch('?/auditScan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-			const result = deserialize(await res.text());
-			if (result.type === 'success') {
-				const r = (result.data as any)?.auditScan?.scan as AuditScan | undefined;
-				if (r) auditScans = [...auditScans, r];
-			} else if (result.type === 'failure') auditError = (result.data as any)?.auditScan?.error ?? `Error ${result.status}`;
-			else if (result.type === 'error') auditError = result.error?.message ?? 'Scan failed';
-		} catch (e) {
-			auditError = e instanceof Error ? e.message : 'Scan failed';
+			while (auditQueue.length > 0) {
+				const { code, cycleId } = auditQueue[0];
+				try {
+					const fd = new FormData();
+					fd.set('cycleId', cycleId);
+					fd.set('barcode', code);
+					const res = await fetch('?/auditScan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+					const result = deserialize(await res.text());
+					// The operator moved to another bucket mid-queue: drop the stale result.
+					const stillHere = panel.kind === 'cycle' && panel.cycleId === cycleId;
+					if (result.type === 'success') {
+						const r = (result.data as any)?.auditScan?.scan as AuditScan | undefined;
+						if (r && stillHere && !auditScans.some(a => a.barcode === r.barcode)) auditScans = [...auditScans, r];
+					} else if (result.type === 'failure') auditError = `${code}: ${(result.data as any)?.auditScan?.error ?? `Error ${result.status}`}`;
+					else if (result.type === 'error') auditError = `${code}: ${result.error?.message ?? 'Scan failed'}`;
+				} catch (e) {
+					auditError = `${code}: ${e instanceof Error ? e.message : 'Scan failed'}`;
+				}
+				auditQueue.shift();
+			}
 		} finally {
 			auditBusy = false;
-			setTimeout(() => document.getElementById('auditScan')?.focus(), 30);
 		}
 	}
 
@@ -632,6 +681,11 @@
 		}
 		if (typeof form.pull?.code === 'string' && form.pull.code.startsWith('BADGE')) pullBadge = '';
 		if (form.audit?.success) { resetAudit(); if (panel.kind === 'cycle') setMode('view'); }
+		if (form.finishRoll?.success) finishRollAsk = false;
+		if (form.looseResolve?.success) {
+			looseDest = {}; loosePicking = null;
+			if (looseFocus && ((form.looseResolve as any).result?.barcodes ?? []).includes(looseFocus)) looseFocus = null;
+		}
 		if (form.start?.success && typeof form.start.cycleId === 'string') {
 			// The badge that started this pass is this pass's badge: re-key it to the
 			// new pass so the cart scans that follow do not ask for it a second time.
@@ -649,6 +703,83 @@
 		busy = true;
 		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => { await update({ reset: false }); busy = false; };
 	};
+
+	// ── Loose pile (user, 2026-11-02) ────────────────────────────────────────
+	// Carts that are alive but on no pass, each waiting for a decision. The scan
+	// box puts a cart there (a member is pulled off its pass; a sticker nobody has
+	// scanned is born there). Put In Bucket goes to ANY open pass, whatever its
+	// stage — the cart takes that stage; Move To Oven = Backed on no pass; Trash =
+	// scrapped. No badge: badges slowed the floor down and are not in use.
+	let looseScanInput = $state('');
+	let looseScanBusy = $state(false);
+	let looseScanMsg = $state('');
+	let looseScanOk = $state(true);
+	let looseDest = $state<Record<string, string>>({}); // cart id (or '*' for the All row) → destination bucket
+	let loosePicking = $state<string | null>(null);     // row whose bucket picker is open (cart id or '*')
+	let looseOpen = $state<string | null>(null);        // row whose details are dropped down
+	let looseFocus = $state<string | null>(null);       // last cart scanned into the Loose box: shown in the bubble
+	let looseBubbleOpen = $state(true);                 // bubble details: open by default, reopened on each scan
+	const looseFocusCart = $derived(looseFocus ? (data.loose.carts.find(lc => lc.cartridgeId === looseFocus) ?? null) : null);
+	// Everything but the barcode goes in the hover title.
+	function looseInfo(lc: LooseCart): string {
+		const from = lc.fromLabel ? `From ${lc.fromLabel}` : lc.fromBucketId ? `From ${lc.fromBucketId}` : 'Never in a bucket';
+		return [from, lc.priorStatus ? `was ${stageLabel(lc.priorStatus)}` : '', `${dwell(lc.since)} ago`, lc.by ?? '', lc.reason ?? ''].filter(Boolean).join(' · ');
+	}
+	const looseOptions = $derived(boardCycles.map(c => ({
+		bucketId: c.bucketId,
+		label: `${nameOf(c)} · ${c.bucketId} #${c.cycleNumber} · ${labelFor(c.stage)}${c.inProcessAt ? ' — in progress' : ''} · ${c.quantity} cart${c.quantity === 1 ? '' : 's'}`
+	})));
+	function looseDestFor(key: string): string {
+		const picked = looseDest[key];
+		return picked && looseOptions.some(o => o.bucketId === picked) ? picked : (looseOptions[0]?.bucketId ?? '');
+	}
+	// Never block the box (CLAUDE.md, barcode scan boxes): Enter clears it and
+	// queues the code; one worker posts in order. Waiting on the previous scan
+	// glued labels together and saved them as carts (user, 2026-11-02).
+	let looseQueue: string[] = [];
+	function scanIntoLoose() {
+		const code = looseScanInput.trim();
+		looseScanInput = '';
+		if (!code || looseQueue.includes(code)) return;
+		looseQueue.push(code);
+		if (!looseScanBusy) pumpLoose();
+	}
+	async function pumpLoose() {
+		looseScanBusy = true;
+		try {
+			while (looseQueue.length > 0) {
+				const code = looseQueue[0];
+				try {
+					const fd = new FormData();
+					fd.set('barcode', code);
+					const res = await fetch('?/looseScan', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+					const result = deserialize(await res.text());
+					if (result.type === 'success') {
+						// The scanned cart gets the compact action bubble under the box.
+						looseScanOk = true;
+						looseScanMsg = '';
+						looseFocus = code;
+						looseBubbleOpen = true;
+						loosePicking = null;
+					} else if (result.type === 'failure') { looseScanOk = false; looseScanMsg = `${code}: ${(result.data as any)?.looseScan?.error ?? `Error ${result.status}`}`; }
+					else if (result.type === 'error') { looseScanOk = false; looseScanMsg = `${code}: ${result.error?.message ?? 'Scan failed'}`; }
+				} catch (e) {
+					looseScanOk = false; looseScanMsg = `${code}: ${e instanceof Error ? e.message : 'Scan failed'}`;
+				}
+				looseQueue.shift();
+			}
+			await invalidateAll();
+		} finally {
+			looseScanBusy = false;
+		}
+	}
+	const looseBtn = 'rounded border px-2 py-0.5 text-[10px] disabled:opacity-40';
+	const looseBtnBucket = `${looseBtn} border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10`;
+	const looseBtnOven = `${looseBtn} border-[var(--color-tron-purple)]/60 text-[var(--color-tron-purple)] hover:bg-[var(--color-tron-purple)]/10`;
+	const looseBtnTrash = `${looseBtn} border-red-500/60 text-red-300 hover:bg-red-900/20`;
+	function confirmTrash(n: number) {
+		return (e: MouseEvent) => { if (!confirm(`Trash ${n} loose cart${n === 1 ? '' : 's'}? They are scrapped — this cannot be undone.`)) e.preventDefault(); };
+	}
 
 	// ── "In oven" — copy every id (user, 2026-10-05) ─────────────────────────
 	// The dropdown shows the first 200 ids as links; this fetches the whole list
@@ -707,7 +838,7 @@
 			case 'advance': return { event: 'Moved', moved: `${from ?? '?'} → ${to ?? '?'}`, discarded: false };
 			case 'consume': return { event: 'Drawn to wax filling', moved: `${from ?? data.backedLabel} → wax filling`, discarded: false };
 			case 'oven': return { event: 'Moved to oven', moved: `${from ?? data.backedLabel} → oven (carts released from the bucket)`, discarded: false };
-			case 'pull': return { event: 'Pulled into process', moved: `${from ?? '?'} → ${r.fromStage === 'barcoded' ? labelFor('unpressed') : data.backedLabel} in process (badge handoff)`, discarded: false };
+			case 'pull': return { event: 'Pulled — in progress', moved: `${from ?? '?'} → ${r.fromStage === 'barcoded' ? labelFor('unpressed') : data.backedLabel} in progress (badge handoff)`, discarded: false };
 			case 'scrap': return { event: 'Discarded', moved: `at ${from ?? '?'}`, discarded: true };
 			case 'adjust': return { event: 'Count corrected', moved: `at ${from ?? '?'}`, discarded: false };
 			case 'merge_in': return { event: 'Residual received', moved: `at ${to ?? '?'}`, discarded: false };
@@ -770,6 +901,30 @@
 	{/if}
 {/snippet}
 
+{#snippet looseActions(key: string, n: number)}
+	<!-- Put In Bucket opens the bucket picker; Confirm submits it (user, 2026-11-02). -->
+	{#if loosePicking === key}
+		<input type="hidden" name="destinationBucketId" value={looseDestFor(key)} />
+		{#if looseOptions.length > 0}
+			<select value={looseDestFor(key)} onchange={(e) => { looseDest = { ...looseDest, [key]: (e.currentTarget as HTMLSelectElement).value }; }} class="{inputCls} w-auto max-w-[300px] text-[10px]">
+				{#each looseOptions as o (o.bucketId)}<option value={o.bucketId}>{o.label}</option>{/each}
+			</select>
+		{:else}
+			<span class="text-[var(--color-tron-yellow)]">No open buckets</span>
+		{/if}
+		<span class="flex shrink-0 gap-1">
+			<button type="submit" name="decision" value="bucket" disabled={busy || !looseDestFor(key)} class={looseBtnBucket}>Confirm</button>
+			<button type="button" onclick={() => { loosePicking = null; }} class="{looseBtn} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]">Cancel</button>
+		</span>
+	{:else}
+		<span class="flex shrink-0 gap-1">
+			<button type="button" onclick={() => { loosePicking = key; }} disabled={busy} class={looseBtnBucket}>Put In Bucket</button>
+			<button type="submit" name="decision" value="oven" disabled={busy} class={looseBtnOven}>Move To Oven</button>
+			<button type="submit" name="decision" value="trash" disabled={busy} class={looseBtnTrash} onclick={confirmTrash(n)}>Trash</button>
+		</span>
+	{/if}
+{/snippet}
+
 {#snippet cartHitView(h: CartHit)}
 	<!-- One found cart (Find a cart box + leftover "where does it belong?"):
 	     cart id · status pill · where it is, headlined by the bucket's nickname
@@ -816,16 +971,15 @@
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-semibold text-[var(--color-tron-text)]">Production Buckets</h1>
-			<p class="text-xs text-[var(--color-tron-text-secondary)]">Stick a QR on each shell and scan it into a bucket. A bucket is <em>pulled</em> into an in-process lane with a badge — that is the handoff — and marked <em>Done</em> when the work is finished: Barcoded → Unpressed in process → Unpressed → {data.backedLabel} in process → {data.backedLabel}. <em>Move to oven</em> frees the carts and returns the bucket to Available.</p>
 		</div>
 		<div class="flex gap-2">
-			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New bucket</a>
-			{#if data.canAdmin}<a href="/manufacturing/cart-mfg/buckets/override" class="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/20" title="Move a bucket to any phase, bypassing the flow (admin)">Master override</a>{/if}
-			<a href="/manufacturing/cart-mfg/state-change" class={btnGhost} title="Move individual carts to any status (bucket stages ask for a destination bucket)">Cart state change</a>
+			<a href="/manufacturing/cart-mfg/buckets/new" class={btnGhost}>New Bucket</a>
+			{#if data.canAdmin}<a href="/manufacturing/cart-mfg/buckets/override" class="rounded border border-red-500/40 px-3 py-1.5 text-xs text-red-300 hover:bg-red-900/20" title="Move a bucket to any phase, bypassing the flow (admin)">Master Override</a>{/if}
+			<a href="/manufacturing/cart-mfg/state-change" class={btnGhost} title="Move individual carts to any status (bucket stages ask for a destination bucket)">Cart State Change</a>
 			<!-- Badge Portal link (BADGE-SYSTEM_PLAN.md §17.5): the Require-badge switch lives
 			     there; this only shows to someone the portal will let in. -->
-			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether scan-in, every advance, discards and move to oven require a badge (admin)">Badge required: {data.badgeMode === 'required' ? 'on' : 'off'}</a>{/if}
-			<a href="/manufacturing/cart-mfg/wax-filling" class={btnGhost}>Wax filling →</a>
+			{#if data.canBadgeAdmin}<a href="/admin/badges" class="rounded border px-3 py-1.5 text-xs {data.badgeMode === 'required' ? 'border-[var(--color-tron-cyan)]/40 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10' : 'border-[var(--color-tron-yellow)]/40 text-[var(--color-tron-yellow)] hover:bg-[var(--color-tron-yellow)]/10'}" title="Open the Badge Portal to change whether scan-in, every advance, discards and move to oven require a badge (admin)">Badge Required: {data.badgeMode === 'required' ? 'On' : 'Off'}</a>{/if}
+			<a href="/manufacturing/cart-mfg/wax-filling" class={btnGhost}>Wax Filling →</a>
 		</div>
 	</div>
 
@@ -841,10 +995,10 @@
 
 	<!-- Controls strip (user, 2026-10-05): what used to be the right-hand rail, laid
 	     across the top where the counter tiles were, so the lanes get the full width. -->
-	<section class="grid items-start gap-3 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+	<section class="grid items-start gap-3 lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)_minmax(0,360px)]">
 			<div class="rounded-lg border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-3">
 				<label for="bucketScan" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan a bucket's sticker</label>
-				<input id="bucketScan" type="text" bind:value={scanInput} autocomplete="off" placeholder="scan bucket QR…"
+				<input id="bucketScan" type="text" bind:value={scanInput} autocomplete="off" placeholder="Scan bucket QR…"
 					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleScan(); } }}
 					oninput={() => { if (scanInput.trim().length >= 3) resolveLocal(scanInput); else shortList = []; }}
 					class={scanCls} />
@@ -876,7 +1030,7 @@
 				{/if}
 			</div>
 
-			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 {panel.kind === 'cycle' ? '' : 'lg:max-w-2xl'}">
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 				{#if panel.kind === 'none'}
 					<p class="py-6 text-center text-xs text-[var(--color-tron-text-secondary)]">Scan a bucket or pick a card.</p>
 
@@ -913,7 +1067,7 @@
 						</div>
 
 						{#if c.stage !== 'backing'}
-							<p class="mt-2 text-[10px] {c.inProcessAt ? 'text-green-300' : 'text-[var(--color-tron-yellow)]'}">{c.inProcessAt ? `${nextLabel(c.stage)} — in process${c.inProcessBy ? ` · ${c.inProcessBy}` : ''} · pulled ${dwell(c.inProcessAt)} ago` : c.stage === 'barcoded' ? 'Scanning carts in — pull the bucket when it is full' : 'Waiting to be pulled'}</p>
+							<p class="mt-2 text-[10px] {c.inProcessAt ? 'text-green-300' : 'text-[var(--color-tron-yellow)]'}">{c.inProcessAt ? `${nextLabel(c.stage)} — in progress${c.inProcessBy ? ` · ${c.inProcessBy}` : ''} · pulled ${dwell(c.inProcessAt)} ago` : c.stage === 'barcoded' ? 'Scanning carts in — pull the bucket when it is full' : 'Waiting to be pulled'}</p>
 						{/if}
 						</div>
 						<div>
@@ -934,7 +1088,7 @@
 									<label for="cartScan" class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan carts into this bucket</label>
 									<!-- Never disabled: a disabled input loses focus, and the gun keeps
 									     typing regardless. Enter queues and returns immediately. -->
-									<input id="cartScan" type="text" bind:value={cartScan} autocomplete="off" placeholder="scan cart QR…"
+									<input id="cartScan" type="text" bind:value={cartScan} autocomplete="off" placeholder="Scan cart QR"
 										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); enqueueCartScan(); } }} class={scanCls} />
 									{#if scanQueue.length > 0}
 										<p class="mt-1 text-[10px] text-[var(--color-tron-cyan)]">Recording… {scanQueue.length} queued — keep scanning</p>
@@ -970,9 +1124,9 @@
 								{@const r = (form.audit as any).result}
 								<div class="mt-3 rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-2 text-[10px] text-[var(--color-tron-text-secondary)]">
 									<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Last audit</p>
-									<p class="mt-0.5 text-[var(--color-tron-text)]">{r.present.length} of {r.expected} found{#if r.moved.length}, {r.moved.length} moved out{/if}{#if r.discarded.length}, {r.discarded.length} discarded{/if}{#if r.missingDiscarded.length}, {r.missingDiscarded.length} written off{/if}{#if r.missingReleased.length}, {r.missingReleased.length} taken off the pass{/if}.</p>
-									{#if r.missing.length > r.missingDiscarded.length + r.missingReleased.length}
-										{@const left = r.missing.filter((id: string) => !r.missingDiscarded.includes(id) && !r.missingReleased.includes(id))}
+									<p class="mt-0.5 text-[var(--color-tron-text)]">{r.present.length} of {r.expected} found{#if r.moved.length}, {r.moved.length} moved out{/if}{#if r.discarded.length}, {r.discarded.length} discarded{/if}{#if r.missingDiscarded.length}, {r.missingDiscarded.length} trashed{/if}{#if r.missingLoose?.length}, {r.missingLoose.length} moved to Loose{/if}{#if r.missingOven?.length}, {r.missingOven.length} moved to oven{/if}{#if r.missingReleased.length}, {r.missingReleased.length} taken off the pass{/if}{#if r.adopted?.length}, {r.adopted.length} loose cart{r.adopted.length === 1 ? '' : 's'} put in{/if}{#if r.born?.length}, {r.born.length} new cart{r.born.length === 1 ? '' : 's'} started here{/if}.</p>
+									{#if r.missing.length > r.missingDiscarded.length + r.missingReleased.length + (r.missingLoose?.length ?? 0) + (r.missingOven?.length ?? 0)}
+										{@const left = r.missing.filter((id: string) => !r.missingDiscarded.includes(id) && !r.missingReleased.includes(id) && !(r.missingLoose ?? []).includes(id) && !(r.missingOven ?? []).includes(id))}
 										<p class="mt-0.5 text-[var(--color-tron-yellow)]">Still missing and still on the pass: {left.length}</p>
 										<ul class="mt-0.5 max-h-20 space-y-0.5 overflow-y-auto">
 											{#each left as id (id)}<li class="truncate font-mono" title={id}>{id}</li>{/each}
@@ -987,7 +1141,7 @@
 									     from here until the bucket is marked done. -->
 									<form method="POST" action="?/pull" use:enhance={enhanceBusy} class="space-y-2">
 										<input type="hidden" name="cycleId" value={c.cycleId} />
-										<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if c.stage === 'barcoded'}When the bucket is full, pull{:else}Pull{/if} it into <strong class="text-[var(--color-tron-text)]">{nextLabel(c.stage)} — in process</strong>. {#if badgeRequired}The badge scanned here takes the bucket: it is recorded to that person until it is marked done.{/if}</p>
+										<p class="text-xs text-[var(--color-tron-text-secondary)]">{#if c.stage === 'barcoded'}When the bucket is full, pull{:else}Pull{/if} it into <strong class="text-[var(--color-tron-text)]">{nextLabel(c.stage)} — in progress</strong>. {#if badgeRequired}The badge scanned here takes the bucket: it is recorded to that person until it is marked done.{/if}</p>
 										{#if badgeRequired}
 											<label class="block">
 												<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan your badge to take this bucket</span>
@@ -999,7 +1153,7 @@
 											<input type="hidden" name="badge" value="" />
 										{/if}
 										{#if form?.pull?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.pull.error}</p>{/if}
-										<button type="submit" disabled={busy || c.quantity === 0} class={btnPrimary}>{busy ? 'Pulling…' : `Pull into ${nextLabel(c.stage)} — in process`}</button>
+										<button type="submit" disabled={busy || c.quantity === 0} class={btnPrimary}>{busy ? 'Pulling…' : `Pull into ${nextLabel(c.stage)} — in progress`}</button>
 									</form>
 								{:else if nxt}
 									<button type="button" class={btnPrimary} disabled={c.quantity === 0} onclick={() => setMode('advance')}>Done → {nextLabel(c.stage)}</button>
@@ -1016,7 +1170,7 @@
 									</form>
 									<p class="text-[10px] text-[var(--color-tron-text-secondary)]">Frees these carts from the bucket and returns it to Available. Carts stay backed until wax filling scans them in.</p>
 									{#if form?.moveToOven?.error}<p class="text-xs text-[var(--color-tron-error)]">{form.moveToOven.error}</p>{/if}
-									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax filling →</a>
+									<a href="/manufacturing/cart-mfg/wax-filling" class="block text-center text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]">Wax Filling →</a>
 								{/if}
 								<button type="button" class="{btnGhost} w-full" disabled={c.quantity === 0} onclick={() => setMode('scrap')}>Discard carts…</button>
 							</div>
@@ -1080,19 +1234,23 @@
 								<input type="hidden" name="discards" value={auditDiscards.join(',')} />
 								<input type="hidden" name="moves" value={JSON.stringify(auditMoves)} />
 								<input type="hidden" name="missingActions" value={JSON.stringify(auditMissingActions)} />
+								<input type="hidden" name="adopt" value={auditAdopt.join(',')} />
+								<input type="hidden" name="born" value={auditBorn.join(',')} />
 
 								<div class="rounded border border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-cyan)]/5 p-2">
 									<p class="text-xs text-[var(--color-tron-text)]">Scan <strong>every</strong> cart in this bucket.</p>
-									<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">{auditPresent.length} of {c.cartridgeIds.length} found · {auditForeign.length} do not belong{#if auditMissing.length > 0} · {auditMissing.length} not scanned yet{/if}</p>
+									<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">{auditPresent.length} of {c.cartridgeIds.length} found{#if auditBorn.length + auditAdopt.length > 0} · {auditBorn.length + auditAdopt.length} joining{/if} · {auditForeign.length} do not belong{#if auditMissing.length > 0} · {auditMissing.length} not scanned yet{/if}</p>
 								</div>
 
 								<div>
 									<label for="auditScan" class="text-[10px] uppercase tracking-wider text-[var(--color-tron-cyan)]">Scan a cart</label>
-									<input id="auditScan" type="text" bind:value={auditInput} autocomplete="off" disabled={auditBusy} placeholder="scan cart QR…"
+									<input id="auditScan" type="text" bind:value={auditInput} autocomplete="off" placeholder="Scan cart QR"
 										onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); scanForAudit(); } }} class={scanCls} />
 									{#if auditBusy}<p class="mt-1 text-[10px] text-[var(--color-tron-text-secondary)]">Checking…</p>{/if}
 									{#if auditError}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{auditError}</p>{/if}
 								</div>
+
+								<div class="rounded bg-[var(--color-tron-bg-primary)] p-2 text-center"><p class="text-[10px] text-[var(--color-tron-text-secondary)]">Scanned</p><p class="text-xl font-bold text-[var(--color-tron-cyan)]">{auditScans.length}</p></div>
 
 								<!-- Just the cart that was scanned: the tick-off list is the counter above. -->
 								{#if auditLast}
@@ -1104,13 +1262,11 @@
 												<span class="block truncate font-mono text-xs text-[var(--color-tron-text)]" title={a.barcode}>{a.barcode}</span>
 											</span>
 											<span class="flex shrink-0 items-center gap-2">
-												{#if a.finding === 'member'}<span class="rounded border border-green-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-green-300">belongs here</span>
-												{:else if a.finding === 'foreign'}<span class="rounded border border-[var(--color-tron-yellow)]/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">wrong tub</span>
-												{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">cannot handle</span>{/if}
+																								<span class="rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wider {auditPill(a.finding).cls}">{auditPill(a.finding).text}</span>
 												<button type="button" onclick={() => { auditScans = auditScans.slice(0, -1); }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]" title="Undo this scan">undo</button>
 											</span>
 										</div>
-										{#if a.finding !== 'member'}<p class="mt-0.5 text-[10px] {a.finding === 'foreign' ? 'text-[var(--color-tron-text-secondary)]' : 'text-red-300'}">{a.note}</p>{/if}
+										{#if a.finding !== 'member'}<p class="mt-0.5 text-[10px] {auditNoteCls(a.finding)}">{a.note}</p>{/if}
 									</div>
 								{/if}
 
@@ -1124,12 +1280,11 @@
 													<div class="flex items-center justify-between gap-2">
 														<span class="truncate font-mono text-xs text-[var(--color-tron-text)]" title={a.barcode}>{a.barcode}</span>
 														<span class="flex shrink-0 items-center gap-2">
-															{#if a.finding === 'foreign'}<span class="rounded border border-[var(--color-tron-yellow)]/50 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-[var(--color-tron-yellow)]">wrong tub</span>
-															{:else}<span class="rounded border border-red-500/40 px-1.5 py-0.5 text-[9px] uppercase tracking-wider text-red-300">cannot handle</span>{/if}
+																														<span class="rounded border px-1.5 py-0.5 text-[9px] uppercase tracking-wider {auditPill(a.finding).cls}">{auditPill(a.finding).text}</span>
 															<button type="button" onclick={() => { auditScans = auditScans.filter(x => x.barcode !== a.barcode); }} class="text-[10px] text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-error)]">remove</button>
 														</span>
 													</div>
-													<p class="mt-0.5 text-[10px] {a.finding === 'foreign' ? 'text-[var(--color-tron-text-secondary)]' : 'text-red-300'}">{a.note}</p>
+													<p class="mt-0.5 text-[10px] {auditNoteCls(a.finding)}">{a.note}</p>
 													{#if a.finding === 'foreign'}
 														{@const act = auditAction[a.barcode] ?? 'move'}
 														<div class="mt-1 flex flex-wrap items-center gap-2">
@@ -1159,17 +1314,20 @@
 								{/if}
 
 								{#if auditMissing.length > 0 && auditScans.length > 0}
-									<!-- Missing members: on the pass but not in the tub. Each one can stay
-									     (default), be written off, or be taken off the pass as a loose cart. -->
+									<!-- Missing members: on the pass but not in the tub (user, 2026-11-02). Each one can
+									     Keep (default — stays on the pass, recorded as missing), Move To Loose (into the
+									     Loose pile for a decision later), Move To Oven (straight to Backed on no pass, so
+									     wax filling can load it) or Trash (scrapped). -->
 									<div class="rounded border border-[var(--color-tron-yellow)]/40 bg-[var(--color-tron-yellow)]/5 p-2">
 										<p class="text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">{auditMissing.length} member{auditMissing.length === 1 ? '' : 's'} missing — on the pass, not in the tub</p>
-										<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">Keep scanning if they are still coming. Anything left as <em>keep</em> stays on the pass and is recorded as missing.</p>
+										<p class="mt-0.5 text-[10px] text-[var(--color-tron-text-secondary)]">Keep scanning if they are still coming. <em>Keep</em> leaves it on the pass and records it as missing. <em>Move To Loose</em> parks it in the Loose pile below the board. <em>Move To Oven</em> sends it straight to {data.backedLabel} so the Opentron will take it. <em>Trash</em> scraps it.</p>
 										{#if auditMissing.length > 1}
 											<div class="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
 												<span class="text-[var(--color-tron-text-secondary)]">All:</span>
-												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'keep'])); }} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">keep</button>
-												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'discard'])); }} class="rounded border border-red-500/40 px-1.5 py-0.5 text-red-300">write off</button>
-												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'release'])); }} class="rounded border border-[var(--color-tron-cyan)]/40 px-1.5 py-0.5 text-[var(--color-tron-cyan)]">take off pass</button>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'keep'])); }} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]">Keep</button>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'loose'])); }} class="rounded border border-[var(--color-tron-yellow)]/40 px-1.5 py-0.5 text-[var(--color-tron-yellow)]">Move To Loose</button>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'oven'])); }} class="rounded border border-[var(--color-tron-purple)]/40 px-1.5 py-0.5 text-[var(--color-tron-purple)]">Move To Oven</button>
+												<button type="button" onclick={() => { auditMissingAction = Object.fromEntries(auditMissing.map(id => [id, 'discard'])); }} class="rounded border border-red-500/40 px-1.5 py-0.5 text-red-300">Trash</button>
 											</div>
 										{/if}
 										<ul class="mt-1.5 max-h-48 space-y-1 overflow-y-auto">
@@ -1178,31 +1336,39 @@
 												<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1">
 													<div class="flex flex-wrap items-center justify-between gap-2">
 														<span class="min-w-0 flex-1 truncate font-mono text-[10px] text-[var(--color-tron-text)]" title={id}>{id}</span>
-														<span class="flex shrink-0 gap-1">
+														<span class="flex shrink-0 flex-wrap gap-1">
 															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'keep' }; }}
 																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'keep' ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
 																title="Leave it on the pass; the audit records it as missing">Keep</button>
+															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'loose' }; }}
+																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'loose' ? 'border-[var(--color-tron-yellow)]/60 text-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+																title="Off this pass into the Loose pile — decide later whether it goes in a bucket, to the oven, or in the trash">Move To Loose</button>
+															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'oven' }; }}
+																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'oven' ? 'border-[var(--color-tron-purple)]/60 text-[var(--color-tron-purple)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
+																title="It moved along without us: off this pass, straight to {data.backedLabel} on no pass — wax filling will take it">Move To Oven</button>
 															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'discard' }; }}
 																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'discard' ? 'border-red-500/60 text-red-300' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
-																title="Gone for good: scrapped off the pass, shell + label written off inventory">Write off</button>
-															<button type="button" onclick={() => { auditMissingAction = { ...auditMissingAction, [id]: 'release' }; }}
-																class="rounded border px-1.5 py-0.5 text-[10px] {act === 'release' ? 'border-[var(--color-tron-yellow)]/60 text-[var(--color-tron-yellow)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}"
-																title="It is somewhere else: off this pass, still a live cart another bucket can take in">Take off pass</button>
+																title="Gone for good: scrapped off the pass, shell + label written off inventory">Trash</button>
 														</span>
 													</div>
 												</li>
 											{/each}
 										</ul>
 										{#if auditRemovedMissing > 0}
-											<p class="mt-1 text-[10px] text-[var(--color-tron-yellow)]">{auditRemovedMissing} missing cart{auditRemovedMissing === 1 ? '' : 's'} will leave this pass — the count drops to {Math.max(0, c.quantity - auditRemovedMissing)}.</p>
+											<p class="mt-1 text-[10px] text-[var(--color-tron-yellow)]">{auditRemovedMissing} missing cart{auditRemovedMissing === 1 ? '' : 's'} will leave this pass — the count drops to {Math.max(0, c.quantity - auditRemovedMissing)}{#if auditAdopt.length} (+{auditAdopt.length} loose put in){/if}.</p>
 										{/if}
 									</div>
 								{/if}
 
-								{#if auditDiscards.length > 0 || auditRemovedMissing > 0}
+								{#if auditJournalRequired}
 									<label class="block">
-										<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — required ({[auditDiscards.length ? `${auditDiscards.length} discarded` : '', auditRemovedMissing ? `${auditRemovedMissing} missing removed` : ''].filter(Boolean).join(', ')})</span>
+										<span class="text-[10px] uppercase tracking-wider text-red-300">Journal — required ({[auditDiscards.length ? `${auditDiscards.length} discarded` : '', auditMissingTrashed ? `${auditMissingTrashed} missing trashed` : ''].filter(Boolean).join(', ')})</span>
 										<textarea name="journal" rows="2" required placeholder="What happened to them?" class={inputCls}></textarea>
+									</label>
+								{:else if auditRemovedMissing > 0}
+									<label class="block">
+										<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Journal — optional</span>
+										<textarea name="journal" rows="2" placeholder="Anything worth noting?" class={inputCls}></textarea>
 									</label>
 								{/if}
 								<!-- Gated step (2026-09-30): an audit that discards a stray or writes a
@@ -1217,7 +1383,9 @@
 									{busy ? 'Saving…' : `Finish audit — ${auditPresent.length}/${c.cartridgeIds.length} found`
 										+ (auditMoves.length ? `, ${auditMoves.length} moved` : '')
 										+ (auditDiscards.length ? `, ${auditDiscards.length} discarded` : '')
-										+ (auditRemovedMissing ? `, ${auditRemovedMissing} missing removed` : '')}
+										+ (auditRemovedMissing ? `, ${auditRemovedMissing} missing removed` : '')
+										+ (auditAdopt.length ? `, ${auditAdopt.length} loose put in` : '')
+										+ (auditBorn.length ? `, ${auditBorn.length} new` : '')}
 								</button>
 								<button type="button" class={btnGhost} onclick={() => { resetAudit(); setMode('view'); }}>Cancel</button>
 							</form>
@@ -1327,7 +1495,7 @@
 								<p class="mt-0.5"><span class="rounded border px-1.5 py-0.5 text-[10px] uppercase tracking-wider text-[var(--color-tron-text)] {last ? (stageTint[last] ?? '') : ''}">{stageLabel(last)}</span></p>
 							</div>
 							{#if !last}
-								<p class="text-xs text-[var(--color-tron-yellow)]">This bucket has never held a pass, so there is no stage to merge at — use <a href="/manufacturing/cart-mfg/state-change" class="underline">Cart state change</a> for these carts instead.</p>
+								<p class="text-xs text-[var(--color-tron-yellow)]">This bucket has never held a pass, so there is no stage to merge at — use <a href="/manufacturing/cart-mfg/state-change" class="underline">Cart State Change</a> for these carts instead.</p>
 							{:else if opts.length > 0}
 								<label class="block">
 									<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Merge into</span>
@@ -1339,7 +1507,7 @@
 									<p class="text-[10px] text-[var(--color-tron-yellow)]">No open pass is at {stageLabel(last)} — an empty bucket is suggested: a new pass opens there at {stageLabel(last)} with these carts. Nothing is debited.</p>
 								{/if}
 							{:else}
-								<p class="text-xs text-[var(--color-tron-yellow)]">No open pass at {stageLabel(last)} and no empty bucket — <strong>mint a new bucket</strong> (<a href="/manufacturing/cart-mfg/buckets/new" class="underline">New bucket</a>); it will appear here as soon as it exists.</p>
+								<p class="text-xs text-[var(--color-tron-yellow)]">No open pass at {stageLabel(last)} and no empty bucket — <strong>mint a new bucket</strong> (<a href="/manufacturing/cart-mfg/buckets/new" class="underline">New Bucket</a>); it will appear here as soon as it exists.</p>
 							{/if}
 							<div>
 								<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Scan the carts being merged</span>
@@ -1383,9 +1551,28 @@
 					</form>
 				{/if}
 			</div>
+
+			<!-- Cart QR search (user, 2026-09-23; top right since 2026-11-02): read-only,
+			     moves nothing and opens no panel. -->
+			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<label for="cartFind" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Find a cart</label>
+				<div class="mt-1 flex items-center gap-2">
+					<input id="cartFind" type="text" bind:value={cartFind} autocomplete="off"
+						placeholder="Scan a cart QR…"
+						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findCart(); } }}
+						class="min-h-[44px] w-full min-w-0 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] placeholder:font-sans placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
+					<button type="button" onclick={findCart} disabled={!cartFind.trim()}
+						class="min-h-[44px] shrink-0 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{cartFindBusy ? 'Looking…' : 'Find'}</button>
+				</div>
+				{#if cartFindHit}
+					<div class="mt-2">{@render cartHitView(cartFindHit)}</div>
+				{:else if cartFindLine}
+					<p class="mt-2 text-xs {cartFindOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{cartFindLine}</p>
+				{/if}
+			</div>
 	</section>
 
-		<!-- Board: Available + five lanes — Barcoded, Unpressed — in process, Unpressed, Backed — in process, Backed (user, 2026-10-05). -->
+		<!-- Board: Available + five lanes — Barcoded, Unpressed — in progress, Unpressed, Backed — in progress, Backed (user, 2026-10-05). -->
 		<div class="grid grid-cols-1 gap-3 md:grid-cols-3 xl:grid-cols-6">
 			<div class="rounded-lg border bg-[var(--color-tron-bg-secondary)] p-2 {data.focusStage === 'available' ? 'ring-1 ring-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}">
 				<div class="flex items-center justify-between px-1 pb-2">
@@ -1504,6 +1691,68 @@
 			{/each}
 		</div>
 
+	<!-- Loose pile (user, 2026-11-02): carts that are alive but in no bucket, each
+	     waiting for a decision. Members an audit could not find land here (Move To
+	     Loose); so does anything scanned into the box — including a sticker nobody
+	     ever scanned into a bucket, which starts life here. Put In Bucket adds a
+	     cart to any open pass at that pass's stage; Move To Oven sends it straight
+	     to Backed for wax filling; Trash scraps it. -->
+	<div class="rounded-lg border border-dashed border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-surface)] p-3 text-[10px]">
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<span class="font-semibold uppercase tracking-wider text-[var(--color-tron-yellow)]">Loose · {data.loose.count} cart{data.loose.count === 1 ? '' : 's'}</span>
+		</div>
+		<div class="mt-2 flex flex-wrap items-end gap-2">
+			<label class="block min-w-[260px] flex-1">
+				<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-yellow)]">Scan a cart into Loose</span>
+				<input id="looseScan" type="text" bind:value={looseScanInput} autocomplete="off" placeholder="Scan cart QR"
+					onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); scanIntoLoose(); } }} class={scanCls} />
+			</label>
+			{#if looseScanBusy}<span class="pb-2 text-[var(--color-tron-text-secondary)]">Checking…</span>{/if}
+		</div>
+		{#if looseScanMsg}<p class="mt-1 text-xs {looseScanOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-error)]'}">{looseScanMsg}</p>{/if}
+		{#if looseFocusCart}
+			{@const fc = looseFocusCart}
+			<!-- Bubble for the cart just scanned (user, 2026-11-02): its id and the three actions. -->
+			<form method="POST" action="?/looseResolve" use:enhance={enhanceBusy} class="mt-2 flex flex-wrap items-center gap-2 rounded border border-[var(--color-tron-yellow)]/50 bg-[var(--color-tron-yellow)]/5 px-2 py-1.5">
+				<input type="hidden" name="barcodes" value={fc.cartridgeId} />
+				<button type="button" onclick={() => { looseBubbleOpen = !looseBubbleOpen; }} class="min-w-0 flex-1 truncate text-left font-mono text-xs text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={looseInfo(fc)}>{fc.cartridgeId}</button>
+				{@render looseActions(`@${fc.cartridgeId}`, 1)}
+				{#if looseBubbleOpen}<p class="w-full text-[10px] text-[var(--color-tron-text-secondary)]">{looseInfo(fc)}</p>{/if}
+			</form>
+		{/if}
+		{#if form?.looseResolve?.error}<p class="mt-1 text-xs text-[var(--color-tron-error)]">{form.looseResolve.error}</p>{/if}
+		{#if form?.looseResolve?.success}
+			{@const r = (form.looseResolve as any).result}
+			<p class="mt-1 text-xs text-[var(--color-tron-cyan)]">{r.barcodes.length} cart{r.barcodes.length === 1 ? '' : 's'} {r.decision === 'bucket' && r.destination ? `put in ${r.destination.bucketId} #${r.destination.cycleNumber}` : r.decision === 'oven' ? 'moved to oven' : 'trashed'}.</p>
+		{/if}
+
+		{#if data.loose.count === 0}
+			<p class="mt-2 text-[var(--color-tron-text-secondary)]">Nothing loose.</p>
+		{:else}
+			{#if data.loose.carts.length > 1}
+				<!-- All at once: one decision for every cart listed. -->
+				<form method="POST" action="?/looseResolve" use:enhance={enhanceBusy} class="mt-2 flex flex-wrap items-center gap-2 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-2 py-1.5">
+					<input type="hidden" name="barcodes" value={data.loose.carts.map(lc => lc.cartridgeId).join(',')} />
+					<span class="flex-1 text-[var(--color-tron-text-secondary)]">All {data.loose.carts.length}</span>
+					{@render looseActions('*', data.loose.carts.length)}
+				</form>
+			{/if}
+			<ul class="mt-2 max-h-[440px] space-y-1 overflow-y-auto">
+				{#each data.loose.carts as lc (lc.cartridgeId)}
+					<li class="rounded bg-[var(--color-tron-bg-primary)] px-2 py-1.5">
+						<form method="POST" action="?/looseResolve" use:enhance={enhanceBusy} class="flex flex-wrap items-center gap-2">
+							<input type="hidden" name="barcodes" value={lc.cartridgeId} />
+							<button type="button" onclick={() => { looseOpen = looseOpen === lc.cartridgeId ? null : lc.cartridgeId; }} class="min-w-0 flex-1 truncate text-left font-mono text-xs text-[var(--color-tron-text)] hover:text-[var(--color-tron-cyan)]" title={looseInfo(lc)}>{lc.cartridgeId}</button>
+							{@render looseActions(lc.cartridgeId, 1)}
+							{#if looseOpen === lc.cartridgeId}<p class="w-full text-[var(--color-tron-text-secondary)]">{looseInfo(lc)}</p>{/if}
+						</form>
+					</li>
+				{/each}
+			</ul>
+			{#if data.loose.count > data.loose.carts.length}<p class="mt-1 text-[var(--color-tron-text-secondary)]">+{data.loose.count - data.loose.carts.length} more</p>{/if}
+		{/if}
+	</div>
+
 	{#if data.thermoseal}
 		{@const ts = data.thermoseal}
 		{@const pct = ts.roll ? Math.max(0, Math.min(100, Math.round((ts.roll.remainingCm / ts.roll.lengthCm) * 100))) : 0}
@@ -1525,6 +1774,18 @@
 						<div class="mt-1 h-1.5 w-full overflow-hidden rounded bg-[var(--color-tron-bg-tertiary)]">
 							<div class="h-full {pct <= 10 ? 'bg-red-400' : pct <= 25 ? 'bg-[var(--color-tron-yellow)]' : 'bg-[var(--color-tron-cyan)]'}" style="width: {pct}%"></div>
 						</div>
+						<!-- Finish Roll (user, 2026-11-02): marks the open roll used up. -->
+						<form method="POST" action="?/finishRoll" use:enhance={enhanceBusy} class="mt-1.5 flex flex-wrap items-center gap-2">
+							<input type="hidden" name="rollId" value={ts.roll.id} />
+							{#if finishRollAsk}
+								<span class="text-[var(--color-tron-text)]">Finish roll {ts.roll.id.slice(0, 8)}? {fmtM(ts.roll.remainingCm)} left becomes 0.</span>
+								<button type="submit" disabled={busy} class="rounded border border-red-500/60 px-2 py-0.5 text-red-300 hover:bg-red-900/20 disabled:opacity-50">Confirm</button>
+								<button type="button" onclick={() => { finishRollAsk = false; }} class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 text-[var(--color-tron-text-secondary)]">Cancel</button>
+							{:else}
+								<button type="button" onclick={() => { finishRollAsk = true; }} class="rounded border border-red-500/60 px-2 py-0.5 text-red-300 hover:bg-red-900/20">Finish Roll</button>
+							{/if}
+							{#if form?.finishRoll?.error}<span class="text-[var(--color-tron-error)]">{form.finishRoll.error}</span>{/if}
+						</form>
 					{:else}
 						<p class="mt-1 text-[var(--color-tron-text-secondary)]">No roll open — the first move to Unpressed pulls one{#if ts.nextLot} (lot {ts.nextLot.lotId}){/if}.</p>
 					{/if}
@@ -1562,29 +1823,10 @@
 		</div>
 	{/if}
 
-	<!-- Cart QR search (user, 2026-09-23): scan a cart, get one line telling you
-	     where it is. Read-only — it moves nothing and opens no panel. -->
-	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-		<label for="cartFind" class="block text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">Find a cart</label>
-		<div class="mt-1 flex flex-wrap items-center gap-2">
-			<input id="cartFind" type="text" bind:value={cartFind} autocomplete="off" disabled={cartFindBusy}
-				placeholder="scan a cart QR…"
-				onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); findCart(); } }}
-				class="min-h-[44px] w-full max-w-sm rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] px-3 py-2 font-mono text-sm text-[var(--color-tron-text)] placeholder:font-sans placeholder:text-[var(--color-tron-text-secondary)]/50 focus:border-[var(--color-tron-cyan)] focus:outline-none" />
-			<button type="button" onclick={findCart} disabled={cartFindBusy || !cartFind.trim()}
-				class="min-h-[44px] rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 text-sm font-medium text-[var(--color-tron-cyan)] disabled:opacity-50">{cartFindBusy ? 'Looking…' : 'Find'}</button>
-			{#if cartFindHit}
-				{@render cartHitView(cartFindHit)}
-			{:else if cartFindLine}
-				<p class="text-xs {cartFindOk ? 'text-[var(--color-tron-text)]' : 'text-[var(--color-tron-yellow)]'}">{cartFindLine}</p>
-			{/if}
-		</div>
-	</div>
-
 	<!-- Change log -->
 	<details class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 		<summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
-			<span class="text-sm font-medium text-[var(--color-tron-text)]">Change log <span class="text-xs text-[var(--color-tron-text-secondary)]">(last {data.changeLog.length} events)</span></span>
+			<span class="text-sm font-medium text-[var(--color-tron-text)]">Change Log <span class="text-xs text-[var(--color-tron-text-secondary)]">(last {data.changeLog.length} events)</span></span>
 			{#if discardedInLog > 0}<span class="rounded border border-red-500/40 bg-red-900/20 px-2 py-0.5 text-[10px] uppercase tracking-wider text-red-300">{discardedInLog} cart{discardedInLog === 1 ? '' : 's'} discarded in this window</span>{:else}<span class="text-[10px] uppercase tracking-wider text-[var(--color-tron-text-secondary)]">no discards in this window</span>{/if}
 		</summary>
 		<div class="border-t border-[var(--color-tron-border)] p-3">
@@ -1623,7 +1865,7 @@
 	<!-- Bucket log -->
 	<details class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 		<summary class="flex cursor-pointer flex-wrap items-center justify-between gap-2 px-4 py-3">
-			<span class="text-sm font-medium text-[var(--color-tron-text)]">Bucket log <span class="text-xs text-[var(--color-tron-text-secondary)]">({data.registry.length} bucket{data.registry.length === 1 ? '' : 's'})</span></span>
+			<span class="text-sm font-medium text-[var(--color-tron-text)]">Bucket Log <span class="text-xs text-[var(--color-tron-text-secondary)]">({data.registry.length} bucket{data.registry.length === 1 ? '' : 's'})</span></span>
 			<span class="flex flex-wrap gap-1.5 text-[10px] uppercase tracking-wider">{#each ['available', 'in_use', 'quarantined', 'retired'] as s (s)}<span class="rounded border px-1.5 py-0.5 {regStateTint[s]}">{regCounts[s]} {regStateLabel[s]}</span>{/each}</span>
 		</summary>
 		<div class="border-t border-[var(--color-tron-border)] p-3">

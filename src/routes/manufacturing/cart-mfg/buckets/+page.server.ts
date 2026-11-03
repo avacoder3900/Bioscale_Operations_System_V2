@@ -10,9 +10,11 @@ import {
 	BucketError, BUCKET_STAGES, STAGE_LABELS, BACKED_LABEL, SHELL_PART, LABEL_PART, THERMOSEAL_PART,
 	boardData, stageCounts, resolveScan, isBucketStage, changeLog, bucketRegistry,
 	startCycle, scanCartIn, unscanCart, advanceCycle, scrapCarts, reportResidual, retireBucket,
-	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts, pullIntoProcess
+	cartStatusLine, auditScan, auditCycle, moveToOven, inOvenCarts, pullIntoProcess,
+	looseCarts, scanIntoLoose, resolveLoose, type MissingAction
 } from '$lib/server/services/bucket-service';
-import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles } from '$lib/server/services/thermoseal-service';
+import { parseLooseDecision } from '$lib/server/services/bucket-loose';
+import { thermosealStatus, thermosealConfig, thermosealPart, checkFloor, setThermosealToggles, finishRoll, ThermosealError } from '$lib/server/services/thermoseal-service';
 import { lotRemaining, lotsWithStock, fifoLot } from '$lib/server/services/lot-remaining';
 import { badgeMode } from '$lib/server/services/badge-service';
 import type { Actions, PageServerLoad } from './$types';
@@ -56,7 +58,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		return thermosealStatus({ cfg, part, nextLot: fifoLot(rows, THERMOSEAL_PART) });
 	})().catch(() => null);
 
-	const [board, counts, lotRowsResolved, scan, log, registry, thermoseal, inOven, badge] = await Promise.all([
+	const [board, counts, lotRowsResolved, scan, log, registry, thermoseal, inOven, badge, loose] = await Promise.all([
 		boardData(),
 		stageCounts(),
 		lotRows,
@@ -70,7 +72,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		// gated steps — start pass, scan-in / un-scan, every advance, discards,
 		// move to oven, retire (2026-09-30; start, un-scan and retire 2026-10-05).
 		// Flipped only from /admin/badges; the board links there for admins.
-		badgeMode().catch(() => 'required' as const)
+		badgeMode().catch(() => 'required' as const),
+		// The Loose pile below the board (user, 2026-11-02): alive carts on no pass,
+		// each waiting for Put In Bucket / Move To Oven / Trash.
+		looseCarts().catch(() => ({ count: 0, carts: [] }))
 	]);
 
 	return {
@@ -88,6 +93,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		registry,
 		thermoseal,
 		inOven,
+		loose,
 		canAdmin: locals.user.roles.some(r => r.permissions.includes('manufacturing:admin') || r.permissions.includes('admin:full')),
 		scan: scan ? JSON.parse(JSON.stringify(scan)) : null,
 		scanQuery: q
@@ -136,7 +142,7 @@ export const actions: Actions = {
 			if (raw) {
 				try { moves = JSON.parse(raw); } catch { throw new BucketError('Could not read the move list — reload the board and scan again.'); }
 			}
-			let missingActions: { barcode: string; action: 'discard' | 'release' }[] = [];
+			let missingActions: { barcode: string; action: MissingAction }[] = [];
 			const rawMissing = String(d.get('missingActions') ?? '').trim();
 			if (rawMissing) {
 				try { missingActions = JSON.parse(rawMissing); } catch { throw new BucketError('Could not read the missing-cart list — reload the board and scan again.'); }
@@ -147,11 +153,47 @@ export const actions: Actions = {
 				discards: codesFrom(d.get('discards')),
 				moves,
 				missingActions,
+				// Loose carts found in the tub join this pass; stickers nobody ever
+				// scanned start life in Loose (user, 2026-11-02).
+				adopt: codesFrom(d.get('adopt')),
+				born: codesFrom(d.get('born')),
 				journal: String(d.get('journal') ?? ''),
 				badge: String(d.get('badge') ?? ''),
 				user: op(locals)
 			});
 			return { audit: { success: true, result: r } };
+		})();
+	},
+
+	// Loose pile (user, 2026-11-02). Scan: one cart into Loose — a member is pulled
+	// off its pass, a sticker nobody scanned is born here. Resolve: Put In Bucket /
+	// Move To Oven / Trash for one cart or all of them. Neither is badge-gated.
+	looseScan: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('looseScan', async () => {
+			const r = await scanIntoLoose({ barcode: String(d.get('barcode') ?? ''), reason: String(d.get('reason') ?? ''), user: op(locals) });
+			return { looseScan: { success: true, ...r } };
+		})();
+	},
+	looseResolve: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		return wrap('looseResolve', async () => {
+			const decision = parseLooseDecision(d.get('decision'));
+			if (!decision) throw new BucketError('Pick Put In Bucket, Move To Oven or Trash.');
+			const r = await resolveLoose({
+				barcodes: codesFrom(d.get('barcodes')),
+				decision,
+				destinationBucketId: String(d.get('destinationBucketId') ?? ''),
+				reason: String(d.get('reason') ?? ''),
+				user: op(locals)
+			});
+			return { looseResolve: { success: true, result: r } };
 		})();
 	},
 
@@ -242,6 +284,21 @@ export const actions: Actions = {
 			});
 			return { thermosealToggles: { success: true, notificationsEnabled: cfg.notificationsEnabled } };
 		})();
+	},
+
+	// Finish Roll (user, 2026-11-02): mark the open thermoseal roll used up.
+	finishRoll: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:write');
+		await connectDB();
+		const d = await request.formData();
+		try {
+			const r = await finishRoll({ rollId: String(d.get('rollId') ?? ''), user: op(locals) });
+			return { finishRoll: { success: true, ...r } };
+		} catch (e) {
+			if (e instanceof ThermosealError) return fail(e.status, { finishRoll: { error: e.message } });
+			throw e;
+		}
 	},
 
 	advance: async ({ request, locals }) => {

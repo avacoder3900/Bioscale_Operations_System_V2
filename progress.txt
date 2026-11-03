@@ -24954,3 +24954,95 @@ Retrieve this exact code: git checkout master at the commit titled "feat(robot-a
 What this deployment is for: see the entry above. BIMS side live now; the loop keeps working against the old daemon and
 old protocols (fallbacks), and gets the full gains once docs/HANDOFF-ARM-LOOP-SPEED-DEPLOY-2026-10-30.md is done:
 ot2-bridge 1.5.0 (md5 4b5691f80e560f16aa6d1500e5fce973) + both stage .py re-added to the library and deployed.
+
+
+================================================================================
+2026-11-02 — feat/bucket-loose — Loose pile for lost carts; audit Keep / Move To Loose / Move To Oven / Trash
+================================================================================
+Bucket audit rework (user, 2026-11-02). Reviewed on a local dev server (worktree
+../Bioscale_V2-wt-loose, port 5191), then merged to master at the user's request.
+
+- New cart status 'loose' (CartridgeRecord enum + a `loose` stamp: at/by/fromBucketId/fromCycleId/
+  priorStatus/reason). Pure helpers + unit tests in services/bucket-loose.ts / bucket-loose.test.ts.
+- Audit, missing member: Keep · Move To Loose · Move To Oven · Trash (Trash = old "Write off";
+  "Take off pass" removed from the UI, 'release' still accepted for old audits). Move To Oven =
+  status 'backing' on no pass with backing.manualBackedAt, same as State Change "No bucket", so
+  wax filling loads it. Journal only required for Trash.
+- Audit, scans: a sticker nobody ever scanned no longer blocks the submit — it starts life in the
+  audited pass at that pass's stage (shell + label debited like a scan-in). A loose cart found in the
+  tub joins the audited pass. Big "Scanned" counter above Just scanned.
+- Fix: audit scan box counted 13 scans for 10 carts. Root cause: the box was disabled during each
+  ?/auditScan round trip, so a gun typing the next label lost characters and the remainder arrived as
+  separate fragment scans. Now never disabled; Enter queues, one worker posts in order (the scan-in
+  box's 2026-09-25 pattern). Server backstop: an unknown code that is not a whole cart barcode
+  (UUID or CART-000123, isCartBarcode) is 'ineligible', never born.
+- Loose panel under the board: scan a cart in (members are pulled off their pass; unknown stickers
+  are born here), then Put In Bucket (any open pass, cart takes its stage), Move To Oven, or Trash,
+  per cart or all at once. No badge anywhere in the Loose flow. A loose cart scanned into a Barcoded
+  pass on the board is adopted instead of refused. No inventory moves except Trash (shell + label scrap).
+- Wording: "in process" → "in progress" (lanes, pull button, errors, ledger reason); header blurb
+  removed; New Bucket, Master Override, Cart State Change, Badge Required: On/Off, Wax Filling,
+  Scan bucket QR…, Scan cart QR, Change Log, Bucket Log. Find a cart moved to the top-right of the
+  controls strip.
+- Models: bucket-cycle missingActions enum + loose/oven, foreign action + adopted/born;
+  bucket-transaction type + 'loose'. No new indexes.
+- npm run check: 13 errors, none in touched files (baseline; 0 new). bucket-loose tests 8/8.
+
+2026-11-02 — master — deploy log: 39af83b7 (bucket Loose pile + audit changes)
+================================================================================
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/7WV8teVjgh9Y7gwd3vwrfT69ibUz
+Source: branch feat/bucket-loose @ commit 39af83b7 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 39af83b7
+What this deployment is for: Loose pile, audit Keep / Move To Loose / Move To Oven / Trash, never-scanned
+stickers born in the audited pass, audit scan queue fix (10 carts read as 13), "in progress" wording.
+
+2026-11-02 — master — Find a cart keeps focus between scans
+================================================================================
+The box was disabled during each lookup, which dropped focus; the operator had to click back in
+before every scan. Now never disabled, cleared on Enter, newest scan's answer shown (seq guard).
+File: buckets/+page.svelte. npm run check: 13 errors, baseline, none in touched files.
+
+2026-11-02 — master — Loose list rework, Loose scan box fix, scan-box rule in CLAUDE.md
+================================================================================
+- Loose rows: barcode only; click drops down the details (also the hover title). Put In Bucket opens
+  the bucket picker; Confirm submits, Cancel closes. Same on the All row.
+- Bubble under the Loose scan box for the last scanned cart: id (details open by default), Put In
+  Bucket / Move To Oven / Trash.
+- Fix: Loose scan box glued labels together and saved them as carts (<uuid><uuid>). Root cause: Enter
+  was ignored while the previous scan was checked, so the next label appended to the box. Now cleared
+  on Enter + queued in order. Server: scanIntoLoose calls assertNotMergedBarcode and refuses unknown
+  codes that are not a whole cart barcode (isCartBarcode).
+- Loose scan accepts any status (was refused past the buckets), like State Change.
+- Trash on a cart born loose and never in a bucket hard-deletes it (no debit happened); others scrap.
+- CLAUDE.md Common Pitfalls: barcode scan boxes must never block input (third time this bit us).
+Files: CLAUDE.md, bucket-service.ts, buckets/+page.svelte. npm run check: 13 errors, baseline.
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/9XFHZc5sxYgLZr2idxsq1jr1HCGy
+Source: branch feat/bucket-loose @ commit 2be01093 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 2be01093
+What this deployment is for: Loose list picker + scan bubble, glued-scan fix, Loose accepts any status.
+
+2026-11-02 — master — retired BKT-000006 "For Oven Use Only"
+================================================================================
+Data change only (user request). The bucket was a shortcut: carts already past backing were moved in
+with State Change, clicked through Unpressed/Backed and Moved to oven so wax filling would take them,
+charging shell + label + thermoseal again each run (9 passes, 2026-09-30 to 2026-11-02). Replaced by
+Move To Oven (Loose panel, bucket audit) and Cart State Change > Backed with No bucket. Retired with
+those alternatives as the reason (shows in the Bucket Log), plus a 'retire' bucket_transactions row and
+an audit_log row, by alejandro. Same writes as retireBucket, done by a one-off script because the
+service cannot load outside SvelteKit ($env).
+
+2026-11-02 — master — Finish Roll button (thermoseal)
+================================================================================
+We ran out of thermoseal before the gauge did. Thermoseal strip on the bucket board: Finish Roll ->
+"Finish roll <id>? <x> m left becomes 0." -> Confirm / Cancel. finishRoll() in thermoseal-service
+sets the active roll consumedCm = lengthCm, status 'exhausted', exhaustedAt, and a new finishedEarly
+{at, by, writtenOffCm} on the roll (ThermosealRoll model) + an AuditLog THERMOSEAL_ROLL_FINISHED row.
+No inventory moves (the roll was debited when opened). Next Barcoded -> Unpressed pulls a new roll as
+before. Action ?/finishRoll (manufacturing:write). npm run check: 13 errors, baseline.
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/EAPCyDKVYfTiTGcrMWuwHbiGyzaY
+Source: branch feat/bucket-loose @ commit 9ec1ad01 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 9ec1ad01
+What this deployment is for: Finish Roll button on the bucket board's thermoseal strip.
