@@ -8,11 +8,21 @@
  * just the server alive.
  */
 
-import { ScannerEvent } from '$lib/server/db';
+import { ScannerEvent, Ot2BridgeCommand } from '$lib/server/db';
 import { bridgeDeviceIdForRobot } from './proxy';
 
 // Heartbeat cadence is ~10s; allow 6 missed beats before calling it offline.
 const HEARTBEAT_STALE_MS = 60_000;
+
+/**
+ * RESTART WINDOW (2026-11-03, B14): the robot server boots for 2–3 min after a
+ * Recover, and during that boot the engine probe fails — which used to read as
+ * "Engine hung" and invite another Recover (each one killed the boot and
+ * blocked the daemon's worker for another 3 min). A restart issued inside this
+ * window is "Restarting" while the engine is silent, and the restart endpoint
+ * refuses a second one. 1.6.0 daemons also report the restart themselves.
+ */
+export const RESTART_WINDOW_MS = 240_000;
 
 // Protocol-run states that mean the robot is occupied (not 'ready').
 const ACTIVE_PROTOCOL = new Set([
@@ -35,9 +45,15 @@ export interface RobotHealth {
 	protocolRun: string | null;
 	maintenanceRun: string | null;
 	lastBeatMsAgo: number | null;
+	/** ISO time the robot server restart began, while it is still booting. */
+	restartingSince?: string | null;
 }
 
-function compute(meta: any, ageMs: number | null): RobotHealth {
+/**
+ * @param recentRestartMs age of a `restart_robot_server` issued inside the
+ * window (see recentRestartAgeMs), for daemons that don't report `restarting`.
+ */
+export function computeHealth(meta: any, ageMs: number | null, recentRestartMs: number | null = null): RobotHealth {
 	const bridgeOnline = ageMs != null && ageMs <= HEARTBEAT_STALE_MS;
 	const serverOk = !!meta?.health;
 	const engine = meta?.engine ?? {};
@@ -46,6 +62,15 @@ function compute(meta: any, ageMs: number | null): RobotHealth {
 	const engineOk = engine?.engineOk !== false;
 	const protocolRun: string | null = engine?.protocolRun ?? null;
 	const maintenanceRun: string | null = engine?.maintenanceRun ?? null;
+	// A restart in flight: reported by the daemon (1.6.0), else inferred from a
+	// recent restart command while the engine is not answering.
+	const reported = engine?.restarting && typeof engine.restarting === 'object' ? engine.restarting : null;
+	const restartAgeMs: number | null = reported
+		? Math.max(0, Number(reported.secondsAgo ?? 0)) * 1000
+		: recentRestartMs != null && (!serverOk || !engineOk)
+			? recentRestartMs
+			: null;
+	const restartingSince = restartAgeMs == null ? null : new Date(Date.now() - restartAgeMs).toISOString();
 
 	let status: RobotHealthStatus;
 	let label: string;
@@ -59,6 +84,10 @@ function compute(meta: any, ageMs: number | null): RobotHealth {
 		status = 'offline';
 		label = 'Offline';
 		detail = `Bridge silent for ${Math.round(ageMs / 1000)}s — daemon down or network lost`;
+	} else if (restartAgeMs != null) {
+		status = 'busy';
+		label = 'Restarting';
+		detail = `Robot server restarting (${Math.round(restartAgeMs / 1000)}s ago; boot takes 2–3 min) — wait, don't press Recover again`;
 	} else if (!serverOk || !engineOk) {
 		status = 'hung';
 		label = 'Engine hung';
@@ -86,8 +115,63 @@ function compute(meta: any, ageMs: number | null): RobotHealth {
 		engineOk,
 		protocolRun,
 		maintenanceRun,
-		lastBeatMsAgo: ageMs
+		lastBeatMsAgo: ageMs,
+		restartingSince
 	};
+}
+
+/**
+ * Age of a restart_robot_server command that still counts as "in flight": inside
+ * the window, not expired (never picked up — a retry is legitimate) and not
+ * refused by the daemon (`restarted:false` without `alreadyStarting`, e.g. a
+ * live run). An old daemon's `failed` ("did not come back" after its 90 s wait)
+ * still counts — the server is booting.
+ */
+export function recentRestartAgeMs(cmd: { createdAt?: Date | string; status?: string; result?: any } | null | undefined, now = Date.now()): number | null {
+	if (!cmd?.createdAt) return null;
+	const age = now - new Date(cmd.createdAt).getTime();
+	if (!(age >= 0 && age <= RESTART_WINDOW_MS)) return null;
+	if (cmd.status === 'expired') return null;
+	const body = cmd.result?.body;
+	if (body && body.restarted === false && !body.alreadyStarting) return null;
+	return age;
+}
+
+async function latestBeat(deviceId: string): Promise<any> {
+	return (await ScannerEvent.findOne({ deviceId, eventType: 'heartbeat' })
+		.sort({ receivedAt: -1 })
+		.select('receivedAt metadata')
+		.lean()
+		.catch(() => null)) as any;
+}
+
+async function recentRestartCommand(deviceId: string, now: number): Promise<any> {
+	return (await Ot2BridgeCommand.findOne({
+		deviceId,
+		kind: 'restart_robot_server',
+		createdAt: { $gte: new Date(now - RESTART_WINDOW_MS) }
+	})
+		.sort({ createdAt: -1 })
+		.select('createdAt status result requestedBy')
+		.lean()
+		.catch(() => null)) as any;
+}
+
+/**
+ * Is a robot-server restart under way on this robot? For the restart endpoint:
+ * the daemon's own report (fresh heartbeat), else any restart command issued
+ * inside the window (whatever the engine says — the badge is what the operator
+ * reads, this is what stops the second press).
+ */
+export async function restartInProgress(robot: { _id: string; name?: string | null }): Promise<{ ageS: number; by: string | null } | null> {
+	const deviceId = bridgeDeviceIdForRobot({ name: robot.name ?? undefined });
+	const now = Date.now();
+	const [beat, cmd] = await Promise.all([latestBeat(deviceId), recentRestartCommand(deviceId, now)]);
+	const reported = beat?.metadata?.engine?.restarting;
+	const fresh = beat?.receivedAt && now - new Date(beat.receivedAt).getTime() <= HEARTBEAT_STALE_MS;
+	if (fresh && reported && typeof reported === 'object') return { ageS: Math.max(0, Number(reported.secondsAgo ?? 0)), by: cmd?.requestedBy ?? null };
+	const ms = recentRestartAgeMs(cmd, now);
+	return ms == null ? null : { ageS: Math.round(ms / 1000), by: cmd?.requestedBy ?? null };
 }
 
 /**
@@ -102,13 +186,10 @@ export async function getRobotsHealth(
 	await Promise.all(
 		robots.map(async (r) => {
 			const deviceId = bridgeDeviceIdForRobot({ name: r.name ?? undefined });
-			const beat = (await ScannerEvent.findOne({ deviceId, eventType: 'heartbeat' })
-				.sort({ receivedAt: -1 })
-				.select('receivedAt metadata')
-				.lean()
-				.catch(() => null)) as any;
-			const ageMs = beat?.receivedAt ? Date.now() - new Date(beat.receivedAt).getTime() : null;
-			out[String(r._id)] = compute(beat?.metadata, ageMs);
+			const now = Date.now();
+			const [beat, cmd] = await Promise.all([latestBeat(deviceId), recentRestartCommand(deviceId, now)]);
+			const ageMs = beat?.receivedAt ? now - new Date(beat.receivedAt).getTime() : null;
+			out[String(r._id)] = computeHealth(beat?.metadata, ageMs, recentRestartAgeMs(cmd, now));
 		})
 	);
 	return out;

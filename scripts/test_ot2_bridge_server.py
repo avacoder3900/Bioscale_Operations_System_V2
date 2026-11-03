@@ -716,5 +716,83 @@ class ScanAtPauseTests(unittest.TestCase):
         self.assertNotIn("scan_at_pause", bridge.DIRECT_JOB_KINDS)
 
 
+class RestartWindowTests(unittest.TestCase):
+    """1.6.0: a manual restart answers at once and runs on its own thread; while
+    it is in flight the heartbeat says so, robot-bound commands are refused
+    immediately (B14 2026-11-03: they used to expire in the queue) and a second
+    press is told the boot is already under way."""
+
+    def setUp(self):
+        names = ("ot2_request", "subprocess", "_post_result", "_unit_main_pid", "_live_run_blocking_restart",
+                 "RESTART_POLL_S", "RESTART_SETTLE_S")
+        self._orig = {k: getattr(bridge, k) for k in names}
+        self.results, self.ran = [], []
+        bridge._post_result = lambda cid, payload: self.results.append((cid, payload)) or True
+
+        def fake_run(args, **k):
+            self.ran.append(list(args))
+            return types.SimpleNamespace(stdout="inactive\n" if "is-active" in args else "", returncode=0)
+        bridge.subprocess = types.SimpleNamespace(run=fake_run)
+        pids = iter([100, 200])  # old pid, then the new process
+        bridge._unit_main_pid = lambda: next(pids, 200)
+        bridge._live_run_blocking_restart = lambda unreadable_blocks: None
+        self.health_ok = True  # a test flips this to hold the fake robot "down" mid-boot
+
+        def fake_ot2(method, path, body=None, timeout=None):
+            if not self.health_ok:
+                raise RuntimeError("connection refused")
+            return FakeResp(200, {})
+        bridge.ot2_request = fake_ot2
+        bridge.RESTART_POLL_S = 0.01
+        bridge.RESTART_SETTLE_S = 0.0
+        bridge._end_restart()
+
+    def tearDown(self):
+        bridge._end_restart()
+        for k, v in self._orig.items():
+            setattr(bridge, k, v)
+
+    def test_manual_restart_answers_at_once_and_boots_in_the_background(self):
+        self.assertIsNone(bridge.engine_health()["restarting"])
+        self.health_ok = False  # the new server is not answering yet
+        bridge.execute_restart_robot_server("c1")
+        cid, payload = self.results[0]
+        self.assertEqual(cid, "c1")
+        self.assertTrue(payload["body"]["restarted"] and payload["body"]["async"])
+        self.assertIsNotNone(bridge.restart_state())  # visible to the heartbeat right away
+        self.assertIsNotNone(bridge.engine_health()["restarting"])
+        time.sleep(0.05)  # the thread has issued the restart and is polling /health
+        self.assertIsNotNone(bridge.restart_state())
+        self.health_ok = True  # the new process answers
+        for _ in range(200):  # the thread sees it and clears the state
+            if bridge.restart_state() is None:
+                break
+            time.sleep(0.02)
+        self.assertIsNone(bridge.restart_state())
+        self.assertIn(["systemctl", "restart", "--no-block", "opentrons-robot-server"], self.ran)
+        self.assertNotIn(["systemctl", "restart", "opentrons-robot-server"], self.ran)
+
+    def test_robot_bound_commands_and_a_second_press_are_refused_while_restarting(self):
+        bridge._begin_restart("test")
+        calls = []
+        bridge.ot2_request = lambda *a, **k: calls.append(a) or FakeResp(200, {})
+        bridge.execute_command({"_id": "h1", "kind": "http", "request": {"method": "GET", "path": "/runs"}}, None)
+        self.assertEqual(calls, [])
+        self.assertFalse(self.results[-1][1]["ok"])
+        self.assertIn("restarting", self.results[-1][1]["error"])
+        self.assertEqual(bridge.engine_health()["restarting"]["reason"], "test")
+        bridge.execute_restart_robot_server("c2")
+        body = self.results[-1][1]["body"]
+        self.assertTrue(body["alreadyStarting"])
+        self.assertFalse(body["restarted"])
+        self.assertEqual([a for a in self.ran if "restart" in a], [])
+
+    def test_a_dead_restart_watcher_stops_reporting_after_the_boot_window(self):
+        bridge._begin_restart("test")
+        with bridge._RESTART_LOCK:
+            bridge._RESTART["since"] = time.time() - bridge.RESTART_BOOT_MAX_S - 60
+        self.assertIsNone(bridge.restart_state())
+
+
 if __name__ == "__main__":
     unittest.main()

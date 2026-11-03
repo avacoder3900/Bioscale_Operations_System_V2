@@ -25085,3 +25085,31 @@ Retrieve this exact code: git checkout master at commit 240d62ad
 What this deployment is for: reagent start uses the record's cartridge count (B07 cartridges=0 on 11-03),
 the robot's own error reason, Start page re-reads. Live: /_app/version.json 1793730429604 (build 18:27:09Z)
 seen at 18:28:57Z.
+
+2026-11-03 — fix/robot-restart-window — "Engine hung" during a robot-server boot: Restarting badge, Recover refuses a second restart, daemon restarts without blocking its worker (ot2-bridge 1.6.0)
+================================================================================
+B14 18:22–18:37Z: its WiFi link to BIMS collapsed (5.5 Mbit/s, 20–70 % loss), bridge commands expired,
+the board said "robot unreachable"/"Engine hung", and each Recover press queued a restart_robot_server
+that the single-worker daemon ran synchronously (90 s in systemctl + 90 s waiting for /health) — the
+next batch's deck scan expired in the queue, the badge still said "Engine hung" (the server boots for
+2–3 min and the engine probe fails meanwhile), so Recover was pressed again: 4 batches cancelled by
+force reset, the storm guard caught the third press. The robot server was never hung. The link itself
+got the same wired relay as B07 (iMac launchd com.bims.ot2relay-b14, en7:8898; not in this repo).
+- health.ts: computeHealth() (exported) reads a 1.6.0 daemon's engine.restarting {since, secondsAgo}
+  → status busy / "Restarting (Ns ago; boot takes 2–3 min) — don't press Recover again". For older
+  daemons a restart_robot_server command issued inside RESTART_WINDOW_MS (4 min) counts while the
+  engine is not answering (recentRestartAgeMs: not expired, not refused by the daemon; an old daemon's
+  false "did not come back" `failed` still counts). getRobotsHealth reads that command per robot;
+  RobotHealth.restartingSince.
+- restart-server endpoint: restartInProgress() → 409 "already in progress (issued Ns ago by X)" instead
+  of queueing another restart, on both lines.
+- RobotBoard: Recover disabled + "Restarting…" while restartingSince is set; wording 90 s → 2–3 min.
+- scripts/ot2-bridge.py 1.6.0: execute_restart_robot_server answers at once and runs the restart on its
+  own thread (systemctl restart --no-block, then waits for a NEW MainPID to answer /health,
+  RESTART_BOOT_MAX_S 300); restart_state() rides in engine_health() → the heartbeat; while it is in
+  flight robot-bound commands (http/sweep/deck_scan/…) are refused immediately with "robot server is
+  restarting (issued Ns ago…)" instead of expiring, and a second restart press is told the boot is
+  under way. The auto-heal restart_robot_server() uses the same non-blocking wait (its 90 s wait was a
+  false negative on this Pi).
+Tests: scripts/test_ot2_bridge_server.py 45/45 (+3 RestartWindowTests); health.test.ts 8/8 (+4);
+npm run check 16 errors (baseline, none in touched files). Daemon rollout: see the deploy-log entry.

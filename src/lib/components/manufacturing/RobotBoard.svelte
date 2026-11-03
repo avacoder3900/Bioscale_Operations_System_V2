@@ -126,8 +126,8 @@
 			'',
 			'This ABORTS any active wax/reagent run on this robot and clears its run state. Cartridges are left as-is.',
 			willRestart
-				? 'The robot server will also be restarted (~90 s).'
-				: 'If the robot server turns out to be hung, it will also be restarted (~90 s).'
+				? 'The robot server will also be restarted (it boots for 2–3 min; the badge shows Restarting).'
+				: 'If the robot server turns out to be hung, it will also be restarted (2–3 min boot).'
 		];
 		if (!confirm(lines.join('\n'))) return;
 		busyId = row.robotId;
@@ -228,6 +228,7 @@
 			{#each rows as row (row.robotId)}
 				{@const h = healthFor(row)}
 				{@const isHung = h?.status === 'hung'}
+				{@const isRestarting = !!h?.restartingSince}
 				<section
 					class="flex flex-col gap-2.5 rounded-lg border bg-[var(--color-tron-surface)] p-3 transition-colors {isHung
 						? 'border-red-500/50'
@@ -252,13 +253,15 @@
 							<button
 								type="button"
 								onclick={(e) => recover(row, e.shiftKey)}
-								disabled={busyId !== null}
-								title="Abort any stuck run and get this robot back to idle. Restarts the robot server (~90 s) only if it's hung. Shift-click to force a restart."
+								disabled={busyId !== null || isRestarting}
+								title={isRestarting
+									? 'The robot server is restarting (boot takes 2–3 min) — wait for the badge to turn green.'
+									: "Abort any stuck run and get this robot back to idle. Restarts the robot server (2–3 min boot) only if it's hung. Shift-click to force a restart."}
 								class="rounded border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 {isHung
 									? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50'
 									: 'border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30'}"
 							>
-								{busyId === row.robotId ? (busyWhat === 'restart' ? 'Restarting…' : 'Recovering…') : 'Recover'}
+								{busyId === row.robotId ? (busyWhat === 'restart' ? 'Restarting…' : 'Recovering…') : isRestarting ? 'Restarting…' : 'Recover'}
 							</button>
 						</div>
 					</div>

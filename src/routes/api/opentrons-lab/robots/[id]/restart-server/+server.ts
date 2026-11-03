@@ -33,6 +33,7 @@ import {
 } from '$lib/server/db';
 import { getRobot, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { bridgeJobGate, isTailnetLineRequest } from '$lib/server/opentrons/bridge-token';
+import { restartInProgress } from '$lib/server/opentrons/health';
 
 export const config = { maxDuration: 30 };
 
@@ -78,6 +79,22 @@ export const POST: RequestHandler = async ({ params, locals, request, url }) => 
 			changedBy: user.username
 		});
 		return json({ success: true, abandoned: true });
+	}
+
+	// RESTART WINDOW (2026-11-03, B14): a restart already under way is not issued
+	// again — the server boots for 2–3 min, and every extra press used to kill
+	// that boot and block the daemon's worker for another 3 min (see health.ts).
+	const inFlight = await restartInProgress({ _id: String(robot._id), name: robot.name });
+	if (inFlight) {
+		return json(
+			{
+				success: false,
+				alreadyRestarting: true,
+				...inFlight,
+				message: `Robot server restart already in progress (issued ${inFlight.ageS}s ago${inFlight.by ? ` by ${inFlight.by}` : ''}; boot takes ~2–3 min). Wait for the health badge to turn green before pressing Recover again.`
+			},
+			{ status: 409 }
+		);
 	}
 
 	if (tailnet) {

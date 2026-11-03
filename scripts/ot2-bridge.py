@@ -107,7 +107,7 @@ except ImportError:
 # read_scanner (trigger + read the scanner over serial, no maintenance run, no motion:
 # the protocol itself parks the gantry at the scan position) and write_file (the
 # instruction record /data/arm_loop.json the running protocol polls after each pause).
-VERSION = "ot2-bridge/1.5.0"  # 1.5.0: scan_at_pause (the arm loop's scan read the moment the run pauses at the scan position); 1.4.0: read_scanner + write_file
+VERSION = "ot2-bridge/1.6.0"  # 1.6.0: non-blocking robot-server restart + 'restarting' in the heartbeat (B14 restart storm 2026-11-03); 1.5.0: scan_at_pause (the arm loop's scan read the moment the run pauses at the scan position); 1.4.0: read_scanner + write_file
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -828,7 +828,95 @@ def engine_health() -> dict:
             out["engineOk"] = False
     except Exception:
         out["engineOk"] = False
+    out["restarting"] = restart_state()  # 1.6.0: BIMS shows "Restarting" instead of "Engine hung"
     return out
+
+
+# 1.6.0 — a robot-server restart in flight. B14 2026-11-03: every Recover press
+# blocked this one worker for ~3 min (90 s in systemctl + the come-back wait),
+# the next batch's deck scan expired in the queue, BIMS showed "Engine hung"
+# for the whole boot and invited another press. Now the heartbeat carries the
+# restart (BIMS says "Restarting"), the manual restart runs on its own thread,
+# and robot-bound commands answer at once while it is set.
+_RESTART = {"since": None, "reason": None}
+_RESTART_LOCK = threading.Lock()
+RESTART_BOOT_MAX_S = float(os.environ.get("RESTART_BOOT_MAX_S", "300"))  # the server boots in 2-3 min
+RESTART_POLL_S = 2.0
+RESTART_SETTLE_S = 3.0  # let the hardware controller settle once /health answers
+
+
+def restart_state() -> Optional[dict]:
+    """{since, secondsAgo, reason} while a restart is in flight, else None."""
+    with _RESTART_LOCK:
+        since = _RESTART["since"]
+        if since is None:
+            return None
+        age = time.time() - since
+        if age > RESTART_BOOT_MAX_S + 30:  # a watcher that died must not report forever
+            _RESTART["since"] = _RESTART["reason"] = None
+            return None
+        return {"since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since)),
+                "secondsAgo": int(age), "reason": _RESTART["reason"]}
+
+
+def _begin_restart(reason: str) -> None:
+    with _RESTART_LOCK:
+        _RESTART["since"], _RESTART["reason"] = time.time(), reason
+
+
+def _end_restart() -> None:
+    with _RESTART_LOCK:
+        _RESTART["since"], _RESTART["reason"] = None, None
+
+
+def _unit_main_pid() -> int:
+    """MainPID of opentrons-robot-server (0 = not running, -1 = unreadable)."""
+    try:
+        out = subprocess.run(["systemctl", "show", "-p", "MainPID", "--value", "opentrons-robot-server"],
+                             capture_output=True, text=True, timeout=10).stdout.strip()
+        return int(out or 0)
+    except Exception:
+        return -1
+
+
+def _wait_server_back(old_pid: int, deadline: float) -> bool:
+    """True once a NEW robot-server process answers /health. After a --no-block
+    restart the old process may keep answering for a few seconds, so the pid
+    must change first (unless it cannot be read at all)."""
+    while time.time() < deadline:
+        pid = _unit_main_pid()
+        if pid < 0 or (pid != old_pid and pid != 0):
+            try:
+                r = ot2_request("GET", "/health", timeout=4)
+                if r.status_code < 400:
+                    return True
+            except Exception:
+                pass
+        time.sleep(RESTART_POLL_S)
+    return False
+
+
+def _restart_and_wait(reason: str) -> bool:
+    """Issue the restart without blocking on systemd (the stop + boot take 2-3
+    min on this Pi; the old blocking call hit its own 90 s timeout and reported
+    a false 'did not come back'), then wait for a new server to answer."""
+    _begin_restart(reason)
+    try:
+        old_pid = _unit_main_pid()
+        try:
+            subprocess.run(["systemctl", "restart", "--no-block", "opentrons-robot-server"],
+                           timeout=30, check=False)
+        except Exception as e:
+            log.error("robot-server restart command failed: %s", e)
+            return False
+        if _wait_server_back(old_pid, time.time() + RESTART_BOOT_MAX_S):
+            log.info("robot-server back up after restart")
+            time.sleep(RESTART_SETTLE_S)
+            return True
+        log.error("robot-server did not come back within %.0fs after restart", RESTART_BOOT_MAX_S)
+        return False
+    finally:
+        _end_restart()
 
 
 _last_restart_at = 0.0
@@ -857,24 +945,7 @@ def restart_robot_server(reason: str = "", force: bool = False) -> bool:
         return False
     _last_restart_at = time.time()
     log.warning("RESTARTING opentrons-robot-server — reason: %s", reason)
-    try:
-        subprocess.run(["systemctl", "restart", "opentrons-robot-server"],
-                       timeout=90, check=False)
-    except Exception as e:
-        log.error("robot-server restart command failed: %s", e)
-        return False
-    for _ in range(45):  # ~90s for the server to come back
-        try:
-            r = ot2_request("GET", "/health", timeout=4)
-            if r.status_code < 400:
-                log.info("robot-server back up after restart")
-                time.sleep(3)  # let the hardware controller settle
-                return True
-        except Exception:
-            pass
-        time.sleep(2)
-    log.error("robot-server did not come back within timeout after restart")
-    return False
+    return _restart_and_wait(reason)
 
 
 def clear_stale_maintenance_run() -> Optional[dict]:
@@ -1795,25 +1866,30 @@ def execute_deck_scan(command_id: str, payload: dict, port: ScannerPort) -> None
 
 
 def execute_restart_robot_server(command_id: str) -> None:
-    """Manual recovery (UI button): restart the OT-2 robot-server and wait for
-    it to come back. Bypasses the auto-heal cooldown.
+    """Manual recovery (UI button): restart the OT-2 robot-server. Bypasses the
+    auto-heal cooldown.
 
     RESTART-STORM GUARD (2026-08-25, B07): this robot-server takes ~2-3 min to
     boot, and while it boots BIMS shows "Engine hung" — which invites another
     restart press. Each queued restart killed the boot of the previous one, so
     the server sat in 'activating' for 40 minutes. If the service is currently
-    starting, do NOT kill it — report that it's booting and let it finish."""
+    starting (or this daemon's own restart is still in flight), do NOT kill it.
+
+    1.6.0: the restart runs on its own thread and this command answers at once,
+    so the worker stays free; BIMS reads 'restarting' from the heartbeat."""
     try:
         state = subprocess.run(["systemctl", "is-active", "opentrons-robot-server"],
                                capture_output=True, text=True, timeout=10).stdout.strip()
     except Exception:
         state = "unknown"
-    if state == "activating":
-        log.info("restart_robot_server %s: server is BOOTING — refusing to kill it (restart-storm guard)", command_id)
+    in_flight = restart_state()
+    if state == "activating" or in_flight:
+        ago = " (issued {} s ago)".format(in_flight["secondsAgo"]) if in_flight else ""
+        log.info("restart_robot_server %s: server is BOOTING%s — refusing to kill it (restart-storm guard)", command_id, ago)
         _post_result(command_id, {"ok": True, "status": 200, "body": {
-            "restarted": False, "alreadyStarting": True,
-            "message": "Robot server is already starting up (boot takes ~2-3 min on this robot). "
-                       "No restart issued — wait for it to finish instead of pressing restart again."}})
+            "restarted": False, "alreadyStarting": True, "restarting": in_flight,
+            "message": "Robot server is already starting up{} (boot takes ~2-3 min on this robot). "
+                       "No restart issued — wait for it to finish instead of pressing restart again.".format(ago)}})
         return
     blocker = _live_run_blocking_restart(unreadable_blocks=False)
     if blocker:
@@ -1823,13 +1899,16 @@ def execute_restart_robot_server(command_id: str) -> None:
             "message": "Not restarted: {} — restarting would kill it. Stop the run "
                        "first if it really is stuck.".format(blocker)}})
         return
+    global _last_restart_at
+    _last_restart_at = time.time()
     log.info("restart_robot_server command %s: restarting on operator request", command_id)
-    ok = restart_robot_server("manual restart via BIMS", force=True)
-    if ok:
-        _post_result(command_id, {"ok": True, "status": 200, "body": {"restarted": True}})
-        log.info("restart_robot_server command %s: server back up", command_id)
-    else:
-        _post_result(command_id, {"ok": False, "error": "robot server did not come back after restart"})
+    _begin_restart("manual restart via BIMS")  # in the next heartbeat even before the thread runs
+    threading.Thread(target=_restart_and_wait, args=("manual restart via BIMS",),
+                     name="robot-server-restart", daemon=True).start()
+    _post_result(command_id, {"ok": True, "status": 200, "body": {
+        "restarted": True, "async": True,
+        "message": "Restart issued — the robot server takes ~2-3 min to boot. The health badge shows "
+                   "'Restarting' until it answers; scans and run starts are refused until then."}})
 
 
 AUTO_RESUME_TIMEOUT_S = float(os.environ.get("AUTO_RESUME_TIMEOUT_S", "75"))
@@ -2525,11 +2604,26 @@ def execute_tip_swap_request(command_id: str, payload: dict) -> None:
         _post_result(command_id, {"ok": False, "error": str(e)})
 
 
+# Everything that needs the robot server (not restart itself, the serial-only
+# read_scanner, or write_file).
+ROBOT_BOUND_KINDS = frozenset({"http", "sweep", "deck_scan", "upload_protocol", "auto_resume_run",
+                               "calibrate_tip", "tip_swap_request", "scan_at_pause"})
+
+
 def execute_command(cmd: dict, port: ScannerPort) -> None:
     command_id = cmd.get("_id")
     kind = cmd.get("kind")
     if not command_id:
         log.warning("Claimed command without _id: %s", json.dumps(cmd)[:200])
+        return
+    in_flight = restart_state()
+    if in_flight and kind in ROBOT_BOUND_KINDS:
+        # 1.6.0: answer now instead of trying a server that is booting — the
+        # command used to sit here until BIMS expired it.
+        msg = ("robot server is restarting (issued {} s ago; boot takes ~2-3 min) — "
+               "try again when the health badge is green".format(in_flight["secondsAgo"]))
+        log.info("%s command %s refused: %s", kind, command_id, msg)
+        _post_result(command_id, {"ok": False, "error": msg, "restarting": in_flight})
         return
     if kind == "http":
         execute_http(command_id, cmd.get("request") or {})
