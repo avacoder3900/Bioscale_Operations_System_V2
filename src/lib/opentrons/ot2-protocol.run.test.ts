@@ -7,6 +7,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
 	runVerb,
+	robotErrorDetail,
 	verbRoute,
 	rtpMatches,
 	findCreatedRun,
@@ -247,6 +248,33 @@ describe('run.create / run.list', () => {
 		const r = await runVerb(t, 'run.create', { protocolId: 'p1' });
 		expect(r.status).toBe(502);
 		expect((r.body as any).message).toBe("Couldn't create run on robot: bad RTP");
+	});
+	it("create: the robot's own words come through the UnexpectedError wrapper (B07 2026-11-03: cartridges=0)", async () => {
+		const body = {
+			errors: [
+				{
+					id: 'UnexpectedError',
+					title: 'Unexpected Internal Error',
+					detail: 'exceptiongroup.ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)',
+					meta: {
+						type: 'ExceptionGroup',
+						code: '4000',
+						detail: {
+							args: "('unhandled errors in a TaskGroup', [ParameterValueError('Parameter must be between 1 and 24 inclusive.')])",
+							exceptions: "(ParameterValueError('Parameter must be between 1 and 24 inclusive.'),)",
+							message: 'unhandled errors in a TaskGroup'
+						}
+					}
+				}
+			]
+		};
+		const r = await runVerb(mockTransport(() => jres(500, body)), 'run.create', { protocolId: 'p1', runTimeParameterValues: { cartridges: 0 } });
+		expect(r.status).toBe(502);
+		expect((r.body as any).message).toBe("Couldn't create run on robot: Parameter must be between 1 and 24 inclusive.");
+		// Plain robot errors and empty bodies read as before; a double-quoted repr is read too.
+		expect(robotErrorDetail({ errors: [{ detail: 'bad RTP' }] }, 'x')).toBe('bad RTP');
+		expect(robotErrorDetail({}, 'Robot returned 500')).toBe('Robot returned 500');
+		expect(robotErrorDetail({ errors: [{ detail: 'wrapper', meta: { detail: { exceptions: `(ValueError("it's off"),)` } } }] }, 'x')).toBe("it's off");
 	});
 	it('list: links.current names the current run', async () => {
 		const body = {

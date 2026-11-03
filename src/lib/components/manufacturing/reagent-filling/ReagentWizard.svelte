@@ -295,6 +295,11 @@
 	const calKey = $derived(JSON.stringify(data.calibrationPreview?.values ?? {}));
 	const calReadonly = $derived(Object.keys(JSON.parse(calKey)));
 	const preScanContext = $derived(Object.freeze({ ...REAGENT_PARAM_DEFAULTS, ...JSON.parse(calKey) }));
+	// The loaded-deck Start panel's context: the same values plus the scanned
+	// count, keyed on a string for the same reason — the Loading-stage poll
+	// re-reads the run every few seconds and must not re-seed the form.
+	const loadedContextKey = $derived(JSON.stringify({ ...preScanContext, cartridges: data.cartridges.length }));
+	const loadedContext = $derived(Object.freeze(JSON.parse(loadedContextKey)) as Record<string, number | string | boolean>);
 
 	// "Run again": complete the just-finished run (→ Completed, robot freed),
 	// then start a fresh run on the same robot reusing the same assay + protocol
@@ -346,7 +351,7 @@
 		persistPlannedCount(fd);
 	}
 
-	async function startRunWithCapturedParams() {
+	async function startRunWithCapturedParams(scannedCount = 0) {
 		// Re-entry guard: the deck grid's onComplete can fire again while a start
 		// is in flight (a repeated last scan, a remount after invalidateAll). Two
 		// starts = two POST /runs = RunConflictError + an orphaned run on the robot.
@@ -354,8 +359,18 @@
 		if (!capturedParamsFd || !data.activeRunId) return;
 		capturedParamsFd.set('runId', data.activeRunId);
 		capturedParamsFd.set('reagentBatchBarcode', reagentBatchBarcode ?? '');
-		// Cartridge count is only known after the scan — inject the real count.
-		capturedParamsFd.set('param_cartridges', String(data.cartridges.length));
+		// Cartridge count is only known after the scan — inject the real count,
+		// taken from the scan that just completed and not only from the re-read
+		// run: B07's re-read (2026-11-03) came back before its 24 cartridges did,
+		// the form said 0, and the robot refused the run ("Parameter must be
+		// between 1 and 24"). The server takes the count from the record anyway;
+		// a 0 here never reaches it.
+		const count = Math.max(scannedCount, data.cartridges.length);
+		if (count < 1) {
+			showError('The deck scan recorded no cartridges — reload the page and press Start Run once they show.');
+			return;
+		}
+		capturedParamsFd.set('param_cartridges', String(count));
 		submitting = true;
 		pendingStage = 'Running';
 		if (lifecycleDirect) {
@@ -365,8 +380,7 @@
 					errorMsg = `Auto-start failed: ${err}`;
 					pendingStage = null;
 				}
-				await invalidateAll();
-				if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+				await settleAfterStart(!err);
 			} catch (e) {
 				errorMsg = e instanceof Error ? e.message : 'Run start failed';
 				pendingStage = null;
@@ -382,7 +396,8 @@
 				headers: { 'x-sveltekit-action': 'true' }
 			});
 			const txt = await res.text();
-			if (!res.ok || txt.includes('"type":"failure"')) {
+			const failed = !res.ok || txt.includes('"type":"failure"');
+			if (failed) {
 				// Show the server's own reason (2026-08-28) — the generic message hid
 				// actionable errors and made a failed auto-start look like a loop.
 				let detail = '';
@@ -397,8 +412,7 @@
 					: 'Auto-start with your parameters failed — start the run manually below.';
 				pendingStage = null;
 			}
-			await invalidateAll();
-			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+			await settleAfterStart(!failed);
 		} catch (e) {
 			errorMsg = e instanceof Error ? e.message : 'Run start failed';
 			pendingStage = null;
@@ -463,6 +477,41 @@
 	const currentStageIndex = $derived(
 		stage ? STAGES.indexOf(stage as Stage) : -1
 	);
+
+	/**
+	 * While the deck is loaded and the run has not started from this page,
+	 * re-read the run every few seconds: a start that landed after this page
+	 * reloaded (or came from another tab) flips the page to Running instead of
+	 * leaving a Start Run button over a robot that is already filling (Robot 2,
+	 * 2026-11-03). Paused while an action of this page is in flight. The Start
+	 * panel's context is keyed on its values (loadedContext) so a re-read with
+	 * the same numbers does not re-seed its form.
+	 */
+	const LOADED_POLL_MS = 8_000;
+	$effect(() => {
+		if (previewParam || stage !== 'Loading' || data.cartridges.length === 0) return;
+		const t = setInterval(() => {
+			if (!submitting) void invalidateAll();
+		}, LOADED_POLL_MS);
+		return () => clearInterval(t);
+	});
+
+	/**
+	 * After a start answered: re-read the run until the server shows it past
+	 * Loading (bounded), then let server state drive the page. One read used to
+	 * do it, which left the optimistic Running stage up for good when that read
+	 * came back stale; now the page falls back to what the server says and the
+	 * poll above keeps watching for the flip.
+	 */
+	async function settleAfterStart(started: boolean) {
+		const tries = started ? 8 : 1;
+		for (let i = 0; i < tries; i++) {
+			await invalidateAll();
+			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') break;
+			if (i < tries - 1) await new Promise((r) => setTimeout(r, 2500));
+		}
+		pendingStage = null;
+	}
 
 	// eslint-disable-next-line svelte/prefer-writable-derived -- viewStageIndex is user-writable via arrow buttons
 	let viewStageIndex = $state(-1);
@@ -775,8 +824,7 @@
 				showError(err);
 				pendingStage = null;
 			}
-			await invalidateAll();
-			if (data.runState.hasActiveRun && data.runState.stage !== 'Loading') pendingStage = null;
+			await settleAfterStart(!err);
 		} finally {
 			submitting = false;
 		}
@@ -1026,7 +1074,7 @@
 				// The !errorMsg guard is load-bearing — never start a run whose deck
 				// load did not commit.
 				if (!errorMsg && reagentBatchConfirmed && capturedParamsFd) {
-					await startRunWithCapturedParams();
+					await startRunWithCapturedParams(cartridgeScans.length);
 				}
 			}}
 			readonly={isViewingPast}
@@ -1054,7 +1102,7 @@
 				<ProtocolStartPanel
 					robot={{ _id: data.opentronsRobotId, name: data.robotId }}
 					protocols={data.robotProtocols}
-					contextValues={{ ...preScanContext, cartridges: data.cartridges.length }}
+					contextValues={loadedContext}
 					contextReadonly={['cartridges', ...calReadonly]}
 					lastTipState={data.lastTipState}
 					submitting={submitting}

@@ -132,6 +132,8 @@ import {
 	validRunId,
 	priorIntentDecision,
 	sameRequestedRtp,
+	startPrepare,
+	isActionFail,
 	START_INTENT_CLEAR_MS,
 	START_INTENT_IN_FLIGHT_MS,
 	START_CREATED_NOT_STARTED_BANNER
@@ -510,5 +512,36 @@ describe('computeRunParameters — rack offsets (CALIB-5)', () => {
 		const r = await computeRunParameters('reagent', new FormData(), schemaWith(['cartridges']), '2vIu0fzsbqzkZ7_Zjj3h2', null);
 		expect(Object.keys(r.runTimeParameterValues).filter((k) => k.includes('_offset_'))).toEqual([]);
 		expect(r.labwareOffsets).toEqual([]);
+	});
+});
+
+describe('reagent `cartridges` comes from the record (B07 2026-11-03: the page posted 0)', () => {
+	const schema = [{ variableName: 'cartridges', type: 'int', default: 24, min: 1, max: 24 }];
+	const scanned = (n: number) => Array.from({ length: n }, (_, i) => ({ cartridgeId: `c${i + 1}`, deckPosition: i + 1 }));
+
+	it('the scanned count on the record replaces whatever the form posted, in both maps', async () => {
+		const run = { _id: 'R1', cartridgesFilled: scanned(24) };
+		const r = await computeRunParameters('reagent', formOf({ param_cartridges: '0' }), schema, 'rb', null, run);
+		expect(r.runTimeParameterValues.cartridges).toBe(24);
+		expect(r.protocolParameters.cartridges).toBe(24);
+		const partial = { _id: 'R2', cartridgesFilled: scanned(9) };
+		const p = await computeRunParameters('reagent', formOf({ param_cartridges: '24' }), schema, 'rb', null, partial);
+		expect(p.runTimeParameterValues.cartridges).toBe(9);
+	});
+
+	it('no record, or a wax run → the posted value as before', async () => {
+		const none = await computeRunParameters('reagent', formOf({ param_cartridges: '0' }), schema, 'rb', null);
+		expect(none.runTimeParameterValues.cartridges).toBe(0);
+		const wax = await computeRunParameters('wax', formOf({ param_cartridges: '3' }), schema, 'rb', null, { _id: 'W1', cartridgeIds: ['c1'] });
+		expect(wax.runTimeParameterValues.cartridges).toBe(3);
+	});
+
+	it('a reagent run with nothing scanned is refused before the robot is touched', async () => {
+		db.reagent.set('R0', { _id: 'R0', robot: { _id: 'rb', name: 'B07' }, cartridgesFilled: [] });
+		const r = await startPrepare('reagent', formOf({ runId: 'R0', opentronsProtocolId: 'p1' }), USER, 'queue');
+		expect(isActionFail(r)).toBe(true);
+		expect((r as any).fail.status).toBe(400);
+		expect((r as any).fail.error).toMatch(/no scanned cartridges/);
+		expect(db.writes.filter((w) => w.model === 'reagent')).toEqual([]);
 	});
 });

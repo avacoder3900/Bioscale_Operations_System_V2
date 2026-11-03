@@ -25046,3 +25046,35 @@ Deployment: production - via Vercel GitHub integration on the push to master (Gi
 Source: branch feat/bucket-loose @ commit 9ec1ad01 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at commit 9ec1ad01
 What this deployment is for: Finish Roll button on the bucket board's thermoseal strip.
+
+2026-11-03 — fix/reagent-start-cart-count — reagent auto-start posted cartridges=0 (B07): count from the record, robot's own reason, Start page re-reads
+================================================================================
+Three reagent fills started together at 17:52Z. R04 and B14 ran; B07 scanned all 24 cartridges (0 errors)
+and then sat on the Start Run page. Root cause: ReagentWizard's auto-start counted the cartridges from
+the page data it re-read after loadDeck, and B07's re-read came back before its 24 scanned cartridges
+did, so the form posted param_cartridges=0; the robot refused POST /runs after a 20 s create
+(ParameterValueError "Parameter must be between 1 and 24 inclusive.") and BIMS only had the wrapper
+("exceptiongroup.ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)"). The record held
+all 24 the whole time; the operator's manual Start at 18:04Z worked.
+- Count from the scan (client): startRunWithCapturedParams(scannedCount) takes the count from the
+  DeckLoadingGrid completion payload (max with the re-read run); 0 never auto-starts — the page says
+  to reload and press Start Run.
+- Count from the record (server): computeRunParameters(..., run) sets `cartridges` from
+  run.cartridgesFilled.length for reagent runs (prepare and resync paths), logging when the form
+  disagreed. startContext refuses a reagent start with nothing scanned (400, before any robot call).
+  Wax is unchanged (test fills / arm fills start with none on purpose).
+- Robot's own words: robotErrorDetail() in ot2-protocol.ts digs the inner Python exception message
+  out of an UnexpectedError's meta.detail.exceptions/args; run.create and run.action use it, so the
+  page shows "Couldn't create run on robot: Parameter must be between 1 and 24 inclusive."
+- Start page re-reads (the "Start Run page over a robot that is already filling" symptom on a second
+  robot the same morning): while the deck is loaded and the run is still Loading, the wizard re-reads
+  the run every 8 s (paused while an action is in flight); after a start answers it re-reads up to
+  8x / 20 s until the server shows Running, then lets server state drive the page instead of holding
+  the optimistic stage. The loaded-deck Start panel's contextValues is keyed on its values (like
+  preScanContext) so the re-read does not re-seed the form.
+Files: ReagentWizard.svelte, run-lifecycle-records.ts (+test), ot2-protocol.ts (+test).
+Tests: the two touched vitest suites pass except "no BIMS labware in the analysis is stale..." in
+ot2-protocol.run.test.ts, which fails identically on origin/master 9e53c604 (expects the old
+"protocol analysis completed with errors" message without its ": x" suffix) — not touched here.
+npm run check: 16 errors, none in touched files (the log's 13 baseline + 3 pre-existing in
+assembly/[sessionId] and validation/magnetometer/[sessionId]).

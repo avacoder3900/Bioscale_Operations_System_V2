@@ -183,6 +183,26 @@ async function runGet(t: Ot2Transport, rid: string): Promise<VerbResult> {
 	}
 }
 
+/**
+ * The message a robot error body carries. Opentrons wraps most run-create
+ * failures in an UnexpectedError whose `detail` is only the Python wrapper
+ * ("exceptiongroup.ExceptionGroup: unhandled errors in a TaskGroup (1
+ * sub-exception)"); the words an operator can act on — "Parameter must be
+ * between 1 and 24 inclusive." (B07, 2026-11-03, cartridges=0) — sit in
+ * meta.detail.exceptions / .args as a Python repr. Dig them out so the page
+ * shows the robot's own reason instead of the wrapper.
+ */
+export function robotErrorDetail(body: unknown, fallback: string): string {
+	const err = (body as any)?.errors?.[0];
+	const detail = typeof err?.detail === 'string' && err.detail ? err.detail : null;
+	const meta = err?.meta?.detail;
+	const inner = [meta?.exceptions, meta?.args]
+		.filter((v): v is string => typeof v === 'string')
+		.flatMap((s) => [...s.matchAll(/\w+\((['"])((?:(?!\1)[^\\]|\\.)*)\1\)/g)].map((m) => m[2]));
+	if (inner.length) return [...new Set(inner)].join('; ');
+	return detail ?? fallback;
+}
+
 async function runAction(t: Ot2Transport, rid: string, action: unknown): Promise<VerbResult> {
 	if (!VALID_RUN_ACTIONS.includes(action as any)) {
 		return fail(400, 'action must be play, pause, stop, or resume');
@@ -193,7 +213,7 @@ async function runAction(t: Ot2Transport, rid: string, action: unknown): Promise
 		});
 		if (!res.ok) {
 			const body = await res.json().catch(() => ({}));
-			const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${res.status}`;
+			const detail = robotErrorDetail(body, `Robot returned ${res.status}`);
 			// A 4xx from the robot means the action is invalid for the run's CURRENT
 			// state (e.g. pause when already paused) — benign; the client reconciles
 			// by re-polling. 5xx/other = a real failure.
@@ -948,7 +968,7 @@ async function runCreate(t: Ot2Transport, protocolId: unknown, rtp: unknown): Pr
 		);
 		if (!createRes.ok) {
 			const body = await createRes.json().catch(() => ({}));
-			const detail = (body as any).errors?.[0]?.detail ?? `Robot returned ${createRes.status}`;
+			const detail = robotErrorDetail(body, `Robot returned ${createRes.status}`);
 			return { status: 502, body: { message: `Couldn't create run on robot: ${detail}`, robotStatus: createRes.status } };
 		}
 		const createBody = await createRes.json();

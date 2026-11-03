@@ -470,6 +470,8 @@ export async function setRunRecordStatus(
 // ── start: prepare ─────────────────────────────────────────────────────────
 
 type ParamDef = { variableName: string; type?: 'int' | 'float' | 'bool' | 'str'; default?: unknown };
+/** Cartridge positions on the carriage deck (DeckLoadingGrid's TOTAL_POSITIONS). */
+const DECK_POSITIONS = 24;
 
 /**
  * Coerce the operator's form values to the protocol schema's native types, then
@@ -481,7 +483,9 @@ export async function computeRunParameters(
 	form: FormData,
 	schema: unknown,
 	robotId: string,
-	deckBinding: any
+	deckBinding: any,
+	/** The run record; a reagent run's scanned cartridges set `cartridges`. */
+	run: any = null
 ): Promise<{
 	runTimeParameterValues: Record<string, number | string | boolean>;
 	protocolParameters: Record<string, number | string | boolean>;
@@ -528,6 +532,22 @@ export async function computeRunParameters(
 			protocolParameters['cartridges'] = endCart;
 			protocolParameters['cartridgesScanned'] = count;
 			console.log(`[wax startRun] partial deck: start cartridge ${startCart}, ${count} scanned -> end cartridge ${endCart}`);
+		}
+	}
+
+	if (kind === 'reagent' && run && paramSchema.some((d) => d.variableName === 'cartridges')) {
+		// The record is the count (2026-11-03). The page used to post the count
+		// it held after re-reading the run; B07's re-read landed before its 24
+		// scanned cartridges did, the form said 0, and the robot refused the run
+		// after a 20 s create ("Parameter must be between 1 and 24 inclusive").
+		// loadDeck has written the scanned cartridges by the time a start is
+		// possible, so the record decides and the posted number is only logged.
+		const scanned = Number(run.cartridgesFilled?.length ?? 0);
+		const posted = runTimeParameterValues['cartridges'];
+		if (scanned >= 1 && scanned <= DECK_POSITIONS) {
+			if (posted !== scanned) console.log(`[reagent startRun] cartridges: form posted ${String(posted)}, record has ${scanned} scanned -> using ${scanned}`);
+			runTimeParameterValues['cartridges'] = scanned;
+			protocolParameters['cartridges'] = scanned;
 		}
 	}
 
@@ -630,6 +650,13 @@ async function startContext(
 				/* non-fatal */
 			}
 		}
+	}
+
+	if (kind === 'reagent' && !(run.cartridgesFilled?.length >= 1)) {
+		// The reagent .py takes `cartridges` 1..24 and the count now comes from
+		// the record (computeRunParameters): nothing scanned = nothing to fill,
+		// and the robot would refuse the run anyway.
+		return actionFail(400, 'This run has no scanned cartridges on record — scan the deck + cartridges first (the robot refuses a run for 0 cartridges).');
 	}
 
 	const robot = await getRobot(robotId);
@@ -749,7 +776,7 @@ export async function startPrepare(
 	let runTimeParameterValues: Record<string, unknown> | null = null;
 	let createArgs: Record<string, unknown> | undefined;
 	if (current) {
-		const params = await computeRunParameters(kind, form, current.parametersSchema, ctx.robotId, ctx.deckBinding);
+		const params = await computeRunParameters(kind, form, current.parametersSchema, ctx.robotId, ctx.deckBinding, run);
 		runTimeParameterValues = params.runTimeParameterValues;
 		createArgs = {
 			protocolId: current.opentronsProtocolId,
@@ -841,7 +868,7 @@ export async function startRecordResync(
 		return actionFail(502, e instanceof Error ? e.message : 'unknown');
 	}
 	await recordResyncUpload(ctx.robotId, processType, fileName, uploaded, user.username);
-	const params = await computeRunParameters(kind, form, uploaded.parametersSchema, ctx.robotId, ctx.deckBinding);
+	const params = await computeRunParameters(kind, form, uploaded.parametersSchema, ctx.robotId, ctx.deckBinding, ctx.run);
 	await model(kind).updateOne(
 		{ _id: ctx.runId, 'startIntent.token': token },
 		{
