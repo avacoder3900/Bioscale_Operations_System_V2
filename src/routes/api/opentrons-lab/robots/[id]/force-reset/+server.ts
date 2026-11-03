@@ -46,8 +46,13 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	//    protocol run, drop any stale maintenance run). Never fail the reset on
 	//    this — the BIMS abort above is what actually frees the wizard.
 	const robotActions: string[] = [];
+	// False when the robot API couldn't be reached — the Recover button uses it
+	// to decide whether the robot server needs a restart too.
+	let robotReachable = true;
 	try {
 		const runsRes = await robotGet(robot as any, '/runs');
+		// A 5xx here means the server is up but its engine isn't answering.
+		if (runsRes.status >= 500) robotReachable = false;
 		if (runsRes.ok) {
 			const body = await runsRes.json().catch(() => ({}) as any);
 			const currentHref = (body?.links?.current?.href ?? '') as string;
@@ -70,6 +75,7 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 			}
 		}
 	} catch (e) {
+		robotReachable = false;
 		robotActions.push(`robot unreachable (${e instanceof Error ? e.message : 'error'}) — BIMS records still cleared`);
 	}
 
@@ -89,5 +95,5 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 			? `Reset to idle — aborted ${waxRes.modifiedCount} wax + ${reaRes.modifiedCount} reagent run(s).${robotActions.length ? ' ' + robotActions.join('; ') + '.' : ''}`
 			: `No active BIMS run to abort.${robotActions.length ? ' ' + robotActions.join('; ') + '.' : ' Robot was already idle.'}`;
 
-	return json({ ok: true, message, abortedWaxRuns: waxRes.modifiedCount, cancelledReagentRuns: reaRes.modifiedCount, robotActions });
+	return json({ ok: true, message, abortedWaxRuns: waxRes.modifiedCount, cancelledReagentRuns: reaRes.modifiedCount, robotActions, robotReachable });
 };

@@ -2,8 +2,8 @@
   Robot board (ROBOT-OVERHAUL, 2026-10-07): every OT-2 on one row of cards,
   with BOTH processes per robot. Each card shows the bridge health, the wax
   run and the reagent run the robot has (or Idle), and the two controls that
-  used to sit in the wax-filling and reagent-filling layouts — restart the
-  robot server, force the robot back to idle.
+  used to sit in the wax-filling and reagent-filling layouts. Those were two
+  buttons (Restart, Reset); since 2026-10-30 they are one Recover button.
 
   Round 6: this board is status only. Below it, each robot's panel shows its
   LIVE run or its SETUP (marked "live" / "setup" on that process row here);
@@ -84,67 +84,86 @@
 		};
 	});
 
-	// --- Controls: restart server / force reset -----------------------------------
+	// --- Control: Recover --------------------------------------------------------
+	// One button gets the robot back to "can start a run":
+	//   1. force-reset: abort the BIMS run record locking the robot and stop/clear
+	//      the robot's own run (cartridges untouched);
+	//   2. restart the robot server (~90 s) only when it needs it — the engine is
+	//      hung, or force-reset couldn't reach it. Shift-click forces the restart.
+	// An offline bridge can't take a restart, so we say so instead.
 	let busyId = $state<string | null>(null);
-	let busyWhat = $state<'restart' | 'reset' | null>(null);
+	let busyWhat = $state<'reset' | 'restart' | null>(null);
 	let messages = $state<Record<string, string>>({});
 
 	function say(robotId: string, text: string) {
 		messages = { ...messages, [robotId]: text };
 	}
 
-	async function restartServer(row: RobotBoardRow) {
-		if (busyId) return;
-		if (!confirm(`Restart the robot server on ${row.name}?\n\nThis clears a hung engine (~90s to come back). Any in-progress run on this robot will be cancelled.`)) return;
-		busyId = row.robotId;
-		busyWhat = 'restart';
-		say(row.robotId, '');
+	async function restartServer(row: RobotBoardRow): Promise<string> {
+		// Tailnet line (OT2-TAILNET-5 S6): the restart is a daemon job over
+		// /bridge (BIMS audits it first). Otherwise the queue POST.
+		const session = await openRobotSession(row.robotId);
 		try {
-			// Tailnet line (OT2-TAILNET-5 S6): the restart is a daemon job over
-			// /bridge (BIMS audits it first). Otherwise the queue POST.
-			const session = await openRobotSession(row.robotId);
-			try {
-				const bridge = session.bridge();
-				if (bridge) {
-					const r = await restartServerOverBridge(bridge, row.robotId);
-					say(row.robotId, r.ok ? r.message : r.error);
-					return;
-				}
-			} finally {
-				session.close();
+			const bridge = session.bridge();
+			if (bridge) {
+				const r = await restartServerOverBridge(bridge, row.robotId);
+				return r.ok ? r.message : r.error;
 			}
-			const res = await fetch(`/api/opentrons-lab/robots/${row.robotId}/restart-server`, { method: 'POST' });
-			const body = await res.json().catch(() => ({}));
-			say(row.robotId, res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.'));
-		} catch {
-			say(row.robotId, 'Restart request failed — check the bridge.');
 		} finally {
+			session.close();
+		}
+		const res = await fetch(`/api/opentrons-lab/robots/${row.robotId}/restart-server`, { method: 'POST' });
+		const body = await res.json().catch(() => ({}));
+		return res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.');
+	}
+
+	async function recover(row: RobotBoardRow, forceRestart: boolean) {
+		if (busyId) return;
+		const health = healthFor(row);
+		const willRestart = forceRestart || health?.status === 'hung';
+		const lines = [
+			`Recover ${row.name}?`,
+			'',
+			'This ABORTS any active wax/reagent run on this robot and clears its run state. Cartridges are left as-is.',
+			willRestart
+				? 'The robot server will also be restarted (~90 s).'
+				: 'If the robot server turns out to be hung, it will also be restarted (~90 s).'
+		];
+		if (!confirm(lines.join('\n'))) return;
+		busyId = row.robotId;
+		busyWhat = 'reset';
+		say(row.robotId, '');
+		const notes: string[] = [];
+		try {
+			let reachable = true;
+			try {
+				const res = await fetch(`/api/opentrons-lab/robots/${row.robotId}/force-reset`, { method: 'POST' });
+				const body = await res.json().catch(() => ({}));
+				notes.push(res.ok ? (body.message ?? 'Reset to idle.') : (body.message ?? body.error ?? 'Reset failed.'));
+				if (body?.robotReachable === false) reachable = false;
+				if (res.ok) await invalidateAll();
+			} catch {
+				notes.push('Reset request failed.');
+			}
+
+			if (willRestart || !reachable) {
+				if (health?.status === 'offline' && !forceRestart) {
+					notes.push('Bridge is offline, so the robot server can’t be restarted from here — check the robot’s power and network.');
+				} else {
+					busyWhat = 'restart';
+					try {
+						notes.push(await restartServer(row));
+					} catch {
+						notes.push('Restart request failed — check the bridge.');
+					}
+				}
+			}
+		} finally {
+			say(row.robotId, notes.join(' '));
 			busyId = null;
 			busyWhat = null;
 			// The dot reflects recovery on the next heartbeat; poll a bit sooner.
 			setTimeout(pollHealth, 3000);
-		}
-	}
-
-	// Master "force reset to idle" — aborts any stale wax/reagent run record that
-	// is locking the robot AND best-effort clears the robot's own run state.
-	async function forceReset(row: RobotBoardRow) {
-		if (busyId) return;
-		if (!confirm(`Force ${row.name} back to idle?\n\nThis ABORTS any active wax/reagent run on this robot and clears its run state. Use for stale/stuck runs. Cartridges are left as-is.`)) return;
-		busyId = row.robotId;
-		busyWhat = 'reset';
-		say(row.robotId, '');
-		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${row.robotId}/force-reset`, { method: 'POST' });
-			const body = await res.json().catch(() => ({}));
-			say(row.robotId, res.ok ? (body.message ?? 'Reset to idle.') : (body.message ?? body.error ?? 'Reset failed.'));
-			if (res.ok) await invalidateAll();
-		} catch {
-			say(row.robotId, 'Reset request failed — check the bridge.');
-		} finally {
-			busyId = null;
-			busyWhat = null;
-			setTimeout(pollHealth, 1500);
 		}
 	}
 
@@ -232,23 +251,14 @@
 						<div class="flex shrink-0 items-center gap-1">
 							<button
 								type="button"
-								onclick={() => restartServer(row)}
+								onclick={(e) => recover(row, e.shiftKey)}
 								disabled={busyId !== null}
-								title="Restart the robot server (clears a hung engine, ~90 s)"
+								title="Abort any stuck run and get this robot back to idle. Restarts the robot server (~90 s) only if it's hung. Shift-click to force a restart."
 								class="rounded border px-2 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 {isHung
 									? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50'
-									: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}"
+									: 'border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30'}"
 							>
-								{busyId === row.robotId && busyWhat === 'restart' ? 'Restarting…' : 'Restart'}
-							</button>
-							<button
-								type="button"
-								onclick={() => forceReset(row)}
-								disabled={busyId !== null}
-								title="Abort any stale run and force this robot back to idle"
-								class="rounded border border-red-500/40 bg-red-900/15 px-2 py-1 text-[11px] font-medium text-red-300 transition-colors hover:bg-red-900/30 disabled:opacity-50"
-							>
-								{busyId === row.robotId && busyWhat === 'reset' ? 'Resetting…' : 'Reset'}
+								{busyId === row.robotId ? (busyWhat === 'restart' ? 'Restarting…' : 'Recovering…') : 'Recover'}
 							</button>
 						</div>
 					</div>
