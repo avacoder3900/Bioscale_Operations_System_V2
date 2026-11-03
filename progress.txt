@@ -25078,3 +25078,10 @@ ot2-protocol.run.test.ts, which fails identically on origin/master 9e53c604 (exp
 "protocol analysis completed with errors" message without its ": x" suffix) — not touched here.
 npm run check: 16 errors, none in touched files (the log's 13 baseline + 3 pre-existing in
 assembly/[sessionId] and validation/magnetometer/[sessionId]).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success 18:28Z)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/AHEmxiZda1HAPWVHy1RKe9Px4xCT
+Source: branch fix/reagent-start-cart-count @ commit 240d62ad (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 240d62ad
+What this deployment is for: reagent start uses the record's cartridge count (B07 cartridges=0 on 11-03),
+the robot's own error reason, Start page re-reads. Live: /_app/version.json 1793730429604 (build 18:27:09Z)
+seen at 18:28:57Z.
