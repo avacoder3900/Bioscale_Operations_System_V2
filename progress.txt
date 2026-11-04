@@ -25333,3 +25333,7 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-ra405s24b-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit d7e56e5c (NOT on master)
 What this deployment is for: ARM status card details hidden by default; only an explicit Show is remembered.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-b3xu4zy7b-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit 541571da (NOT on master)
+What this deployment is for: Calibrate > Stage — cartridge plane capped at 56vh / 480 px, no longer stretched to the side column; gaps tightened.
