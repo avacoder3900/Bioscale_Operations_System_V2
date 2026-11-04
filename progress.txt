@@ -25195,3 +25195,12 @@ Pi install (arm-pi, 10:11 local): conveyor.py + install_conveyor_router.py copie
 applied (backup src/server/app.py.bak-conveyor), robot-arm restarted with /sessions/active null. Journal:
 "[conveyor] claimed BCM 22 via gpiozero"; GET /conveyor/status -> pin 22, state 0, simulated false. No pulse
 fired from here (it moves the real belt); first hardware pulse is the user's from the tab.
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Conveyor: default pulse 600 ms + Force Off button
+================================================================================
+- Conveyor tab: Pulse (ms) defaults to 600 (was 1000); conveyor.py PulseRequest default matches.
+- Force Off button (never disabled, so it can be sent even when the status read failed) -> ?/forceOff
+  -> POST /conveyor/off on the Pi: a single write driving BCM 22 low (claims the line first if needed),
+  leaving any pulse task alone (Stop still cancels). Audited as robot_arm.conveyor.force_off.
+Tests: TestClient in SIMULATED mode (off on a fresh module, pulse on -> off forces 0). npm run check 14
+errors (baseline, none in touched files).

@@ -4,7 +4,7 @@
 
 	let { data, form } = $props();
 
-	let pulseMs = $state(1000);
+	let pulseMs = $state(600);
 	let delayMs = $state(0);
 	let busy = $state(false);
 
@@ -92,7 +92,7 @@
 			</label>
 		</div>
 
-		<div class="grid grid-cols-1 content-start gap-3 sm:grid-cols-2">
+		<div class="grid grid-cols-1 content-start gap-3 sm:grid-cols-3">
 			<form method="POST" action="?/pulse" use:enhance={conveyorEnhance}>
 				<input type="hidden" name="pulse_ms" value={pulseMs} />
 				<input type="hidden" name="delay_ms" value={delayMs} />
@@ -112,6 +112,15 @@
 					class="min-h-[44px] w-full rounded border border-red-500/60 bg-red-500/10 px-3 py-1.5 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
 				>
 					Stop
+				</button>
+			</form>
+			<!-- Last resort: never disabled, so it can be sent even when the status read failed. -->
+			<form method="POST" action="?/forceOff" use:enhance={conveyorEnhance}>
+				<button
+					type="submit"
+					class="min-h-[44px] w-full rounded border border-red-500 bg-red-500/25 px-3 py-1.5 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/40"
+				>
+					Force Off
 				</button>
 			</form>
 		</div>

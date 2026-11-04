@@ -106,5 +106,18 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(502, { error: conveyorMessage(err) });
 		}
+	},
+
+	// One write: drive BCM 22 low. Touches no pulse state on the Pi.
+	forceOff: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const status = await robotArm.conveyorForceOff();
+			await audit(locals.user, 'robot_arm.conveyor.force_off', { pin: status.pin });
+			return { status };
+		} catch (err) {
+			return fail(502, { error: conveyorMessage(err) });
+		}
 	}
 };
