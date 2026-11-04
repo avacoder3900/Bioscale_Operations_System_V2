@@ -25543,3 +25543,17 @@ svelte-check 14 errors (baseline per 942994c8; none in touched files); 224 arm u
 Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
 Source: branch master @ 3f182710 (ad44a686 + 3f182710)
 What this deployment is for: easier move set archiving, and the first yellow-to-blue buttons.
+
+================================================================================
+2026-11-04 — master — Robot Arm colors by meaning, Delete buttons, Days Left, header row merged
+================================================================================
+645cac68: Fire blue / Hold gray / Move green (StepStrip, AnimationCurves, fire steps, Fire buttons, Test Fire);
+fire labels read the target's name, no emoji. Torque OFF + Off, Wax Fill drop, Force Off gray; Teach move
+set verified count blue; crumb row folded into the tab strip. daa7c112: red Delete (the 30-day R2 trash)
+on Teach move sets + sequences, the move set page and the sequence page (Play On The Arm row); Show Deleted
++ Restore for both lists; sequence page Play On The Arm blue; joint curves blue; fire step / solenoid pulse
+are number boxes only. This commit: every deleted list shows "N Days Left" (Teach poses / move sets /
+sequences, Pi recordings trash). svelte-check 13 errors (baseline); arm unit tests pass.
+Deployment: production — via Vercel GitHub integration on each push to master (builds not watched)
+Source: branch master @ 645cac68, daa7c112, and this commit
+What this deployment is for: the color, delete and Days Left requests above.
