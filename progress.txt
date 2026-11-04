@@ -25300,3 +25300,7 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-ei59h4wi6-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit 0c55e3af (NOT on master)
 What this deployment is for: Run tab Setup without the Test mode checkbox.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-gtdwrb69r-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit 0825f261 (NOT on master)
+What this deployment is for: descriptive text pared down on Run, Teach, History, Maintenance, Arm home and the status card.
