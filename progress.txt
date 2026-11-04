@@ -25341,3 +25341,7 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-bkpf22vj1-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit dc858923 (NOT on master)
 What this deployment is for: Calibrate opens on Stage (Stage sub-tab first); the four Stage teach-point cards sit 2x2 under the cartridge plane.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-hmgoj2p2r-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit 0707b430 (NOT on master)
+What this deployment is for: Run > Setup drawer — Animations condensed, Stage calibration card directly under it.
