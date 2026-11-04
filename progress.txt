@@ -25186,3 +25186,12 @@ move into Wax fill later); the Pi script stays.
   robot_arm.conveyor.pulse|stop). Tab added before Runs in +layout.svelte.
 Tests: conveyor router exercised in SIMULATED mode with FastAPI TestClient (pulse on, 409 overlap,
 delay -> on, stop, 422 over cap). npm run check 14 errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/E9uxRu3qJzoybnuMzPPxmdxBu19A
+Source: branch feat/arm-conveyor-page @ commit a713b68c (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit a713b68c
+What this deployment is for: Robot Arm > Conveyor tab, pulse the belt on GPIO 22 for a typed number of ms.
+Pi install (arm-pi, 10:11 local): conveyor.py + install_conveyor_router.py copied to ~/robot-arm, installer
+applied (backup src/server/app.py.bak-conveyor), robot-arm restarted with /sessions/active null. Journal:
+"[conveyor] claimed BCM 22 via gpiozero"; GET /conveyor/status -> pin 22, state 0, simulated false. No pulse
+fired from here (it moves the real belt); first hardware pulse is the user's from the tab.
