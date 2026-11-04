@@ -25519,3 +25519,13 @@ said twice. Header still shows DRY RUN and Arm Unreachable. svelte-check 13 erro
 Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
 Source: branch master @ (this commit)
 What this deployment is for: Arm Reachable moved into the hidden ARM card section.
+================================================================================
+2026-11-04 — master — Stage page cards in balanced columns, no empty space (23af0604)
+================================================================================
+Top row: cartridge canvas | Jog. The four Stage teach-point cards, Tip Calibrator, Protocol On Robot,
+Tour / Fill Motion, Set Position → Selection and Align Selection → Anchor Hole flow into CSS columns
+(1 / 2 / 3 / 4 at sm / lg / xl, column-fill balance). svelte-check 14 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 23af0604
+Retrieve this exact code: git checkout 23af0604
+What this deployment is for: Alejandro's screenshot of the empty left column under the Stage cards.
