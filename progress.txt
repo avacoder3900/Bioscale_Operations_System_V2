@@ -25364,3 +25364,7 @@ What this deployment is for: Run — Recent Runs under Stage calibration in the 
   Calibrate Recent Edits / Calibration History / Tag Registry; Run text trims.
 Tests: animation.test.ts 56/56 (+2 conveyor); simulated FireTimer check. npm run check 13 errors (baseline).
 Not yet run on hardware: a move set with a conveyor step.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-d0tjfh60b.vercel.app
+Source: branch feat/arm-ui-redesign @ commit dd613f8e (NOT on master)
+What this deployment is for: Teach pose editor — full-width sliders, nudge buttons and value box under each slider (fa4e8aff + dd613f8e).
