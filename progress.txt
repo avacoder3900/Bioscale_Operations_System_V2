@@ -25244,3 +25244,7 @@ Deployment: preview - via Vercel GitHub integration on the push of feat/arm-ui-r
   https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/2HHLMYz1TK8cqdECaXbiiskhpTbx
 Source: branch feat/arm-ui-redesign @ commit 09cf07bc (NOT on master)
 What this deployment is for: preview of the Robot Arm UI redesign, Robot Arm > Run / Teach / Calibrate / History.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-awbeq73g9-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit 9654861f (NOT on master)
+What this deployment is for: Run tab without the readiness notes; History is a page behind one button at the bottom of Run, no longer a tab.
