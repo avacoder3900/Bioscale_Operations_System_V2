@@ -386,6 +386,10 @@ export interface ConveyorStatus {
 	max_pulse_ms: number;
 	simulated: boolean;
 	stopped?: boolean;
+	/** The replay's own conveyor step is driving the belt (move-set fire step). */
+	replay_busy?: boolean;
+	/** The Pi's replay fires conveyor steps (conveyor.py + replay_settle.py, 2026-11-04). */
+	replay_fire?: boolean;
 }
 
 export interface ArmTask {

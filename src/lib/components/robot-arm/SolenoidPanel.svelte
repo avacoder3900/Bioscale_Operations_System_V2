@@ -13,7 +13,7 @@
 	 */
 	import { deserialize } from '$app/forms';
 	import { onMount } from 'svelte';
-	import { DEFAULT_PULSE_MS, MAX_PULSE_MS, MIN_PULSE_MS, SOLENOIDS, type FireSpec, type Solenoid, type SolenoidStatus } from '$lib/robot-arm/animation';
+	import { DEFAULT_PULSE_MS, MAX_PULSE_MS, MIN_PULSE_MS, SOLENOIDS, solenoidLabel, type FireSpec, type FireTarget, type SolenoidStatus } from '$lib/robot-arm/animation';
 
 	interface Props {
 		status: SolenoidStatus | null;
@@ -25,7 +25,7 @@
 
 	let status = $state<SolenoidStatus | null>(null);
 	let pulseMs = $state(DEFAULT_PULSE_MS);
-	let firing = $state<Solenoid | null>(null);
+	let firing = $state<FireTarget | null>(null);
 	let note = $state<{ ok: boolean; text: string } | null>(null);
 
 	$effect(() => {
@@ -52,7 +52,7 @@
 		if (armReachable && !initial) void refresh();
 	});
 
-	async function fire(solenoid: Solenoid, ms: number) {
+	async function fire(solenoid: FireTarget, ms: number) {
 		if (firing) return;
 		firing = solenoid;
 		note = null;
@@ -110,7 +110,7 @@
 			<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber}
 				disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(step.solenoid, step.pulseMs)}
 				title="Pulse this step's solenoid now. The arm does not move.">
-				{firing ? 'Firing…' : `Test Fire ${step.solenoid} · ${step.pulseMs} ms`}
+				{firing ? 'Firing…' : `Test Fire ${step.solenoid === 'conveyor' ? solenoidLabel(step.solenoid) : step.solenoid} · ${step.pulseMs} ms`}
 			</button>
 		{:else}
 			<label class="text-[11px]" style={muted}>Pulse (ms)

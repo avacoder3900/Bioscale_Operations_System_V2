@@ -387,7 +387,7 @@ describe('bulkPoseMessage', () => {
 });
 
 describe('fire steps (cartridge trapdoor solenoids)', () => {
-	function fire(solenoid: 'A' | 'B', o: Partial<ResolvedKeyframe> = {}): ResolvedKeyframe {
+	function fire(solenoid: 'A' | 'B' | 'conveyor', o: Partial<ResolvedKeyframe> = {}): ResolvedKeyframe {
 		const k = newFireStep(solenoid);
 		return { ...k, name: `Fire ${solenoid}`, positions: [], ...o };
 	}
@@ -433,6 +433,22 @@ describe('fire steps (cartridge trapdoor solenoids)', () => {
 			{ pin: 17, ms: 100, solenoid: 'A' },
 			{ pin: 27, ms: 100, solenoid: 'B' }
 		]);
+	});
+
+	it('a conveyor step fires GPIO 22 (Pin 15) with its own long pulse', () => {
+		expect(newFireStep('conveyor').fire).toEqual({ solenoid: 'conveyor', pulseMs: 600 });
+		const p = buildPath([kf('a', A, { holdS: 1 }), fire('conveyor', { fire: { solenoid: 'conveyor', pulseMs: 5000 } }), fire('A')], { rateHz: 30 });
+		expect(fireFrames(p).map((f) => [f.solenoid, f.pin, f.ms])).toEqual([['conveyor', 22, 5000], ['A', 17, 100]]);
+		// The trapdoor fires after the belt's pulse + wait: 1 + 5 + 1 s.
+		expect(fireFrames(p)[1].t).toBeCloseTo(7);
+	});
+
+	it('cleanKeyframes keeps conveyor steps; only the belt may pulse past 2 s', () => {
+		const belt = { poseId: '', holdS: 1, durationS: 0, easing: 'linear', fire: { solenoid: 'conveyor', pulseMs: 30000 } };
+		expect(cleanKeyframes([belt])[0].fire).toEqual({ solenoid: 'conveyor', pulseMs: 30000 });
+		expect(() => cleanKeyframes([{ ...belt, fire: { solenoid: 'A', pulseMs: 30000 } }])).toThrow(/20–2000 ms/);
+		expect(() => cleanKeyframes([{ ...belt, fire: { solenoid: 'conveyor', pulseMs: 600001 } }])).toThrow(/20–600000 ms/);
+		expect(() => cleanKeyframes([{ ...belt, fire: { solenoid: 'C', pulseMs: 100 } }])).toThrow(/conveyor belt/);
 	});
 
 	it('no fire steps → no fires field in the header (older recordings unchanged)', () => {

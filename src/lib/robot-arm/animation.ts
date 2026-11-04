@@ -74,6 +74,12 @@ export const MAX_TRIM_STEPS = 50;
 // ── solenoids (cartridge trapdoors) ──────────────────────────────────────
 
 export type Solenoid = 'A' | 'B';
+/**
+ * What a fire step drives: a trapdoor solenoid, or the conveyor belt (GPIO 22
+ * = Pin 15, services/robot-arm conveyor.py; 2026-11-04). Stored in
+ * FireSpec.solenoid, whose name predates the belt.
+ */
+export type FireTarget = Solenoid | 'conveyor';
 
 /**
  * The two trapdoor solenoids on the arm Pi's GPIO (BCM numbers, as in
@@ -83,10 +89,16 @@ export const SOLENOIDS: { id: Solenoid; pin: number; label: string }[] = [
 	{ id: 'A', pin: 17, label: 'Solenoid A' },
 	{ id: 'B', pin: 27, label: 'Solenoid B' }
 ];
+/** The conveyor belt as a fire target. Its pulse can be long (conveyor.py caps at 10 min). */
+export const CONVEYOR_FIRE: { id: 'conveyor'; pin: number; label: string } = { id: 'conveyor', pin: 22, label: 'Conveyor Belt' };
+export const FIRE_TARGETS: { id: FireTarget; pin: number; label: string }[] = [...SOLENOIDS, CONVEYOR_FIRE];
 /** Pulse range matches the Control tab's buttons (the Pi caps at 2000); default 100 ms (user, 2026-10-28). */
 export const DEFAULT_PULSE_MS = 100;
 export const MIN_PULSE_MS = 20;
 export const MAX_PULSE_MS = 2000;
+/** The belt's pulse: default 600 ms like the Conveyor card, up to conveyor.py's 600000. */
+export const CONVEYOR_DEFAULT_PULSE_MS = 600;
+export const CONVEYOR_MAX_PULSE_MS = 600000;
 /**
  * The wait after a pulse before the next step. Never shorter than this, so two
  * fire steps in a row are always apart (both trapdoors open at once would drop
@@ -104,9 +116,9 @@ export interface SolenoidStatus {
 	replayFire: boolean;
 }
 
-/** A fire step's solenoid and pulse; the wait after it is the step's holdS. */
+/** A fire step's target (solenoid or conveyor) and pulse; the wait after it is the step's holdS. */
 export interface FireSpec {
-	solenoid: Solenoid;
+	solenoid: FireTarget;
 	pulseMs: number;
 }
 
@@ -114,12 +126,22 @@ export function isSolenoid(v: unknown): v is Solenoid {
 	return v === 'A' || v === 'B';
 }
 
-export function solenoidPin(s: Solenoid): number {
-	return SOLENOIDS.find((x) => x.id === s)!.pin;
+export function isFireTarget(v: unknown): v is FireTarget {
+	return isSolenoid(v) || v === 'conveyor';
 }
 
-export function solenoidLabel(s: Solenoid): string {
-	return SOLENOIDS.find((x) => x.id === s)!.label;
+/** The target's GPIO (BCM) number, not the physical header pin. */
+export function solenoidPin(s: FireTarget): number {
+	return FIRE_TARGETS.find((x) => x.id === s)!.pin;
+}
+
+export function solenoidLabel(s: FireTarget): string {
+	return FIRE_TARGETS.find((x) => x.id === s)!.label;
+}
+
+/** Longest pulse a fire step may ask of this target. */
+export function maxPulseMs(s: FireTarget): number {
+	return s === 'conveyor' ? CONVEYOR_MAX_PULSE_MS : MAX_PULSE_MS;
 }
 
 /** How long a fire step holds the arm: the pulse, then the wait. */
@@ -128,8 +150,9 @@ export function fireStepS(k: { holdS: number; fire?: FireSpec }): number {
 }
 
 /** A fresh fire step, as the editor adds it. */
-export function newFireStep(solenoid: Solenoid = 'A'): Keyframe {
-	return { poseId: '', holdS: DEFAULT_FIRE_WAIT_S, durationS: 0, easing: 'linear', fire: { solenoid, pulseMs: DEFAULT_PULSE_MS } };
+export function newFireStep(solenoid: FireTarget = 'A'): Keyframe {
+	const pulseMs = solenoid === 'conveyor' ? CONVEYOR_DEFAULT_PULSE_MS : DEFAULT_PULSE_MS;
+	return { poseId: '', holdS: DEFAULT_FIRE_WAIT_S, durationS: 0, easing: 'linear', fire: { solenoid, pulseMs } };
 }
 
 /** How many pose steps and fire steps a step list has. */
@@ -389,10 +412,11 @@ export function cleanKeyframes(input: unknown): Keyframe[] {
 
 function cleanFireStep(k: any, i: number): Keyframe {
 	const solenoid = k.fire?.solenoid;
-	if (!isSolenoid(solenoid)) throw new Error(`step ${i + 1}: pick solenoid A or B`);
+	if (!isFireTarget(solenoid)) throw new Error(`step ${i + 1}: pick solenoid A, B or the conveyor belt`);
 	const pulseMs = Math.round(Number(k.fire?.pulseMs ?? DEFAULT_PULSE_MS));
-	if (!Number.isFinite(pulseMs) || pulseMs < MIN_PULSE_MS || pulseMs > MAX_PULSE_MS)
-		throw new Error(`step ${i + 1}: the pulse must be ${MIN_PULSE_MS}–${MAX_PULSE_MS} ms`);
+	const max = maxPulseMs(solenoid);
+	if (!Number.isFinite(pulseMs) || pulseMs < MIN_PULSE_MS || pulseMs > max)
+		throw new Error(`step ${i + 1}: the pulse must be ${MIN_PULSE_MS}–${max} ms`);
 	const waitS = Number(k.holdS ?? DEFAULT_FIRE_WAIT_S);
 	if (!Number.isFinite(waitS) || waitS < MIN_FIRE_WAIT_S || waitS > MAX_HOLD_S)
 		throw new Error(`step ${i + 1}: the wait after firing must be ${MIN_FIRE_WAIT_S}–${MAX_HOLD_S} s`);
@@ -798,7 +822,7 @@ export interface FireFlag {
 	t: number;
 	pin: number;
 	ms: number;
-	solenoid: Solenoid;
+	solenoid: FireTarget;
 }
 
 /** The frames where fire steps fire (each marker's time, on the frame grid). */

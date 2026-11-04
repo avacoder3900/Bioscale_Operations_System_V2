@@ -59,9 +59,9 @@ import {
 	tooFast,
 	trimFromSettle,
 	DEFAULT_RATE_HZ,
-	MAX_PULSE_MS,
+	maxPulseMs,
 	MIN_PULSE_MS,
-	type Solenoid,
+	type FireTarget,
 	type SolenoidStatus,
 	ENCODER_MAX,
 	JOG_CHUNK_STEPS,
@@ -1237,7 +1237,9 @@ export async function writeAndPlay(
 	if (!o.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
 	await requireIdle();
 	const fireSteps = o.keyframes.filter((k) => k.fire);
-	const gpio = fireSteps.length ? await requireReplayFire() : null;
+	const coilSteps = fireSteps.filter((k) => k.fire!.solenoid !== 'conveyor');
+	const gpio = coilSteps.length ? await requireReplayFire() : null;
+	if (fireSteps.length > coilSteps.length) await requireConveyorFire();
 	const now = await readArm();
 	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
 	const warnings: string[] = requireCool(now);
@@ -1318,6 +1320,22 @@ async function requireReplayFire(): Promise<{ simulated: boolean }> {
 	return { simulated: !!s.simulated };
 }
 
+/**
+ * A path with conveyor steps plays only on a Pi whose replay drives the belt
+ * (conveyor.py's replay_fire); otherwise the belt would silently stay still.
+ */
+async function requireConveyorFire(): Promise<void> {
+	let s: { replay_fire?: boolean };
+	try {
+		s = await robotArm.conveyorStatus();
+	} catch (err) {
+		const msg = (err as Error).message ?? String(err);
+		if (/robot-arm 404/.test(msg)) throw new AnimateError('This move set runs the conveyor belt, but the arm Pi has no conveyor routes. Install conveyor.py on the Pi first.', 409);
+		throw new AnimateError(`Could not check the conveyor belt before playing: ${msg}`, 502);
+	}
+	if (!s.replay_fire) throw new AnimateError("This move set runs the conveyor belt, but the arm Pi's replay cannot drive it yet. Update conveyor.py and replay_settle.py on the Pi and restart robot-arm.", 409);
+}
+
 /** Solenoid status for the Animate pages (null when the Pi or its GPIO routes are not there). */
 export async function solenoidStatus(): Promise<SolenoidStatus | null> {
 	try {
@@ -1334,9 +1352,32 @@ export async function solenoidStatus(): Promise<SolenoidStatus | null> {
  * Allowed while the arm plays, like the Control tab: the Pi's lock still
  * refuses a pulse while another is on, so both trapdoors never open at once.
  */
-export async function testFire(user: User, solenoid: Solenoid, pulseMs: number): Promise<{ simulated: boolean; elapsedMs: number }> {
-	if (!Number.isFinite(pulseMs) || pulseMs < MIN_PULSE_MS || pulseMs > MAX_PULSE_MS) throw new AnimateError(`The pulse must be ${MIN_PULSE_MS}–${MAX_PULSE_MS} ms.`);
+export async function testFire(user: User, solenoid: FireTarget, pulseMs: number): Promise<{ simulated: boolean; elapsedMs: number }> {
+	const max = maxPulseMs(solenoid);
+	if (!Number.isFinite(pulseMs) || pulseMs < MIN_PULSE_MS || pulseMs > max) throw new AnimateError(`The pulse must be ${MIN_PULSE_MS}–${max} ms.`);
 	const pin = solenoidPin(solenoid);
+	if (solenoid === 'conveyor') {
+		// The belt's pulse runs in the background on the Pi (conveyor.py), so this answers at once.
+		let st;
+		try {
+			st = await robotArm.conveyorPulse({ ms: Math.round(pulseMs), delay_ms: 0 });
+		} catch (err) {
+			const msg = (err as Error).message ?? String(err);
+			if (/robot-arm 409/.test(msg)) throw new AnimateError('The conveyor belt is already running — wait for it to finish.', 409);
+			if (/robot-arm 404/.test(msg)) throw new AnimateError('The arm Pi has no conveyor routes yet.', 409);
+			throw new AnimateError(`Conveyor pulse failed: ${msg}`, 502);
+		}
+		await connectDB();
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'robot_arm_gpio',
+			recordId: 'robot-arm-pi',
+			action: 'robot_arm.conveyor.pulse',
+			newData: { pin, ms: Math.round(pulseMs), delay_ms: 0, simulated: st.simulated, from: 'animate', userId: user._id },
+			changedBy: user.username
+		});
+		return { simulated: !!st.simulated, elapsedMs: 0 };
+	}
 	let r;
 	try {
 		r = await robotArm.pulseGpio({ pin, ms: Math.round(pulseMs) });

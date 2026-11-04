@@ -26,7 +26,7 @@ import {
 	testFire,
 	AnimateError
 } from '$lib/server/robot-arm-animation';
-import { friendlyName, isSolenoid, solenoidLabel } from '$lib/robot-arm/animation';
+import { friendlyName, isFireTarget, solenoidLabel } from '$lib/robot-arm/animation';
 import {
 	calibratePose,
 	checkPose,
@@ -165,11 +165,11 @@ export const sharedAnimateActions = {
 		if (!writer(locals)) return fail(401, { error: 'Unauthorized' });
 		const d = await request.formData();
 		const solenoid = field(d, 'solenoid');
-		if (!isSolenoid(solenoid)) return fail(400, { error: 'Pick solenoid A or B.' });
+		if (!isFireTarget(solenoid)) return fail(400, { error: 'Pick solenoid A, B or the conveyor belt.' });
 		const pulseMs = Number(field(d, 'pulseMs'));
 		try {
 			const r = await testFire(who(locals), solenoid, pulseMs);
-			return { fired: { solenoid, pulseMs, simulated: r.simulated }, success: `${solenoidLabel(solenoid)} fired for ${pulseMs} ms${r.simulated ? ' (simulated — the Pi has no GPIO right now)' : ''}.` };
+			return { fired: { solenoid, pulseMs, simulated: r.simulated }, success: `${solenoidLabel(solenoid)} ${solenoid === 'conveyor' ? 'started' : 'fired'} for ${pulseMs} ms${r.simulated ? ' (simulated — the Pi has no GPIO right now)' : ''}.` };
 		} catch (err) {
 			return failFrom(err);
 		}

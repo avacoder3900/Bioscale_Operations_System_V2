@@ -162,7 +162,7 @@ class FireTimer(threading.Thread):
             r = self.pulse(f["pin"], f["ms"], stop_event=self.halt)
             r.update({"t": f["t"], "solenoid": f["solenoid"], "late_ms": late_ms, "loop": self.loop})
             self.results.append(r)
-            print(f"[replay_settle] fire {f['solenoid'] or ''} pin {f['pin']} {f['ms']} ms at t={f['t']}: {'ok' if r.get('ok') else r.get('error')}", flush=True)
+            print(f"[replay_settle] fire {f['solenoid'] or ''} GPIO {f['pin']} {f['ms']} ms at t={f['t']}: {'ok' if r.get('ok') else r.get('error')}", flush=True)
         skipped = len(self.fires) - len(self.results)
         if skipped:
             self.results.append({"skipped": skipped, "loop": self.loop, "reason": "replay stopped"})
@@ -288,8 +288,21 @@ def replay_session_settling(
         raise ValueError(f"recording {source_path} has no frames")
     flagged = sum(1 for f in frames if f["settle"])
     fires = fire_schedule(frames)
-    pulse = None
+    # Conveyor steps (GPIO 22 = Pin 15, conveyor.py) run on their own timer so a
+    # long belt pulse never holds up a trapdoor; the rest are solenoid coils.
+    belt_pin: Optional[int] = None
+    belt_pulse = None
     if fires:
+        try:
+            from src.server import conveyor as belt
+
+            belt_pin, belt_pulse = belt.PIN, belt.pulse_blocking
+        except Exception as exc:  # no conveyor module: its steps fail per step, logged
+            print(f"[replay_settle] conveyor steps unavailable: {exc}", flush=True)
+    belt_fires = [f for f in fires if belt_pin is not None and f["pin"] == belt_pin]
+    coil_fires = [f for f in fires if not (belt_pin is not None and f["pin"] == belt_pin)]
+    pulse = None
+    if coil_fires:
         # Refuse before anything moves rather than play the arm without its trapdoors.
         from src.server import gpio as solenoid_gpio
 
@@ -326,22 +339,24 @@ def replay_session_settling(
     offset: dict[int, int] = {sid: 0 for sid in SETTLE_SERVOS}
     results: list[dict] = []
     fired: list[dict] = []
-    timer: Optional[FireTimer] = None
+    timers: list[FireTimer] = []
     halt = threading.Event()
     n = len(frames)
 
     def finish_fires(cancel: bool) -> None:
-        nonlocal timer
-        if timer is None:
+        if not timers:
             return
         if cancel:
             halt.set()
-        timer.join(FIRE_JOIN_S)
-        if timer.is_alive():  # a pulse would not end: cut the coils
+        for t in timers:
+            t.join(FIRE_JOIN_S)
+        if any(t.is_alive() for t in timers):  # a pulse would not end: cut the coils / belt
             halt.set()
-            timer.join(1.0)
-        fired.extend(timer.results)
-        timer = None
+            for t in timers:
+                t.join(1.0)
+        for t in timers:
+            fired.extend(t.results)
+        timers.clear()
 
     try:
         for loop_idx in range(loops):
@@ -350,10 +365,14 @@ def replay_session_settling(
             arms.logger.log_event("replay.loop", {"index": loop_idx + 1, "of": loops})
             arms._ramp_follower_to(follower_neutral)
             t_loop_start = time.perf_counter()
-            if fires and pulse is not None:
+            if coil_fires and pulse is not None or belt_fires and belt_pulse is not None:
                 halt.clear()
-                timer = FireTimer(fires, t_loop_start, halt, pulse, loop_idx + 1)
-                timer.start()
+            if coil_fires and pulse is not None:
+                timers.append(FireTimer(coil_fires, t_loop_start, halt, pulse, loop_idx + 1))
+            if belt_fires and belt_pulse is not None:
+                timers.append(FireTimer(belt_fires, t_loop_start, halt, belt_pulse, loop_idx + 1))
+            for t in timers:
+                t.start()
             for i, frame in enumerate(frames):
                 if stopped():
                     break
@@ -426,10 +445,16 @@ def install() -> dict[str, Any]:
 
 
 def _mark_fire_supported() -> None:
-    """Tell gpio.py (GET /gpio/status → replay_fire) that this replay fires `fire` frames."""
+    """Tell gpio.py and conveyor.py (GET …/status → replay_fire) that this replay fires `fire` frames."""
     try:
         from src.server import gpio as solenoid_gpio
 
         solenoid_gpio.REPLAY_FIRE_SUPPORTED = True
     except Exception as exc:  # no GPIO module: BIMS will refuse fire steps, which is right
         print(f"[replay_settle] fire steps unavailable: {exc}", flush=True)
+    try:
+        from src.server import conveyor as belt
+
+        belt.REPLAY_FIRE_SUPPORTED = True
+    except Exception as exc:  # no conveyor module: BIMS will refuse conveyor steps
+        print(f"[replay_settle] conveyor steps unavailable: {exc}", flush=True)

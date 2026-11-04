@@ -9,7 +9,7 @@ import mongoose, { Schema } from 'mongoose';
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 
 /** A fire step's solenoid and pulse (src/lib/robot-arm/animation.ts FireSpec). */
-const fireSchema = new Schema({ solenoid: { type: String, enum: ['A', 'B'], required: true }, pulseMs: { type: Number, required: true } }, { _id: false });
+const fireSchema = new Schema({ solenoid: { type: String, enum: ['A', 'B', 'conveyor'], required: true }, pulseMs: { type: Number, required: true } }, { _id: false });
 
 const keyframeSchema = new Schema(
 	{

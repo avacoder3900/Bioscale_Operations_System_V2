@@ -13,6 +13,12 @@ Endpoints (auth is applied by app.py when the router is included):
     POST /conveyor/stop          belt off now, cancels a pending delay too
     POST /conveyor/off           Force Off: one write driving the pin low
 
+Move-set conveyor steps (2026-11-04): replay_settle.py fires a `fire` frame
+whose pin is CONVEYOR_GPIO_PIN through pulse_blocking() below, on its own
+timer thread, so a long belt pulse never delays a trapdoor solenoid.
+replay_settle.install() sets REPLAY_FIRE_SUPPORTED (GET /conveyor/status ->
+replay_fire), and BIMS refuses to play a conveyor step on a Pi without it.
+
 A pulse is fire-and-forget: /pulse answers as soon as the pulse is scheduled,
 and the belt is switched off by a background task. That is what lets a pulse
 run longer than BIMS's 30 s request budget. Poll /status to see it finish.
@@ -37,6 +43,7 @@ from __future__ import annotations
 import asyncio
 import atexit
 import os
+import threading
 import time
 from typing import Optional
 
@@ -53,6 +60,11 @@ if not (0 <= PIN <= 27):
 MAX_PULSE_MS = int(os.environ.get("CONVEYOR_MAX_PULSE_MS", "600000"))
 MIN_PULSE_MS = 10
 MAX_DELAY_MS = 600000
+
+#: Set by replay_settle.install(): the replay fires conveyor `fire` frames.
+REPLAY_FIRE_SUPPORTED = False
+#: Held while the replay's timer drives the belt (pulse_blocking).
+_replay_lock = threading.Lock()
 
 # ---------------------------------------------------------------- backend
 
@@ -162,6 +174,40 @@ def close() -> None:
     _backend.close()
 
 
+def pulse_blocking(pin: int, ms: int, stop_event: Optional[threading.Event] = None, wait_s: float = 0.0) -> dict:
+    """Run the belt from a worker thread (the replay's conveyor fire timer).
+
+    Drives the belt pin (GPIO 22 = Pin 15 by default) high for ms, then low;
+    a set stop_event ends it early.
+    Refuses (never raises) when the pin is wrong, ms is out of range, or a
+    pulse from the page is already running, so a replay is never killed by
+    the belt. Same return shape as gpio.pulse_blocking.
+    """
+    if pin != PIN:
+        return {"ok": False, "pin": pin, "ms": ms, "error": f"pin must be {PIN}"}
+    if not (MIN_PULSE_MS <= ms <= MAX_PULSE_MS):
+        return {"ok": False, "pin": pin, "ms": ms, "error": f"ms must be {MIN_PULSE_MS}..{MAX_PULSE_MS}"}
+    if _job.active:
+        return {"ok": False, "pin": pin, "ms": ms, "error": "a conveyor pulse from the page is running"}
+    if not _replay_lock.acquire(timeout=wait_s):
+        return {"ok": False, "pin": pin, "ms": ms, "error": "the previous conveyor step is still running"}
+    t0 = time.monotonic()
+    try:
+        _backend.on()
+        try:
+            if stop_event is not None:
+                stop_event.wait(ms / 1000.0)
+            else:
+                time.sleep(ms / 1000.0)
+        finally:
+            _backend.off()
+    except Exception as exc:  # hardware error: report it, the replay goes on
+        return {"ok": False, "pin": pin, "ms": ms, "error": str(exc), "simulated": _backend.simulated}
+    finally:
+        _replay_lock.release()
+    return {"ok": True, "pin": pin, "ms": ms, "simulated": _backend.simulated, "elapsed_ms": int((time.monotonic() - t0) * 1000)}
+
+
 async def _run(delay_ms: int, ms: int) -> None:
     try:
         if delay_ms > 0:
@@ -205,6 +251,8 @@ def _status() -> dict:
         "ends_in_ms": ends_in_ms,
         "max_pulse_ms": MAX_PULSE_MS,
         "simulated": _backend.simulated,
+        "replay_busy": _replay_lock.locked(),
+        "replay_fire": REPLAY_FIRE_SUPPORTED,
     }
 
 
@@ -215,7 +263,7 @@ async def conveyor_status() -> dict:
 
 @router.post("/pulse")
 async def conveyor_pulse(req: PulseRequest) -> dict:
-    if _job.active:
+    if _job.active or _replay_lock.locked():
         raise HTTPException(status_code=409, detail="a conveyor pulse is already in progress")
     _job.ms = req.ms
     _job.delay_ms = req.delay_ms

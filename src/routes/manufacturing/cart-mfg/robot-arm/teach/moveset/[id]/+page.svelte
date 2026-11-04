@@ -39,16 +39,16 @@
 		DEFAULT_RATE_HZ,
 		EASINGS,
 		MAX_HOLD_S,
-		MAX_PULSE_MS,
+		maxPulseMs,
 		MAX_STEPS_PER_S,
 		MAX_TRANSITION_S,
 		MIN_FIRE_WAIT_S,
 		MIN_PULSE_MS,
 		MIN_TRANSITION_S,
-		SOLENOIDS,
+		FIRE_TARGETS,
+		type FireTarget,
 		type Keyframe,
 		type ResolvedKeyframe,
-		type Solenoid,
 		type SolenoidStatus
 	} from '$lib/robot-arm/animation';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
@@ -205,7 +205,7 @@
 		addPoseId = '';
 	}
 	// A fire step goes right after the selected step (the pose it should fire at), else at the end.
-	function addFire(s: Solenoid) {
+	function addFire(s: FireTarget) {
 		const at = selected != null ? selected + 1 : kfs.length;
 		kfs = [...kfs.slice(0, at), newFireStep(s), ...kfs.slice(at)];
 		selected = at;
@@ -305,15 +305,15 @@
 							</div>
 							{#if selected === i}
 								<div class="mt-2 space-y-2 text-[11px]" style={muted}>
-									<label class="block">Solenoid
-										<select bind:value={f.solenoid} class="{input} mt-1 w-full" style={inputStyle}>
-											{#each SOLENOIDS as s (s.id)}<option value={s.id}>{s.label} · GPIO {s.pin}</option>{/each}
+									<label class="block">Target
+										<select bind:value={f.solenoid} onchange={() => (f.pulseMs = Math.min(f.pulseMs, maxPulseMs(f.solenoid)))} class="{input} mt-1 w-full" style={inputStyle}>
+											{#each FIRE_TARGETS as s (s.id)}<option value={s.id}>{s.label} · GPIO {s.pin}</option>{/each}
 										</select>
 									</label>
 									<label class="block">Pulse (ms)
 										<span class="mt-1 flex items-center gap-2">
-											<input type="range" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={f.pulseMs} oninput={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, MAX_PULSE_MS)))} class="min-w-0 flex-1" aria-label="Pulse length" />
-											<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={f.pulseMs} onchange={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, MAX_PULSE_MS)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
+											<input type="range" min={MIN_PULSE_MS} max={maxPulseMs(f.solenoid)} step="10" value={f.pulseMs} oninput={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, maxPulseMs(f.solenoid))))} class="min-w-0 flex-1" aria-label="Pulse length" />
+											<input type="number" min={MIN_PULSE_MS} max={maxPulseMs(f.solenoid)} step="10" value={f.pulseMs} onchange={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, maxPulseMs(f.solenoid))))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
 										</span>
 									</label>
 									<label class="block">Wait After (s)
@@ -398,8 +398,8 @@
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
 				<span class="text-[11px]" style={muted}>Fire Step {selected != null && kfs[selected] ? `After Step ${selected + 1}` : 'At The End'}:</span>
-				{#each SOLENOIDS as s (s.id)}
-					<button type="button" onclick={() => addFire(s.id)} class="rounded px-3 py-1 text-sm font-semibold" style={amber} title="Add a step that fires {s.label} (GPIO {s.pin})">Fire {s.id}</button>
+				{#each FIRE_TARGETS as s (s.id)}
+					<button type="button" onclick={() => addFire(s.id)} class="rounded px-3 py-1 text-sm font-semibold" style={amber} title="Add a step that fires {s.label} (GPIO {s.pin})">Fire {s.id === 'conveyor' ? s.label : s.id}</button>
 				{/each}
 			</div>
 			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save Move Set' : 'Saved'}</button>
