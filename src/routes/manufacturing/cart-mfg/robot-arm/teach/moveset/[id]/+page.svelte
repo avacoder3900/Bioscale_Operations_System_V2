@@ -68,6 +68,16 @@
 	const armReachable = $derived(!!data.arm?.reachable);
 	const heat = $derived(armNow ? heatCheck(armNow.temps) : null);
 
+	function confirmArchive(e: SubmitEvent) {
+		if (!confirm('Archive this move set?')) {
+			e.preventDefault();
+			return;
+		}
+		const n = new Set(moveSet.keyframes.filter((k) => !k.fire).map((k) => k.poseId)).size;
+		const poses = (e.currentTarget as HTMLFormElement).elements.namedItem('poses') as HTMLInputElement;
+		poses.value = n && confirm(`Also archive its ${n} pose${n === 1 ? '' : 's'}? Poses another move set uses will stay.`) ? '1' : '0';
+	}
+
 	const playback = new Playback();
 	playback.onend = () => void invalidateAll();
 	onDestroy(() => playback.destroy());
@@ -437,7 +447,9 @@
 						<button type="submit" class="rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={dirty || !kfs.length}>Save To Pi</button>
 					</form>
 					<span class="grow"></span>
-					<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this move set?')) e.preventDefault(); }}>
+					<!-- Plain POST to Teach's action: the result (and any poses kept) shows on Teach. -->
+					<form method="POST" action="/manufacturing/cart-mfg/robot-arm/teach?/archiveMoveSet" onsubmit={confirmArchive}>
+						<input type="hidden" name="id" value={moveSet._id} /><input type="hidden" name="poses" value="0" />
 						<button type="submit" class="text-xs underline" style={muted}>Archive Move Set</button>
 					</form>
 				</div>

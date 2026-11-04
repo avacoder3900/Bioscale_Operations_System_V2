@@ -15,7 +15,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { page } from '$app/state';
 	import type { SubmitFunction } from '@sveltejs/kit';
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy, onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
 	import {
 		flattenSequence,
@@ -230,6 +230,26 @@
 			await update();
 			if (result.type === 'success') set.clear();
 		};
+	// Move set Archive: confirm, then offer its poses that no other live move set uses.
+	let showArchivedSets = $state(false);
+	const archivedSets = $derived(moveSets.filter((m) => m.archived));
+	let msArchiveForm = $state<HTMLFormElement>();
+	let msArchive = $state({ id: '', poses: '0' });
+	async function archiveMoveSet(ms: MoveSetSummary) {
+		if (!confirm(`Archive move set "${friendlyName(ms.name)}"?`)) return;
+		const ids = [...new Set(ms.keyframes.filter((k) => !k.fire).map((k) => k.poseId))].filter((id) => poseById.has(id) && !poseById.get(id)!.archived);
+		const own = ids.filter((id) => (liveSetsUsing.get(id) ?? 0) <= 1);
+		const shared = ids.length - own.length;
+		const withPoses =
+			own.length > 0 &&
+			confirm(
+				`Also archive its ${own.length} pose${own.length === 1 ? '' : 's'} that no other move set uses?\n\n${own.map((id) => friendlyName(poseById.get(id)!.name)).join('\n')}${shared ? `\n\n${shared} pose${shared === 1 ? ' is' : 's are'} shared with other move sets and will stay.` : ''}`
+			);
+		msArchive = { id: ms._id, poses: withPoses ? '1' : '0' };
+		await tick();
+		msArchiveForm?.requestSubmit();
+	}
+
 	function confirmDelete(e: SubmitEvent) {
 		const n = pickedDeletable.length;
 		const kept = pickedOld.length - n;
@@ -531,6 +551,10 @@
 		</aside>
 	</div>
 
+	<form method="POST" action="?/archiveMoveSet" use:enhance bind:this={msArchiveForm} class="hidden">
+		<input type="hidden" name="id" value={msArchive.id} /><input type="hidden" name="poses" value={msArchive.poses} />
+	</form>
+
 	<!-- move sets + sequences -->
 	<div class="grid gap-4 md:grid-cols-2">
 		{#each [{ kind: 'moveSets' as const }, { kind: 'sequences' as const }] as col (col.kind)}
@@ -565,10 +589,29 @@
 									: `Verified run with ${camera}: ${cov.ok} of ${cov.total} poses have a reference${cov.stale ? `, ${cov.stale} stale (pose edited since; retake)` : ''}. Steps without one are played unchecked.`}
 								disabled={blocked || !camera || !!heat?.tooHot.length || cov.ok + cov.stale === 0}
 								onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎ {cov.ok}/{cov.total}</button>
+							{#if ms}
+								<button type="button" class="px-1 text-xs underline" style={muted} title="Archive this move set (deleted for good after 30 days), and its poses if you choose" onclick={() => void archiveMoveSet(ms)}>Archive</button>
+							{/if}
 						</li>
 					{/each}
 				</ul>
 				{#if !rows.length}<p class="mt-2 text-xs" style={muted}>None Yet</p>{/if}
+				{#if isSets && archivedSets.length}
+					<button type="button" onclick={() => (showArchivedSets = !showArchivedSets)} class="mt-3 text-xs underline" style={muted}>{showArchivedSets ? 'Hide' : 'Show'} Archived · {archivedSets.length}</button>
+					{#if showArchivedSets}
+						<ul class="mt-1 space-y-0.5">
+							{#each archivedSets as r (r._id)}
+								<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
+									<span class="min-w-0 flex-1 truncate" style={muted} title={r.name}>{friendlyName(r.name)}</span>
+									<form method="POST" action="?/archiveMoveSet" use:enhance>
+										<input type="hidden" name="id" value={r._id} /><input type="hidden" name="restore" value="1" /><input type="hidden" name="poses" value="1" />
+										<button type="submit" class="text-xs underline" style="color: var(--color-tron-cyan)" title="Restore this move set and its archived poses">Restore</button>
+									</form>
+								</li>
+							{/each}
+						</ul>
+					{/if}
+				{/if}
 			</section>
 		{/each}
 	</div>

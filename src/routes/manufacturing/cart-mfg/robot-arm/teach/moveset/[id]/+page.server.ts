@@ -2,7 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, setMoveSetArchived, solenoidStatus, updateMoveSet } from '$lib/server/robot-arm-animation';
+import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, solenoidStatus, updateMoveSet } from '$lib/server/robot-arm-animation';
 import { stepCountLabel } from '$lib/robot-arm/animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
@@ -94,16 +94,5 @@ export const actions: Actions = {
 		} catch (err) {
 			return failFrom(err);
 		}
-	},
-
-	archive: async ({ locals, params }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		try {
-			await setMoveSetArchived(who(locals), params.id, true);
-		} catch (err) {
-			return failFrom(err);
-		}
-		redirect(303, '/manufacturing/cart-mfg/robot-arm/teach');
 	}
 };

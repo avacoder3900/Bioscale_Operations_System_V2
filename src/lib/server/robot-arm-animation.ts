@@ -33,7 +33,7 @@
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
 import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
-import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2 } from '$lib/server/robot-arm-archive';
+import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2, whoUses } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
 	autoDurationS,
@@ -1075,6 +1075,49 @@ export async function setMoveSetArchived(user: User, id: string, archived: boole
 	if (name == null) throw new AnimateError('Move set not found.', 404);
 	await viaArchive<unknown>(() => (archived ? archiveToR2(user, 'move_set', id, { name }) : restoreFromR2(user, 'move_set', id)));
 	await audit(user, archived ? 'robot_arm.animate.move_set_archive' : 'robot_arm.animate.move_set_restore', 'robot_arm_move_sets', id, { name });
+}
+
+export interface MoveSetArchiveResult {
+	name: string;
+	/** Poses archived (or restored) along with the move set. */
+	poses: number;
+	/** Poses left live because something else still uses them. */
+	kept: { name: string; usedBy: string[] }[];
+}
+
+/**
+ * Archive a move set and, with `withPoses`, each of its poses no other move
+ * set uses; a pose still in use is kept and named in `kept`. Restore brings
+ * the move set back and, with `withPoses`, its poses still in the trash.
+ */
+export async function setMoveSetArchivedWithPoses(user: User, id: string, archived: boolean, withPoses: boolean): Promise<MoveSetArchiveResult> {
+	await connectDB();
+	const before = archived ? ((await RobotArmMoveSet.findById(id).select('name keyframes').lean()) as any) : null;
+	await setMoveSetArchived(user, id, archived);
+	const ms = archived ? before : ((await RobotArmMoveSet.findById(id).select('name keyframes').lean()) as any);
+	const out: MoveSetArchiveResult = { name: ms?.name ?? id, poses: 0, kept: [] };
+	if (!withPoses || !ms) return out;
+	const poseIds = [...new Set(((ms.keyframes ?? []) as any[]).filter((k) => !k.fire && k.poseId).map((k) => String(k.poseId)))];
+	if (!archived) {
+		out.poses = (await setPosesArchived(user, poseIds, false)).done.length;
+		return out;
+	}
+	const live = (await RobotArmPose.find({ _id: { $in: poseIds }, archivedAt: null }).select('name').lean()) as any[];
+	for (const p of live) {
+		const usedBy = await whoUses('pose', String(p._id));
+		if (usedBy.length) {
+			out.kept.push({ name: p.name, usedBy });
+			continue;
+		}
+		try {
+			await setPoseArchived(user, String(p._id), true);
+			out.poses++;
+		} catch (err) {
+			if (!(err instanceof AnimateError)) throw err;
+			out.kept.push({ name: p.name, usedBy: [err.message] });
+		}
+	}
+	return out;
 }
 
 /**

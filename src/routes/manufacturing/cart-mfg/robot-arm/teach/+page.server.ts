@@ -21,7 +21,7 @@ import {
 	playbackActive,
 	readArm,
 	savePoseFromLeader,
-	setMoveSetArchived,
+	setMoveSetArchivedWithPoses,
 	setPoseArchived,
 	setPosesArchived,
 	setSequenceArchived,
@@ -31,6 +31,7 @@ import {
 	updatePose,
 	type PoseBulkResult
 } from '$lib/server/robot-arm-animation';
+import type { MoveSetArchiveResult } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { conveyorActions, loadConveyor } from '$lib/server/robot-arm-conveyor';
 import { getSettings as waxFillSettings } from '$lib/server/arm-wax-fill';
@@ -84,6 +85,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 		waxFill: wax ? JSON.parse(JSON.stringify({ grab: wax.grabAnimation, withdraw: wax.withdrawAnimation, fail: wax.failAnimation })) : null
 	};
 };
+
+/** Move set archive / restore, with the poses that went along and the ones kept. */
+function moveSetFlash(r: MoveSetArchiveResult, restore: boolean) {
+	const n = (k: number) => `${k} pose${k === 1 ? '' : 's'}`;
+	const head = restore ? `Restored "${friendlyName(r.name)}"${r.poses ? ` with ${n(r.poses)}` : ''}.` : `Archived "${friendlyName(r.name)}"${r.poses ? ` and ${n(r.poses)}` : ''}.`;
+	if (!r.kept.length) return { success: head };
+	return { warning: `${head} Kept ${n(r.kept.length)} still in use: ${r.kept.map((k) => `"${friendlyName(k.name)}" (${k.usedBy.join(', ')})`).join('; ')}.` };
+}
 
 /** Nothing done → an error; some skipped → a warning; else success. */
 function bulkFlash(verb: string, r: PoseBulkResult) {
@@ -213,6 +222,8 @@ export const actions: Actions = {
 		redirect(303, `/manufacturing/cart-mfg/robot-arm/teach/sequence/${id}`);
 	},
 
+	// `poses=1`: its poses go too (archive: those no other move set uses; restore: those in the trash).
+	// The move set's own page posts here as well (plain POST), so the result shows on Teach.
 	archiveMoveSet: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
@@ -220,8 +231,8 @@ export const actions: Actions = {
 		const id = field(d, 'id');
 		if (!id) return fail(400, { error: 'Move set id missing.' });
 		try {
-			await setMoveSetArchived(who(locals), id, field(d, 'restore') !== '1');
-			return { success: field(d, 'restore') === '1' ? 'Move set restored.' : 'Move set archived.' };
+			const restore = field(d, 'restore') === '1';
+			return moveSetFlash(await setMoveSetArchivedWithPoses(who(locals), id, !restore, field(d, 'poses') === '1'), restore);
 		} catch (err) {
 			return failFrom(err);
 		}
