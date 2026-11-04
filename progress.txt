@@ -25345,3 +25345,7 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-hmgoj2p2r-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit 0707b430 (NOT on master)
 What this deployment is for: Run > Setup drawer — Animations condensed, Stage calibration card directly under it.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-pjk69oviz-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit e3ac5d73 (NOT on master)
+What this deployment is for: Run — Recent Runs under Stage calibration in the Setup drawer.
