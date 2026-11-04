@@ -4,7 +4,7 @@
 
 	let { data, form } = $props();
 
-	const BASE = '/manufacturing/cart-mfg/robot-arm/cleanup';
+	const BASE = '/manufacturing/cart-mfg/robot-arm/maintenance/cleanup';
 
 	// Preselect from ?source= (the Control tab's recordings list links here).
 	let sourceName = $state('');

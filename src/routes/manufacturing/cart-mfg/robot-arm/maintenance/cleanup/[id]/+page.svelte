@@ -172,7 +172,7 @@
 			const what = r.savedAs.smoothed ? 'smoothed' : 'steps as straight lines';
 			notice = {
 				kind: 'ok',
-				text: `${r.savedAs.replaced ? 'Replaced' : 'Saved'} on the Pi as "${r.savedAs.name}" (${what}; ${r.savedAs.frames} frames, ${r.savedAs.durationS.toFixed(1)} s). Replay it from the Control tab.`
+				text: `${r.savedAs.replaced ? 'Replaced' : 'Saved'} on the Pi as "${r.savedAs.name}" (${what}; ${r.savedAs.frames} frames, ${r.savedAs.durationS.toFixed(1)} s). Replay it from Maintenance › Leader arm.`
 			};
 			await invalidateAll();
 			if (!r.savedAs.replaced) piName = suggestedName();
@@ -201,7 +201,7 @@
 		smoothing.servos = on ? [...new Set([...smoothing.servos, sid])].sort((a, b) => a - b) : smoothing.servos.filter((x) => x !== sid);
 	}
 
-	// --- to the Animate tab ---------------------------------------------------
+	// --- to the Teach tab ---------------------------------------------------
 	// Same steps, rendered by the Animate engine: poses + a move set the operator
 	// keeps adjusting there. Previewed here from the draft on screen.
 	let animateName = $state(initial.title || data.cleanup.sourceName.replace(/\.jsonl$/i, ''));
@@ -228,8 +228,8 @@
 		});
 		if (r) {
 			savedJson = json;
-			notice = { kind: 'ok', text: `Made "${r.animate.name}" (${r.animate.poses} poses). Opening it in the Animate tab…` };
-			await goto(`${BASE}/animate/moveset/${r.animate.moveSetId}`);
+			notice = { kind: 'ok', text: `Made "${r.animate.name}" (${r.animate.poses} poses). Opening it in the Teach tab…` };
+			await goto(`${BASE}/teach/moveset/${r.animate.moveSetId}`);
 		}
 	}
 
@@ -427,7 +427,7 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<div class="flex flex-wrap items-start justify-between gap-3">
 			<div class="min-w-0 flex-1">
-				<a href={`${BASE}/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← all clean-ups</a>
+				<a href={`${BASE}/maintenance/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← all clean-ups</a>
 				<input
 					value={title}
 					onchange={(e) => edit(() => (title = (e.currentTarget as HTMLInputElement).value.slice(0, 120)))}
@@ -477,7 +477,7 @@
 			>
 				{notice.text}
 				{#if notice.kind === 'ok' && notice.text.includes('Control tab')}
-					<a href={`${BASE}/control`} class="ml-1 underline">Go to Control →</a>
+					<a href={`${BASE}/maintenance/control`} class="ml-1 underline">Go to Control →</a>
 				{/if}
 			</div>
 		{/if}
@@ -874,11 +874,11 @@
 			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
 				{#if smoothing.enabled}
 					Writes a recording on the Pi: {smoothing.source === 'steps' ? 'your steps' : 'the recording'}, smoothed with the
-					settings in the Smoothing card above. Replay it from the Control tab like any recording. The original stays as
+					settings in the Smoothing card above. Replay it from Maintenance › Leader arm like any recording. The original stays as
 					it is.
 				{:else}
 					Writes a new recording on the Pi: each step moves its servos together in a straight line over its
-					time, then waits. Turn on smoothing above for a smooth path instead. Replay it from the Control tab. The
+					time, then waits. Turn on smoothing above for a smooth path instead. Replay it from Maintenance › Leader arm. The
 					original stays as it is.
 				{/if}
 			</p>
@@ -921,7 +921,7 @@
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Send to Animate</h2>
 			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Makes a move set in the Animate tab from these steps: the start and the end of each step become saved
+				Makes a move set in the Teach tab from these steps: the start and the end of each step become saved
 				poses; a step's time becomes the move into its pose and its wait becomes the hold. Playback there eases
 				into every pose instead of moving in straight lines, and each pose, time and easing can still be changed.
 				This clean-up is not altered.
@@ -934,7 +934,7 @@
 					class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm"
 					style="color: var(--color-tron-text)"
 				/>
-				<select bind:value={animateEasing} class="{inputCls} py-1 font-sans text-sm" style="color: var(--color-tron-text)" title="How every move arrives at its pose; change per pose in the Animate tab">
+				<select bind:value={animateEasing} class="{inputCls} py-1 font-sans text-sm" style="color: var(--color-tron-text)" title="How every move arrives at its pose; change per pose in the Teach tab">
 					{#each EASINGS as e (e.id)}
 						<option value={e.id} title={e.hint}>{e.label}</option>
 					{/each}

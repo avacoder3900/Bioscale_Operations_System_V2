@@ -901,7 +901,7 @@ export interface LoopView {
 
 const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
 
-function loopView(d: any): LoopView {
+export function loopView(d: any): LoopView {
 	return {
 		_id: String(d._id),
 		robot: { _id: String(d.robot?._id ?? ''), name: d.robot?.name ?? '' },

@@ -114,7 +114,7 @@
 	const blocked = $derived(!armReachable || busyElsewhere || following || playback.running || playback.busy || vr.active || vr.busy);
 	const blockReason = $derived(
 		!armReachable
-			? 'The arm is unreachable — check the connection on the Control tab.'
+			? 'The arm is unreachable — check the connection on the Maintenance › Leader arm page.'
 			: following
 				? 'The follower is following the control arm — press Done first.'
 				: playback.running || playback.busy
@@ -259,22 +259,24 @@
 	<!-- header + arm status -->
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Animate</h1>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Teach</h1>
+			<p class="text-xs" style={muted}>
+				Poses → move sets → sequences, which Run plays as grab, withdraw and fail.
+				Torque, Return to home and Stop arm are on the status card.
+				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import a piloted recording</a>
+			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if !armReachable}
 				<span class={chip} style="border-color: #ef4444; color: #fca5a5">Arm unreachable</span>
 			{:else if armNow}
-				<span class={chip} style="border-color: {armNow.torqueOn === false ? '#f59e0b' : 'var(--color-tron-border)'}; color: {armNow.torqueOn === false ? '#fbbf24' : '#4ade80'}">Torque {armNow.torqueOn === false ? 'OFF' : armNow.torqueOn ? 'on' : '?'}</span>
+				{#if armNow.torqueOn === false}
+					<span class={chip} style="border-color: #f59e0b; color: #fbbf24" title="Turn torque on from the status card before posing">Torque OFF</span>
+				{/if}
 				{#if heat?.maxC != null}
 					<span class="{chip} font-mono" style="border-color: var(--color-tron-border); color: {heatColor(heat.maxC)}" title={armNow.temps.map((t, i) => `servo ${i + 1}: ${t ?? '?'} °C`).join('\n')}>
 						{heat.maxC} °C max
 					</span>
-				{/if}
-				{#if armNow.torqueOn === false}
-					<form method="POST" action="?/holdArm" use:enhance onsubmit={(e) => { if (!confirm('Torque on: each servo returns to its last commanded position. If someone moved the arm by hand, it will move back. Is the path clear?')) e.preventDefault(); }}>
-						<button type="submit" class={btn} style={amber} disabled={blocked}>Torque on</button>
-					</form>
 				{/if}
 			{:else if data.active}
 				{#if following}
@@ -498,7 +500,7 @@
 						{@const cov = coverage(ms, sq)}
 						{@const covColor = cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
 						<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
-							<a href="/manufacturing/cart-mfg/robot-arm/animate/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
+							<a href="/manufacturing/cart-mfg/robot-arm/teach/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
 							<span class="shrink-0 text-xs" style={muted}>
 								{ms ? stepCountLabel(ms.keyframes) : `${sq!.items.length} sets`}{(ms ? moveSetDuration(ms) : sequenceDuration(sq!)) ? ` · ${ms ? moveSetDuration(ms) : sequenceDuration(sq!)}` : ''}
 							</span>

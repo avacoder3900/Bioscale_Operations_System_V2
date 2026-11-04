@@ -243,7 +243,7 @@
 <div class="mx-auto max-w-7xl space-y-4">
 	<div class="flex flex-wrap items-end justify-between gap-3">
 		<div>
-			<a href="/manufacturing/cart-mfg/robot-arm/animate" class="text-xs underline" style={muted}>← Animate</a>
+			<a href="/manufacturing/cart-mfg/robot-arm/teach" class="text-xs underline" style={muted}>← Teach</a>
 			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">{friendlyName(moveSet.name)}</h1>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">

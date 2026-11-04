@@ -687,72 +687,85 @@
 		}
 	}
 
-	/** Restart the OT-2 robot server (clears a hung engine, ~90 s) — the board's Restart. */
-	async function restartServer() {
-		if (!robotId || robotBusy) return;
-		const name = data.robotName ?? 'this robot';
-		const extra = loop?.status === 'running' ? '\n\nA loop is running: the robot server refuses the restart while a fill is live; stop or reset the loop first if it needs to come down now.' : '';
-		if (!confirm(`Restart the robot server on ${name}?\n\nThis clears a hung engine (~90 s to come back). Any in-progress run on this robot will be cancelled.${extra}`)) return;
-		robotBusy = 'restart';
-		robotMsg = null;
+	/** Restart the OT-2 robot server (clears a hung engine, ~90 s); the Recover step that needs it. */
+	async function restartServerNow(): Promise<string> {
+		if (!robotId) return 'No robot chosen.';
+		// Tailnet line: the restart is a daemon job over /bridge (BIMS audits it first). Otherwise the queue POST.
+		const session = await openRobotSession(robotId);
 		try {
-			// Tailnet line: the restart is a daemon job over /bridge (BIMS audits it first). Otherwise the queue POST.
-			const session = await openRobotSession(robotId);
-			try {
-				const bridge = session.bridge();
-				if (bridge) {
-					const r = await restartServerOverBridge(bridge, robotId);
-					say(r.ok ? r.message : r.error, r.ok ? 'warn' : 'error');
-					return;
-				}
-			} finally {
-				session.close();
+			const bridge = session.bridge();
+			if (bridge) {
+				const r = await restartServerOverBridge(bridge, robotId);
+				return r.ok ? r.message : r.error;
 			}
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/restart-server`, { method: 'POST', credentials: 'same-origin' });
-			const body = await res.json().catch(() => ({}));
-			say(res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.'), res.ok ? 'warn' : 'error');
-		} catch {
-			say('Restart request failed — check the bridge.', 'error');
 		} finally {
-			robotBusy = null;
-			setTimeout(pollHealth, 3000);
+			session.close();
 		}
+		const res = await fetch(`/api/opentrons-lab/robots/${robotId}/restart-server`, { method: 'POST', credentials: 'same-origin' });
+		const body = await res.json().catch(() => ({}));
+		return res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.');
 	}
 
 	/**
-	 * Force everything back to idle — the board's Reset, plus this line's loop:
-	 * the loop ends now (the arm's play is stopped if it is moving), then the
-	 * OT-2 force-reset aborts the one-cart wax run and clears the robot's own
-	 * run and any stale maintenance run. Carts are left as they are.
+	 * Recover — the Robots board's one button (2026-11-03), plus this line's
+	 * loop: the loop ends now (the arm's play is stopped if it is moving), the
+	 * OT-2 force-reset aborts the wax run and clears the robot's own run and
+	 * any stale maintenance run, then the robot server is restarted only when
+	 * it needs it (the engine is hung, or force-reset could not reach it).
+	 * Shift-click forces the restart. Carts are left as they are.
 	 */
-	async function forceReset() {
+	async function recover(forceRestart: boolean) {
 		if (!robotId || robotBusy) return;
 		const name = data.robotName ?? 'this robot';
-		if (!confirm(`Force ${name} back to idle?\n\nThis ENDS the running loop (stopping the arm if it is moving), ABORTS any active wax/reagent run on this robot and clears its run state. Use for stale/stuck runs. Carts are left as-is.`)) return;
+		const willRestart = forceRestart || health?.status === 'hung';
+		const lines = [
+			`Recover ${name}?`,
+			'',
+			'This ENDS the running loop (stopping the arm if it is moving), ABORTS any active wax/reagent run on this robot and clears its run state. Carts are left as-is.',
+			willRestart
+				? 'The robot server will also be restarted (it boots for 2–3 min).'
+				: 'If the robot server turns out to be hung or unreachable, it will also be restarted (2–3 min boot).'
+		];
+		if (!confirm(lines.join('\n'))) return;
 		robotBusy = 'reset';
 		robotMsg = null;
 		stopAsked = true;
+		const notes: string[] = [];
+		let reachable = true;
 		try {
 			const r = await post('resetLoop');
-			if (!r.ok) {
-				say(`Run reset failed: ${r.error}`, 'error');
-				return;
-			}
-			if (r.data.loop) {
+			if (!r.ok) notes.push(`Run reset failed: ${r.error}`);
+			else if (r.data.loop) {
 				loop = r.data.loop;
-				if (r.data.stoppedArm) note(r.data.torqueOn ? 'Reset — the arm was stopped and is holding its position.' : 'Reset — the arm was stopped, but torque could NOT be re-enabled; it may be limp.', r.data.torqueOn ? 'warn' : 'error');
+				if (r.data.stoppedArm) note(r.data.torqueOn ? 'Recover — the arm was stopped and is holding its position.' : 'Recover — the arm was stopped, but torque could NOT be re-enabled; it may be limp.', r.data.torqueOn ? 'warn' : 'error');
 			}
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/force-reset`, { method: 'POST', credentials: 'same-origin' });
-			const body = await res.json().catch(() => ({}));
-			say(res.ok ? (body.message ?? 'Reset to idle.') : (body.message ?? body.error ?? 'Reset failed.'), res.ok ? 'warn' : 'error');
+			try {
+				const res = await fetch(`/api/opentrons-lab/robots/${robotId}/force-reset`, { method: 'POST', credentials: 'same-origin' });
+				const body = await res.json().catch(() => ({}));
+				notes.push(res.ok ? (body.message ?? 'Reset to idle.') : (body.message ?? body.error ?? 'Reset failed.'));
+				if (body?.robotReachable === false) reachable = false;
+			} catch {
+				notes.push('Reset request failed — check the bridge.');
+			}
+			if (willRestart || !reachable) {
+				if (health?.status === 'offline' && !forceRestart) {
+					notes.push('Bridge is offline, so the robot server can’t be restarted from here — check the robot’s power and network.');
+				} else {
+					robotBusy = 'restart';
+					try {
+						notes.push(await restartServerNow());
+					} catch {
+						notes.push('Restart request failed — check the bridge.');
+					}
+				}
+			}
 			await invalidateAll();
-		} catch {
-			say('Reset request failed — check the bridge.', 'error');
 		} finally {
+			say(notes.join(' '), 'warn');
 			// The driver clears stopAsked itself when it winds down; nothing was driving otherwise.
 			if (!driving) stopAsked = false;
 			robotBusy = null;
-			setTimeout(pollHealth, 1500);
+			setTimeout(pollHealth, 3000);
 		}
 	}
 
@@ -844,7 +857,7 @@
 	// The calibration for this robot's wax fill (scan position, tip-neutral cart
 	// location, dispense depth, stage geometry) is taught on its own tab, the arm
 	// line's Stage calibration studio; this page only shows what is taught.
-	const STAGE_CALIBRATION_HREF = '/manufacturing/cart-mfg/robot-arm/stage-calibration';
+	const STAGE_CALIBRATION_HREF = '/manufacturing/cart-mfg/robot-arm/calibrate/stage';
 
 	const fmt = (p: { x: number; y: number; z: number } | null) => (p ? `x ${p.x.toFixed(2)} · y ${p.y.toFixed(2)} · z ${p.z.toFixed(2)}` : 'not taught');
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '');
@@ -881,7 +894,12 @@
 
 <div class="space-y-4">
 	<div>
-		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax fill</h2>
+		<div class="flex flex-wrap items-baseline justify-between gap-2">
+			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Run — wax fill{#if rehearsal} <span class="text-sm font-semibold text-amber-300">(rehearsal protocol on the robot)</span>{/if}</h2>
+			<a href="/manufacturing/cart-mfg/robot-arm/history" class="text-xs underline" style="color: var(--color-tron-text-secondary)">Full history</a>
+		</div>
+		<details class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
+		<summary class="cursor-pointer">How a run works</summary>
 		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 			One OT-2 run and one tip serve the whole loop: the robot homes, takes its tip, probes it once, aspirates and parks the tip in the wax (it stays warm) between carts.
 			Per cart: <span class="font-semibold">grab</span> (arm, while the OT-2 is parked) → <span class="font-semibold">scan</span> (the run goes to the taught scan position, the scanner is read) →
@@ -892,6 +910,7 @@
 			If the scan fails — nothing read, or the cart is not a backed cart — the OT-2 goes back to the tube and the <span class="font-semibold">fail animation</span> plays instead of the fill; the loop stops.
 			The arm moves only while the robot reports it is parked in the wax; it never moves while the OT-2 is at the calibrator or over the stage.
 		</p>
+		</details>
 	</div>
 
 	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
@@ -931,13 +950,12 @@
 						title={loop?.status === 'running' ? 'Not while a loop is running' : 'Home all axes'} class={ctlPlain}>
 						{robotBusy === 'home' ? 'Homing…' : 'Home'}
 					</button>
-					<button type="button" onclick={restartServer} disabled={!robotId || robotBusy !== null} title="Restart the robot server (clears a hung engine, ~90 s)"
-						class="{ctl} {health?.status === 'hung' ? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
-						{robotBusy === 'restart' ? 'Restarting…' : 'Restart'}
-					</button>
-					<button type="button" onclick={forceReset} disabled={!robotId || robotBusy !== null} title="End the loop, abort any stale run and force this robot back to idle"
-						class="{ctl} border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30">
-						{robotBusy === 'reset' ? 'Resetting…' : 'Reset'}
+					<a href="/manufacturing/cart-mfg/robot-arm/maintenance/conveyor" title="Pulse the cooling belt (bench test, under Maintenance)" class={ctlPlain}>Conveyor</a>
+					<!-- One Recover, as on the Robots board (2026-11-03): end the loop + force-reset, restart the robot server only when it is hung or unreachable (shift-click forces it). -->
+					<button type="button" onclick={(e) => void recover(e.shiftKey)} disabled={!robotId || robotBusy !== null}
+						title="Ends the loop, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"
+						class="{ctl} {health?.status === 'hung' ? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50' : 'border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30'}">
+						{robotBusy === 'restart' ? 'Restarting…' : robotBusy === 'reset' ? 'Recovering…' : 'Recover'}
 					</button>
 				</div>
 			</div>
@@ -1155,7 +1173,14 @@
 		</section>
 	{/if}
 
-	<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+	<!-- Setup, animations, protocol and the stage calibration summary fold away once a run is on; they open by themselves while something blocks a start. -->
+	<details class="rounded-lg border border-[var(--color-tron-border)] p-3" open={!loop || data.readiness.blocking.length > 0}>
+	<summary class="cursor-pointer text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+		Setup &amp; calibration
+		{#if data.readiness.blocking.length}<span class="ml-2 rounded border border-amber-500/40 bg-amber-900/15 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-amber-200">{data.readiness.blocking.length} thing{data.readiness.blocking.length === 1 ? '' : 's'} to fix before a start</span>{/if}
+		<span class="ml-2 text-[11px] font-normal normal-case tracking-normal">{data.robotName ?? 'no OT-2 chosen'} · grab {anim.grabAnimation?.name ?? '—'} · withdraw {anim.withdrawAnimation?.name ?? '—'} · fail {anim.failAnimation?.name ?? '—'}</span>
+	</summary>
+	<div class="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
 		<!-- ── Setup ─────────────────────────────────────────────────── -->
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Setup</h3>
@@ -1296,7 +1321,7 @@
 				{/if}
 			</div>
 			<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Chosen once and kept for every run. Made in <a href="/manufacturing/cart-mfg/robot-arm/animate" class="underline" style="color: var(--color-tron-cyan)">Animate</a> (move sets or sequences).
+				Chosen once and kept for every run. Made in <a href="/manufacturing/cart-mfg/robot-arm/teach" class="underline" style="color: var(--color-tron-cyan)">Animate</a> (move sets or sequences).
 				The fail animation plays instead of the fill when the scan fails; it may be the withdraw animation or its own.
 			</p>
 			{#if changingAnimations}
@@ -1344,7 +1369,7 @@
 	</div>
 
 	<!-- ── Calibration summary (taught on the Stage calibration tab) ────── -->
-	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
+	<section class="mt-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
 				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
@@ -1383,11 +1408,15 @@
 			</div>
 		</div>
 	</section>
+	</details>
 
 	<!-- ── History ───────────────────────────────────────────────────── -->
 	{#if data.recentLoops.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent loops</h3>
+			<div class="flex items-center justify-between gap-2">
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent runs</h3>
+				<a href="/manufacturing/cart-mfg/robot-arm/history" class="text-xs underline" style="color: var(--color-tron-cyan)">Full history</a>
+			</div>
 			<table class="mt-2 w-full text-left text-xs">
 				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
 				<tbody>

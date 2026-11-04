@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * Robot Arm — Vision tab (ARM-05, AprilTags).
+	 * Arm home (camera) tab (ARM-05, AprilTags).
 	 *
 	 * Top to bottom in the order an operator needs it: is the arm home (and if
 	 * not, send it back), where is everything right now, recalibrate, and the
@@ -60,7 +60,7 @@
 	const busy = $derived(data.holder != null || !!data.active);
 	const blocked = $derived(!armReachable || busy);
 	const blockReason = $derived(
-		!armReachable ? 'The arm is unreachable — check the connection on the Control tab.' : busy ? 'The arm is running something — stop it first.' : ''
+		!armReachable ? 'The arm is unreachable — see the status card.' : busy ? 'The arm is running something — stop it first.' : ''
 	);
 
 	// Return to home runs as a loop of attempts (each attempt is one server
@@ -145,7 +145,7 @@
 <div class="mx-auto max-w-7xl space-y-5">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm — Vision</h1>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Arm home (camera)</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
 				AprilTags on the arm and its surroundings, located by the camera in mm — the backstop for an arm that did not return home.
 			</p>

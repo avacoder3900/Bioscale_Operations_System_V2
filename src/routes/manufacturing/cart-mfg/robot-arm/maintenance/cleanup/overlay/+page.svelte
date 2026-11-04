@@ -52,7 +52,7 @@
 	async function lineUp() {
 		if (!smoothName || !preciseName) return;
 		lining = true;
-		await goto(`${BASE}/cleanup/overlay?smooth=${encodeURIComponent(smoothName)}&precise=${encodeURIComponent(preciseName)}`, { invalidateAll: true });
+		await goto(`${BASE}/maintenance/cleanup/overlay?smooth=${encodeURIComponent(smoothName)}&precise=${encodeURIComponent(preciseName)}`, { invalidateAll: true });
 		lining = false;
 	}
 
@@ -130,7 +130,7 @@
 			if (r.type === 'success') {
 				const s = (r.data as { saved: { name: string; frames: number; durationS: number } }).saved;
 				saved = [s, ...saved];
-				notice = { kind: 'ok', text: `Saved on the Pi as "${s.name}" (${s.frames} frames, ${s.durationS.toFixed(1)} s). Replay it from the Control tab.` };
+				notice = { kind: 'ok', text: `Saved on the Pi as "${s.name}" (${s.frames} frames, ${s.durationS.toFixed(1)} s). Replay it from Maintenance › Leader arm.` };
 				piName = `${stem(ov.smooth.name)}-pilot-${saved.length + 1}`;
 			} else notice = { kind: 'error', text: errorOf(r) };
 		} catch (err) {
@@ -176,7 +176,7 @@
 
 <div class="space-y-4">
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-		<a href={`${BASE}/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← all clean-ups</a>
+		<a href={`${BASE}/maintenance/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← all clean-ups</a>
 		<h2 class="mt-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
 			Overlay: the pilot's positions on an animated recording
 		</h2>
@@ -242,7 +242,7 @@
 			>
 				{notice.text}
 				{#if notice.kind === 'ok' && notice.text.includes('Control tab')}
-					<a href={`${BASE}/control`} class="ml-1 underline">Go to Control →</a>
+					<a href={`${BASE}/maintenance/control`} class="ml-1 underline">Go to Control →</a>
 				{/if}
 			</div>
 		{/if}
@@ -380,7 +380,7 @@
 				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save to Pi</h2>
 				<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					Writes the result as a new recording on the Pi: every frame of the animated recording, at its own time,
-					with the offset above added. Replay it from the Control tab. Both source recordings stay as they are.
+					with the offset above added. Replay it from Maintenance › Leader arm. Both source recordings stay as they are.
 				</p>
 				<div class="flex gap-2">
 					<input bind:value={piName} class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm" style="color: var(--color-tron-text)" />
@@ -406,7 +406,7 @@
 				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Open as a clean-up</h2>
 				<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					Splits the result into steps like any recording, so you can edit targets and timing, and send it to
-					the Animate tab as poses + a move set with the pilot's positions. (A clean-up's own Save to Pi plays
+					the Teach tab as poses + a move set with the pilot's positions. (A clean-up's own Save to Pi plays
 					straight lines; use Save to Pi here to keep the animation's curves as they are.)
 				</p>
 				<div class="flex flex-wrap items-end gap-2">

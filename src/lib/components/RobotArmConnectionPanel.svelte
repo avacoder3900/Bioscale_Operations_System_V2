@@ -1,19 +1,21 @@
 <script lang="ts">
-	// ARM-01 §8.1 — arm connection health.
-	//
-	// Renders the Pi's own preflight verdict rather than re-deriving it here.
-	// The Pi's `diagnosis` string already names the concrete fix ("Update
-	// LEADER_PORT=... and restart the server"); re-implementing that logic in
-	// TypeScript would guarantee the two drift.
-	//
-	// Since 2026-10-28 the top of the panel also carries the Pi heat / Wi-Fi
-	// line, the servo temperatures and the Torque row (moved here from the
-	// camera card). Those stay visible when the panel is hidden; Hide only
-	// folds away the connection details under them.
+	/**
+	 * The arm's status card — the one place for "is the arm up, is it holding,
+	 * send it home, stop it" on every Robot Arm tab (2026-11 UI redesign).
+	 *
+	 * Top: the Pi's preflight verdict (rendered, not re-derived: the Pi's
+	 * `diagnosis` string already names the concrete fix, and re-implementing
+	 * that in TypeScript would guarantee the two drift), then the always-on
+	 * rows — Pi heat / Wi-Fi + servo temperatures, Torque, Return to home,
+	 * Stop arm. Connection details (ports, boards, base URL, last connected)
+	 * fold away under a disclosure since they only matter when something is
+	 * wrong.
+	 */
 	import { invalidateAll } from '$app/navigation';
 	import type { ArmThermal } from '$lib/server/robot-arm-client';
 	import PiThermalChip from './robot-arm/PiThermalChip.svelte';
 	import ReturnHomeControl from './robot-arm/ReturnHomeControl.svelte';
+	import StopArmControl from './robot-arm/StopArmControl.svelte';
 	import TorqueControl from './robot-arm/TorqueControl.svelte';
 
 	interface PreflightCheck {
@@ -41,34 +43,17 @@
 		preflightError = null,
 		baseUrl = null,
 		lastConnected = null,
-		variant = 'full',
 		armReachable = false,
-		thermal = null,
-		hidden = false,
-		onhide,
-		onshow
+		thermal = null
 	}: {
 		preflight?: Preflight | null;
 		preflightError?: string | null;
 		baseUrl?: string | null;
 		/** ISO timestamp of the most recent SUCCESSFUL reach, from the connection log. */
 		lastConnected?: string | null;
-		/**
-		 * 'full' is the desktop side panel; 'compact' is the single status line
-		 * shown under the page title on narrow screens. Both are driven by the
-		 * same derived state below so they can never disagree.
-		 */
-		variant?: 'full' | 'compact';
-		/** Full panel only: drives the always-visible Pi / servo / torque lines. */
 		armReachable?: boolean;
 		/** The Pi's temperature / throttle state at page load; the chip polls from there. */
 		thermal?: ArmThermal | null;
-		/** Full panel only: fold the connection details away, keeping the header lines. */
-		hidden?: boolean;
-		/** When given, the full panel shows a Hide button that calls this. */
-		onhide?: () => void;
-		/** When given, the hidden panel shows a Show button that calls this. */
-		onshow?: () => void;
 	} = $props();
 
 	let refreshing = $state(false);
@@ -120,136 +105,38 @@
 	}
 </script>
 
-{#if variant === 'compact'}
-	<!--
-		Narrow screens only. The full panel is a lot of vertical space to spend
-		before the controls, so phones get the verdict on one line instead.
-	-->
-	<div
-		class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded border px-3 py-2"
-		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
-	>
-		<span class="inline-flex items-center gap-2 text-xs" style="color: var(--color-tron-text)">
-			<span class="inline-block h-2 w-2 rounded-full" style="background: {dotColor}"></span>
-			{label}
-		</span>
-
-		{#if liveMotion}
-			<span
-				class="rounded px-1.5 py-0.5 text-[10px] font-semibold"
-				style="background: rgba(239,68,68,0.15); color: #ef4444;"
-			>
-				⚠ LIVE MOTION
-			</span>
-		{:else if dryRun === true}
-			<span
-				class="rounded px-1.5 py-0.5 text-[10px] font-semibold"
-				style="background: rgba(34,197,94,0.15); color: #22c55e;"
-			>
-				DRY RUN
-			</span>
-		{/if}
-
-		<span class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-			last connected {relativeTime(lastConnected)}
-		</span>
-	</div>
-{:else}
-	<section
-		class="rounded border p-3 sm:p-4"
-		style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
-	>
+<section
+	class="rounded border p-3 sm:p-4"
+	style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
+>
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<h2
 			class="inline-flex items-center gap-2 text-sm font-semibold tracking-wide"
 			style="color: var(--color-tron-text)"
 		>
 			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}" title={label}></span>
-			ARM CONNECTION
-		</h2>
-		<div class="flex items-center gap-2">
-			<button
-				type="button"
-				onclick={refresh}
-				disabled={refreshing}
-				class="min-h-[44px] rounded border px-3 text-xs disabled:opacity-50"
-				style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
-			>
-				{refreshing ? 'Refreshing…' : 'Refresh'}
-			</button>
-			{#if hidden && onshow}
-				<button
-					type="button"
-					onclick={onshow}
-					class="min-h-[44px] rounded border px-3 text-xs"
-					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
-					title="Show the arm connection details"
-				>
-					Show
-				</button>
-			{:else if onhide}
-				<button
-					type="button"
-					onclick={onhide}
-					class="min-h-[44px] rounded border px-3 text-xs"
-					style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
-					title="Hide the arm connection panel"
-				>
-					Hide
-				</button>
-			{/if}
-		</div>
-	</div>
-
-	<!--
-		Always visible, hidden panel or not, in the order they had on the camera
-		card: Pi heat + Wi-Fi, the servo temperatures, then Torque — and under
-		it Return to home (2026-10-28), so the arm can be sent home from any tab.
-	-->
-	<div class="mt-2 space-y-1.5">
-		<PiThermalChip initial={thermal} {armReachable} />
-	</div>
-	<div class="-mx-3 mt-2 sm:-mx-4">
-		<TorqueControl {armReachable} />
-		<ReturnHomeControl {armReachable} />
-	</div>
-
-	{#if !hidden}
-	<div class="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2">
-		<span class="text-sm" style="color: var(--color-tron-text)">{label}</span>
-
-		{#if reachable}
-			<span class="text-xs" style="color: var(--color-tron-text-secondary)">
-				{preflight?.service} v{preflight?.version}
-			</span>
-
+			ARM
+			<span class="text-xs font-normal" style="color: {dotColor}">{label}</span>
 			{#if dryRun === true}
-				<span
-					class="rounded px-2 py-0.5 text-xs font-semibold"
-					style="background: rgba(34,197,94,0.15); color: #22c55e;"
-				>
-					DRY RUN
-				</span>
+				<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" style="background: rgba(34,197,94,0.15); color: #22c55e;">DRY RUN</span>
 			{:else if liveMotion}
-				<span
-					class="rounded px-2 py-0.5 text-xs font-semibold"
-					style="background: rgba(239,68,68,0.15); color: #ef4444;"
-				>
-					⚠ LIVE MOTION
-				</span>
+				<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" style="background: rgba(239,68,68,0.15); color: #ef4444;">⚠ LIVE MOTION</span>
 			{/if}
-		{/if}
+		</h2>
+		<button
+			type="button"
+			onclick={refresh}
+			disabled={refreshing}
+			class="min-h-[36px] rounded border px-3 text-xs disabled:opacity-50"
+			style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+		>
+			{refreshing ? 'Refreshing…' : 'Refresh'}
+		</button>
 	</div>
-
-	{#if baseUrl}
-		<p class="mt-1 break-all text-xs" style="color: var(--color-tron-text-secondary)">
-			{baseUrl}
-		</p>
-	{/if}
 
 	{#if !reachable}
 		<div
-			class="mt-3 rounded border p-2 text-xs"
+			class="mt-2 rounded border p-2 text-xs"
 			style="border-color: #ef4444; background: rgba(239,68,68,0.08); color: var(--color-tron-text)"
 		>
 			<p class="font-semibold">Cannot reach the robot arm.</p>
@@ -258,60 +145,58 @@
 			</p>
 			<p class="mt-1" style="color: var(--color-tron-text-secondary)">
 				Check ROBOT_ARM_BASE_URL and ROBOT_ARM_API_KEY, and that the robot-arm service is running
-				on the Pi.
+				on the Pi. Last connected {relativeTime(lastConnected)}.
 			</p>
 		</div>
-	{:else}
-		<!-- Stacked label/value on phones, two-column from sm up. -->
-		<dl class="mt-3 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
-			{#each portRows as row (row.key)}
-				<div class="flex items-start justify-between gap-2 sm:justify-start">
-					<dt class="text-xs" style="color: var(--color-tron-text-secondary)">{row.label}</dt>
-					<dd class="text-right text-xs sm:text-left" style="color: var(--color-tron-text)">
-						<span style="color: {row.check?.ok ? '#22c55e' : '#ef4444'}">
-							{row.check?.ok ? '✓' : '✗'}
-						</span>
-						<span class="ml-1 break-all">{row.check?.configured ?? '—'}</span>
-					</dd>
-				</div>
-			{/each}
-		</dl>
+	{:else if !preflight?.ok && preflight?.diagnosis}
+		<div
+			class="mt-2 rounded border p-2 text-xs"
+			style="border-color: #f59e0b; background: rgba(245,158,11,0.08); color: var(--color-tron-text)"
+		>
+			⚠ {preflight.diagnosis}
+		</div>
+	{/if}
 
-		{#if preflight?.candidates?.length}
-			<div class="mt-3">
-				<p class="text-xs font-semibold" style="color: var(--color-tron-text-secondary)">
-					Detected boards
-				</p>
+	<!-- Always visible: Pi heat + Wi-Fi, servo temperatures, Torque, Return to home, Stop arm. -->
+	<div class="mt-2 space-y-1.5">
+		<PiThermalChip initial={thermal} {armReachable} />
+	</div>
+	<div class="-mx-3 mt-2 sm:-mx-4">
+		<TorqueControl {armReachable} />
+		<ReturnHomeControl {armReachable} />
+		<StopArmControl {armReachable} />
+	</div>
+
+	{#if reachable}
+		<details class="-mx-3 border-t px-3 pt-2 text-xs sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
+			<summary class="cursor-pointer">
+				Connection details · {preflight?.service} v{preflight?.version} · last connected {relativeTime(lastConnected)}
+			</summary>
+			{#if baseUrl}
+				<p class="mt-2 break-all">{baseUrl}</p>
+			{/if}
+			<!-- Stacked label/value on phones, two-column from sm up. -->
+			<dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+				{#each portRows as row (row.key)}
+					<div class="flex items-start justify-between gap-2 sm:justify-start">
+						<dt>{row.label}</dt>
+						<dd class="text-right sm:text-left" style="color: var(--color-tron-text)">
+							<span style="color: {row.check?.ok ? '#22c55e' : '#ef4444'}">
+								{row.check?.ok ? '✓' : '✗'}
+							</span>
+							<span class="ml-1 break-all">{row.check?.configured ?? '—'}</span>
+						</dd>
+					</div>
+				{/each}
+			</dl>
+			{#if preflight?.candidates?.length}
+				<p class="mt-2 font-semibold">Detected boards</p>
 				<ul class="mt-1 space-y-1">
 					{#each preflight.candidates as c (c.port)}
-						<li class="break-all text-xs" style="color: var(--color-tron-text-secondary)">
-							{c.port} · {c.serial_number}{c.expected_role ? ` · ${c.expected_role}` : ''}
-						</li>
+						<li class="break-all">{c.port} · {c.serial_number}{c.expected_role ? ` · ${c.expected_role}` : ''}</li>
 					{/each}
 				</ul>
-			</div>
-		{/if}
-
-		{#if !preflight?.ok && preflight?.diagnosis}
-			<div
-				class="mt-3 rounded border p-2 text-xs"
-				style="border-color: #f59e0b; background: rgba(245,158,11,0.08); color: var(--color-tron-text)"
-			>
-				⚠ {preflight.diagnosis}
-			</div>
-		{/if}
+			{/if}
+		</details>
 	{/if}
-
-	<!--
-		Sourced from the persisted connection log, not from this render — so it
-		still answers "when did this last work?" while the arm is down.
-	-->
-	<p
-		class="mt-3 border-t pt-2 text-xs"
-		style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
-	>
-		Last connected <span style="color: var(--color-tron-text)">{relativeTime(lastConnected)}</span>
-	</p>
-	{/if}
-	</section>
-{/if}
+</section>

@@ -1,20 +1,18 @@
 <script lang="ts">
 	/**
-	 * ARM-02 — the consolidated Robot Arm page.
+	 * The Robot Arm page (2026-11 UI redesign).
 	 *
-	 * Control / Jog / Calibrate / Runs were four sibling entries in the Cart
-	 * Mfg nav, as though they were peers of Reagent Filling. They are one
-	 * machine, so they are now tabs inside one page.
+	 * Four tabs in the order an operator needs them — Run the wax-fill line,
+	 * Teach the arm its moves, Calibrate (arm home by camera, the OT-2 stage),
+	 * History — plus a small Maintenance link for the leader-arm tools, the
+	 * Pi's recordings, jog, sync zero and the conveyor bench test, which the
+	 * line no longer needs day to day.
 	 *
-	 * This is a real +layout.svelte rather than client-side tab state, because
-	 * the four pages between them own 15 named form actions (?/jog, ?/capture,
-	 * ?/startTeleop, …) that would collide in a single actions object, and
-	 * because merging their loads would make opening Runs pay for a live
-	 * calibration sync. Tabs stay deep-linkable and each keeps its own load.
-	 *
-	 * The camera lives here, not in a child page: a SvelteKit layout instance
-	 * survives navigation between its children, so the feed is not torn down
-	 * and reconnected every time the operator moves between tabs.
+	 * This is a real +layout.svelte rather than client-side tab state: the
+	 * child pages own dozens of named form actions that would collide in one
+	 * actions object, and each tab keeps its own load. The camera and the
+	 * status card live here, so the feed is not torn down on every tab change
+	 * and torque / Return to home / Stop arm are reachable from anywhere.
 	 */
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
@@ -44,120 +42,44 @@
 
 	const BASE = '/manufacturing/cart-mfg/robot-arm';
 
-	// Operational order — connect/run, nudge, fix, review — not alphabetical.
 	const tabs = [
 		{
-			href: `${BASE}/control`,
-			label: 'Control',
-			icon: 'M12 2L9.5 4.5h5L12 2zm-2.5 3l-2 2v8l2 2h5l2-2V7l-2-2h-5zm0 11h5v3h-5v-3zm-3 4h11l-1 2H7.5l-1-2z'
+			href: `${BASE}/run`,
+			label: 'Run',
+			hint: 'The wax-fill line: start, watch and stop a run',
+			icon: 'M5 4l10 8-10 8V4z'
 		},
 		{
-			href: `${BASE}/jog`,
-			label: 'Jog',
-			icon: 'M4 8V4m0 0h4M4 4l5 5m11-5v4m0-4h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5v-4m0 4h-4m4 0l-5-5'
+			href: `${BASE}/teach`,
+			label: 'Teach',
+			hint: 'Poses, move sets and sequences the arm plays',
+			icon: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4L16.5 3.5z'
 		},
 		{
 			href: `${BASE}/calibrate`,
 			label: 'Calibrate',
+			hint: 'Arm home by camera · the OT-2 stage',
 			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-3 0a6 6 0 11-12 0 6 6 0 0112 0z'
 		},
 		{
-			// ARM-04 — sticker-marker calibration, live tracking, home check.
-			href: `${BASE}/vision`,
-			label: 'Vision',
-			icon: 'M15 12a3 3 0 11-6 0 3 3 0 016 0zm-3-7C7 5 3.3 8.1 2 12c1.3 3.9 5 7 10 7s8.7-3.1 10-7c-1.3-3.9-5-7-10-7z'
-		},
-		{
-			// Recording clean-up: split a recording into steps, edit, save as a new one.
-			href: `${BASE}/cleanup`,
-			label: 'Clean-up',
-			icon: 'M4 6h16M4 12h10M4 18h6m9-5l-3 3 3 3m-3-3h5'
-		},
-		{
-			// ARM-06 — pose animation: poses by hand, move sets, sequences.
-			href: `${BASE}/animate`,
-			label: 'Animate',
-			icon: 'M5 4l10 8-10 8V4zm12 0h2v16h-2V4z'
-		},
-		{
-			// The arm feeds one cart at a time to an OT-2 running the wax-filling protocol.
-			href: `${BASE}/wax-fill`,
-			label: 'Wax fill',
-			icon: 'M4 7h16M4 7l2 12h12l2-12M9 7V4h6v3m-6 6h6'
-		},
-		{
-			// The arm line's own calibration studio: the single-cart stage on its OT-2
-			// (scan position, tip-neutral cart location, dispense depth, stage geometry).
-			href: `${BASE}/stage-calibration`,
-			label: 'Stage calibration',
-			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-9-3v6m-3-3h6M12 7a5 5 0 110 10 5 5 0 010-10z'
-		},
-		{
-			// Temporary: conveyor belt bench test (BCM 22); moves into Wax fill later.
-			href: `${BASE}/conveyor`,
-			label: 'Conveyor',
-			icon: 'M3 15h18M3 15a2 2 0 100 4 2 2 0 000-4zm18 0a2 2 0 110 4 2 2 0 010-4zM7 19h10M8 11h4v4H8v-4z'
-		},
-		{
-			href: `${BASE}/runs`,
-			label: 'Runs',
-			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'
+			href: `${BASE}/history`,
+			label: 'History',
+			hint: 'Wax-fill runs and arm sessions',
+			icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'
 		}
 	];
+	const maintenanceHref = `${BASE}/maintenance`;
 
 	let currentPath = $derived($page.url.pathname);
-	let activeTab = $derived(tabs.find((t) => currentPath.startsWith(t.href)) ?? tabs[0]);
+	let maintActive = $derived(currentPath.startsWith(maintenanceHref));
+	let activeLabel = $derived(
+		tabs.find((t) => currentPath.startsWith(t.href))?.label ?? (maintActive ? 'Maintenance' : 'Run')
+	);
 
 	// dry_run.ok is always true — dry-run vs live is a config choice, not a
 	// fault — so the state worth showing is `value`.
 	let dryRun = $derived(data.arm.preflight?.checks?.dry_run?.value ?? null);
 	let version = $derived(data.arm.preflight?.version ?? null);
-	let diagnosis = $derived(data.arm.preflight?.diagnosis ?? null);
-
-	// ARM CONNECTION panel sits above the camera in the right rail. Hiding it
-	// folds away the connection details to give the camera more of the rail;
-	// its header, the Pi / servo lines and Torque stay. The choice is a
-	// per-browser convenience, remembered so it survives a reload.
-	const CONNECTION_HIDDEN_KEY = 'robot-arm:connection-panel-hidden';
-	let connectionHidden = $state(false);
-	$effect(() => {
-		try {
-			connectionHidden = localStorage.getItem(CONNECTION_HIDDEN_KEY) === '1';
-		} catch {
-			/* storage unavailable — default to shown */
-		}
-	});
-	function setConnectionHidden(hidden: boolean) {
-		connectionHidden = hidden;
-		try {
-			localStorage.setItem(CONNECTION_HIDDEN_KEY, hidden ? '1' : '0');
-		} catch {
-			/* ignore */
-		}
-	}
-
-	// The preflight warning (e.g. the leader BusLinker missing) can be collapsed
-	// to a small "Show Warning" chip. The hidden TEXT is remembered, not a flag,
-	// so a new or different warning shows again.
-	const DIAGNOSIS_HIDDEN_KEY = 'robot-arm:diagnosis-hidden';
-	let hiddenDiagnosis = $state<string | null>(null);
-	$effect(() => {
-		try {
-			hiddenDiagnosis = localStorage.getItem(DIAGNOSIS_HIDDEN_KEY);
-		} catch {
-			/* storage unavailable — default to shown */
-		}
-	});
-	let diagnosisHidden = $derived(!!diagnosis && hiddenDiagnosis === diagnosis);
-	function setDiagnosisHidden(hidden: boolean) {
-		hiddenDiagnosis = hidden ? diagnosis : null;
-		try {
-			if (hidden && diagnosis) localStorage.setItem(DIAGNOSIS_HIDDEN_KEY, diagnosis);
-			else localStorage.removeItem(DIAGNOSIS_HIDDEN_KEY);
-		} catch {
-			/* ignore */
-		}
-	}
 </script>
 
 <div class="space-y-4">
@@ -170,25 +92,24 @@
 		>
 		<span style="color: var(--color-tron-text-secondary)">/</span>
 		<a
-			href={`${BASE}/control`}
+			href={`${BASE}/run`}
 			class="transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)">Robot Arm</a
 		>
 		<span style="color: var(--color-tron-text-secondary)">/</span>
-		<span style="color: var(--color-tron-cyan)">{activeTab.label}</span>
+		<span style="color: var(--color-tron-cyan)">{activeLabel}</span>
 	</nav>
 
-	<div class="flex items-center justify-between gap-4">
+	<div class="flex flex-wrap items-center justify-between gap-4">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
 
-		<!-- Status strip. ARM-01 fills this region out with per-port diagnosis;
-		     ARM-02 only claims the space and shows the headline facts. -->
+		<!-- Headline facts only; the status card in the rail has the rest. -->
 		<div class="flex items-center gap-3 text-xs">
 			{#if data.arm.reachable}
 				<span class="flex items-center gap-1.5">
 					<span class="h-2 w-2 rounded-full bg-green-500"></span>
 					<span style="color: var(--color-tron-text-secondary)">
-						Reachable{#if version} · v{version}{/if}
+						Arm reachable{#if version} · v{version}{/if}
 					</span>
 				</span>
 				{#if dryRun === true}
@@ -203,7 +124,7 @@
 			{:else}
 				<span class="flex items-center gap-1.5">
 					<span class="h-2 w-2 rounded-full bg-red-500"></span>
-					<span class="text-red-400">Unreachable</span>
+					<span class="text-red-400">Arm unreachable</span>
 				</span>
 			{/if}
 		</div>
@@ -213,37 +134,19 @@
 		<div class="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs">
 			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
 			<p class="mt-1" style="color: var(--color-tron-text-secondary)">
-				Check <code>ROBOT_ARM_BASE_URL</code> and <code>ROBOT_ARM_API_KEY</code>. Run history below
-				still works — it reads from BIMS, not the arm.
+				Check <code>ROBOT_ARM_BASE_URL</code> and <code>ROBOT_ARM_API_KEY</code>. History still
+				works — it reads from BIMS, not the arm.
 			</p>
-		</div>
-	{:else if diagnosis && diagnosisHidden}
-		<button
-			type="button"
-			onclick={() => setDiagnosisHidden(false)}
-			class="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
-		>
-			Show Warning
-		</button>
-	{:else if diagnosis}
-		<div class="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-xs text-amber-200">
-			<span class="flex-1">{diagnosis}</span>
-			<button
-				type="button"
-				onclick={() => setDiagnosisHidden(true)}
-				class="shrink-0 rounded border border-amber-500/40 px-2 py-0.5 font-semibold hover:bg-amber-500/20"
-			>
-				Hide
-			</button>
 		</div>
 	{/if}
 
-	<!-- Tab strip -->
-	<div class="flex flex-wrap gap-2 border-b pb-3" style="border-color: var(--color-tron-border)">
+	<!-- Tab strip: four tabs left, Maintenance tucked right. -->
+	<div class="flex flex-wrap items-center gap-2 border-b pb-3" style="border-color: var(--color-tron-border)">
 		{#each tabs as tab (tab.href)}
 			{@const active = currentPath.startsWith(tab.href)}
 			<a
 				href={tab.href}
+				title={tab.hint}
 				class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200
 					{active
 					? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
@@ -256,13 +159,24 @@
 				{tab.label}
 			</a>
 		{/each}
+		<span class="grow"></span>
+		<a
+			href={maintenanceHref}
+			title="Leader arm, Pi recordings, jog, sync zero, clean-up, conveyor bench test"
+			class="rounded-lg px-3 py-1.5 text-xs transition-colors
+				{maintActive
+				? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]'
+				: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+			aria-current={maintActive ? 'page' : undefined}
+		>
+			Maintenance
+		</a>
 	</div>
 
 	<!--
-		Camera is a right rail on wide screens so it is co-visible with the
-		controls — the natural teleop posture. Below 1280px it stacks above the
-		tab content. Never a modal: a modal you must dismiss to press a jog
-		button is the exact problem this page exists to fix.
+		Status card and camera are a right rail on wide screens so they are
+		co-visible with the controls. Below 1280px they stack above the tab
+		content. Never a modal.
 	-->
 	<div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
 		<div class="min-w-0 xl:order-1">
@@ -270,7 +184,6 @@
 		</div>
 		<div class="xl:order-2">
 			<div class="space-y-4 xl:sticky xl:top-4">
-				<!-- Hidden keeps the header, Pi / servo lines and Torque; only the details fold away. -->
 				<RobotArmConnectionPanel
 					preflight={data.arm.preflight}
 					preflightError={data.arm.error}
@@ -278,9 +191,6 @@
 					lastConnected={data.arm.lastConnected}
 					armReachable={data.arm.reachable}
 					thermal={data.thermal}
-					hidden={connectionHidden}
-					onhide={() => setConnectionHidden(true)}
-					onshow={() => setConnectionHidden(false)}
 				/>
 				<RobotArmCameraPanel
 					cameras={data.cameras}

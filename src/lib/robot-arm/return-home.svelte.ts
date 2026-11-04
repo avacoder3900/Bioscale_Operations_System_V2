@@ -22,7 +22,7 @@ import { shouldRetryHome } from '$lib/robot-arm/home-calibration';
 import type { HomeCheckResult } from '$lib/server/robot-arm-vision';
 
 /** The route whose form actions run each attempt (`?/returnHome`, `?/stopReturn`, `?/closeClaw`). */
-export const RETURN_HOME_ROUTE = '/manufacturing/cart-mfg/robot-arm/vision';
+export const RETURN_HOME_ROUTE = '/manufacturing/cart-mfg/robot-arm/calibrate/arm';
 
 /** The Vision tab's chosen camera, remembered per browser; other tabs send it too. */
 export const VISION_CAMERA_KEY = 'bims.armVision.camera.v1';

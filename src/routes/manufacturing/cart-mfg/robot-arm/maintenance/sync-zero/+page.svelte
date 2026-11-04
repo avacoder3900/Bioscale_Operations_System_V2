@@ -120,14 +120,14 @@
 <div class="mx-auto max-w-5xl space-y-6 p-4">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Robot Arm — Sync Zero Calibration
+			Sync zero &amp; joint map (maintenance)
 		</h1>
 		<a
-			href="/manufacturing/cart-mfg/robot-arm/control"
+			href="/manufacturing/cart-mfg/robot-arm/maintenance"
 			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text)"
 		>
-			← Back to robot arm
+			← Maintenance
 		</a>
 	</div>
 
@@ -139,7 +139,7 @@
 			</p>
 			<p class="mt-1 text-xs text-yellow-200/80">
 				Stop the session from the
-				<a href="/manufacturing/cart-mfg/robot-arm/control" class="underline">control page</a>
+				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/control" class="underline">control page</a>
 				before capturing — the arm bus is single-owner.
 			</p>
 		</div>

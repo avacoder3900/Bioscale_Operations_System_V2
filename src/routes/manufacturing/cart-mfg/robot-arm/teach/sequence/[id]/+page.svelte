@@ -149,7 +149,7 @@
 <div class="mx-auto max-w-7xl space-y-4">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
-			<a href="/manufacturing/cart-mfg/robot-arm/animate" class="text-xs underline" style="color: var(--color-tron-text-secondary)">← Animate</a>
+			<a href="/manufacturing/cart-mfg/robot-arm/teach" class="text-xs underline" style="color: var(--color-tron-text-secondary)">← Teach</a>
 			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">{friendlyName(sequence.name)}</h1>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">

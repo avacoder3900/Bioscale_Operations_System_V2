@@ -34,7 +34,7 @@
 			</p>
 		</div>
 		<a
-			href="/manufacturing/cart-mfg/robot-arm/runs"
+			href="/manufacturing/cart-mfg/robot-arm/history"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>

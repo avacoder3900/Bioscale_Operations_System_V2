@@ -25195,3 +25195,46 @@ Pi install (arm-pi, 10:11 local): conveyor.py + install_conveyor_router.py copie
 applied (backup src/server/app.py.bak-conveyor), robot-arm restarted with /sessions/active null. Journal:
 "[conveyor] claimed BCM 22 via gpiozero"; GET /conveyor/status -> pin 22, state 0, simulated false. No pulse
 fired from here (it moves the real belt); first hardware pulse is the user's from the tab.
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — Robot Arm UI redesign: four tabs + status card (PREVIEW ONLY, not merged)
+================================================================================
+Preview branch only. The Robot Arm page had grown to ten tabs over three generations (leader-arm
+teleop, pose authoring, the wax-fill line); an audit found about half of what was on screen belonged
+to the first generation, which the line no longer uses. This branch restructures the page without
+changing any server behaviour the line depends on: every +page.server.ts and lib function is the
+same code, moved.
+Tabs now: Run (was Wax fill) · Teach (was Animate, with moveset/ and sequence/) · Calibrate, with
+two sub-tabs: Arm home (was Vision) and Stage (OT-2) (was Stage calibration) · History (was Runs).
+A small Maintenance link on the right of the tab strip opens an index of the tools behind the line:
+Leader arm & recordings (was Control, minus Run Task, the GPIO solenoid panel and the "arm not
+home?" card — Teach has the solenoid panel, the status card has Return to home), Clean-up, Jog, Sync
+zero & joint map (was Calibrate), Conveyor bench test.
+- +layout.svelte: four tabs + Maintenance; the preflight-warning hide chip and the connection-panel
+  hide/show localStorage are gone. Rail = status card + camera.
+- RobotArmConnectionPanel.svelte reworked as THE status card (same file name: the URL-invariant test
+  pins it): dot + ONLINE / NEEDS ATTENTION / UNREACHABLE + DRY RUN / LIVE MOTION chip, then the
+  always-on rows Pi heat/Wi-Fi + servo temps, Torque, Return to home and the new Stop arm; ports,
+  boards, base URL and last-connected fold under "Connection details". Compact variant dropped.
+- Stop arm (new): src/lib/components/robot-arm/StopArmControl.svelte → POST /api/robot-arm/stop
+  (new) → src/lib/server/robot-arm-stop.ts stopArm() — the Control page's ?/stop action body moved
+  there and the action now calls it, so the two cannot drift. Confirm text says it is arm-only and
+  points at STOP RUN for the whole line. Announces bus-free so Torque re-reads.
+- Run tab: "How a run works" intro folded into a <details>; OT-2 card gets one Recover button (the
+  Robots board's 2026-11-03 logic: resetLoop + force-reset, restart only when hung/unreachable,
+  shift-click forces) replacing Restart + Reset; Conveyor link next to Stage calibration; Setup,
+  Animations, Protocol on the robot and the Stage calibration summary fold into one "Setup &
+  calibration" <details> that opens by itself when a start is blocked or no run is on; Recent runs
+  links to Full history.
+- Teach tab: header loses the torque chip + Torque on button (status card), shows Torque OFF only
+  as a warning; one-line intro with an "Import a piloted recording" link to Maintenance › Clean-up.
+- History tab (rewritten): ?view=runs (default) lists ArmWaxFillRun loops — started, by, robot,
+  carts filled/asked/skipped, status, duration, note, carts drop-down — paginated; ?view=sessions is
+  the old RobotArmRun log with its type/status filters and the run detail page (history/[id]).
+  loopView() is now exported from arm-wax-fill.ts for it.
+- Old URLs all 301 to the new ones (wax-fill, animate + moveset/sequence ids, vision,
+  stage-calibration, runs + id, control, jog, cleanup + id + overlay, conveyor); the bare
+  /robot-arm now lands on /run. RETURN_HOME_ROUTE → /calibrate/arm. Every internal href rewritten.
+Not done here (follow-ups): Calibrate › Stage still pays the arm layout's three soft Pi calls; the
+Run tab's Setup fields are unchanged inside the drawer; Vision keeps its own fuller Return to home.
+Tests: vitest robot-arm suites 13 files / 256 tests pass (incl. robot-arm-url-invariant). npm run check
+14 errors (baseline), no warnings in touched files.

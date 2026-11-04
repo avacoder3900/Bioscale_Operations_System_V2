@@ -54,7 +54,7 @@
 
 	let { data, form } = $props();
 
-	const WAX_FILL_HREF = '/manufacturing/cart-mfg/robot-arm/wax-fill';
+	const WAX_FILL_HREF = '/manufacturing/cart-mfg/robot-arm/run';
 	const robotId = $derived(data.robotId as string | null);
 	const robotName = $derived((data.robotName as string | null) ?? 'robot');
 

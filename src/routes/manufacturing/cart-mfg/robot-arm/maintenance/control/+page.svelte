@@ -5,18 +5,6 @@
 
 	let { data, form } = $props();
 
-	// Solenoid pulse controls. 1000 ms default: long enough for a cartridge to
-	// fall clear, short enough for an intermittent-duty coil. The Pi caps at 2000.
-	let pulseMs = $state(1000);
-	let gapMs = $state(500);
-	let gpioBusy = $state(false);
-	const gpioEnhance = () => {
-		gpioBusy = true;
-		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
-			await update({ reset: false });
-			gpioBusy = false;
-		};
-	};
 
 	// Recording trash. Delete moves a recording to R2 for 30 days; Recover
 	// brings it back to the Pi. Only the daily cron removes trash permanently.
@@ -34,10 +22,6 @@
 		return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
 	}
 
-	let selectedTask = $state('');
-	const selectedTaskMeta = $derived(
-		(data.tasks ?? []).find((t: { name: string }) => t.name === selectedTask) ?? null
-	);
 
 	// `active` and `activeError` now arrive pre-separated from the server, so the
 	// hand-written union guards this page used to carry are gone.
@@ -60,21 +44,7 @@
 		active?.kind === 'replay' && holder?.type === 'replay' ? (holder.loop ?? null) : null
 	);
 
-	// ARM-01 §7.4 — this build is accepted against dry-run only, so the Start
-	// control refuses to submit when the Pi reports live motion. The server
-	// re-checks at submit time; this is the UI half of the same gate.
-	const dryRun = $derived(data.preflight?.checks?.dry_run?.value);
 	const armReachable = $derived(data.preflight != null);
-	const taskStartBlocked = $derived(!armReachable || dryRun !== true || holder != null);
-	const taskBlockReason = $derived(
-		!armReachable
-			? 'The arm is unreachable — check the connection panel.'
-			: dryRun !== true
-				? 'Run Task is validated for dry-run only (ARM-01 §7.4). The arm is in live motion: set DRY_RUN=true in ~/robot-arm/.env on the Pi and restart the robot-arm service to re-enable it.'
-				: holder != null
-					? 'The arm is already running something. If the session bar reads STALE, that run was never closed out and will keep blocking this until it is resolved.'
-					: ''
-	);
 
 	const SESSION_POLL_MS = 2000;
 	// Boolean on purpose: each poll replaces `active`, and an effect keyed on
@@ -128,14 +98,14 @@
 <div class="mx-auto max-w-7xl space-y-6">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Robot Arm — Remote Control
+			Leader arm &amp; recordings
 		</h1>
 		<a
-			href="/manufacturing/cart-mfg"
+			href="/manufacturing/cart-mfg/robot-arm/maintenance"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
-			← back
+			← Maintenance
 		</a>
 	</div>
 
@@ -165,7 +135,7 @@
 				{form.success}
 				{#if 'runId' in form && form.runId}
 					<a
-						href="/manufacturing/cart-mfg/robot-arm/runs/{form.runId}"
+						href="/manufacturing/cart-mfg/robot-arm/history/{form.runId}"
 						class="ml-2 underline"
 						style="color: var(--color-tron-cyan)">view run →</a
 					>
@@ -176,19 +146,6 @@
 				{form.error}
 			</div>
 		{/if}
-
-		<!--
-			Home recovery moved to the Vision tab (ARM-04): sticker markers tracked
-			by the camera replaced ARM-03's whole-frame picture check.
-		-->
-		<a
-			href="/manufacturing/cart-mfg/robot-arm/vision"
-			class="flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-xs transition-colors hover:border-[var(--color-tron-cyan)]"
-			style="border-color: var(--color-tron-border); background: var(--color-tron-surface); color: var(--color-tron-text-secondary);"
-		>
-			<span><span class="font-semibold" style="color: var(--color-tron-text)">Arm not back home?</span> Check it against the camera markers, or send it home, on the Vision tab.</span>
-			<span style="color: var(--color-tron-cyan)">Vision →</span>
-		</a>
 
 		<!-- Teleop / Record / Replay — the controls used most, so they lead -->
 		<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -366,173 +323,6 @@
 			</form>
 		</div>
 
-		<!--
-			Solenoids on the arm Pi's GPIO (cartridge chute). Pins are named by BCM
-			number for now. One shared pulse length feeds all three buttons; the
-			sequence button adds a gap between the two pins. Not disabled during a
-			session on purpose: manual testing fires these while teleop runs.
-		-->
-		<section
-			class="rounded border p-3 sm:p-4"
-			style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
-		>
-			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
-				SOLENOIDS (GPIO)
-			</h2>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				Energize a solenoid for the pulse length, then release. The Pi caps a pulse at 2000 ms.
-			</p>
-
-			<div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-[12rem_minmax(0,1fr)]">
-				<div class="space-y-3">
-					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-						Pulse (ms)
-						<input
-							type="number"
-							bind:value={pulseMs}
-							min="20"
-							max="2000"
-							step="10"
-							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-							style="color: var(--color-tron-text)"
-						/>
-					</label>
-					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-						Gap between pins (ms, sequence only)
-						<input
-							type="number"
-							bind:value={gapMs}
-							min="0"
-							max="5000"
-							step="50"
-							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-							style="color: var(--color-tron-text)"
-						/>
-					</label>
-				</div>
-
-				<div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-					<form method="POST" action="?/pulseGpio" use:enhance={gpioEnhance}>
-						<input type="hidden" name="pin" value="17" />
-						<input type="hidden" name="pulse_ms" value={pulseMs} />
-						<button
-							type="submit"
-							disabled={!armReachable || gpioBusy}
-							class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-							style="color: var(--color-tron-cyan)"
-						>
-							Pulse GPIO 17
-						</button>
-					</form>
-					<form method="POST" action="?/pulseGpio" use:enhance={gpioEnhance}>
-						<input type="hidden" name="pin" value="27" />
-						<input type="hidden" name="pulse_ms" value={pulseMs} />
-						<button
-							type="submit"
-							disabled={!armReachable || gpioBusy}
-							class="min-h-[44px] w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-							style="color: var(--color-tron-cyan)"
-						>
-							Pulse GPIO 27
-						</button>
-					</form>
-					<form method="POST" action="?/pulseSequence" use:enhance={gpioEnhance}>
-						<input type="hidden" name="pulse_ms" value={pulseMs} />
-						<input type="hidden" name="gap_ms" value={gapMs} />
-						<button
-							type="submit"
-							disabled={!armReachable || gpioBusy}
-							class="min-h-[44px] w-full rounded px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-							style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
-						>
-							GPIO 17 then 27
-						</button>
-					</form>
-				</div>
-			</div>
-			{#if gpioBusy}
-				<p class="mt-2 text-xs" style="color: #f59e0b">
-					Pulsing... the Pi holds the pin for the full length before answering.
-				</p>
-			{:else if !armReachable}
-				<p class="mt-2 text-xs" style="color: #f59e0b">
-					The arm Pi is unreachable, so the solenoids cannot be driven.
-				</p>
-			{/if}
-		</section>
-
-		<!-- ARM-01 S5 — run a named task from the Pi's registry -->
-		<section
-			class="rounded border p-3 sm:p-4"
-			style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
-		>
-			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
-				RUN TASK
-			</h2>
-
-			{#if (data.tasks ?? []).length === 0}
-				<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					No tasks available — the arm is unreachable or its registry is empty.
-				</p>
-			{:else}
-				<form method="POST" action="?/startTask" class="mt-3 space-y-3">
-					<div>
-						<label
-							for="task_name"
-							class="block text-xs"
-							style="color: var(--color-tron-text-secondary)">Task</label
-						>
-						<select
-							id="task_name"
-							name="task_name"
-							bind:value={selectedTask}
-							required
-							class="mt-1 min-h-[44px] w-full rounded border bg-transparent px-2 text-sm sm:w-auto sm:min-w-[22rem]"
-							style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
-						>
-							<option value="" disabled>Select a task…</option>
-							{#each data.tasks as t (t.name)}
-								<option value={t.name}>{t.name}</option>
-							{/each}
-						</select>
-						{#if selectedTaskMeta}
-							<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-								{selectedTaskMeta.description ?? ''}
-								{#if selectedTaskMeta.version}
-									<span class="ml-1 font-mono">v{selectedTaskMeta.version}</span>
-								{/if}
-							</p>
-						{/if}
-					</div>
-
-					<div>
-						<label for="lot_id" class="block text-xs" style="color: var(--color-tron-text-secondary)"
-							>Lot (optional)</label
-						>
-						<input
-							type="text"
-							id="lot_id"
-							name="lot_id"
-							class="mt-1 min-h-[44px] w-full rounded border bg-transparent px-2 text-sm sm:w-auto sm:min-w-[22rem]"
-							style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
-						/>
-					</div>
-
-					<button
-						type="submit"
-						disabled={taskStartBlocked || !selectedTask}
-						class="min-h-[44px] w-full rounded px-4 text-sm font-semibold disabled:opacity-40 sm:w-auto"
-						style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
-					>
-						Start task
-					</button>
-					{#if taskStartBlocked}
-						<span class="block text-xs" style="color: #f59e0b">{taskBlockReason}</span>
-					{/if}
-				</form>
-			{/if}
-		</section>
-
 		<!-- Recordings table, with the 30-day trash -->
 		<section>
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -638,7 +428,7 @@
 									<td class="px-3 py-2 font-mono">
 										{r.name}
 										<a
-											href={`/manufacturing/cart-mfg/robot-arm/cleanup?source=${encodeURIComponent(r.name)}`}
+											href={`/manufacturing/cart-mfg/robot-arm/maintenance/cleanup?source=${encodeURIComponent(r.name)}`}
 											class="ml-2 font-sans text-[11px] hover:underline"
 											style="color: var(--color-tron-cyan)"
 											title="Split this recording into steps and clean it up">clean up</a
