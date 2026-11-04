@@ -12,6 +12,11 @@
 	let showTrash = $state(false);
 	let recordingBusy = $state(false);
 	const deletedRecordings = $derived(data.deletedRecordings ?? []);
+	// Recordings On Pi: click NAME or DATE to sort; newest first by default.
+	let recordingSort = $state<'date' | 'name'>('date');
+	const sortedRecordings = $derived(
+		[...data.piRecordings].sort((a, b) => (recordingSort === 'name' ? a.name.localeCompare(b.name, undefined, { numeric: true }) : new Date(b.modified).getTime() - new Date(a.modified).getTime()))
+	);
 	const recordingEnhance = () => {
 		recordingBusy = true;
 		return async ({ update }: { update: (opts?: { reset?: boolean }) => Promise<void> }) => {
@@ -348,14 +353,18 @@
 							style="color: var(--color-tron-text-secondary)"
 						>
 							<tr>
-								<th class="px-3 py-2">Name</th>
+								<th class="px-3 py-2">
+									<button type="button" class="uppercase tracking-wider" style={recordingSort === 'name' ? 'color: var(--color-tron-cyan)' : ''} onclick={() => (recordingSort = 'name')} aria-pressed={recordingSort === 'name'}>Name</button>
+								</th>
 								<th class="px-3 py-2">Size</th>
-								<th class="px-3 py-2">Modified</th>
+								<th class="px-3 py-2">
+									<button type="button" class="uppercase tracking-wider" style={recordingSort === 'date' ? 'color: var(--color-tron-cyan)' : ''} onclick={() => (recordingSort = 'date')} aria-pressed={recordingSort === 'date'}>Date</button>
+								</th>
 								<th class="w-10 px-3 py-2"><span class="sr-only">Delete</span></th>
 							</tr>
 						</thead>
 						<tbody style="color: var(--color-tron-text)">
-							{#each data.piRecordings as r (r.path)}
+							{#each sortedRecordings as r (r.path)}
 								<tr class="border-b border-[var(--color-tron-border)]/50 last:border-b-0">
 									<td class="px-3 py-2 font-mono">
 										{r.name}
