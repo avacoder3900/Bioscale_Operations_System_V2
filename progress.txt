@@ -25368,3 +25368,11 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-d0tjfh60b.vercel.app
 Source: branch feat/arm-ui-redesign @ commit dd613f8e (NOT on master)
 What this deployment is for: Teach pose editor — full-width sliders, nudge buttons and value box under each slider (fa4e8aff + dd613f8e).
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — NOTE FOR EVERY CLAUDE SESSION ON THIS BRANCH: push each change now
+================================================================================
+Alejandro (2026-11-04): commit and `git push origin feat/arm-ui-redesign` after EVERY change, however
+small. Do not batch edits or leave them uncommitted: he watches this branch live on a local dev server,
+and a second Claude session works on the same branch. Before each commit: `git pull --no-rebase origin
+feat/arm-ui-redesign`; never force-push this branch. It does not go to master until he says so. Same
+rule is at the top of CLAUDE.md.
