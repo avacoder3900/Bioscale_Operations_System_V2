@@ -25155,3 +25155,12 @@ Source: branch feat/arm-loop-audit-fixes (fast-forwarded onto master; sha in the
 What this deployment is for: the arm wax-fill loop cannot hang on a dead bridge command, a stop never halts a
 withdraw with a cart in the gripper, a replay after an arrival miss is allowed only from the animation's start pose,
 and the channel default is A only.
+
+2026-11-04 — master — deploy log: ab844676 (arm wax-fill audit fixes)
+================================================================================
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/arm-loop-audit-fixes @ commit ab844676 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at the commit titled "fix(robot-arm): arm wax-fill audit fixes — channels default A only, dead bridge commands expire, a stop lets a withdraw finish, replay after a miss only from the start pose"
+What this deployment is for: see the entry above. Robot side still to do: re-add both stage .py (now channel A only by
+default) to the library from the Wax fill tab and deploy the rehearsal — docs/HANDOFF-ARM-LOOP-SPEED-DEPLOY-2026-10-30.md
+(update of 2026-11-04). The daemon on B14 is already 1.6.0.
