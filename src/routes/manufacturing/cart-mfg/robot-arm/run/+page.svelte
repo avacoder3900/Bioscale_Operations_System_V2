@@ -1380,51 +1380,51 @@
 			</div>
 		</div>
 	</section>
+
+		<!-- ── History ───────────────────────────────────────────────────── -->
+		{#if data.recentLoops.length}
+			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<div class="flex items-center justify-between gap-2">
+					<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Runs</h3>
+					<button
+						type="button"
+						onclick={() => setRecentHidden(!recentHidden)}
+						class="min-h-[36px] rounded border px-3 text-xs"
+						style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+						aria-expanded={!recentHidden}
+					>
+						{recentHidden ? 'Show' : 'Hide'}
+					</button>
+				</div>
+				{#if !recentHidden}
+				<table class="mt-2 w-full text-left text-xs">
+					<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
+					<tbody>
+						{#each data.recentLoops as l (l._id)}
+							<tr style="color: var(--color-tron-text)">
+								<td class="pr-3 py-1">{when(l.startedAt)}</td>
+								<td class="pr-3">{l.startedBy ?? ''}</td>
+								<td class="pr-3">{l.robot.name}</td>
+								<td class="pr-3 font-mono">{l.completedRuns} / {l.requestedRuns}</td>
+								<td class="pr-3 {l.status === 'completed' ? 'text-green-300' : l.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">{l.status ? l.status[0].toUpperCase() + l.status.slice(1) : ''}</td>
+								<td class="pr-3 text-[11px]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
+								<td class="py-1">
+									{#if l.opentronsRunId}
+										<button type="button" onclick={() => void loadProfile(l._id)} disabled={profileBusy} class={ctlPlain} title="Where this loop's OT-2 run spent its seconds">
+											{profileBusy && profileLoopId === l._id ? 'Reading…' : 'Profile'}
+										</button>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+				{/if}
+			</section>
+		{/if}
 		</div>
 	</div>
 	</details>
-
-	<!-- ── History ───────────────────────────────────────────────────── -->
-	{#if data.recentLoops.length}
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<div class="flex items-center justify-between gap-2">
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Runs</h3>
-				<button
-					type="button"
-					onclick={() => setRecentHidden(!recentHidden)}
-					class="min-h-[36px] rounded border px-3 text-xs"
-					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
-					aria-expanded={!recentHidden}
-				>
-					{recentHidden ? 'Show' : 'Hide'}
-				</button>
-			</div>
-			{#if !recentHidden}
-			<table class="mt-2 w-full text-left text-xs">
-				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
-				<tbody>
-					{#each data.recentLoops as l (l._id)}
-						<tr style="color: var(--color-tron-text)">
-							<td class="pr-3 py-1">{when(l.startedAt)}</td>
-							<td class="pr-3">{l.startedBy ?? ''}</td>
-							<td class="pr-3">{l.robot.name}</td>
-							<td class="pr-3 font-mono">{l.completedRuns} / {l.requestedRuns}</td>
-							<td class="pr-3 {l.status === 'completed' ? 'text-green-300' : l.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">{l.status ? l.status[0].toUpperCase() + l.status.slice(1) : ''}</td>
-							<td class="pr-3 text-[11px]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
-							<td class="py-1">
-								{#if l.opentronsRunId}
-									<button type="button" onclick={() => void loadProfile(l._id)} disabled={profileBusy} class={ctlPlain} title="Where this loop's OT-2 run spent its seconds">
-										{profileBusy && profileLoopId === l._id ? 'Reading…' : 'Profile'}
-									</button>
-								{/if}
-							</td>
-						</tr>
-					{/each}
-				</tbody>
-			</table>
-			{/if}
-		</section>
-	{/if}
 	<!-- History is its own page, one button away rather than a tab. -->
 	<div class="flex justify-center pt-2">
 		<a href="/manufacturing/cart-mfg/robot-arm/history" class="rounded-lg border border-[var(--color-tron-border)] px-5 py-2 text-sm font-semibold transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Open History</a>
