@@ -57,7 +57,7 @@
 			onclick={start}
 			disabled={!armReachable}
 			class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-			style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
+			style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
 			title={armReachable
 				? 'The arm MOVES: open the mouth, servo 2 home, all joints home, close the claw; keeps going until done (Stop any time; max 90 s). Uses the Vision tab’s camera and calibration; refused while a session holds the arm.'
 				: 'The arm is unreachable'}

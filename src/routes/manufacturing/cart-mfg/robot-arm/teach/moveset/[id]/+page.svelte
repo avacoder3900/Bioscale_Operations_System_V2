@@ -263,7 +263,7 @@
 			{#if playback.running}
 				<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 			{:else}
-				<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || firesBlocked}
+				<button type="button" class={btn} style={cyan} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || firesBlocked}
 					title={dirty ? 'Save first' : firesBlocked ? "The Pi's replay cannot fire steps yet" : 'From where the arm is, through every step'}
 					onclick={() => { if (confirm(firesOnly ? `Fire the steps of "${friendlyName(moveSet.name)}"? The arm does not move; the solenoids and conveyor belt run. Are the trapdoors and the belt clear?` : `The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
 				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}

@@ -304,7 +304,7 @@
 						onclick={runReturnHome}
 						disabled={blocked || !calibration.jointSteps || !!homeBusy}
 						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-						style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
+						style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
 						title={calibration.jointSteps ? 'Open the mouth, servo 2 home, all joints home, close the claw; keeps going until done (Stop any time; max 90 s)' : 'This calibration has no encoder home'}
 					>
 						Return To Home
