@@ -25439,3 +25439,15 @@ the rows purgedAt (rows rewritten, never deleted). Nothing is kept after 30 days
 Files: src/lib/server/robot-arm-archive.ts (+ .test.ts), db/models/robot-arm-archive-entry.ts,
 robot-arm-animation.ts, robot-arm-cleanup.ts, robot-arm-vision.ts, robot-arm-verified.ts, the cron route,
 vercel.json. Tests: robot-arm-archive.test.ts 2/2, animation.test.ts 57/57. npm run check 13 (baseline).
+================================================================================
+2026-11-04 — master — Robot Arm UI redesign merged to production (Alejandro: "We are done with this branch")
+================================================================================
+feat/arm-ui-redesign fast-forwarded onto master: Run / Teach / Calibrate / History + Maintenance, status card
+with Hide/Show and Show Warning, UI text rule (Title Case, no extra text, no emojis in titles), Conveyor Belt
+card + move-set conveyor fire steps, fires-only plays without the arm, Hide/Show on Recent Runs / Recent
+Edits / Calibration History / Tag Registry, New Pose sliders follow the arm, archive = R2 trash for 30 days.
+Deployment: production - via Vercel GitHub integration on the push to master (build not watched, per user)
+Source: branch feat/arm-ui-redesign @ the merge commit pushed to master today (git log master --oneline -3)
+Retrieve this exact code: git checkout master at that commit
+What this deployment is for: the redesigned Robot Arm page and today's arm features, live at the BIMS address.
+Pi already has fires.py, conveyor.py and replay_settle.py from today; nothing else to install.
