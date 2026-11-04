@@ -1004,7 +1004,7 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
-<div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip">
+<div class="mx-auto max-w-[1400px] space-y-3 overflow-x-clip">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Stage Calibration Studio</h1>
@@ -1013,7 +1013,7 @@
 	</div>
 
 	<!-- Pickers -->
-	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+	<div class="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
 				<span class="bg-[var(--color-tron-cyan)]/20 px-2.5 py-1.5 text-[var(--color-tron-cyan)]" title="One Gen7 cartridge on the arm's elevated stage">Cartridge On Stage</span>
