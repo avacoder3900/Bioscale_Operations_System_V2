@@ -25237,3 +25237,8 @@ saved per browser on change.
   value differs from the stored one); both boxes seeded once from BIMS (untrack, so status polls
   never reset them); a successful Save also puts the value in Pulse (ms).
 npm run check 14 errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/26rC9ptDwmrffqHq4Umpxv2U7Rh4
+Source: branch feat/arm-conveyor-page @ commit c6a91078 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit c6a91078
+What this deployment is for: Conveyor default pulse stored in BIMS, saved with the Save button.
