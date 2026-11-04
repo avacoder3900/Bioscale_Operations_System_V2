@@ -333,7 +333,7 @@
 		{#each SERVOS as s (s)}
 			{@const r = ranges[s]}
 			{@const ticks = axisTicks(r.min, r.max, 6)}
-			<div class="grid grid-cols-[6.5rem_1fr] items-start gap-x-3 gap-y-1 sm:grid-cols-[7.5rem_1fr_auto]">
+			<div class="grid grid-cols-[6.5rem_1fr] items-start gap-x-3 gap-y-1 sm:grid-cols-[7.5rem_1fr]">
 				<div class="pt-1">
 					<div class="text-sm" style="color: var(--color-tron-text)">{JOINT_LABELS[s]}</div>
 					<div class="text-[10px]" style="color: var(--color-tron-text-secondary)">
