@@ -1293,8 +1293,10 @@
 			{/if}
 		</section>
 
+		<!-- Right column: the animations the run plays, with the stage calibration it runs on directly under them -->
+		<div class="min-w-0 space-y-3">
 		<!-- ── Animations ────────────────────────────────────────────── -->
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="flex items-center justify-between">
 				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Animations</h3>
 				{#if !changingAnimations}
@@ -1333,7 +1335,7 @@
 					</div>
 				</form>
 			{:else}
-				<dl class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
+				<dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
 					<dt style="color: var(--color-tron-text-secondary)">Grab</dt>
 					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.grabAnimation?.name ?? '— Not Chosen —'}{#if anim.grabAnimation}<span class="ml-1 font-normal opacity-60">({anim.grabAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
 					<dt style="color: var(--color-tron-text-secondary)">Withdraw</dt>
@@ -1342,21 +1344,19 @@
 					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.failAnimation?.name ?? '— Not Chosen —'}{#if anim.failAnimation}<span class="ml-1 font-normal opacity-60">({anim.failAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'}{anim.withdrawAnimation && animValue(anim.failAnimation) === animValue(anim.withdrawAnimation) ? ', Same As Withdraw' : ''})</span>{/if}</dd>
 				</dl>
 				{#if anim.animationsChangedAt}
-					<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Last Changed {when(anim.animationsChangedAt)}{anim.animationsChangedBy ? ` by ${anim.animationsChangedBy}` : ''}.</p>
+					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Last Changed {when(anim.animationsChangedAt)}{anim.animationsChangedBy ? ` by ${anim.animationsChangedBy}` : ''}.</p>
 				{/if}
 			{/if}
 		</section>
-	</div>
 
-	<!-- ── Calibration summary (taught on the Stage calibration tab) ────── -->
-	<section class="mt-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 space-y-2">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
 				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage Calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
 			</div>
 			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage Calibration</a>
 		</div>
-		<div class="grid grid-cols-1 gap-3 text-xs md:grid-cols-2 xl:grid-cols-4">
+		<div class="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Scan Position</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
@@ -1380,6 +1380,8 @@
 			</div>
 		</div>
 	</section>
+		</div>
+	</div>
 	</details>
 
 	<!-- ── History ───────────────────────────────────────────────────── -->
