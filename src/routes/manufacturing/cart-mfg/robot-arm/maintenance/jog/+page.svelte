@@ -48,7 +48,7 @@
 
 <div class="mx-auto max-w-3xl space-y-5 p-4">
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
+		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">
 			Jog
 		</h1>
 		<a

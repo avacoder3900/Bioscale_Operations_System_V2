@@ -150,7 +150,7 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<a href="/manufacturing/cart-mfg/robot-arm/teach" class="text-xs underline" style="color: var(--color-tron-text-secondary)">← Teach</a>
-			<h1 class="text-xl font-bold" style="color: var(--color-tron-cyan)">{friendlyName(sequence.name)}</h1>
+			<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">{friendlyName(sequence.name)}</h1>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
 			{#if stats}{stats.durationS.toFixed(1)} s · {stats.frames} frames · fastest servo {Math.max(...stats.maxStepsPerS)} steps/s{/if}

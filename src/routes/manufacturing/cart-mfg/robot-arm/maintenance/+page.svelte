@@ -28,10 +28,8 @@
 	];
 </script>
 
-<div class="space-y-4">
-	<div>
-		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Maintenance</h2>
-	</div>
+<div class="space-y-3">
+	<h2 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Maintenance</h2>
 	<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
 		{#each tools as t (t.href)}
 			<a

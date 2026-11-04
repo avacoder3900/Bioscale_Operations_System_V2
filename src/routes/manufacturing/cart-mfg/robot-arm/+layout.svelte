@@ -66,9 +66,6 @@
 
 	let currentPath = $derived($page.url.pathname);
 	let maintActive = $derived(currentPath.startsWith(maintenanceHref));
-	let activeLabel = $derived(
-		tabs.find((t) => currentPath.startsWith(t.href))?.label ?? (maintActive ? 'Maintenance' : currentPath.startsWith(`${BASE}/history`) ? 'History' : 'Run')
-	);
 
 	// dry_run.ok is always true — dry-run vs live is a config choice, not a
 	// fault — so the state worth showing is `value`.
@@ -76,29 +73,21 @@
 	let version = $derived(data.arm.preflight?.version ?? null);
 </script>
 
-<div class="space-y-4">
-	<!-- Breadcrumb -->
-	<nav class="flex items-center gap-2 text-sm">
-		<a
-			href="/manufacturing/cart-mfg"
-			class="transition-colors hover:text-[var(--color-tron-cyan)]"
-			style="color: var(--color-tron-text-secondary)">Cart Mfg</a
-		>
-		<span style="color: var(--color-tron-text-secondary)">/</span>
-		<a
-			href={`${BASE}/run`}
-			class="transition-colors hover:text-[var(--color-tron-cyan)]"
-			style="color: var(--color-tron-text-secondary)">Robot Arm</a
-		>
-		<span style="color: var(--color-tron-text-secondary)">/</span>
-		<span style="color: var(--color-tron-cyan)">{activeLabel}</span>
-	</nav>
-
-	<div class="flex flex-wrap items-center justify-between gap-4">
-		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
+<div class="space-y-2">
+	<!-- One chrome row: crumb + title left, arm state right. Short on purpose so the content starts high. -->
+	<div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+		<div class="flex min-w-0 items-center gap-1.5 text-xs">
+			<a
+				href="/manufacturing/cart-mfg"
+				class="transition-colors hover:text-[var(--color-tron-cyan)]"
+				style="color: var(--color-tron-text-secondary)">Cart Mfg</a
+			>
+			<span style="color: var(--color-tron-text-secondary)">/</span>
+			<h1 class="text-sm font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
+		</div>
 
 		<!-- Headline facts only; the status card in the rail has the rest. -->
-		<div class="flex items-center gap-3 text-xs">
+		<div class="flex items-center gap-2 text-[11px]">
 			{#if data.arm.reachable}
 				<span class="flex items-center gap-1.5">
 					<span class="h-2 w-2 rounded-full bg-green-500"></span>
@@ -107,7 +96,7 @@
 					</span>
 				</span>
 				{#if dryRun === true}
-					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-amber-300">
+					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-px text-amber-300">
 						DRY RUN
 					</span>
 				{/if}
@@ -121,25 +110,25 @@
 	</div>
 
 	{#if !data.arm.reachable && data.arm.error}
-		<div class="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs">
+		<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs">
 			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
 		</div>
 	{/if}
 
-	<!-- Tab strip: four tabs left, Maintenance tucked right. -->
-	<div class="flex flex-wrap items-center gap-2 border-b pb-3" style="border-color: var(--color-tron-border)">
+	<!-- Tab strip: three short tabs left, Maintenance tucked right. -->
+	<div class="flex flex-wrap items-center gap-1 border-b pb-1.5" style="border-color: var(--color-tron-border)">
 		{#each tabs as tab (tab.href)}
 			{@const active = currentPath.startsWith(tab.href)}
 			<a
 				href={tab.href}
 				title={tab.hint}
-				class="flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all duration-200
+				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all duration-200
 					{active
 					? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
 					: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
 				aria-current={active ? 'page' : undefined}
 			>
-				<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
 					<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d={tab.icon} />
 				</svg>
 				{tab.label}
@@ -149,7 +138,7 @@
 		<a
 			href={maintenanceHref}
 			title="Leader arm, Pi recordings, jog, sync zero, clean-up, conveyor bench test"
-			class="rounded-lg px-3 py-1.5 text-xs transition-colors
+			class="rounded-md px-2 py-1 text-[11px] transition-colors
 				{maintActive
 				? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]'
 				: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
@@ -164,7 +153,7 @@
 		co-visible with the controls. Below 1280px they stack above the tab
 		content. Never a modal.
 	-->
-	<div class="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+	<div class="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
 		<div class="min-w-0 xl:order-1">
 			{@render children()}
 		</div>
