@@ -235,8 +235,13 @@
 
 	{#if reachable && !hidden}
 		<div class="-mx-3 mt-2 border-t px-3 pt-2 text-xs sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
-			<p>
-				Connection Details · {preflight?.service} v{preflight?.version} · Last Connected {relativeTime(lastConnected)}
+			<!-- Moved down from the page header (2026-11-04). -->
+			<p class="flex items-center gap-1.5">
+				<span class="h-2 w-2 rounded-full bg-green-500"></span>
+				Arm Reachable{#if preflight?.version} · v{preflight.version}{/if}
+			</p>
+			<p class="mt-2">
+				Connection Details · {preflight?.service} · Last Connected {relativeTime(lastConnected)}
 			</p>
 			{#if baseUrl}
 				<p class="mt-2 break-all">{baseUrl}</p>

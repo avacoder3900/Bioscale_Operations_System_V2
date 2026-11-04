@@ -25508,3 +25508,14 @@ that branch is merged and retired; work goes to master. svelte-check 13 errors (
 Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
 Source: branch master @ (this commit)
 What this deployment is for: the three requests above.
+
+================================================================================
+2026-11-04 — master — Arm Reachable · version moved from the page header into the ARM card's Connection Details
+================================================================================
+The green dot + "Arm Reachable · v0.1.0" in the Robot Arm header (robot-arm/+layout.svelte) is gone; it now
+heads the ARM card's Connection Details fold (RobotArmConnectionPanel.svelte), which is hidden by default and
+opens with the blue Show button. The Connection Details line drops its own copy of the version so it isn't
+said twice. Header still shows DRY RUN and Arm Unreachable. svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ (this commit)
+What this deployment is for: Arm Reachable moved into the hidden ARM card section.

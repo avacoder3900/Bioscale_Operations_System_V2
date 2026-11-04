@@ -70,7 +70,6 @@
 	// dry_run.ok is always true — dry-run vs live is a config choice, not a
 	// fault — so the state worth showing is `value`.
 	let dryRun = $derived(data.arm.preflight?.checks?.dry_run?.value ?? null);
-	let version = $derived(data.arm.preflight?.version ?? null);
 </script>
 
 <div class="space-y-2">
@@ -88,13 +87,8 @@
 
 		<!-- Headline facts only; the status card in the rail has the rest. -->
 		<div class="flex items-center gap-2 text-[11px]">
+			<!-- Arm Reachable · version lives in the ARM card's Connection Details (2026-11-04). -->
 			{#if data.arm.reachable}
-				<span class="flex items-center gap-1.5">
-					<span class="h-2 w-2 rounded-full bg-green-500"></span>
-					<span style="color: var(--color-tron-text-secondary)">
-						Arm Reachable{#if version} · v{version}{/if}
-					</span>
-				</span>
 				{#if dryRun === true}
 					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-px text-amber-300">
 						DRY RUN
