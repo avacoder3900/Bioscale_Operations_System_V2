@@ -262,7 +262,7 @@
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Teach</h1>
 			<p class="text-xs" style={muted}>
-				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import Piloted Recording</a>
+				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import Teleop Recording</a>
 			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
