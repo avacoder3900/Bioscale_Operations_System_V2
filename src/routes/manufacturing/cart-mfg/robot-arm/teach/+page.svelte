@@ -312,7 +312,6 @@
 	const btn = 'min-h-[38px] rounded px-3 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40';
 	const cyan = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
 	const green = 'background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid #4ade80;';
-	const amber = 'background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;';
 	const red = 'background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;';
 	const card = 'rounded border p-3 sm:p-4';
 	const cardStyle = 'border-color: var(--color-tron-border); background: var(--color-tron-surface);';
@@ -466,9 +465,9 @@
 					<span style="color: var(--color-tron-text)">{pickedLive.length} Selected</span>
 					<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(picked, activePoses.map((p) => p._id))}>{pickedLive.length === activePoses.length ? 'None' : 'All'}</button>
 					<span class="grow"></span>
-					<form method="POST" action="?/archivePoses" use:enhance={clearAfter(picked)}>
+					<form method="POST" action="?/archivePoses" use:enhance={clearAfter(picked)} onsubmit={(e) => { if (!confirm(`Delete ${pickedLive.length} pose${pickedLive.length === 1 ? '' : 's'}? You can restore them for 30 days.`)) e.preventDefault(); }}>
 						{#each pickedLive as id (id)}<input type="hidden" name="id" value={id} />{/each}
-						<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber} disabled={!pickedLive.length}>Archive{pickedLive.length ? ` ${pickedLive.length}` : ''}</button>
+						<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedLive.length} title="Restorable for 30 days">Delete{pickedLive.length ? ` ${pickedLive.length}` : ''}</button>
 					</form>
 				</div>
 			{/if}
@@ -528,7 +527,7 @@
 			{/each}
 
 			{#if archivedPoses.length}
-				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} Archived · {archivedPoses.length}</button>
+				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} Deleted · {archivedPoses.length}</button>
 				{#if showArchived}
 					<div class="mt-1 flex flex-wrap items-center gap-2 text-xs" style={muted}>
 						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, archivedPoses.map((p) => p._id))}>{pickedOld.length === archivedPoses.length ? 'None' : 'All'}</button>

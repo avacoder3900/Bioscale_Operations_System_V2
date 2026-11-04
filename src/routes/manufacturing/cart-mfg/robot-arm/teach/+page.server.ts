@@ -178,7 +178,7 @@ export const actions: Actions = {
 		const d = await request.formData();
 		const restore = field(d, 'restore') === '1';
 		try {
-			return bulkFlash(restore ? 'Restored' : 'Archived', await setPosesArchived(who(locals), d.getAll('id'), !restore));
+			return bulkFlash(restore ? 'Restored' : 'Deleted', await setPosesArchived(who(locals), d.getAll('id'), !restore));
 		} catch (err) {
 			return failFrom(err);
 		}
