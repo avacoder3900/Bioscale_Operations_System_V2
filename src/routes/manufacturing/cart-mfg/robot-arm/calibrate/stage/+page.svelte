@@ -1023,7 +1023,7 @@
 
 <svelte:window onkeydown={onWindowKeydown} />
 
-<div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip">
+<div class="mx-auto max-w-[1400px] space-y-3 overflow-x-clip">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Stage Calibration Studio</h1>
@@ -1032,7 +1032,7 @@
 	</div>
 
 	<!-- Pickers -->
-	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+	<div class="flex flex-wrap items-end gap-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
 				<span class="bg-[var(--color-tron-cyan)]/20 px-2.5 py-1.5 text-[var(--color-tron-cyan)]" title="One Gen7 cartridge on the arm's elevated stage">Cartridge On Stage</span>
@@ -1074,7 +1074,7 @@
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
 	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
 
-	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
+	<div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
 		<!-- Canvas -->
 		<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1099,18 +1099,18 @@
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
 				</div>
 			</div>
-			<div class="flex-1 overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 85vh; display: flex; align-items: safe center; justify-content: safe center;">
-				<div style={`width:${zoom * 100}%; flex: 0 0 auto;`}>
+			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="display: flex; align-items: safe center; justify-content: safe center;">
+				<div style={`height: calc(min(56vh, 480px) * ${zoom}); flex: 0 0 auto;`}>
 					<svg
 						bind:this={svgEl}
-						width="100%"
+						height="100%"
 						viewBox={`${bounds.x0} 0 ${bounds.x1 - bounds.x0} ${bounds.y1 - bounds.y0}`}
 						preserveAspectRatio="xMidYMid meet"
 						onpointerdown={onCanvasPointerDown}
 						onpointermove={onCanvasPointerMove}
 						onpointerup={onCanvasPointerUp}
 						onpointerleave={() => (hover = null)}
-						style="display:block; height:auto; touch-action:none; cursor: crosshair;"
+						style="display:block; width:auto; touch-action:none; cursor: crosshair;"
 					>
 						<defs>
 							<pattern id="sgrid-025mm" x={bounds.x0} y="0" width="0.25" height="0.25" patternUnits="userSpaceOnUse">
@@ -1174,7 +1174,7 @@
 		</section>
 
 		<!-- Right column: jog + tip + offset + protocol -->
-		<div class="min-w-0 space-y-4">
+		<div class="min-w-0 space-y-3">
 			<section class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-3">
 				<div class="flex items-center justify-between">
 					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Jog</h2>
@@ -1317,7 +1317,7 @@
 	</div>
 
 	<!-- Under-canvas tools: they act on the CURRENT SELECTION -->
-	<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
+	<div class="grid grid-cols-1 gap-3 lg:grid-cols-3">
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill Motion</h2>
 			{#if touring}
@@ -1379,7 +1379,7 @@
 	</div>
 
 	<!-- The stage's own teach points: what a deck definition would otherwise carry -->
-	<div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
+	<div class="grid grid-cols-1 gap-3 lg:grid-cols-4">
 		<section class="rounded-lg border {taught ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · First Hole</h2>
 			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{rim ? `x ${fmt3(rim.x)} · y ${fmt3(rim.y)} · z ${fmt3(rim.z)}` : 'not taught'}</div>
