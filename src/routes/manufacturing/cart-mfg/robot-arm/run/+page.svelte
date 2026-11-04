@@ -1114,7 +1114,7 @@
 			{#if profileError}<p class="text-xs text-red-300">{profileError}</p>{/if}
 			{#if profile}
 				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s start to end{/if} · read {when(profile.generatedAt)}.
+					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s{/if} · read {when(profile.generatedAt)}.
 				</p>
 				<div class="overflow-x-auto">
 					<table class="w-full text-left text-[11px]">
@@ -1173,12 +1173,7 @@
 					</select>
 				</label>
 				<div class="grid grid-cols-2 gap-3">
-					{#if stage}
-						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
-							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
-							<span class="mt-1 block"><a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage Calibration</a></span>
-						</div>
-					{:else}
+					{#if !stage}
 						<label class="block">
 							<span style="color: var(--color-tron-text-secondary)">Deck Position (1–24)</span>
 							<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
@@ -1348,27 +1343,23 @@
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Scan Position</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					{#if calibration?.scanPosition?.taughtAt}Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}.{/if}
-				</div>
+				{#if calibration?.scanPosition?.taughtAt}<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}</div>{/if}
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Cart Location</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					{#if calibration?.cartLocation?.tipAdjust}Probe at teach <span class="font-mono">{calibration.cartLocation.tipAdjust.x}, {calibration.cartLocation.tipAdjust.y}</span>.{:else if calibration?.cartLocation}<span class="text-amber-300">Taught without a probed tip — teach again.</span>{/if}
-				</div>
+				{#if calibration?.cartLocation && !calibration.cartLocation.tipAdjust}<div class="mt-1 text-[11px] text-amber-300">Taught without a probed tip. Teach again.</div>{/if}
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense Depth</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">
 					{#if calibration?.dispenseDepth}{Math.abs(calibration.dispenseDepth.mm)} mm {calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim{:else}Not Taught{/if}
 				</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">{#if !calibration?.dispenseDepth}<span class="text-amber-300">Required before a stage fill.</span>{/if}</div>
+				{#if !calibration?.dispenseDepth}<div class="mt-1 text-[11px] text-amber-300">Required before a stage fill.</div>{/if}
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Stage Geometry</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">Rotation {calibration?.stageRotationDeg ?? 0}° · Travel: All The Way Up</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">Rotation {calibration?.stageRotationDeg ?? 0}°</div>
 			</div>
 		</div>
 	</section>
