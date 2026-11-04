@@ -8,8 +8,8 @@
 	 * that in TypeScript would guarantee the two drift), then the always-on
 	 * rows — Pi heat / Wi-Fi + servo temperatures, Torque, Return to home,
 	 * Stop arm. Connection details (ports, boards, base URL, last connected)
-	 * fold away under a disclosure since they only matter when something is
-	 * wrong.
+	 * fold away with the blue Hide / Show button next to Refresh, as before the
+	 * redesign (Alejandro, 2026-11-04); the choice is remembered per browser.
 	 */
 	import { invalidateAll } from '$app/navigation';
 	import type { ArmThermal } from '$lib/server/robot-arm-client';
@@ -57,6 +57,25 @@
 	} = $props();
 
 	let refreshing = $state(false);
+
+	// Same key as the pre-redesign panel, so an operator's choice carries over.
+	const HIDDEN_KEY = 'robot-arm:connection-panel-hidden';
+	let hidden = $state(false);
+	$effect(() => {
+		try {
+			hidden = localStorage.getItem(HIDDEN_KEY) === '1';
+		} catch {
+			/* storage unavailable — default to shown */
+		}
+	});
+	function setHidden(value: boolean) {
+		hidden = value;
+		try {
+			localStorage.setItem(HIDDEN_KEY, value ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 
 	const reachable = $derived(preflight !== null);
 	const dryRun = $derived(preflight?.checks?.dry_run?.value);
@@ -123,15 +142,26 @@
 				<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" style="background: rgba(239,68,68,0.15); color: #ef4444;">⚠ LIVE MOTION</span>
 			{/if}
 		</h2>
-		<button
-			type="button"
-			onclick={refresh}
-			disabled={refreshing}
-			class="min-h-[36px] rounded border px-3 text-xs disabled:opacity-50"
-			style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
-		>
-			{refreshing ? 'Refreshing…' : 'Refresh'}
-		</button>
+		<div class="flex items-center gap-2">
+			<button
+				type="button"
+				onclick={refresh}
+				disabled={refreshing}
+				class="min-h-[36px] rounded border px-3 text-xs disabled:opacity-50"
+				style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
+			>
+				{refreshing ? 'Refreshing…' : 'Refresh'}
+			</button>
+			<button
+				type="button"
+				onclick={() => setHidden(!hidden)}
+				class="min-h-[36px] rounded border px-3 text-xs"
+				style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+				aria-expanded={!hidden}
+			>
+				{hidden ? 'Show' : 'Hide'}
+			</button>
+		</div>
 	</div>
 
 	{#if !reachable}
@@ -167,11 +197,11 @@
 		<StopArmControl {armReachable} />
 	</div>
 
-	{#if reachable}
-		<details class="-mx-3 border-t px-3 pt-2 text-xs sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
-			<summary class="cursor-pointer">
-				Connection details · {preflight?.service} v{preflight?.version} · last connected {relativeTime(lastConnected)}
-			</summary>
+	{#if reachable && !hidden}
+		<div class="-mx-3 mt-2 border-t px-3 pt-2 text-xs sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
+			<p>
+				Connection Details · {preflight?.service} v{preflight?.version} · last connected {relativeTime(lastConnected)}
+			</p>
 			{#if baseUrl}
 				<p class="mt-2 break-all">{baseUrl}</p>
 			{/if}
@@ -197,6 +227,6 @@
 					{/each}
 				</ul>
 			{/if}
-		</details>
+		</div>
 	{/if}
 </section>
