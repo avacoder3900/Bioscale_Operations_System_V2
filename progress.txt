@@ -25204,3 +25204,10 @@ fired from here (it moves the real belt); first hardware pulse is the user's fro
   leaving any pulse task alone (Stop still cancels). Audited as robot_arm.conveyor.force_off.
 Tests: TestClient in SIMULATED mode (off on a fresh module, pulse on -> off forces 0). npm run check 14
 errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/J3VtL9yGvLrEGxBHCax48ubNkMJb
+Source: branch feat/arm-conveyor-page @ commit 090e01ad (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 090e01ad
+What this deployment is for: Conveyor tab default 600 ms + Force Off button.
+Pi: updated conveyor.py copied to ~/robot-arm/src/server, robot-arm restarted with /sessions/active null;
+POST /conveyor/off -> state 0, simulated false; pinctrl get 22 -> output, lo.
