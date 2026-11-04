@@ -1,10 +1,33 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
+	import { untrack } from 'svelte';
 
 	let { data, form } = $props();
 
-	let pulseMs = $state(1000);
+	// The default pulse is stored in BIMS (shared by everyone) and only changes
+	// when Save is pressed. Read once: the 500 ms status polls must not reset
+	// either box while someone is typing.
+	let defaultMs = $state(untrack(() => data.defaultPulseMs));
+	let pulseMs = $state(untrack(() => data.defaultPulseMs));
+	const defaultDirty = $derived(defaultMs !== data.defaultPulseMs);
+
+	const saveEnhance = () => {
+		busy = true;
+		return async ({
+			result,
+			update
+		}: {
+			result: { type: string; data?: Record<string, unknown> };
+			update: (opts?: { reset?: boolean }) => Promise<void>;
+		}) => {
+			await update({ reset: false });
+			if (result.type === 'success' && typeof result.data?.savedDefaultMs === 'number') {
+				pulseMs = result.data.savedDefaultMs;
+			}
+			busy = false;
+		};
+	};
 	let delayMs = $state(0);
 	let busy = $state(false);
 
@@ -78,6 +101,32 @@
 					style="color: var(--color-tron-text)"
 				/>
 			</label>
+			<form method="POST" action="?/saveDefault" use:enhance={saveEnhance}>
+				<label class="block text-xs" style="color: var(--color-tron-text-secondary)" for="conveyor-default-ms">
+					Default (ms)
+				</label>
+				<div class="mt-1 flex gap-2">
+					<input
+						id="conveyor-default-ms"
+						type="number"
+						name="default_ms"
+						bind:value={defaultMs}
+						min="10"
+						max={data.pulseMaxMs}
+						step="10"
+						class="w-full min-w-0 rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+						style="color: var(--color-tron-text)"
+					/>
+					<button
+						type="submit"
+						disabled={busy || !defaultDirty}
+						class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+						style="color: var(--color-tron-cyan)"
+					>
+						Save
+					</button>
+				</div>
+			</form>
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 				Delay (ms)
 				<input
@@ -92,7 +141,7 @@
 			</label>
 		</div>
 
-		<div class="grid grid-cols-1 content-start gap-3 sm:grid-cols-2">
+		<div class="grid grid-cols-1 content-start gap-3 sm:grid-cols-3">
 			<form method="POST" action="?/pulse" use:enhance={conveyorEnhance}>
 				<input type="hidden" name="pulse_ms" value={pulseMs} />
 				<input type="hidden" name="delay_ms" value={delayMs} />
@@ -112,6 +161,15 @@
 					class="min-h-[44px] w-full rounded border border-red-500/60 bg-red-500/10 px-3 py-1.5 text-sm font-semibold text-red-300 transition-colors hover:bg-red-500/20 disabled:cursor-not-allowed disabled:opacity-40"
 				>
 					Stop
+				</button>
+			</form>
+			<!-- Last resort: never disabled, so it can be sent even when the status read failed. -->
+			<form method="POST" action="?/forceOff" use:enhance={conveyorEnhance}>
+				<button
+					type="submit"
+					class="min-h-[44px] w-full rounded border border-red-500 bg-red-500/25 px-3 py-1.5 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/40"
+				>
+					Force Off
 				</button>
 			</form>
 		</div>

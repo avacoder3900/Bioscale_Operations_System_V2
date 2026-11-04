@@ -25197,7 +25197,7 @@ applied (backup src/server/app.py.bak-conveyor), robot-arm restarted with /sessi
 fired from here (it moves the real belt); first hardware pulse is the user's from the tab.
 ================================================================================
 2026-11-04 — feat/arm-ui-redesign — Robot Arm UI redesign: four tabs + status card (PREVIEW ONLY, not merged)
-================================================================================
+=========================================================================
 Preview branch only. The Robot Arm page had grown to ten tabs over three generations (leader-arm
 teleop, pose authoring, the wax-fill line); an audit found about half of what was on screen belonged
 to the first generation, which the line no longer uses. This branch restructures the page without
@@ -25244,3 +25244,50 @@ Deployment: preview - via Vercel GitHub integration on the push of feat/arm-ui-r
   https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/2HHLMYz1TK8cqdECaXbiiskhpTbx
 Source: branch feat/arm-ui-redesign @ commit 09cf07bc (NOT on master)
 What this deployment is for: preview of the Robot Arm UI redesign, Robot Arm > Run / Teach / Calibrate / History.
+=======
+2026-11-04 — feat/arm-conveyor-page — Conveyor: default pulse 600 ms + Force Off button
+================================================================================
+- Conveyor tab: Pulse (ms) defaults to 600 (was 1000); conveyor.py PulseRequest default matches.
+- Force Off button (never disabled, so it can be sent even when the status read failed) -> ?/forceOff
+  -> POST /conveyor/off on the Pi: a single write driving BCM 22 low (claims the line first if needed),
+  leaving any pulse task alone (Stop still cancels). Audited as robot_arm.conveyor.force_off.
+Tests: TestClient in SIMULATED mode (off on a fresh module, pulse on -> off forces 0). npm run check 14
+errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/J3VtL9yGvLrEGxBHCax48ubNkMJb
+Source: branch feat/arm-conveyor-page @ commit 090e01ad (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit 090e01ad
+What this deployment is for: Conveyor tab default 600 ms + Force Off button.
+Pi: updated conveyor.py copied to ~/robot-arm/src/server, robot-arm restarted with /sessions/active null;
+POST /conveyor/off -> state 0, simulated false; pinctrl get 22 -> output, lo.
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Conveyor: Default (ms) box
+================================================================================
+- Conveyor tab: new Default (ms) box above Delay. Changing it sets Pulse (ms) to the new value and
+  remembers it in this browser (localStorage robot-arm:conveyor-default-ms, read once in onMount so the
+  500 ms status polls never reset the Pulse box). 600 when nothing is saved. Page-only; no Pi change.
+npm run check 14 errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/6Bq4RxqVJi67xqTj355KukTWoDPo
+Source: branch feat/arm-conveyor-page @ commit bb865c25 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit bb865c25
+What this deployment is for: Conveyor tab Default (ms) box.
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Conveyor default stored in BIMS, saved with a button
+================================================================================
+Correction to bb865c25: the user wanted the default stored in BIMS and confirmed by a button, not
+saved per browser on change.
+- src/lib/server/db/models/arm-wax-fill-settings.ts: conveyorPulseMs (default 600) +
+  conveyorPulseChangedBy on the existing 'default' doc (arm_wax_fill_settings), so the value survives
+  when the temporary Conveyor tab moves into Wax fill. No new index or collection.
+- conveyor/+page.server.ts: load returns defaultPulseMs; new ?/saveDefault action ($set + upsert on
+  _id 'default', audited robot_arm.conveyor.default with old/new value).
+- conveyor/+page.svelte: localStorage removed. Default (ms) box + Save button (enabled only when the
+  value differs from the stored one); both boxes seeded once from BIMS (untrack, so status polls
+  never reset them); a successful Save also puts the value in Pulse (ms).
+npm run check 14 errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/26rC9ptDwmrffqHq4Umpxv2U7Rh4
+Source: branch feat/arm-conveyor-page @ commit c6a91078 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit c6a91078
+What this deployment is for: Conveyor default pulse stored in BIMS, saved with the Save button.

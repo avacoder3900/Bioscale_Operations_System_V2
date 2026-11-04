@@ -844,6 +844,8 @@ export const robotArm = {
 		robotArmFetch<ConveyorStatus>('/conveyor/pulse', { method: 'POST', body, timeoutMs: 6000 }),
 	conveyorStop: () =>
 		robotArmFetch<ConveyorStatus>('/conveyor/stop', { method: 'POST', timeoutMs: 6000 }),
+	conveyorForceOff: () =>
+		robotArmFetch<ConveyorStatus>('/conveyor/off', { method: 'POST', timeoutMs: 6000 }),
 
 	// Task startup does hardware preflight on the Pi before returning, so it
 	// gets the same 15s allowance as the calibration calls above.

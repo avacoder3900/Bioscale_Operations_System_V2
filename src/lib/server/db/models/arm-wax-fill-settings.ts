@@ -57,6 +57,13 @@ const armWaxFillSettingsSchema = new Schema(
 		grabDuringProbe: { type: Boolean, default: true },
 		/** Between carts the withdraw and the next grab play as ONE arm path (one play, no tail between them). */
 		chainGrab: { type: Boolean, default: true },
+		/**
+		 * Default conveyor belt pulse (BCM 22 on the arm Pi), ms. Set from the Robot
+		 * Arm Conveyor tab's Save button (2026-11-04); kept here because the belt
+		 * controls are moving into Wax fill.
+		 */
+		conveyorPulseMs: { type: Number, default: 600 },
+		conveyorPulseChangedBy: { _id: String, username: String },
 		grabAnimation: animationRefSchema,
 		withdrawAnimation: animationRefSchema,
 		/** Plays when a cycle takes the fail route (today: the scan failed). May equal the withdraw animation. */

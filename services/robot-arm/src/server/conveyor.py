@@ -9,8 +9,9 @@ long time.
 
 Endpoints (auth is applied by app.py when the router is included):
     GET  /conveyor/status        {pin, state, running, ends_in_ms, simulated, ...}
-    POST /conveyor/pulse         {ms: 1500, delay_ms: 0}
+    POST /conveyor/pulse         {ms: 600, delay_ms: 0}
     POST /conveyor/stop          belt off now, cancels a pending delay too
+    POST /conveyor/off           Force Off: one write driving the pin low
 
 A pulse is fire-and-forget: /pulse answers as soon as the pulse is scheduled,
 and the belt is switched off by a background task. That is what lets a pulse
@@ -107,6 +108,14 @@ class _Backend:
         except Exception as exc:
             print(f"[conveyor] off failed on BCM {PIN}: {exc}", flush=True)
 
+    def force_low(self) -> None:
+        """Drive the pin low, claiming it first if nothing has yet."""
+        self._ensure_open()
+        if self._simulated:
+            self._sim_state = 0
+            return
+        self._device.off()  # type: ignore[union-attr]
+
     def close(self) -> None:
         self.off()
         if self._device is not None:
@@ -167,7 +176,7 @@ async def _run(delay_ms: int, ms: int) -> None:
 # ---------------------------------------------------------------- models
 
 class PulseRequest(BaseModel):
-    ms: int = Field(1000, ge=MIN_PULSE_MS, le=MAX_PULSE_MS)
+    ms: int = Field(600, ge=MIN_PULSE_MS, le=MAX_PULSE_MS)
     delay_ms: int = Field(0, ge=0, le=MAX_DELAY_MS)
 
 
@@ -229,3 +238,10 @@ async def conveyor_stop() -> dict:
         except (asyncio.CancelledError, Exception):
             pass
     return {**_status(), "stopped": was_running}
+
+
+@router.post("/off")
+async def conveyor_force_off() -> dict:
+    """One write: BCM 22 low. Leaves any pulse task alone (use /stop for that)."""
+    _backend.force_low()
+    return _status()
