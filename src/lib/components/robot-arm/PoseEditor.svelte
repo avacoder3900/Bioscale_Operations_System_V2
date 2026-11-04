@@ -66,7 +66,9 @@
 
 	/** "The arm is at these values" — loaded joints sit a few tens of steps short of their goal. */
 	const AT_POSE_STEPS = 80;
-	const POLL_MS = 1500;
+	// Fast enough that the New Pose sliders track an arm moved by hand (2026-11-04, was 1500).
+	// One read at a time (readArmNow), so a slow route just lowers the rate.
+	const POLL_MS = 300;
 	const SERVOS = Array.from({ length: SERVO_COUNT }, (_, i) => i);
 	const JOINT_LABELS = ['Base', 'Shoulder', 'Elbow', 'Wrist Flex', 'Wrist Roll', 'Gripper'];
 
@@ -176,6 +178,8 @@
 			activeKind = body.active?.kind ?? null;
 			if (Array.isArray(body.positions)) {
 				armPos = body.positions;
+				// New Pose with Live off: the sliders show where the arm is right now.
+				if (!pose && !live && !sending) values = [...body.positions];
 				if (!opened) opened = [...body.positions];
 				temps = body.temps ?? temps;
 				torqueOn = typeof body.torqueOn === 'boolean' ? body.torqueOn : null;
