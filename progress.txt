@@ -25337,3 +25337,7 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-b3xu4zy7b-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit 541571da (NOT on master)
 What this deployment is for: Calibrate > Stage — cartridge plane capped at 56vh / 480 px, no longer stretched to the side column; gaps tightened.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-bkpf22vj1-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit dc858923 (NOT on master)
+What this deployment is for: Calibrate opens on Stage (Stage sub-tab first); the four Stage teach-point cards sit 2x2 under the cartridge plane.
