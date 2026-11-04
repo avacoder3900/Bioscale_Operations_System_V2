@@ -25481,3 +25481,18 @@ Source: branch feat/cart-mfg-sidebar-overlay @ commit 06d9a1c0, fast-forwarded o
 Retrieve this exact code: git checkout master at commit 06d9a1c0
   (or: git log master --oneline to find it if master has since moved on)
 What this deployment is for: Cart Mfg sidebar opens over the page instead of squishing it.
+================================================================================
+2026-11-04 — master — Teach usage marks, teleop recording on Teach, wax lot gone, stage tools up (2b2fef3e)
+================================================================================
+Teach: link mark on poses used by a live move set and move sets used by a live sequence; amber drop on
+what the wax-fill run's chosen grab / withdraw / fail animations use (sequence → move sets → poses). Teleop
+Recording card under the conveyor belt (posts to Leader Arm's startRecord / stop); Leader Arm's Record card
+and the Teach header import link removed. Run setup: Wax Lot field removed. Stage: Tour / Fill Motion and
+Set Position → Selection moved into the right column under Protocol On Robot; Align full width below.
+svelte-check 14 errors (baseline). Pre-existing: robot-arm-url-invariant.test.ts fails since dab4cf35.
+Alejandro, 2026-11-04: "commit all changes to the main branch from now on instead of to separate previews.
+do not make any preview builds from now on." feat/arm-ui-redesign is retired.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 2b2fef3e
+Retrieve this exact code: git checkout 2b2fef3e
+What this deployment is for: the four Teach / Run / Stage requests above, live at the BIMS address.
