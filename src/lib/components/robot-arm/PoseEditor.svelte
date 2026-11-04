@@ -68,7 +68,7 @@
 	const AT_POSE_STEPS = 80;
 	const POLL_MS = 1500;
 	const SERVOS = Array.from({ length: SERVO_COUNT }, (_, i) => i);
-	const JOINT_LABELS = ['Base', 'Shoulder', 'Elbow', 'Wrist flex', 'Wrist roll', 'Gripper'];
+	const JOINT_LABELS = ['Base', 'Shoulder', 'Elbow', 'Wrist Flex', 'Wrist Roll', 'Gripper'];
 
 	// The sliders: what the arm is (or will be) told. Starts at the pose, or at the arm for a new pose.
 	// svelte-ignore state_referenced_locally
@@ -122,8 +122,8 @@
 	// Reference marker: which values the green dot sits on.
 	const refOptions = $derived.by(() => {
 		const out: { id: string; label: string; values: (number | null)[] | null }[] = [];
-		out.push({ id: 'home', label: home ? 'Home' : 'Home (no calibration yet)', values: home });
-		out.push({ id: 'opened', label: 'When this editor opened', values: opened });
+		out.push({ id: 'home', label: home ? 'Home' : 'Home (Not Calibrated)', values: home });
+		out.push({ id: 'opened', label: 'When Editor Opened', values: opened });
 		for (const p of allPoses.filter((p) => !p.archived && p._id !== pose?._id)) out.push({ id: p._id, label: friendlyName(p.name), values: p.positions });
 		return out;
 	});
@@ -152,9 +152,9 @@
 			: activeKind
 				? `A ${activeKind} session is using the arm.`
 				: torqueOn === false
-					? 'Torque is off — press Torque on first.'
+					? 'Torque is off.'
 					: tooHot
-						? `A servo is at or above ${SERVO_TEMP_STOP_C} °C — let it cool before moving the arm.`
+						? `A servo is at or above ${SERVO_TEMP_STOP_C} °C.`
 						: ''
 	);
 	$effect(() => {
@@ -228,7 +228,7 @@
 				for (const [sid, g] of Object.entries(goals)) sent[Number(sid) - 1] = g;
 				if (Array.isArray(body.positions)) armPos = body.positions;
 				if (Array.isArray(body.temps)) temps = body.temps;
-				note = body.warnings?.length ? { text: body.warnings.join(' '), kind: 'warn' } : body.via === 'jog' ? { text: 'This Pi has no absolute move route; using jogs (exact while the arm is still).', kind: 'warn' } : null;
+				note = body.warnings?.length ? { text: body.warnings.join(' '), kind: 'warn' } : body.via === 'jog' ? { text: 'No absolute move route; using jogs.', kind: 'warn' } : null;
 			}
 		} catch (e) {
 			live = false;
@@ -257,14 +257,14 @@
 	async function startLive() {
 		await readArmNow();
 		if (!armPos || !canLive) {
-			if (!armPos) note = { text: 'Could not read the arm, so Live stays off.', kind: 'warn' };
+			if (!armPos) note = { text: 'Could not read the arm.', kind: 'warn' };
 			return;
 		}
 		values = [...armPos];
 		sent = new Array(SERVO_COUNT).fill(null);
 		live = true;
 		await pump();
-		note = { text: 'Live — the sliders are set to where the arm is; the arm follows them.', kind: 'ok' };
+		note = { text: 'Sliders set to arm position.', kind: 'ok' };
 	}
 
 	function reset() {
@@ -299,20 +299,20 @@
 			{pose ? friendlyName(pose.name) : 'New Pose'}
 		</h2>
 		{#if live}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(74,222,128,0.15); color: #4ade80">LIVE</span>{/if}
-		{#if dirty}<span class="text-[11px]" style="color: #fbbf24">unsaved changes</span>{/if}
+		{#if dirty}<span class="text-[11px]" style="color: #fbbf24">Unsaved Changes</span>{/if}
 		<span class="grow"></span>
 		{#if live}
-			<button type="button" class={btn} style={cyan} onclick={() => (live = false)}>Stop live</button>
+			<button type="button" class={btn} style={cyan} onclick={() => (live = false)}>Stop Live</button>
 		{:else}
 			{#if pose && ongoto && !atValues}
-				<button type="button" class={btn} style={amber} disabled={!canLive} onclick={() => ongoto?.(pose!)}>Go to pose</button>
+				<button type="button" class={btn} style={amber} disabled={!canLive} onclick={() => ongoto?.(pose!)}>Go To Pose</button>
 			{/if}
 			{@render beforeLive?.()}
 			<button type="button" class={btn} style={green} disabled={!canLive} onclick={startLive} title="Set the sliders to where the arm is, then let them drive the arm">Live</button>
 		{/if}
-		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>close</button>{/if}
+		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>Close</button>{/if}
 		<label class="flex w-full items-center gap-1 text-[11px] sm:w-auto" style="color: var(--color-tron-text-secondary)" title="The green dot above each slider stays on this reference; hover a dot for its number and where the arm really is">
-			<span class="inline-block h-2 w-2 rounded-full" style="background: #4ade80"></span> marker
+			<span class="inline-block h-2 w-2 rounded-full" style="background: #4ade80"></span> Marker
 			<select bind:value={refChoice} class="{input} py-0.5 text-[11px]" style={inputStyle} aria-label="Reference marker">
 				{#each refOptions as o (o.id)}<option value={o.id} disabled={!o.values}>{o.label}</option>{/each}
 			</select>
@@ -323,10 +323,6 @@
 		<p class="mt-2 text-xs" style="color: #f59e0b">{why}</p>
 	{:else if note}
 		<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>
-	{:else if !live}
-		<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-			The sliders are locked. Press Live to move the arm with them — Live first sets them to where the arm is.{pose && !atValues ? ' To edit this pose, Go to pose first.' : ''}
-		</p>
 	{/if}
 
 	<div class="mt-3 space-y-4">
@@ -337,7 +333,7 @@
 				<div class="pt-1">
 					<div class="text-sm" style="color: var(--color-tron-text)">{JOINT_LABELS[s]}</div>
 					<div class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-						servo {s + 1}
+						Servo {s + 1}
 						<span class="ml-1 font-mono" style="color: {heatColor(temps[s])}" title="Servo temperature">{temps[s] != null ? `${temps[s]}°C` : ''}</span>
 					</div>
 				</div>
@@ -408,17 +404,17 @@
 			<form method="POST" action="?/savePosePositions" use:enhance={() => async ({ update }) => { await update({ reset: false }); }}>
 				<input type="hidden" name="id" value={pose._id} />
 				<input type="hidden" name="positions" value={JSON.stringify(values)} />
-				<button type="submit" class={btn} style={green} disabled={!dirty}>Save pose</button>
+				<button type="submit" class={btn} style={green} disabled={!dirty}>Save Pose</button>
 			</form>
-			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!dirty || !live} onclick={reset} title={live ? 'Sliders (and the arm) back to the saved pose' : 'Press Live first: the sliders only move with the arm'}>reset to saved</button>
+			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!dirty || !live} onclick={reset} title={live ? 'Sliders (and the arm) back to the saved pose' : 'Press Live first: the sliders only move with the arm'}>Reset To Saved</button>
 		{/if}
 		<form method="POST" action="?/createPose" use:enhance={() => async ({ result, update }) => { await update({ reset: false }); if (result.type === 'success') newName = ''; }} class="flex flex-wrap items-end gap-2">
 			<input type="hidden" name="positions" value={JSON.stringify(values)} />
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-				{pose ? 'Or save as a new pose' : 'Name'}
-				<input name="name" bind:value={newName} required maxlength="80" placeholder="e.g. Over tray" class="{input} mt-1 block w-48" style={inputStyle} />
+				{pose ? 'New Pose Name' : 'Name'}
+				<input name="name" bind:value={newName} required maxlength="80" placeholder="e.g. Over Tray" class="{input} mt-1 block w-48" style={inputStyle} />
 			</label>
-			<button type="submit" class={btn} style={cyan} disabled={!newName.trim()}>Save as new</button>
+			<button type="submit" class={btn} style={cyan} disabled={!newName.trim()}>Save As New</button>
 		</form>
 	</div>
 </section>

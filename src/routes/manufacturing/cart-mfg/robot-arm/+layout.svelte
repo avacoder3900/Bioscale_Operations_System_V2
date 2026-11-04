@@ -103,7 +103,7 @@
 				<span class="flex items-center gap-1.5">
 					<span class="h-2 w-2 rounded-full bg-green-500"></span>
 					<span style="color: var(--color-tron-text-secondary)">
-						Arm reachable{#if version} · v{version}{/if}
+						Arm Reachable{#if version} · v{version}{/if}
 					</span>
 				</span>
 				{#if dryRun === true}
@@ -114,7 +114,7 @@
 			{:else}
 				<span class="flex items-center gap-1.5">
 					<span class="h-2 w-2 rounded-full bg-red-500"></span>
-					<span class="text-red-400">Arm unreachable</span>
+					<span class="text-red-400">Arm Unreachable</span>
 				</span>
 			{/if}
 		</div>
@@ -123,10 +123,6 @@
 	{#if !data.arm.reachable && data.arm.error}
 		<div class="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs">
 			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
-			<p class="mt-1" style="color: var(--color-tron-text-secondary)">
-				Check <code>ROBOT_ARM_BASE_URL</code> and <code>ROBOT_ARM_API_KEY</code>. History still
-				works — it reads from BIMS, not the arm.
-			</p>
 		</div>
 	{/if}
 

@@ -105,7 +105,7 @@
 					note = body.warning;
 					noteKind = 'warn';
 				} else {
-					note = enable ? 'Torque on — the arm is holding its position.' : 'Torque off — the arm is limp.';
+					note = enable ? 'Torque On' : 'Torque Off';
 					noteKind = 'ok';
 				}
 			}
@@ -124,7 +124,7 @@
 <div class="flex flex-wrap items-center gap-2 border-t px-3 py-1.5 text-[11px]" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
 	<span>Torque <span class="font-semibold" style="color: {color}">{label}</span></span>
 	{#if wentOff && torqueOn === false}
-		<span class="rounded px-1.5 py-0.5 font-semibold" style="background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid #f59e0b" title="The servos report torque off, and Off was not pressed here. Power drop, a servo fault, or a session that ended without turning it back on. Support the arm, then press On.">Torque went off</span>
+		<span class="rounded px-1.5 py-0.5 font-semibold" style="background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid #f59e0b" title="The servos report torque off, and Off was not pressed here. Power drop, a servo fault, or a session that ended without turning it back on. Support the arm, then press On.">Torque Went Off</span>
 	{/if}
 	<button
 		type="button"
@@ -146,7 +146,7 @@
 	>
 		Off
 	</button>
-	<button type="button" onclick={refresh} disabled={!armReachable || busy} class="underline disabled:opacity-40" title="Re-read the servos">refresh</button>
+	<button type="button" onclick={refresh} disabled={!armReachable || busy} class="underline disabled:opacity-40" title="Re-read the servos">Refresh</button>
 	{#if note}
 		<span class="basis-full" style="color: {noteKind === 'error' ? '#fca5a5' : noteKind === 'warn' ? '#fbbf24' : '#4ade80'}">{note}</span>
 	{/if}

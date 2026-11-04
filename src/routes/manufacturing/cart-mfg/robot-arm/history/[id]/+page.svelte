@@ -27,7 +27,7 @@
 	<div class="flex items-center justify-between">
 		<div>
 			<h1 class="text-2xl font-bold capitalize" style="color: var(--color-tron-cyan)">
-				{data.run.type} run
+				{data.run.type} Run
 			</h1>
 			<p class="mt-1 font-mono text-xs" style="color: var(--color-tron-text-secondary)">
 				{data.run.runId}
@@ -38,7 +38,7 @@
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
-			← back to runs
+			← Back To Runs
 		</a>
 	</div>
 
@@ -52,7 +52,7 @@
 		>
 			<dt>Status</dt>
 			<dd class={statusColor(data.run.status)}>{data.run.status}</dd>
-			<dt>Triggered by</dt>
+			<dt>Triggered By</dt>
 			<dd style="color: var(--color-tron-text)">{data.run.triggeredBy?.username ?? '—'}</dd>
 			<dt>Started</dt>
 			<dd style="color: var(--color-tron-text)">{formatTime(data.run.startedAt)}</dd>
@@ -126,10 +126,10 @@
 			class="mb-2 text-sm font-bold uppercase tracking-wider"
 			style="color: var(--color-tron-text-secondary)"
 		>
-			Event timeline ({data.run.events.length})
+			Event Timeline ({data.run.events.length})
 		</h2>
 		{#if data.run.events.length === 0}
-			<p class="text-sm" style="color: var(--color-tron-text-secondary)">No events captured.</p>
+			<p class="text-sm" style="color: var(--color-tron-text-secondary)">No Events</p>
 		{:else}
 			<div
 				class="overflow-hidden rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]"

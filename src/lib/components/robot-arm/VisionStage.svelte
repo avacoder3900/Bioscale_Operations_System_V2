@@ -34,7 +34,7 @@
 	import RotatedFrame from './RotatedFrame.svelte';
 	import { cameraRotation } from '$lib/robot-arm/camera-rotation.svelte';
 
-	let { src, width, height, tags, alt = 'Camera frame', emptyText = 'No frame' }: Props = $props();
+	let { src, width, height, tags, alt = 'Camera frame', emptyText = 'No Frame' }: Props = $props();
 
 	const w = $derived(width || 640);
 	const h = $derived(height || 480);
@@ -90,7 +90,7 @@
 					stroke="#000"
 					stroke-width={s * 1.2}
 					paint-order="stroke"
-					style="font-family: ui-sans-serif, system-ui;">{t.label}{t.center ? '' : ' — not found'}</text
+					style="font-family: ui-sans-serif, system-ui;">{t.label}{t.center ? '' : ' · Not Found'}</text
 				>
 			{/if}
 		{/each}

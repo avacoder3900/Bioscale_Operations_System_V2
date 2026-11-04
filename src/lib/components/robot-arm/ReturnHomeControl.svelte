@@ -31,10 +31,10 @@
 
 	const status = $derived.by(() => {
 		if (!loop) return null;
-		if (loop.closing) return 'Closing the claw (final step)…';
-		if (loop.running) return `Returning home: attempt ${loop.attempt} · ${Math.round((rh.now - loop.startedAt) / 1000)} s of ${HOME_LOOP_MS / 1000} s${loop.stopping ? ' · stopping (after the current jog), then closing the mouth…' : ''}`;
+		if (loop.closing) return 'Closing Claw…';
+		if (loop.running) return `Returning Home: attempt ${loop.attempt} · ${Math.round((rh.now - loop.startedAt) / 1000)} s of ${HOME_LOOP_MS / 1000} s${loop.stopping ? ' · Stopping…' : ''}`;
 		if (loop.error) return `${loop.error} (attempt ${loop.attempt})`;
-		return `Return to home finished after ${loop.attempt} attempt(s): ${loop.outcome}.`;
+		return `Finished after ${loop.attempt} attempt(s): ${loop.outcome}.`;
 	});
 </script>
 
@@ -49,7 +49,7 @@
 			style="background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;"
 			title="Stops within one jog, then closes the mouth"
 		>
-			Stop returning
+			Stop Returning
 		</button>
 	{:else}
 		<button
@@ -62,7 +62,7 @@
 				? 'The arm MOVES: open the mouth, servo 2 home, all joints home, close the claw; keeps going until done (Stop any time; max 90 s). Uses the Vision tab’s camera and calibration; refused while a session holds the arm.'
 				: 'The arm is unreachable'}
 		>
-			Return to home
+			Return To Home
 		</button>
 	{/if}
 	{#if status}

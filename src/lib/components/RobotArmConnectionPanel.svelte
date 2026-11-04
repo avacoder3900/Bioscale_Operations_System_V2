@@ -190,13 +190,12 @@
 			class="mt-2 rounded border p-2 text-xs"
 			style="border-color: #ef4444; background: rgba(239,68,68,0.08); color: var(--color-tron-text)"
 		>
-			<p class="font-semibold">Cannot reach the robot arm.</p>
+			<p class="font-semibold">Cannot Reach Robot Arm</p>
 			<p class="mt-1 break-all" style="color: var(--color-tron-text-secondary)">
 				{preflightError}
 			</p>
 			<p class="mt-1" style="color: var(--color-tron-text-secondary)">
-				Check ROBOT_ARM_BASE_URL and ROBOT_ARM_API_KEY, and that the robot-arm service is running
-				on the Pi. Last connected {relativeTime(lastConnected)}.
+				Last Connected {relativeTime(lastConnected)}
 			</p>
 		</div>
 	{:else if diagnosis && diagnosisHidden}
@@ -236,7 +235,7 @@
 	{#if reachable && !hidden}
 		<div class="-mx-3 mt-2 border-t px-3 pt-2 text-xs sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
 			<p>
-				Connection Details · {preflight?.service} v{preflight?.version} · last connected {relativeTime(lastConnected)}
+				Connection Details · {preflight?.service} v{preflight?.version} · Last Connected {relativeTime(lastConnected)}
 			</p>
 			{#if baseUrl}
 				<p class="mt-2 break-all">{baseUrl}</p>
@@ -256,7 +255,7 @@
 				{/each}
 			</dl>
 			{#if preflight?.candidates?.length}
-				<p class="mt-2 font-semibold">Detected boards</p>
+				<p class="mt-2 font-semibold">Detected Boards</p>
 				<ul class="mt-1 space-y-1">
 					{#each preflight.candidates as c (c.port)}
 						<li class="break-all">{c.port} · {c.serial_number}{c.expected_role ? ` · ${c.expected_role}` : ''}</li>

@@ -51,9 +51,8 @@
 		style="background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;"
 		title={armReachable ? 'Stops whatever the arm is playing and holds it there. Does not touch the OT-2.' : 'The arm is unreachable'}
 	>
-		{busy ? 'Stopping…' : '■ Stop arm'}
+		{busy ? 'Stopping…' : 'Stop Arm'}
 	</button>
-	<span class="opacity-70">arm only · the Run tab's STOP RUN halts the whole line</span>
 	{#if note}
 		<span class="basis-full" style="color: {note.ok ? '#4ade80' : '#fca5a5'}">{note.text}</span>
 	{/if}

@@ -115,15 +115,15 @@
 	const blocked = $derived(!armReachable || busyElsewhere || following || playback.running || playback.busy || vr.active || vr.busy);
 	const blockReason = $derived(
 		!armReachable
-			? 'The arm is unreachable — check the connection on the Maintenance › Leader arm page.'
+			? 'The arm is unreachable.'
 			: following
-				? 'The follower is following the control arm — press Done first.'
+				? 'Following the control arm.'
 				: playback.running || playback.busy
 					? 'The arm is playing.'
 					: vr.active || vr.busy
 						? 'A verified run is in progress.'
 						: busyElsewhere
-							? 'The arm is running something — stop it first.'
+							? 'The arm is running something.'
 							: ''
 	);
 
@@ -195,7 +195,7 @@
 	function confirmDelete(e: SubmitEvent) {
 		const n = pickedDeletable.length;
 		const kept = pickedOld.length - n;
-		const msg = `Delete ${n} archived pose${n === 1 ? '' : 's'} for good? This cannot be undone from this page. Their camera references are retired; the audit log keeps a copy of each pose.${kept ? `\n\n${kept} selected pose${kept === 1 ? ' is' : 's are'} used by a move set and will be kept.` : ''}`;
+		const msg = `Delete ${n} archived pose${n === 1 ? '' : 's'} for good? This cannot be undone.${kept ? `\n\n${kept} selected pose${kept === 1 ? ' is' : 's are'} used by a move set and will be kept.` : ''}`;
 		if (!confirm(msg)) e.preventDefault();
 	}
 
@@ -262,26 +262,24 @@
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Teach</h1>
 			<p class="text-xs" style={muted}>
-				Poses → move sets → sequences, which Run plays as grab, withdraw and fail.
-				Torque, Return to home and Stop arm are on the status card.
-				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import a piloted recording</a>
+				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import Piloted Recording</a>
 			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if !armReachable}
-				<span class={chip} style="border-color: #ef4444; color: #fca5a5">Arm unreachable</span>
+				<span class={chip} style="border-color: #ef4444; color: #fca5a5">Arm Unreachable</span>
 			{:else if armNow}
 				{#if armNow.torqueOn === false}
 					<span class={chip} style="border-color: #f59e0b; color: #fbbf24" title="Turn torque on from the status card before posing">Torque OFF</span>
 				{/if}
 				{#if heat?.maxC != null}
 					<span class="{chip} font-mono" style="border-color: var(--color-tron-border); color: {heatColor(heat.maxC)}" title={armNow.temps.map((t, i) => `servo ${i + 1}: ${t ?? '?'} °C`).join('\n')}>
-						{heat.maxC} °C max
+						{heat.maxC} °C Max
 					</span>
 				{/if}
 			{:else if data.active}
 				{#if following}
-					<span class={chip} style="border-color: var(--color-tron-border); {muted}">Following the control arm</span>
+					<span class={chip} style="border-color: var(--color-tron-border); {muted}">Following Control Arm</span>
 				{:else}
 					<!-- Yellow, so a session holding the arm (e.g. a replay) is hard to miss. -->
 					<span class="{chip} font-semibold" style="border-color: #f59e0b; background: rgba(245,158,11,0.18); color: #fbbf24">{titleCase(String(data.active.kind ?? 'session'))} Running</span>
@@ -292,7 +290,7 @@
 
 	{#if heat?.tooHot.length}
 		<div class="rounded border border-red-500/50 bg-red-900/15 p-3 text-sm text-red-300">
-			Servo {heat.tooHot.join(', ')} at or above {SERVO_TEMP_STOP_C} °C — motion is refused until it cools. Leave the arm resting (or powered down).
+			Servo {heat.tooHot.join(', ')} at or above {SERVO_TEMP_STOP_C} °C. Motion refused until it cools.
 		</div>
 	{/if}
 	{#if data.libraryError}<p class="text-xs text-red-300">{data.libraryError}</p>{/if}
@@ -332,10 +330,10 @@
 			<!-- control arm: only while following (Follow Leader Arm itself sits next to Live in the pose editor) -->
 			{#if following}
 			<div class="{card} flex flex-wrap items-end gap-3" style="border-color: #4ade80; background: var(--color-tron-surface);">
-				<div class="w-full text-xs text-emerald-300">Following the control arm. Move it into a pose, hold it still, name it and save.</div>
+				<div class="w-full text-xs text-emerald-300">Following Control Arm</div>
 				<form method="POST" action="?/saveLeaderPose" use:enhance class="flex flex-wrap items-end gap-2">
 					<input type="hidden" name="resume" value="1" />
-					<input name="name" required maxlength="80" placeholder="Pose name" class="{input} w-44" style={inputStyle} aria-label="Pose name" />
+					<input name="name" required maxlength="80" placeholder="Pose Name" class="{input} w-44" style={inputStyle} aria-label="Pose name" />
 					<button type="submit" class={btn} style={green} disabled={!armReachable}>Save</button>
 				</form>
 				<form method="POST" action="?/stopLeaderPosing" use:enhance>
@@ -379,16 +377,16 @@
 				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">Poses</h2>
 				<div class="flex items-center gap-3">
 					{#if activePoses.length || selecting}
-						<button type="button" class="text-xs underline" style={selecting ? 'color: var(--color-tron-cyan)' : muted} onclick={() => setSelecting(!selecting)}>{selecting ? 'done' : 'select'}</button>
+						<button type="button" class="text-xs underline" style={selecting ? 'color: var(--color-tron-cyan)' : muted} onclick={() => setSelecting(!selecting)}>{selecting ? 'Done' : 'Select'}</button>
 					{/if}
-					<button type="button" class="text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (editing = 'new')}>+ new</button>
+					<button type="button" class="text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (editing = 'new')}>+ New</button>
 				</div>
 			</div>
-			{#if !activePoses.length}<p class="mt-2 text-xs" style={muted}>No poses yet.</p>{/if}
+			{#if !activePoses.length}<p class="mt-2 text-xs" style={muted}>No Poses Yet</p>{/if}
 			{#if selecting && activePoses.length}
 				<div class="mt-2 flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 text-xs" style="border-color: var(--color-tron-border)">
-					<span style="color: var(--color-tron-text)">{pickedLive.length} selected</span>
-					<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(picked, activePoses.map((p) => p._id))}>{pickedLive.length === activePoses.length ? 'none' : 'all'}</button>
+					<span style="color: var(--color-tron-text)">{pickedLive.length} Selected</span>
+					<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(picked, activePoses.map((p) => p._id))}>{pickedLive.length === activePoses.length ? 'None' : 'All'}</button>
 					<span class="grow"></span>
 					<form method="POST" action="?/archivePoses" use:enhance={clearAfter(picked)}>
 						{#each pickedLive as id (id)}<input type="hidden" name="id" value={id} />{/each}
@@ -404,7 +402,7 @@
 							<input type="hidden" name="id" value={p._id} />
 							<input type="hidden" name="notes" value={p.notes ?? ''} />
 							<input name="name" required maxlength="80" value={p.name} class="{input} min-w-0 flex-1 py-0.5 text-xs" style={inputStyle} aria-label="Name" />
-							<button type="submit" class="text-xs" style="color: #4ade80">save</button>
+							<button type="submit" class="text-xs" style="color: #4ade80">Save</button>
 							<button type="button" class="text-xs" style={muted} onclick={() => (renaming = null)}>✕</button>
 						</form>
 					{:else if selecting}
@@ -420,10 +418,10 @@
 							<details class="relative">
 								<summary class="cursor-pointer list-none px-1 text-xs" style={muted} title="More">⋯</summary>
 								<div class="absolute right-0 z-10 mt-1 w-28 space-y-1 rounded border p-2 text-xs" style="border-color: var(--color-tron-border); background: var(--color-tron-surface)">
-									<button type="button" class="block underline" style="color: var(--color-tron-cyan)" onclick={() => (renaming = p._id)}>rename</button>
+									<button type="button" class="block underline" style="color: var(--color-tron-cyan)" onclick={() => (renaming = p._id)}>Rename</button>
 									<form method="POST" action="?/archivePose" use:enhance>
 										<input type="hidden" name="id" value={p._id} />
-										<button type="submit" class="underline" style={muted}>archive</button>
+										<button type="submit" class="underline" style={muted}>Archive</button>
 									</form>
 								</div>
 							</details>
@@ -440,7 +438,7 @@
 					<summary class="cursor-pointer text-xs font-semibold" style={muted}>
 						{g} <span class="font-normal">· {list.length}</span>
 						{#if selecting}
-							<button type="button" class="ml-2 font-normal underline" style="color: var(--color-tron-cyan)" onclick={(e) => { e.preventDefault(); toggleAll(picked, list.map((p) => p._id)); }}>{list.every((p) => picked.has(p._id)) ? 'none' : 'all'}</button>
+							<button type="button" class="ml-2 font-normal underline" style="color: var(--color-tron-cyan)" onclick={(e) => { e.preventDefault(); toggleAll(picked, list.map((p) => p._id)); }}>{list.every((p) => picked.has(p._id)) ? 'None' : 'All'}</button>
 						{/if}
 					</summary>
 					<ul class="mt-1 space-y-0.5 pl-2">
@@ -450,20 +448,20 @@
 			{/each}
 
 			{#if archivedPoses.length}
-				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} archived · {archivedPoses.length}</button>
+				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} Archived · {archivedPoses.length}</button>
 				{#if showArchived}
 					<div class="mt-1 flex flex-wrap items-center gap-2 text-xs" style={muted}>
-						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, archivedPoses.map((p) => p._id))}>{pickedOld.length === archivedPoses.length ? 'none' : 'all'}</button>
+						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, archivedPoses.map((p) => p._id))}>{pickedOld.length === archivedPoses.length ? 'None' : 'All'}</button>
 						<span class="grow"></span>
 						<form method="POST" action="?/archivePoses" use:enhance={clearAfter(pickedArchived)}>
 							<input type="hidden" name="restore" value="1" />
 							{#each pickedOld as id (id)}<input type="hidden" name="id" value={id} />{/each}
-							<button type="submit" class="underline disabled:cursor-not-allowed disabled:opacity-40" style="color: var(--color-tron-cyan)" disabled={!pickedOld.length}>restore{pickedOld.length ? ` ${pickedOld.length}` : ''}</button>
+							<button type="submit" class="underline disabled:cursor-not-allowed disabled:opacity-40" style="color: var(--color-tron-cyan)" disabled={!pickedOld.length}>Restore{pickedOld.length ? ` ${pickedOld.length}` : ''}</button>
 						</form>
 						<form method="POST" action="?/deletePoses" use:enhance={clearAfter(pickedArchived)} onsubmit={confirmDelete}>
 							{#each pickedDeletable as id (id)}<input type="hidden" name="id" value={id} />{/each}
 							<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedDeletable.length}
-								title={pickedOld.length && !pickedDeletable.length ? 'Every selected pose is used by a move set — remove it from the move set first' : 'Delete the selected archived poses for good'}>Delete{pickedDeletable.length ? ` ${pickedDeletable.length}` : ''} for good</button>
+								title={pickedOld.length && !pickedDeletable.length ? 'Every selected pose is used by a move set — remove it from the move set first' : 'Delete the selected archived poses for good'}>Delete{pickedDeletable.length ? ` ${pickedDeletable.length}` : ''} For Good</button>
 						</form>
 					</div>
 					<ul class="mt-1 space-y-1 text-xs" style={muted}>
@@ -472,8 +470,8 @@
 							<li class="flex items-center gap-2">
 								<input type="checkbox" checked={pickedArchived.has(p._id)} onchange={() => toggle(pickedArchived, p._id)} aria-label="Select {friendlyName(p.name)}" />
 								<span class="min-w-0 flex-1 truncate">{friendlyName(p.name)}</span>
-								{#if sets}<span class="shrink-0 text-[10px]" title="Used by {sets} move set{sets === 1 ? '' : 's'}: it can be restored, not deleted">in {sets} set{sets === 1 ? '' : 's'}</span>{/if}
-								<form method="POST" action="?/archivePose" use:enhance><input type="hidden" name="id" value={p._id} /><input type="hidden" name="restore" value="1" /><button type="submit" class="underline" style="color: var(--color-tron-cyan)">restore</button></form>
+								{#if sets}<span class="shrink-0 text-[10px]" title="Used by {sets} move set{sets === 1 ? '' : 's'}: it can be restored, not deleted">In {sets} Set{sets === 1 ? '' : 's'}</span>{/if}
+								<form method="POST" action="?/archivePose" use:enhance><input type="hidden" name="id" value={p._id} /><input type="hidden" name="restore" value="1" /><button type="submit" class="underline" style="color: var(--color-tron-cyan)">Restore</button></form>
 							</li>
 						{/each}
 					</ul>
@@ -489,9 +487,9 @@
 			{@const rows = (isSets ? moveSets : sequences).filter((r) => !r.archived)}
 			<section class={card} style={cardStyle}>
 				<div class="flex items-center justify-between gap-2">
-					<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">{isSets ? 'Move sets' : 'Sequences'}</h2>
+					<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">{isSets ? 'Move Sets' : 'Sequences'}</h2>
 					<form method="POST" action={isSets ? '?/createMoveSet' : '?/createSequence'} use:enhance class="flex items-center gap-1">
-						<input name="name" required maxlength="80" placeholder={isSets ? 'New move set' : 'New sequence'} class="{input} w-36 py-0.5 text-xs" style={inputStyle} aria-label="Name" />
+						<input name="name" required maxlength="80" placeholder={isSets ? 'New Move Set' : 'New Sequence'} class="{input} w-36 py-0.5 text-xs" style={inputStyle} aria-label="Name" />
 						<button type="submit" class="rounded px-2 py-0.5 text-xs font-semibold" style={cyan}>+</button>
 					</form>
 				</div>
@@ -518,7 +516,7 @@
 						</li>
 					{/each}
 				</ul>
-				{#if !rows.length}<p class="mt-2 text-xs" style={muted}>None yet.</p>{/if}
+				{#if !rows.length}<p class="mt-2 text-xs" style={muted}>None Yet</p>{/if}
 			</section>
 		{/each}
 	</div>

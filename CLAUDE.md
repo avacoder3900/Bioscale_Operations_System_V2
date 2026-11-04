@@ -100,6 +100,18 @@ What this deployment is for: <one line — what feature/fix it's meant to demons
 - `src/lib/server/` — all server-side code
 - `src/hooks.server.ts` — auth middleware
 
+### UI Text (MANDATORY)
+Decided by Alejandro 2026-11-04:
+- **Capitalize every word of every title**: buttons, headings, tabs, labels, chips, column headers,
+  placeholders ("Return To Home", "Stage Calibration", "Force Off"). Units stay lower case ("Pulse (ms)").
+- **Titles describe what they do, so add no extra text**: no explanatory sentences under headings, no
+  hint lines, no em-dash asides or parenthetical explanations. If something needs explaining, give it a
+  better title.
+- **No emojis in simple titles** (headings, buttons, labels). The one exception: ⚠ in place of the word
+  WARNING on a warning message.
+- Messages that report what happened (errors, results, live status) stay, kept short.
+- Labels the user dictates go in verbatim, capitalization included.
+
 ## Coding Patterns
 
 ### Load Functions

@@ -64,17 +64,16 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">History</h2>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">Read from BIMS, so it works while the arm is down.</p>
 		</div>
 		<div class="flex gap-1 text-xs">
-			<a href="?" class="rounded-full border px-3 py-1 transition-colors {data.view === 'runs' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Wax-fill runs</a>
-			<a href="?view=sessions" class="rounded-full border px-3 py-1 transition-colors {data.view === 'sessions' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}" title="Every arm session the Pi reported: each play lands here as a replay">Arm sessions</a>
+			<a href="?" class="rounded-full border px-3 py-1 transition-colors {data.view === 'runs' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Wax-Fill Runs</a>
+			<a href="?view=sessions" class="rounded-full border px-3 py-1 transition-colors {data.view === 'sessions' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}" title="Every arm session the Pi reported: each play lands here as a replay">Arm Sessions</a>
 		</div>
 	</div>
 
 	{#if data.view === 'runs'}
 		{#if data.loops.length === 0}
-			<p class="py-8 text-center text-sm" style="color: var(--color-tron-text-secondary)">No wax-fill runs yet.</p>
+			<p class="py-8 text-center text-sm" style="color: var(--color-tron-text-secondary)">No Wax-Fill Runs</p>
 		{:else}
 			<div class="overflow-hidden rounded-lg border border-[var(--color-tron-border)]">
 				<table class="w-full text-sm">
@@ -104,7 +103,7 @@
 									{l.error ?? ''}
 									{#if l.cycles.some((c) => c.barcode)}
 										<details class="mt-1">
-											<summary class="cursor-pointer">carts</summary>
+											<summary class="cursor-pointer">Carts</summary>
 											<ul class="mt-1 space-y-0.5 font-mono">
 												{#each l.cycles as c (c.index)}
 													<li>#{c.index} {c.barcode ?? '—'} · {c.step}{c.error ? ` · ${c.error}` : ''}</li>
@@ -129,7 +128,7 @@
 					class="rounded border px-2 py-1 transition-colors {data.filters.type === t ? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}"
 					style={data.filters.type === t ? '' : 'color: var(--color-tron-text-secondary)'}
 				>
-					{t}
+					{t[0].toUpperCase() + t.slice(1)}
 				</a>
 			{/each}
 			<span style="color: var(--color-tron-text-secondary)" class="self-center pl-3 pr-1">Status:</span>
@@ -139,14 +138,13 @@
 					class="rounded border px-2 py-1 transition-colors {data.filters.status === s ? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}"
 					style={data.filters.status === s ? '' : 'color: var(--color-tron-text-secondary)'}
 				>
-					{s}
+					{s[0].toUpperCase() + s.slice(1)}
 				</a>
 			{/each}
 		</div>
-		<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Every Teach play, Go to pose and wax-fill grab / withdraw lands here as a replay; teleop, record and calibrate come from Maintenance.</p>
 
 		{#if sessions.length === 0}
-			<p class="py-8 text-center text-sm" style="color: var(--color-tron-text-secondary)">No sessions match the current filters.</p>
+			<p class="py-8 text-center text-sm" style="color: var(--color-tron-text-secondary)">No Matching Sessions</p>
 		{:else}
 			<div class="overflow-hidden rounded-lg border border-[var(--color-tron-border)]">
 				<table class="w-full text-sm">
@@ -154,7 +152,7 @@
 						<tr>
 							<th class="px-3 py-2">Type</th>
 							<th class="px-3 py-2">Status</th>
-							<th class="px-3 py-2">Triggered by</th>
+							<th class="px-3 py-2">Triggered By</th>
 							<th class="px-3 py-2">Lot</th>
 							<th class="px-3 py-2">Started</th>
 							<th class="px-3 py-2">Ended</th>
@@ -187,10 +185,10 @@
 			<span style="color: var(--color-tron-text-secondary)">Page {data.page} of {totalPages} · {data.total} total</span>
 			<div class="flex gap-2">
 				{#if data.page > 1}
-					<a href={href({ page: String(data.page - 1) })} class="rounded border border-[var(--color-tron-border)] px-2 py-1 transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">← prev</a>
+					<a href={href({ page: String(data.page - 1) })} class="rounded border border-[var(--color-tron-border)] px-2 py-1 transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">← Prev</a>
 				{/if}
 				{#if data.page < totalPages}
-					<a href={href({ page: String(data.page + 1) })} class="rounded border border-[var(--color-tron-border)] px-2 py-1 transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">next →</a>
+					<a href={href({ page: String(data.page + 1) })} class="rounded border border-[var(--color-tron-border)] px-2 py-1 transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Next →</a>
 				{/if}
 			</div>
 		</div>

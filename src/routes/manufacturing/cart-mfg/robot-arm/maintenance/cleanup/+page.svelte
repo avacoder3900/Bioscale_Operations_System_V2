@@ -42,14 +42,8 @@
 
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-			New clean-up
+			New Clean-Up
 		</h2>
-		<p class="mb-3 text-xs" style="color: var(--color-tron-text-secondary)">
-			Splits a recording into numbered steps: servo moves that overlap in time share a step, so you can decide
-			what each step keeps, where each servo ends up and how long it takes. With <em>Smooth automatically</em>,
-			Save to Pi writes the recording's path smoothed — hand tremor out, stops kept where the pilot held still —
-			with sliders to adjust it on the next page, and again later. The original recording on the Pi is never changed.
-		</p>
 
 		{#if data.recordingsError}
 			<p class="mb-3 rounded border border-amber-500/40 bg-amber-900/10 p-2 text-xs text-amber-300">
@@ -59,7 +53,7 @@
 
 		<form method="POST" action="?/create" use:enhance={createEnhance} class="grid gap-3 sm:grid-cols-[1fr_auto_auto_auto_auto] sm:items-end">
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-				Recording on the Pi
+				Recording
 				<select
 					name="sourceName"
 					bind:value={sourceName}
@@ -67,7 +61,7 @@
 					class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1.5 text-sm"
 					style="color: var(--color-tron-text)"
 				>
-					<option value="" disabled>Pick a recording…</option>
+					<option value="" disabled>Pick A Recording…</option>
 					{#each data.recordings as r (r.path)}
 						<option value={r.name}>{r.name} · {(r.size_bytes / 1024).toFixed(0)} KB · {fmtDate(r.modified)}</option>
 					{/each}
@@ -87,7 +81,7 @@
 				/>
 			</label>
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)" title="A servo that holds still this long has finished its move.">
-				Pause ends a move (s)
+				Pause Ends A Move (s)
 				<input
 					name="pauseS"
 					type="number"
@@ -101,7 +95,7 @@
 			</label>
 			<label class="flex items-center gap-1.5 pb-2 text-xs" style="color: var(--color-tron-text-secondary)" title="Save to Pi writes a smoothed path: tremor removed, stops kept where the pilot held still. You can change the smoothing with sliders on the next page, and later.">
 				<input name="smooth" type="checkbox" bind:checked={smooth} class="accent-cyan-400" />
-				<span style="color: var(--color-tron-text)">Smooth automatically</span>
+				<span style="color: var(--color-tron-text)">Smooth Automatically</span>
 			</label>
 			<button
 				type="submit"
@@ -109,34 +103,24 @@
 				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
 				style="color: var(--color-tron-cyan)"
 			>
-				{busy ? 'Splitting…' : 'Split into steps'}
+				{busy ? 'Splitting…' : 'Split Into Steps'}
 			</button>
 		</form>
-		<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-			1 step ≈ 0.09° at the joint. Threshold 10 ignores hand tremor on the leader; you can re-split later with
-			other settings.
-		</p>
 	</section>
 
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<div class="flex flex-wrap items-center justify-between gap-3">
 			<div class="min-w-0">
 				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-					Overlay a pilot's recording on an animated one
+					Overlay Pilot Recording On Animation
 				</h2>
-				<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-					An animated recording plays smoothly but its joints settle short of each pose under load. A teleop
-					recording of the same motion has the pilot's corrections for that baked in. The overlay lines the two
-					up in time and gives the animation the pilot's positions — the result can be saved to the Pi as it
-					is, or opened as a clean-up and sent to Animate.
-				</p>
 			</div>
 			<a
 				href={`${BASE}/overlay`}
 				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20"
 				style="color: var(--color-tron-cyan)"
 			>
-				Pick two recordings →
+				Pick Two Recordings →
 			</a>
 		</div>
 	</section>
@@ -144,12 +128,12 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]">
 		<div class="border-b border-[var(--color-tron-border)] px-4 py-3">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-				Clean-ups ({data.cleanups.length})
+				Clean-Ups ({data.cleanups.length})
 			</h2>
 		</div>
 		{#if data.cleanups.length === 0}
 			<p class="px-4 py-6 text-center text-xs" style="color: var(--color-tron-text-secondary)">
-				None yet. Split a recording above to start.
+				No Clean-Ups
 			</p>
 		{:else}
 			<table class="w-full text-xs">
@@ -161,8 +145,8 @@
 						<th class="px-4 py-2">Name</th>
 						<th class="px-4 py-2">From</th>
 						<th class="px-4 py-2">Steps</th>
-						<th class="px-4 py-2">Saved to Pi as</th>
-						<th class="px-4 py-2">Last edit</th>
+						<th class="px-4 py-2">Saved To Pi As</th>
+						<th class="px-4 py-2">Last Edit</th>
 						<th class="w-10 px-4 py-2"><span class="sr-only">Remove</span></th>
 					</tr>
 				</thead>

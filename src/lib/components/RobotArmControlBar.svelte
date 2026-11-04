@@ -131,7 +131,6 @@
 			{#if barState === 'unreachable'}
 				<span class="min-w-0 truncate text-xs sm:text-sm" style="color: var(--color-tron-text)">
 					<span class="font-semibold" style="color: #ef4444">UNREACHABLE</span>
-					<span style="color: var(--color-tron-text-secondary)">· cannot reach the arm</span>
 				</span>
 			{:else if barState === 'running'}
 				<span class="min-w-0 truncate text-xs sm:text-sm" style="color: var(--color-tron-text)">
@@ -154,7 +153,7 @@
 				</span>
 			{:else}
 				<span class="text-xs sm:text-sm" style="color: var(--color-tron-text-secondary)">
-					IDLE — arm is free
+					IDLE
 				</span>
 			{/if}
 		</div>
@@ -192,8 +191,7 @@
 
 	{#if barState === 'orphaned'}
 		<p class="mt-1 text-xs" style="color: #f59e0b">
-			The arm reports nothing running, but this run was never closed out — its terminal event
-			never arrived. It will keep blocking Run Task until it is resolved.
+			Run never closed out. Blocks Run Task.
 		</p>
 	{/if}
 </div>

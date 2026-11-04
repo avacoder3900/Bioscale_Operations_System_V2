@@ -22,7 +22,7 @@
 		labels?: { smooth: string; pilot: string; result: string };
 	}
 
-	let { t, smooth, pilot = null, result, jointNames, corrected, labels = { smooth: 'animated', pilot: 'pilot, lined up in time', result: 'result' } }: Props = $props();
+	let { t, smooth, pilot = null, result, jointNames, corrected, labels = { smooth: 'Animated', pilot: 'Pilot', result: 'Result' } }: Props = $props();
 
 	const LANE_H = 52;
 	const W = 1000;
@@ -93,7 +93,7 @@
 			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-cyan-400"></span> {labels.result}</span>
 		</div>
 		<div class="flex items-center gap-1">
-			zoom
+			Zoom
 			{#each [1, 2, 4, 8] as z (z)}
 				<button
 					type="button"

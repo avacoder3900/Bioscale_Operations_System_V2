@@ -35,10 +35,10 @@
 		preciseName = data.picked.precise;
 	});
 	const KIND_LABEL: Record<string, string> = {
-		animated: 'animated',
-		teleop: 'teleop',
-		cleaned: 'clean-up',
-		overlay: 'overlay',
+		animated: 'Animated',
+		teleop: 'Teleop',
+		cleaned: 'Clean-Up',
+		overlay: 'Overlay',
 		other: ''
 	};
 	const rank = (kind: string, want: string) => (kind === want ? 0 : kind === 'other' ? 1 : 2);
@@ -130,7 +130,7 @@
 			if (r.type === 'success') {
 				const s = (r.data as { saved: { name: string; frames: number; durationS: number } }).saved;
 				saved = [s, ...saved];
-				notice = { kind: 'ok', text: `Saved on the Pi as "${s.name}" (${s.frames} frames, ${s.durationS.toFixed(1)} s). Replay it from Maintenance › Leader arm.` };
+				notice = { kind: 'ok', text: `Saved on the Pi as "${s.name}" (${s.frames} frames, ${s.durationS.toFixed(1)} s). Replay it from Maintenance › Leader Arm.` };
 				piName = `${stem(ov.smooth.name)}-pilot-${saved.length + 1}`;
 			} else notice = { kind: 'error', text: errorOf(r) };
 		} catch (err) {
@@ -176,17 +176,10 @@
 
 <div class="space-y-4">
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-		<a href={`${BASE}/maintenance/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← all clean-ups</a>
+		<a href={`${BASE}/maintenance/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← All Clean-Ups</a>
 		<h2 class="mt-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-			Overlay: the pilot's positions on an animated recording
+			Overlay Pilot Positions On Animation
 		</h2>
-		<p class="mb-3 mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			An animated recording is smooth and fast but its joints settle short of each pose under load, so the claw
-			lands low. A pilot on the control arm pushes each joint until the claw is where it should be, so a teleop
-			recording of the same motion has the right positions but a rough path. This lines the two up in time and
-			adds, frame by frame, how far the pilot's command was from the animation's — the result keeps the
-			animation's timing and curves with the pilot's positions. Neither recording is changed.
-		</p>
 
 		{#if data.recordingsError}
 			<p class="mb-3 rounded border border-amber-500/40 bg-amber-900/10 p-2 text-xs text-amber-300">
@@ -196,18 +189,18 @@
 
 		<div class="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-				Animated recording (timing and smoothness)
+				Animated Recording
 				<select bind:value={smoothName} class={selectCls} style="color: var(--color-tron-text)">
-					<option value="" disabled>Pick a recording…</option>
+					<option value="" disabled>Pick A Recording…</option>
 					{#each forSmooth as r (r.name)}
 						<option value={r.name}>{label(r)}</option>
 					{/each}
 				</select>
 			</label>
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-				Pilot's recording (positions)
+				Pilot's Recording
 				<select bind:value={preciseName} class={selectCls} style="color: var(--color-tron-text)">
-					<option value="" disabled>Pick a recording…</option>
+					<option value="" disabled>Pick A Recording…</option>
 					{#each forPrecise as r (r.name)}
 						<option value={r.name}>{label(r)}</option>
 					{/each}
@@ -220,14 +213,9 @@
 				class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
 				style="color: var(--color-tron-cyan)"
 			>
-				{lining ? 'Lining up…' : 'Line them up'}
+				{lining ? 'Lining Up…' : 'Line Them Up'}
 			</button>
 		</div>
-		<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-			Both recordings must be of the same motion in the same order. They can take different times: by default the
-			shorter one is stretched evenly to the length of the longer one (Stretch to fit), from when each starts moving
-			to when it stops. If the pilot paused or sped up in places, switch to Follow the motion below.
-		</p>
 
 		{#if data.overlayError}
 			<div class="mt-3 rounded border border-red-500/40 bg-red-900/10 p-2 text-xs text-red-300">{data.overlayError}</div>
@@ -242,7 +230,7 @@
 			>
 				{notice.text}
 				{#if notice.kind === 'ok' && notice.text.includes('Control tab')}
-					<a href={`${BASE}/maintenance/control`} class="ml-1 underline">Go to Control →</a>
+					<a href={`${BASE}/maintenance/control`} class="ml-1 underline">Go To Control →</a>
 				{/if}
 			</div>
 		{/if}
@@ -255,7 +243,7 @@
 		<!-- What lined up -->
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<div class="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs" style="color: var(--color-tron-text-secondary)">
-				<span class="font-semibold uppercase tracking-wider">Line up by</span>
+				<span class="font-semibold uppercase tracking-wider">Line Up By</span>
 				{#each ALIGN_MODES as m (m.id)}
 					<label class="flex items-center gap-1.5" title={m.hint}>
 						<input type="radio" name="align" value={m.id} bind:group={alignMode} class="accent-cyan-400" />
@@ -265,7 +253,7 @@
 				{#if alignMode === 'stretch'}
 					<label class="flex items-center gap-1.5" title="Line up from when each recording starts moving to when it stops, so a pause before or after the motion does not shift the stretch">
 						<input type="checkbox" bind:checked={trimIdle} class="accent-cyan-400" />
-						<span style="color: var(--color-tron-text)">Ignore still time at the start and end</span>
+						<span style="color: var(--color-tron-text)">Ignore Still Time At Start And End</span>
 					</label>
 				{/if}
 			</div>
@@ -283,19 +271,16 @@
 					The animation matched the pilot's {fmtS(pilotS(al.span.from))}–{fmtS(pilotS(al.span.to))}.
 				{/if}
 				After lining up the pilot's path sits
-				<strong style="color: var(--color-tron-text)">{al.fit.toFixed(0)} steps</strong> from the animation on average
-				(all six joints together; that distance includes the offset being corrected).
+				<strong style="color: var(--color-tron-text)">{al.fit.toFixed(0)} steps</strong> from the animation on average.
 			</p>
 			{#if al.mode === 'follow' && ov.pilotT.length > 1 && pilotS(al.span.to) - pilotS(al.span.from) < 0.5 * (ov.pilotT[ov.pilotT.length - 1] - ov.pilotT[0])}
 				<p class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-2 text-xs text-amber-300">
-					Follow the motion used less than half of the pilot's recording, so the amber line may be squeezed flat. If
-					the two recordings are the same moves at different speeds, use Stretch to fit.
+					Follow the motion used under half of the pilot's recording; try Stretch to fit.
 				</p>
 			{/if}
 			{#if poorFit}
 				<p class="mt-2 rounded border border-amber-500/40 bg-amber-900/10 p-2 text-xs text-amber-300">
-					That is a long way apart (more than {POOR_FIT_STEPS} steps). These two recordings may not be the same
-					motion, or not in the same order — check the amber line follows the grey one below before saving.
+					Poor fit (over {POOR_FIT_STEPS} steps): the recordings may not be the same motion.
 				</p>
 			{/if}
 			<div class="mt-3">
@@ -310,22 +295,19 @@
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 					<span class="flex justify-between"><span>Strength</span><span class="font-mono" style="color: var(--color-tron-text)">{strengthPct}%</span></span>
 					<input type="range" min="0" max="100" step="5" bind:value={strengthPct} class="mt-1 w-full accent-cyan-400" />
-					<span class="text-[11px]">How much of the pilot's offset to add. 100% = the pilot's positions; 0% = the animation as it is.</span>
 				</label>
 				<div class="mt-3 grid grid-cols-2 gap-3">
 					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-						Smoothing window (s)
+						Smoothing Window (s)
 						<input type="number" min="0" max={MAX_WINDOW_S} step="0.1" bind:value={windowS} class="{inputCls} mt-1 block w-full py-1" style="color: var(--color-tron-text)" />
-						<span class="text-[11px]">The offset is averaged over this long, so hand tremor and the pilot's detours do not get into the result. 0 = raw.</span>
 					</label>
 					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-						Largest offset (steps)
+						Largest Offset (steps)
 						<input type="number" min="1" max={MAX_MAX_OFFSET} step="1" bind:value={maxOffset} class="{inputCls} mt-1 block w-full py-1" style="color: var(--color-tron-text)" />
-						<span class="text-[11px]">An offset bigger than this is capped — a sign the recordings drifted apart there, not of droop.</span>
 					</label>
 				</div>
 				<div class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">
-					Servos to correct
+					Servos To Correct
 					<div class="mt-1 grid grid-cols-3 gap-1 sm:grid-cols-6">
 						{#each SERVO_IDS as sid, i (sid)}
 							<label class="flex items-center gap-1 rounded border border-[var(--color-tron-border)] px-1.5 py-1 text-[11px]" title={names[i]}>
@@ -335,19 +317,18 @@
 							</label>
 						{/each}
 					</div>
-					<span class="text-[11px]">Untick a servo to keep the animation's goal for it (e.g. the gripper, if the pilot squeezed harder than you want).</span>
 				</div>
 			</div>
 
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset per servo (steps)</h2>
+				<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset Per Servo (steps)</h2>
 				<table class="w-full text-xs">
 					<thead class="border-b border-[var(--color-tron-border)] text-left uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
 						<tr>
 							<th class="py-1 pr-2">Servo</th>
-							<th class="py-1 pr-2" title="Pilot minus animation, before smoothing: the middle value over the recording">Pilot offset (median)</th>
+							<th class="py-1 pr-2" title="Pilot minus animation, before smoothing: the middle value over the recording">Pilot Offset (Median)</th>
 							<th class="py-1 pr-2" title="Smallest and largest raw offset over the recording">Range</th>
-							<th class="py-1 pr-2" title="What is added after smoothing, the cap and the strength">Applied (mean, min … max)</th>
+							<th class="py-1 pr-2" title="What is added after smoothing, the cap and the strength">Applied (Mean, Min … Max)</th>
 							<th class="py-1" title="Frames whose smoothed offset was over the cap">Capped</th>
 						</tr>
 					</thead>
@@ -357,16 +338,13 @@
 								<td class="py-1 pr-2 font-sans"><span class="font-mono text-cyan-400">{s.servoId}</span> {names[i]}</td>
 								<td class="py-1 pr-2">{signed(s.median)}</td>
 								<td class="py-1 pr-2">{signed(s.min)} … {signed(s.max)}</td>
-								<td class="py-1 pr-2">{#if s.corrected}{signed(s.appliedMean)}, {signed(s.appliedMin)} … {signed(s.appliedMax)}{:else}<span class="font-sans">kept</span>{/if}</td>
+								<td class="py-1 pr-2">{#if s.corrected}{signed(s.appliedMean)}, {signed(s.appliedMin)} … {signed(s.appliedMax)}{:else}<span class="font-sans">Kept</span>{/if}</td>
 								<td class="py-1 {s.capped ? 'text-amber-300' : ''}">{s.corrected ? s.capped : '—'}</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					A steady positive or negative median on the loaded joints (shoulder lift, elbow, wrist) is the droop the
-					pilot was compensating for. A range far wider than the median means the two paths differ between poses;
-					a longer smoothing window evens that out.
 					{#if cappedTotal}
 						<span class="text-amber-300">{cappedTotal} frame-servo values hit the cap.</span>
 					{/if}
@@ -377,11 +355,7 @@
 		<!-- Ways out -->
 		<section class="grid gap-4 lg:grid-cols-2">
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save to Pi</h2>
-				<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Writes the result as a new recording on the Pi: every frame of the animated recording, at its own time,
-					with the offset above added. Replay it from Maintenance › Leader arm. Both source recordings stay as they are.
-				</p>
+				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save To Pi</h2>
 				<div class="flex gap-2">
 					<input bind:value={piName} class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm" style="color: var(--color-tron-text)" />
 					<button
@@ -390,7 +364,7 @@
 						disabled={busy !== null || !piName.trim() || !options.servos.length}
 						class="rounded border border-emerald-500/50 bg-emerald-900/10 px-3 py-1 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-900/25 disabled:cursor-not-allowed disabled:opacity-40"
 					>
-						{busy === 'pi' ? 'Saving…' : 'Save to Pi'}
+						{busy === 'pi' ? 'Saving…' : 'Save To Pi'}
 					</button>
 				</div>
 				{#if saved.length}
@@ -403,19 +377,14 @@
 			</div>
 
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Open as a clean-up</h2>
-				<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Splits the result into steps like any recording, so you can edit targets and timing, and send it to
-					the Teach tab as poses + a move set with the pilot's positions. (A clean-up's own Save to Pi plays
-					straight lines; use Save to Pi here to keep the animation's curves as they are.)
-				</p>
+				<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Open As A Clean-Up</h2>
 				<div class="flex flex-wrap items-end gap-2">
 					<label class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						Threshold (steps)
 						<input type="number" min="0" max="500" bind:value={thresholdSteps} class="{inputCls} mt-0.5 block w-24 py-1" style="color: var(--color-tron-text)" />
 					</label>
 					<label class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-						Pause ends a move (s)
+						Pause Ends A Move (s)
 						<input type="number" min="0.05" max="5" step="0.05" bind:value={pauseS} class="{inputCls} mt-0.5 block w-24 py-1" style="color: var(--color-tron-text)" />
 					</label>
 					<button
@@ -424,16 +393,12 @@
 						disabled={busy !== null || !options.servos.length}
 						class="rounded border border-[var(--color-tron-cyan)]/50 bg-cyan-900/10 px-3 py-1 text-sm font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-cyan-900/25 disabled:cursor-not-allowed disabled:opacity-40"
 					>
-						{busy === 'cleanup' ? 'Splitting…' : 'Split into steps'}
+						{busy === 'cleanup' ? 'Splitting…' : 'Split Into Steps'}
 					</button>
 				</div>
-				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					An animated recording has no hand tremor, so threshold 0–2 keeps every move; the holds between poses
-					end the moves.
-				</p>
 			</div>
 		</section>
 	{:else if ov && al && !preview}
-		<p class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-xs text-amber-300">Tick at least one servo to correct.</p>
+		<p class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-xs text-amber-300">No Servos Selected</p>
 	{/if}
 </div>

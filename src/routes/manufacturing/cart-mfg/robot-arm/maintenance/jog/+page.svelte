@@ -49,33 +49,27 @@
 <div class="mx-auto max-w-3xl space-y-5 p-4">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Jog (maintenance)
+			Jog
 		</h1>
 		<a
 			href="/manufacturing/cart-mfg/robot-arm/maintenance/control"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
-			← control
+			← Control
 		</a>
 	</div>
 
 	{#if data.poseError}
 		<div class="rounded border border-amber-500/40 bg-amber-900/10 p-3 text-sm">
-			<p class="font-medium text-amber-400">Cartesian pose unavailable</p>
+			<p class="font-medium text-amber-400">Cartesian Pose Unavailable</p>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">{data.poseError}</p>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				The Cartesian pad above needs the IK stack (ikpy + URDF + jog calibration), which is not
-				ported to the Pi server yet. <strong>Per-joint jog and torque below still work</strong> —
-				use those for movement tests. If the arm server is simply down, check that the robot-arm
-				service is running on arm-pi and that ROBOT_ARM_BASE_URL points at it.
-			</p>
 		</div>
 	{:else if sessionActive}
 		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-3 text-sm">
 			<p style="color: var(--color-tron-text)">
 				<span class="font-medium text-yellow-400">{data.active?.kind}</span> session active —
-				jog disabled until it stops. <a href="/manufacturing/cart-mfg/robot-arm/maintenance/control" class="ml-2 underline" style="color: var(--color-tron-cyan)">go stop it →</a>
+				jog disabled until it stops. <a href="/manufacturing/cart-mfg/robot-arm/maintenance/control" class="ml-2 underline" style="color: var(--color-tron-cyan)">Go Stop It →</a>
 			</p>
 		</div>
 	{/if}
@@ -98,11 +92,11 @@
 		>
 			<div class="mb-2 flex items-center justify-between">
 				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-					End-effector pose
+					End-Effector Pose
 				</h2>
 				<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" bind:checked={polling} class="accent-cyan-400" />
-					auto-refresh (2 s)
+					Auto-Refresh (2 s)
 				</label>
 			</div>
 			<div class="grid grid-cols-3 gap-3 font-mono text-sm" style="color: var(--color-tron-text)">
@@ -119,7 +113,7 @@
 				{/each}
 			</div>
 			<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				calibration: {pose.calibration_source}
+				Calibration: {pose.calibration_source}
 			</p>
 		</section>
 	{/if}
@@ -146,7 +140,7 @@
 				/>
 			</label>
 			<label class="block">
-				Max per-joint Δ (steps, IK safety)
+				Max Joint Δ (steps)
 				<input
 					type="number"
 					bind:value={maxStepDelta}
@@ -161,12 +155,12 @@
 		<div class="grid grid-cols-3 gap-2 text-sm">
 			<!-- row 1: +Y forward / +Z up / +X right -->
 			{#each [
-				{ label: 'Y +', payload: jogPayload(0, 1, 0), help: 'forward' },
-				{ label: 'Z +', payload: jogPayload(0, 0, 1), help: 'up' },
-				{ label: 'X +', payload: jogPayload(1, 0, 0), help: 'right' },
-				{ label: 'Y −', payload: jogPayload(0, -1, 0), help: 'back' },
-				{ label: 'Z −', payload: jogPayload(0, 0, -1), help: 'down' },
-				{ label: 'X −', payload: jogPayload(-1, 0, 0), help: 'left' }
+				{ label: 'Y +', payload: jogPayload(0, 1, 0), help: 'Forward' },
+				{ label: 'Z +', payload: jogPayload(0, 0, 1), help: 'Up' },
+				{ label: 'X +', payload: jogPayload(1, 0, 0), help: 'Right' },
+				{ label: 'Y −', payload: jogPayload(0, -1, 0), help: 'Back' },
+				{ label: 'Z −', payload: jogPayload(0, 0, -1), help: 'Down' },
+				{ label: 'X −', payload: jogPayload(-1, 0, 0), help: 'Left' }
 			] as btn (btn.label)}
 				<form method="POST" action="?/jog" use:enhance>
 					<input type="hidden" name="dx_mm" value={btn.payload.dx_mm} />
@@ -185,11 +179,6 @@
 				</form>
 			{/each}
 		</div>
-
-		<p class="mt-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-			Each click moves by ±{stepMm} mm in the chosen axis. Per-joint Δ is clamped to {maxStepDelta} steps
-			(≈ {(maxStepDelta * 360 / 4096).toFixed(1)}°) per click. Click again to step further if a long jog clamped.
-		</p>
 	</section>
 
 	<!-- Per-joint single-step jog (precision fallback for the last 0.3 mm) -->
@@ -198,10 +187,10 @@
 	>
 		<div class="mb-3 flex items-center justify-between">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-				Per-joint single-step
+				Per-Joint Single-Step
 			</h2>
 			<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-				step
+				Step
 				<input
 					type="number"
 					bind:value={jointStep}
@@ -242,10 +231,6 @@
 				</div>
 			{/each}
 		</div>
-		<p class="mt-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-			±{jointStep} step ≈ {(jointStep * 360 / 4096).toFixed(2)}° at the joint, ~{(jointStep * 0.3).toFixed(2)} mm
-			at the tip near full extension. Use this when Cartesian IK rounds your nudge to nothing.
-		</p>
 	</section>
 
 	<!-- Torque + calibration controls -->
@@ -256,7 +241,7 @@
 				disabled={sessionActive}
 				class="w-full rounded border border-emerald-500/50 bg-emerald-900/10 px-3 py-2 font-medium text-emerald-300 transition-colors hover:bg-emerald-900/20 disabled:opacity-40"
 			>
-				torque on
+				Torque On
 			</button>
 		</form>
 		<form method="POST" action="?/torqueOff" use:enhance>
@@ -265,7 +250,7 @@
 				disabled={sessionActive}
 				class="w-full rounded border border-red-500/50 bg-red-900/10 px-3 py-2 font-medium text-red-300 transition-colors hover:bg-red-900/20 disabled:opacity-40"
 			>
-				torque off
+				Torque Off
 			</button>
 		</form>
 	</section>
@@ -277,7 +262,7 @@
 				class="w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-3 py-2 text-xs transition-colors hover:bg-black/50"
 				style="color: var(--color-tron-text-secondary)"
 			>
-				Reload calibration JSON
+				Reload Calibration JSON
 			</button>
 		</form>
 		<form method="POST" action="?/resetBacklash" use:enhance>
@@ -286,14 +271,8 @@
 				class="w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-3 py-2 text-xs transition-colors hover:bg-black/50"
 				style="color: var(--color-tron-text-secondary)"
 			>
-				Reset backlash state
+				Reset Backlash State
 			</button>
 		</form>
 	</div>
-	<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-		Backlash compensation is on by default — when a joint reverses direction, the server
-		automatically over-shoots by ~10 steps (per-joint override in jog-calibration.json under
-		<code>backlash_steps</code>) so gear slack is consumed before the arm tip moves. Reset
-		after manually hand-poseing with torque off so the next jog isn't treated as a reversal.
-	</p>
 </div>

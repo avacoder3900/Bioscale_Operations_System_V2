@@ -145,10 +145,7 @@
 <div class="mx-auto max-w-7xl space-y-5">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Arm home (camera)</h1>
-			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				AprilTags on the arm and its surroundings, located by the camera in mm — the backstop for an arm that did not return home.
-			</p>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Arm Home (Camera)</h1>
 		</div>
 		<label class="text-xs" style="color: var(--color-tron-text-secondary)">
 			Camera
@@ -158,8 +155,8 @@
 				class="ml-1 rounded border bg-black/40 px-2 py-1 text-sm"
 				style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
 			>
-				{#each cameraNames as n}<option value={n}>{n}{calibrations.some((c) => c.cameraName === n) ? '' : ' (not calibrated)'}</option>{/each}
-				{#if !cameraNames.length}<option value="">no camera</option>{/if}
+				{#each cameraNames as n}<option value={n}>{n}{calibrations.some((c) => c.cameraName === n) ? '' : ' (Not Calibrated)'}</option>{/each}
+				{#if !cameraNames.length}<option value="">No Camera</option>{/if}
 			</select>
 		</label>
 	</div>
@@ -195,7 +192,7 @@
 						· {calibration.jointSteps ? 'encoder home stored' : 'no encoder home'}
 						{#if calibration.note}· {calibration.note}{/if}
 					{:else}
-						No calibration for this camera yet — calibrate below with the arm parked at home.
+						No Calibration For This Camera
 					{/if}
 				</p>
 			</div>
@@ -212,17 +209,17 @@
 			<div class="mt-3 grid gap-4 md:grid-cols-2">
 				<figure>
 					<VisionStage src={calibration.thumbnailDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} tags={referenceTags} alt="Calibration frame" />
-					<figcaption class="mt-1 text-center text-[11px]" style="color: var(--color-tron-text-secondary)">calibration (home)</figcaption>
+					<figcaption class="mt-1 text-center text-[11px]" style="color: var(--color-tron-text-secondary)">Calibration (Home)</figcaption>
 				</figure>
 				{#if shownResult}
 					{@const v = verdict(shownResult.home.verdict)}
 					<figure>
-						<VisionStage src={shownResult.snapshotDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} tags={resultTags} alt="Camera frame at the check" emptyText="No camera frame for this check" />
-						<figcaption class="mt-1 text-center text-[11px] font-semibold" style="color: {v.color}">now · {v.label}</figcaption>
+						<VisionStage src={shownResult.snapshotDataUrl} width={calibration.frameWidth} height={calibration.frameHeight} tags={resultTags} alt="Camera frame at the check" emptyText="No Camera Frame" />
+						<figcaption class="mt-1 text-center text-[11px] font-semibold" style="color: {v.color}">Now · {v.label}</figcaption>
 					</figure>
 				{:else}
 					<div class="flex items-center justify-center rounded border border-dashed p-6 text-center text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
-						Run a check to compare the arm with this calibration.
+						No Check Yet
 					</div>
 				{/if}
 			</div>
@@ -243,16 +240,16 @@
 			{/if}
 			{#if shownResult?.frozen}
 				<div class="mt-3 rounded border border-red-500/60 bg-red-900/20 p-3 text-sm text-red-200">
-					<div class="font-semibold">FROZEN — return the arm to home by hand</div>
+					<div class="font-semibold">FROZEN — Return The Arm To Home By Hand</div>
 					<div class="mt-1 text-xs">{shownResult.message}</div>
 				</div>
 			{/if}
 			{#if loop}
 				<p class="mt-2 text-xs" style="color: {loop.error ? '#fca5a5' : 'var(--color-tron-text-secondary)'}">
 					{#if loop.closing}
-						Closing the claw (final step)…
+						Closing The Claw…
 					{:else if loop.running}
-						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping (after the current jog), then closing the mouth…' : ''}
+						Returning home: attempt {loop.attempt} · {Math.round(((tick - loop.startedAt) / 1000))} s of {HOME_LOOP_MS / 1000} s{loop.stopping ? ' · stopping…' : ''}
 					{:else if loop.error}
 						{loop.error} (attempt {loop.attempt})
 					{:else}
@@ -282,7 +279,7 @@
 						style="background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;"
 						title="Stops within one jog, then closes the mouth"
 					>
-						Stop returning
+						Stop Returning
 					</button>
 				{:else}
 					<button
@@ -293,7 +290,7 @@
 						style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
 						title={calibration.jointSteps ? 'Open the mouth, servo 2 home, all joints home, close the claw; keeps going until done (Stop any time; max 90 s)' : 'This calibration has no encoder home'}
 					>
-						Return to home
+						Return To Home
 					</button>
 				{/if}
 				<form method="POST" action="?/checkHome" use:enhance={homeEnhance('check')}>
@@ -304,36 +301,31 @@
 						class="min-h-[44px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 						style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
 					>
-						{homeBusy === 'check' ? 'Checking…' : 'Check without moving'}
+						{homeBusy === 'check' ? 'Checking…' : 'Check Without Moving'}
 					</button>
 				</form>
 				<form method="POST" action="?/retireCalibration" use:enhance onsubmit={(e) => { if (!confirm('Retire this calibration? Home check and Return to home stop working for this camera until you recalibrate.')) e.preventDefault(); }}>
 					<input type="hidden" name="id" value={calibration._id} />
-					<button type="submit" class="min-h-[44px] px-2 text-xs underline" style="color: var(--color-tron-text-secondary)">retire</button>
+					<button type="submit" class="min-h-[44px] px-2 text-xs underline" style="color: var(--color-tron-text-secondary)">Retire</button>
 				</form>
 				{#if blocked}<span class="text-xs" style="color: #f59e0b">{blockReason}</span>{/if}
 			</div>
 
 			<details class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">
 				<summary class="cursor-pointer">
-					Home settings: servo 1 safe range ±{Math.round(stepsToDeg(calibration.homing.baseRangeSteps))}° · mouth opens {calibration.homing.gripperOpenSteps} steps
+					Home Settings: Servo 1 Safe Range ±{Math.round(stepsToDeg(calibration.homing.baseRangeSteps))}° · Mouth Opens {calibration.homing.gripperOpenSteps} steps
 				</summary>
-				<p class="mt-2 max-w-2xl">
-					If servo 1 (base) is further than this from home, Return to home moves nothing, turns torque OFF so a person can
-					walk the arm home by hand, and reports FROZEN. The mouth (servo 6) opens by this many steps first to release a
-					cartridge (0 = don't open). Kept when you recalibrate.
-				</p>
 				<form method="POST" action="?/updateHoming" use:enhance class="mt-2 flex flex-wrap items-end gap-3">
 					<input type="hidden" name="id" value={calibration._id} />
 					<label class="block">
-						Servo 1 range ± degrees
+						Servo 1 Range (±°)
 						<input name="baseRangeDeg" type="number" min="1" max="180" step="1" required value={Math.round(stepsToDeg(calibration.homing.baseRangeSteps))} class="mt-1 block w-28 rounded border bg-black/40 px-2 py-1 text-sm" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
 					</label>
 					<label class="block">
-						Mouth opens (steps, 0–{MAX_JOG_STEPS})
+						Mouth Opens (steps)
 						<input name="gripperOpenSteps" type="number" min="0" max={MAX_JOG_STEPS} step="1" required value={calibration.homing.gripperOpenSteps} class="mt-1 block w-28 rounded border bg-black/40 px-2 py-1 text-sm" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
 					</label>
-					<button type="submit" class="min-h-[34px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">Save home settings</button>
+					<button type="submit" class="min-h-[34px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">Save Home Settings</button>
 				</form>
 			</details>
 		{/if}

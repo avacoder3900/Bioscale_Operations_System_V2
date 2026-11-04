@@ -91,7 +91,7 @@
 		const cur = new Map(controls.map((c) => [c.id, c.value]));
 		return new Set(presets.filter((p) => Object.entries(p.values).every(([k, v]) => cur.get(k) === v)).map((p) => p._id));
 	});
-	const presetLabel = (p: PresetSummary) => `${p.name}${p.conditions ? ` — ${p.conditions}` : ''}${p.kind === 'camera-default' ? ' (camera defaults)' : ''}`;
+	const presetLabel = (p: PresetSummary) => `${p.name}${p.conditions ? ` — ${p.conditions}` : ''}${p.kind === 'camera-default' ? ' (Camera Defaults)' : ''}`;
 	const changedFromDefault = $derived(controls.filter((c) => c.value != null && c.default != null && c.value !== c.default).length);
 
 	const url = () => `/api/robot-arm/cameras/${encodeURIComponent(camera)}/controls`;
@@ -231,7 +231,7 @@
 	const valueOf = (c: CameraControl): number => drafts[c.id] ?? c.value ?? c.default ?? c.min ?? 0;
 	const inactive = (c: CameraControl): boolean => c.flags.includes('inactive');
 	const isBusy = (c: CameraControl): boolean => busy.includes(c.id);
-	const label = (c: CameraControl): string => c.id.replace(/_/g, ' ');
+	const label = (c: CameraControl): string => c.id.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
 	/** The raw value in the unit a person thinks in. */
 	function human(c: CameraControl, v: number): string {
 		if (c.id === 'exposure_time_absolute') return `${(v / 10).toFixed(1)} ms` + (v > 0 ? ` (1/${Math.round(10000 / v)} s)` : '');
@@ -279,30 +279,29 @@
 			<div>
 				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">CAMERA SETTINGS</h2>
 				<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-					Exposure, gain and white balance of the arm camera. Limits are the camera's own.
 					{#if resp?.available}
-						· {resp.device}{changedFromDefault ? ` · ${changedFromDefault} off default` : ' · all at default'}{savedCount ? ` · ${savedCount} remembered on the Pi` : ''}
+						{resp.device}{changedFromDefault ? ` · ${changedFromDefault} off default` : ' · all at default'}{savedCount ? ` · ${savedCount} remembered on the Pi` : ''}
 					{/if}
 				</p>
 			</div>
-			<span class="text-xs" style="color: var(--color-tron-text-secondary)">{open ? 'hide' : 'show'}</span>
+			<span class="text-xs" style="color: var(--color-tron-text-secondary)">{open ? 'Hide' : 'Show'}</span>
 		</summary>
 
 		{#if !armReachable}
-			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">The arm Pi is unreachable; the camera settings cannot be read.</p>
+			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">Arm Pi Unreachable</p>
 		{:else if resp && !resp.installed}
 			<p class="mt-3 text-xs" style="color: #f59e0b">{resp.reason}</p>
 		{:else}
 			<div class="mt-3 flex flex-wrap items-center gap-3 text-xs">
 				<label class="flex items-center gap-1" style="color: var(--color-tron-text)" title="Save every applied value on the Pi (calibrations/camera_controls.json). cameras.py re-applies the set each time it opens the camera, so a replug or restart keeps your settings.">
 					<input type="checkbox" bind:checked={persist} class="accent-cyan-400" />
-					Remember on the Pi
+					Remember On The Pi
 				</label>
 				<button type="button" onclick={() => void load()} disabled={loading} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);">
-					{loading ? 'Reading…' : 'Re-read from camera'}
+					{loading ? 'Reading…' : 'Re-Read From Camera'}
 				</button>
 				<button type="button" onclick={() => void resetAll()} disabled={!resp?.available || busy.length > 0} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: #fca5a5; border: 1px solid #ef4444;" title="Every control back to the camera's default; the saved set on the Pi is cleared when Remember is on.">
-					Reset all to camera defaults
+					Reset All To Camera Defaults
 				</button>
 				{#if error}<span class="text-red-300">{error}</span>{/if}
 			</div>
@@ -311,7 +310,7 @@
 				<div class="flex flex-wrap items-center gap-2">
 					<span class="font-medium" style="color: var(--color-tron-text)">Presets</span>
 					<select bind:value={presetId} disabled={presetBusy || !presets.length} class="min-w-[16rem] max-w-full rounded border bg-black/40 px-2 py-1 disabled:opacity-40" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" aria-label="Camera preset">
-						{#if !presets.length}<option value="">No presets saved yet</option>{/if}
+						{#if !presets.length}<option value="">No Presets</option>{/if}
 						{#each presets as p (p._id)}
 							<option value={p._id}>{presetLabel(p)}{matchingPresetIds.has(p._id) ? ' ✓' : ''}</option>
 						{/each}
@@ -320,7 +319,7 @@
 						Apply
 					</button>
 					<button type="button" onclick={() => (showSave = !showSave)} disabled={presetBusy || !resp?.available} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: var(--color-tron-text); border: 1px solid var(--color-tron-border);">
-						{showSave ? 'Cancel' : 'Save current as…'}
+						{showSave ? 'Cancel' : 'Save Current As…'}
 					</button>
 					{#if selectedPreset}
 						<button type="button" onclick={() => void archivePreset()} disabled={presetBusy} class="min-h-[34px] rounded px-2 disabled:opacity-40" style="color: var(--color-tron-text-secondary); border: 1px solid var(--color-tron-border);" title="Archive this preset (kept in history)">Archive</button>
@@ -331,7 +330,7 @@
 				</div>
 				{#if selectedPreset}
 					<p class="mt-1" style="color: var(--color-tron-text-secondary)">
-						{#if matchingPresetIds.has(selectedPreset._id)}The camera is on these values now.{:else}Differs from the camera now: {Object.entries(selectedPreset.values).filter(([k, v]) => byId.get(k)?.value !== v).map(([k, v]) => `${k.replace(/_/g, ' ')} ${byId.get(k)?.value ?? '?'} → ${v}`).join(', ') || '—'}.{/if}
+						{#if matchingPresetIds.has(selectedPreset._id)}Matches camera.{:else}Differs from camera: {Object.entries(selectedPreset.values).filter(([k, v]) => byId.get(k)?.value !== v).map(([k, v]) => `${k.replace(/_/g, ' ')} ${byId.get(k)?.value ?? '?'} → ${v}`).join(', ') || '—'}.{/if}
 						{#if selectedPreset.notes} {selectedPreset.notes}{/if}
 						Saved {selectedPreset.createdAt ? new Date(selectedPreset.createdAt).toLocaleDateString() : ''}{selectedPreset.createdBy?.username ? ` by ${selectedPreset.createdBy.username}` : ''}{selectedPreset.lastAppliedAt ? `; last applied ${new Date(selectedPreset.lastAppliedAt).toLocaleString()}` : ''}.
 					</p>
@@ -340,17 +339,17 @@
 					<form class="mt-2 flex flex-wrap items-end gap-2" onsubmit={(e) => { e.preventDefault(); void savePreset(); }}>
 						<label class="block" style="color: var(--color-tron-text-secondary)">
 							Name
-							<input bind:value={newName} required maxlength="120" placeholder="e.g. Blinds open, manual 8 ms" class="mt-1 block w-64 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+							<input bind:value={newName} required maxlength="120" placeholder="e.g. Blinds Open, Manual 8 ms" class="mt-1 block w-64 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
 						</label>
 						<label class="block" style="color: var(--color-tron-text-secondary)">
-							Lighting / conditions
-							<input bind:value={newConditions} maxlength="500" placeholder="e.g. Shared office, blinds open, afternoon" class="mt-1 block w-72 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
+							Lighting / Conditions
+							<input bind:value={newConditions} maxlength="500" placeholder="e.g. Shared Office, Blinds Open, Afternoon" class="mt-1 block w-72 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
 						</label>
 						<label class="block" style="color: var(--color-tron-text-secondary)">
 							Notes
 							<input bind:value={newNotes} maxlength="500" class="mt-1 block w-56 rounded border bg-black/40 px-2 py-1" style="border-color: var(--color-tron-border); color: var(--color-tron-text)" />
 						</label>
-						<button type="submit" disabled={presetBusy || !newName.trim()} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: #4ade80; border: 1px solid #4ade80;">Save the camera's current values</button>
+						<button type="submit" disabled={presetBusy || !newName.trim()} class="min-h-[34px] rounded px-3 font-semibold disabled:opacity-40" style="color: #4ade80; border: 1px solid #4ade80;">Save Current Values</button>
 					</form>
 				{/if}
 			</div>
@@ -369,7 +368,7 @@
 										<div class="flex items-center justify-between gap-2">
 											<span class="font-medium" style="color: {off ? 'var(--color-tron-text-secondary)' : 'var(--color-tron-text)'}">
 												{label(c)}
-												{#if resp.saved && c.id in resp.saved}<span class="ml-1 text-[10px]" style="color: var(--color-tron-cyan)" title="Remembered on the Pi (value {resp.saved[c.id]})">saved</span>{/if}
+												{#if resp.saved && c.id in resp.saved}<span class="ml-1 text-[10px]" style="color: var(--color-tron-cyan)" title="Remembered on the Pi (value {resp.saved[c.id]})">Saved</span>{/if}
 											</span>
 											<span class="flex items-center gap-2 font-mono" style="color: var(--color-tron-text-secondary)">
 												{#if c.type === 'int'}{human(c, v)}{/if}
@@ -413,7 +412,7 @@
 											</div>
 											<div class="mt-0.5 flex justify-between font-mono text-[10px]" style="color: var(--color-tron-text-secondary)">
 												<span>{c.min}</span>
-												<span>step {c.step ?? 1}{c.unit ? ` · ${c.unit}` : ''}</span>
+												<span>Step {c.step ?? 1}{c.unit ? ` · ${c.unit}` : ''}</span>
 												<span>{c.max}</span>
 											</div>
 										{:else if c.type === 'menu'}
@@ -426,7 +425,7 @@
 												aria-label={label(c)}
 											>
 												{#each Object.entries(c.menu ?? {}) as [k, text] (k)}
-													<option value={k}>{k}: {text}{c.default != null && Number(k) === c.default ? ' (default)' : ''}</option>
+													<option value={k}>{k}: {text}{c.default != null && Number(k) === c.default ? ' (Default)' : ''}</option>
 												{/each}
 											</select>
 										{:else}
@@ -438,15 +437,15 @@
 													onchange={(e) => void send({ [c.id]: (e.currentTarget as HTMLInputElement).checked ? 1 : 0 })}
 													class="accent-cyan-400 disabled:opacity-40"
 												/>
-												{v === 1 ? 'on' : 'off'}{c.default != null ? ` (default ${c.default === 1 ? 'on' : 'off'})` : ''}
+												{v === 1 ? 'On' : 'Off'}{c.default != null ? ` (Default ${c.default === 1 ? 'On' : 'Off'})` : ''}
 											</label>
 										{/if}
 
 										{#if off}
 											<p class="mt-1 flex flex-wrap items-center gap-2" style="color: #f59e0b">
-												<span>Inactive: the camera is setting this automatically.</span>
+												<span>Set Automatically</span>
 												{#if gate}
-													<button type="button" onclick={() => makeManual(c)} disabled={isBusy(c)} class="rounded px-2 py-0.5 font-semibold disabled:opacity-40" style="border: 1px solid #f59e0b; color: #f59e0b">Take manual control ({gate.label})</button>
+													<button type="button" onclick={() => makeManual(c)} disabled={isBusy(c)} class="rounded px-2 py-0.5 font-semibold disabled:opacity-40" style="border: 1px solid #f59e0b; color: #f59e0b">Take Manual Control</button>
 												{/if}
 											</p>
 										{/if}
@@ -457,13 +456,10 @@
 					{/each}
 				</div>
 				<p class="mt-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Ranges, steps and defaults are read from the camera (v4l2) each time; a value the camera refuses shows its reason beside the control instead of being rounded.
-					Exposure is in units of 100 µs (166 = 16.6 ms = 1/60 s). Sharpness above the default adds ringing that hurts sub-pixel tag corners.
-					Detection reads only luma, so saturation and hue change the picture, not the measurement.
-					{#if resp.saved_file}Saved set: <span class="font-mono">{resp.saved_file}</span> on the Pi.{/if}
+					{#if resp.saved_file}Saved Set: <span class="font-mono">{resp.saved_file}</span>{/if}
 				</p>
 			{:else if loading}
-				<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">Reading the camera's controls…</p>
+				<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">Reading…</p>
 			{/if}
 		{/if}
 	</details>

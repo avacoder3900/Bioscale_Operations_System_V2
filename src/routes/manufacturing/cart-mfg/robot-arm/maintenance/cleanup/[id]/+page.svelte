@@ -172,7 +172,7 @@
 			const what = r.savedAs.smoothed ? 'smoothed' : 'steps as straight lines';
 			notice = {
 				kind: 'ok',
-				text: `${r.savedAs.replaced ? 'Replaced' : 'Saved'} on the Pi as "${r.savedAs.name}" (${what}; ${r.savedAs.frames} frames, ${r.savedAs.durationS.toFixed(1)} s). Replay it from Maintenance › Leader arm.`
+				text: `${r.savedAs.replaced ? 'Replaced' : 'Saved'} on the Pi as "${r.savedAs.name}" (${what}; ${r.savedAs.frames} frames, ${r.savedAs.durationS.toFixed(1)} s). Replay it from Maintenance › Leader Arm.`
 			};
 			await invalidateAll();
 			if (!r.savedAs.replaced) piName = suggestedName();
@@ -276,7 +276,7 @@
 			arm = { positions: r.moved.after, at: new Date() };
 			const off = Object.entries(r.moved.residual).filter(([, d]) => Math.abs(d) > 5);
 			notice = off.length
-				? { kind: 'info', text: `Moved (${r.moved.jogs} jogs), but ${off.map(([sid, d]) => `${names[Number(sid) - 1]} is ${d} steps short`).join(', ')}. Something may be blocking it, or it hit a limit.` }
+				? { kind: 'info', text: `Moved (${r.moved.jogs} jogs), but ${off.map(([sid, d]) => `${names[Number(sid) - 1]} is ${d} steps short`).join(', ')}.` }
 				: { kind: 'ok', text: `Arm is at ${label} (${r.moved.jogs} jogs).` };
 		}
 	}
@@ -427,11 +427,11 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<div class="flex flex-wrap items-start justify-between gap-3">
 			<div class="min-w-0 flex-1">
-				<a href={`${BASE}/maintenance/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← all clean-ups</a>
+				<a href={`${BASE}/maintenance/cleanup`} class="text-xs hover:underline" style="color: var(--color-tron-text-secondary)">← All Clean-Ups</a>
 				<input
 					value={title}
 					onchange={(e) => edit(() => (title = (e.currentTarget as HTMLInputElement).value.slice(0, 120)))}
-					placeholder="Name this clean-up"
+					placeholder="Clean-Up Name"
 					class="mt-1 block w-full border-b border-transparent bg-transparent text-lg font-semibold hover:border-[var(--color-tron-border)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
 					style="color: var(--color-tron-text)"
 				/>
@@ -447,8 +447,7 @@
 					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
 						Overlay lined up by {data.cleanup.overlay.align === 'stretch' ? 'stretch to fit' : 'follow the motion'}, at {Math.round(data.cleanup.overlay.strength * 100)}% strength, {data.cleanup.overlay.windowS} s window, cap
 						{data.cleanup.overlay.maxOffset} steps, servos {data.cleanup.overlay.servos.join(', ')}; the pilot's path sat
-						{Math.round(data.cleanup.overlay.fit)} steps from the animation on average. The grey trace below is the overlaid
-						recording, not either source.
+						{Math.round(data.cleanup.overlay.fit)} steps from the animation on average.
 					</p>
 				{/if}
 			</div>
@@ -477,7 +476,7 @@
 			>
 				{notice.text}
 				{#if notice.kind === 'ok' && notice.text.includes('Control tab')}
-					<a href={`${BASE}/maintenance/control`} class="ml-1 underline">Go to Control →</a>
+					<a href={`${BASE}/maintenance/control`} class="ml-1 underline">Go To Control →</a>
 				{/if}
 			</div>
 		{/if}
@@ -501,15 +500,10 @@
 		<div class="flex flex-wrap items-start justify-between gap-3">
 			<div class="min-w-0 flex-1">
 				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Smoothing</h2>
-				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Takes the hand tremor out of the path and eases into and out of every stop, keeping the stops where the pilot
-					held still. Save to Pi writes the smoothed path when this is on. The settings are saved with the clean-up:
-					come back any time, move the sliders, and save again (tick <em>Replace it</em> to update the same file).
-				</p>
 			</div>
 			<label class="flex items-center gap-2 text-sm" style="color: var(--color-tron-text)">
 				<input type="checkbox" bind:checked={smoothing.enabled} class="h-4 w-4 accent-cyan-400" />
-				Smooth when saving to the Pi
+				Smooth When Saving To Pi
 			</label>
 		</div>
 
@@ -526,9 +520,8 @@
 						{/each}
 					</div>
 					<label class="block">
-						<span class="flex justify-between"><span>Smoothing window</span><span class="font-mono" style="color: var(--color-tron-text)">{smoothing.windowS.toFixed(1)} s</span></span>
+						<span class="flex justify-between"><span>Smoothing Window</span><span class="font-mono" style="color: var(--color-tron-text)">{smoothing.windowS.toFixed(1)} s</span></span>
 						<input type="range" min="0" max={MAX_SMOOTH_WINDOW_S} step="0.1" bind:value={smoothing.windowS} class="mt-1 w-full accent-cyan-400" />
-						<span class="text-[11px]">Wider = smoother and slower to change direction. Around 0.3–1 s takes out tremor and keeps the shape.</span>
 					</label>
 					<label class="block">
 						<span class="flex justify-between"><span>Strength</span><span class="font-mono" style="color: var(--color-tron-text)">{Math.round(smoothing.strength * 100)}%</span></span>
@@ -541,14 +534,13 @@
 							oninput={(e) => (smoothing.strength = Number((e.currentTarget as HTMLInputElement).value) / 100)}
 							class="mt-1 w-full accent-cyan-400"
 						/>
-						<span class="text-[11px]">100% = fully smoothed; lower blends back toward the source.</span>
 					</label>
 					<label class="flex items-center gap-1.5" title="Every stretch where the arm held still for 0.3 s or more is pinned to where it was held, so smoothing never shortens a reach.">
 						<input type="checkbox" bind:checked={smoothing.keepStops} class="accent-cyan-400" />
-						<span style="color: var(--color-tron-text)">Keep stops exact</span>
+						<span style="color: var(--color-tron-text)">Keep Stops Exact</span>
 					</label>
 					<div>
-						Servos to smooth
+						Servos To Smooth
 						<div class="mt-1 grid grid-cols-3 gap-1">
 							{#each SERVO_IDS as sid, i (sid)}
 								<label class="flex items-center gap-1 rounded border border-[var(--color-tron-border)] px-1.5 py-1 text-[11px]" title={names[i]}>
@@ -567,12 +559,12 @@
 							{smoothPreview.servos.filter((x) => x.smoothed).map((x) => `${names[x.servoId - 1]} ${x.maxChange}`).join(', ')} steps.
 						</p>
 					{:else if smoothing.source === 'steps' && !steps.length}
-						<p class="text-[11px] text-amber-300">There are no steps to smooth.</p>
+						<p class="text-[11px] text-amber-300">No Steps To Smooth</p>
 					{:else if !smoothing.servos.length}
-						<p class="text-[11px] text-amber-300">Tick at least one servo.</p>
+						<p class="text-[11px] text-amber-300">No Servos Selected</p>
 					{/if}
 					{#if dirty}
-						<p class="text-[11px] text-amber-300">Unsaved — Save or Save to Pi keeps these settings.</p>
+						<p class="text-[11px] text-amber-300">Unsaved</p>
 					{/if}
 				</div>
 				<div class="min-w-0">
@@ -583,7 +575,7 @@
 							result={smoothPreview.goal}
 							jointNames={names}
 							corrected={servoOn}
-							labels={{ smooth: smoothing.source === 'steps' ? 'your steps' : 'recorded', pilot: '', result: 'smoothed' }}
+							labels={{ smooth: smoothing.source === 'steps' ? 'Your Steps' : 'Recorded', pilot: '', result: 'Smoothed' }}
 						/>
 					{/if}
 				</div>
@@ -595,15 +587,14 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 		<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 			<div>
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Start pose</h2>
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Replay ramps the follower here before step 1.</p>
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Start Pose</h2>
 			</div>
 			<div class="flex flex-wrap gap-2">
 				<button type="button" class={btnCls} disabled={!armReachable || busy !== null} onclick={startFromArm}>
-					{busy === 'read' ? 'Reading…' : 'Set from arm'}
+					{busy === 'read' ? 'Reading…' : 'Set From Arm'}
 				</button>
 				<button type="button" class={btnCls} disabled={!armReachable || busy !== null} onclick={() => moveArmTo('the start pose', { ...start })}>
-					Send arm here
+					Send Arm Here
 				</button>
 			</div>
 		</div>
@@ -624,7 +615,7 @@
 						style="color: var(--color-tron-text)"
 					/>
 					{#if arm?.positions[String(sid)] !== undefined}
-						<span class="font-mono text-[10px] opacity-70">arm {arm.positions[String(sid)]}</span>
+						<span class="font-mono text-[10px] opacity-70">Arm {arm.positions[String(sid)]}</span>
 					{/if}
 				</label>
 			{/each}
@@ -637,18 +628,18 @@
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Steps</h2>
 			<div class="flex items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 				{#if arm}
-					arm read {arm.at.toLocaleTimeString()}
+					Arm Read {arm.at.toLocaleTimeString()}
 				{/if}
 				<button type="button" class={btnCls} disabled={!armReachable || busy !== null} onclick={readArm}>
-					{busy === 'read' ? 'Reading…' : 'Read arm'}
+					{busy === 'read' ? 'Reading…' : 'Read Arm'}
 				</button>
-				<button type="button" class={btnCls} onclick={() => insertAfter(-1)}>+ step at start</button>
+				<button type="button" class={btnCls} onclick={() => insertAfter(-1)}>+ Step At Start</button>
 			</div>
 		</div>
 
 		{#if steps.length === 0}
 			<p class="rounded border border-dashed border-[var(--color-tron-border)] p-6 text-center text-xs" style="color: var(--color-tron-text-secondary)">
-				No steps. Add one, or re-split the recording with a lower threshold.
+				No Steps
 			</p>
 		{/if}
 
@@ -684,12 +675,12 @@
 					<input
 						value={s.label}
 						onchange={(e) => setLabel(si, (e.currentTarget as HTMLInputElement).value)}
-						placeholder="label (optional)"
+						placeholder="Label (Optional)"
 						class="{inputCls} w-40 font-sans"
 						style="color: var(--color-tron-text)"
 					/>
 					<label class="flex items-center gap-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						takes
+						Takes
 						<input
 							type="number"
 							min="0.1"
@@ -705,7 +696,7 @@
 						/> s
 					</label>
 					<label class="flex items-center gap-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						then wait
+						Then Wait
 						<input
 							type="number"
 							min="0"
@@ -722,17 +713,17 @@
 					</label>
 					{#if s.raw}
 						<span class="text-[10px] opacity-60" style="color: var(--color-tron-text-secondary)">
-							recorded {fmtS(s.raw.tEnd - s.raw.tStart)} at {s.raw.tStart.toFixed(1)} s
+							Recorded {fmtS(s.raw.tEnd - s.raw.tStart)} At {s.raw.tStart.toFixed(1)} s
 						</span>
 					{/if}
 					<span class="ml-auto text-[10px] font-mono opacity-60" style="color: var(--color-tron-text-secondary)">
-						plays at {rs.tStart.toFixed(1)} s
+						Plays At {rs.tStart.toFixed(1)} s
 					</span>
 					<div class="flex items-center gap-1">
 						<button type="button" class={btnCls} disabled={si === 0} onclick={() => moveStep(si, -1)} title="Move step up">↑</button>
 						<button type="button" class={btnCls} disabled={si === steps.length - 1} onclick={() => moveStep(si, 1)} title="Move step down">↓</button>
-						<button type="button" class={btnCls} disabled={si === steps.length - 1} onclick={() => mergeNext(si)} title="Fold the next step into this one">merge ↓</button>
-						<button type="button" class={btnCls} onclick={() => insertAfter(si)} title="Insert an empty step after this one">+ after</button>
+						<button type="button" class={btnCls} disabled={si === steps.length - 1} onclick={() => mergeNext(si)} title="Fold the next step into this one">Merge ↓</button>
+						<button type="button" class={btnCls} onclick={() => insertAfter(si)} title="Insert an empty step after this one">+ After</button>
 						<button
 							type="button"
 							class="{btnCls} hover:!border-red-500 hover:!text-red-400"
@@ -750,7 +741,7 @@
 								<th class="px-3 py-1 font-medium">Servo</th>
 								<th class="px-2 py-1 font-medium">From</th>
 								<th class="px-2 py-1 font-medium">To</th>
-								<th class="px-2 py-1 font-medium">Moves by</th>
+								<th class="px-2 py-1 font-medium">Moves By</th>
 								<th class="px-2 py-1 font-medium">Recorded</th>
 								<th class="px-3 py-1"><span class="sr-only">Actions</span></th>
 							</tr>
@@ -791,7 +782,7 @@
 										/>
 										<span class="ml-1 text-[10px] opacity-60">{(m.delta / STEPS_PER_DEGREE).toFixed(1)}°</span>
 										{#if Math.abs(m.delta) < SMALL_MOVE}
-											<span class="ml-1 rounded bg-white/10 px-1 text-[9px] uppercase opacity-70" title="Under {SMALL_MOVE} steps. Possibly jitter; your call.">small</span>
+											<span class="ml-1 rounded bg-white/10 px-1 text-[9px] uppercase opacity-70" title="Under {SMALL_MOVE} steps. Possibly jitter; your call.">Small</span>
 										{/if}
 									</td>
 									<td class="px-2 py-1 font-mono text-[11px]" style="color: var(--color-tron-text-secondary)">
@@ -799,17 +790,17 @@
 											{m.raw.from} → {m.raw.to}
 											<span class="opacity-60">({m.raw.to - m.raw.from > 0 ? '+' : ''}{m.raw.to - m.raw.from})</span>
 										{:else}
-											<span class="italic opacity-60">added</span>
+											<span class="italic opacity-60">Added</span>
 										{/if}
 									</td>
 									<td class="whitespace-nowrap px-3 py-1 text-right">
 										{#if armV !== undefined}
 											<button type="button" class={btnCls} onclick={() => oneFromArm(si, m.servoId)} title="Use the arm's last-read position ({armV}) as this target">
-												arm {armV}
+												Arm {armV}
 											</button>
 										{/if}
 										{#if rs.moves.length > 1}
-											<button type="button" class={btnCls} onclick={() => splitOut(si, m.servoId)} title="Move this servo into its own step after this one">own step</button>
+											<button type="button" class={btnCls} onclick={() => splitOut(si, m.servoId)} title="Move this servo into its own step after this one">Own Step</button>
 										{/if}
 										<button
 											type="button"
@@ -824,7 +815,7 @@
 					</table>
 				{:else}
 					<p class="px-3 py-2 text-[11px] italic" style="color: var(--color-tron-text-secondary)">
-						No servo moves in this step: it only waits {s.durationS + s.pauseAfterS} s.
+						Wait Only · {s.durationS + s.pauseAfterS} s
 					</p>
 				{/if}
 
@@ -841,7 +832,7 @@
 								if (v) addMove(si, v);
 							}}
 						>
-							<option value="">+ servo…</option>
+							<option value="">+ Servo…</option>
 							{#each missing as sid (sid)}
 								<option value={sid}>{sid} {names[sid - 1]}</option>
 							{/each}
@@ -849,13 +840,13 @@
 					{/if}
 					<div class="ml-auto flex flex-wrap gap-1">
 						<button type="button" class={btnCls} disabled={!armReachable || busy !== null || !rs.moves.length} onclick={() => targetsFromArm(si)} title="Read the follower and use its position as every target in this step">
-							targets from arm
+							Targets From Arm
 						</button>
 						<button type="button" class={btnCls} disabled={!armReachable || busy !== null} onclick={() => moveArmTo(`the start of step ${rs.number}`, stepStartPose(si))}>
-							arm → start of step
+							Arm → Start Of Step
 						</button>
 						<button type="button" class={btnCls} disabled={!armReachable || busy !== null} onclick={() => moveArmTo(`the end of step ${rs.number}`, stepEndPose(si))}>
-							arm → end of step
+							Arm → End Of Step
 						</button>
 					</div>
 				</div>
@@ -863,25 +854,14 @@
 		{/each}
 
 		{#if steps.length}
-			<button type="button" class="{btnCls} w-full py-1.5" onclick={() => insertAfter(steps.length - 1)}>+ step at end</button>
+			<button type="button" class="{btnCls} w-full py-1.5" onclick={() => insertAfter(steps.length - 1)}>+ Step At End</button>
 		{/if}
 	</section>
 
 	<!-- Save to Pi + send to Animate + re-split -->
 	<section class="grid gap-4 lg:grid-cols-3">
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save to Pi</h2>
-			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				{#if smoothing.enabled}
-					Writes a recording on the Pi: {smoothing.source === 'steps' ? 'your steps' : 'the recording'}, smoothed with the
-					settings in the Smoothing card above. Replay it from Maintenance › Leader arm like any recording. The original stays as
-					it is.
-				{:else}
-					Writes a new recording on the Pi: each step moves its servos together in a straight line over its
-					time, then waits. Turn on smoothing above for a smooth path instead. Replay it from Maintenance › Leader arm. The
-					original stays as it is.
-				{/if}
-			</p>
+			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Save To Pi</h2>
 			<div class="flex gap-2">
 				<input bind:value={piName} class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm" style="color: var(--color-tron-text)" />
 				<button
@@ -890,18 +870,18 @@
 					disabled={!armReachable || busy !== null || (needsSteps && !steps.length) || !piName.trim()}
 					class="rounded border border-emerald-500/50 bg-emerald-900/10 px-3 py-1 text-sm font-medium text-emerald-300 transition-colors hover:bg-emerald-900/25 disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{busy === 'pi' ? 'Saving…' : replace && nameIsOurs ? 'Replace on Pi' : 'Save to Pi'}
+					{busy === 'pi' ? 'Saving…' : replace && nameIsOurs ? 'Replace On Pi' : 'Save To Pi'}
 				</button>
 			</div>
 			<div class="mt-2 flex flex-wrap items-center gap-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
 				{#if nameIsOurs}
 					<label class="flex items-center gap-1.5" title="This clean-up saved a recording with this name before. Replace deletes it on the Pi and writes this version.">
 						<input type="checkbox" bind:checked={replace} class="accent-emerald-400" />
-						<span style="color: var(--color-tron-text)">Replace it</span> (saved from here before)
+						<span style="color: var(--color-tron-text)">Replace It</span>
 					</label>
 				{:else if lastSaved}
 					<button type="button" class="underline decoration-dotted hover:text-[var(--color-tron-cyan)]" onclick={useLastName}>
-						update {lastSaved.name} instead
+						Update {lastSaved.name}
 					</button>
 				{/if}
 			</div>
@@ -919,17 +899,11 @@
 		</div>
 
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Send to Animate</h2>
-			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Makes a move set in the Teach tab from these steps: the start and the end of each step become saved
-				poses; a step's time becomes the move into its pose and its wait becomes the hold. Playback there eases
-				into every pose instead of moving in straight lines, and each pose, time and easing can still be changed.
-				This clean-up is not altered.
-			</p>
+			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Send To Animate</h2>
 			<div class="flex flex-wrap gap-2">
 				<input
 					bind:value={animateName}
-					placeholder="Move set name"
+					placeholder="Move Set Name"
 					maxlength="80"
 					class="{inputCls} min-w-0 flex-1 py-1 font-sans text-sm"
 					style="color: var(--color-tron-text)"
@@ -945,7 +919,7 @@
 					disabled={busy !== null || !steps.length || !animateName.trim() || !!animatePreview.error}
 					class="rounded border border-[var(--color-tron-cyan)]/50 bg-cyan-900/10 px-3 py-1 text-sm font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-cyan-900/25 disabled:cursor-not-allowed disabled:opacity-40"
 				>
-					{busy === 'animate' ? 'Making…' : 'Send to Animate'}
+					{busy === 'animate' ? 'Making…' : 'Send To Animate'}
 				</button>
 			</div>
 			{#if animatePreview.error}
@@ -974,21 +948,18 @@
 		</div>
 
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Split again</h2>
-			<p class="mb-3 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Starts over from the recording with other settings. Replaces every step and edit.
-			</p>
+			<h2 class="mb-1 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Split Again</h2>
 			<div class="flex flex-wrap items-end gap-2">
 				<label class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 					Threshold (steps)
 					<input type="number" min="0" max="500" bind:value={splitThreshold} class="{inputCls} mt-0.5 block w-24 py-1" style="color: var(--color-tron-text)" />
 				</label>
 				<label class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Pause ends a move (s)
+					Pause Ends A Move (s)
 					<input type="number" min="0.05" max="5" step="0.05" bind:value={splitPause} class="{inputCls} mt-0.5 block w-24 py-1" style="color: var(--color-tron-text)" />
 				</label>
 				<button type="button" class={btnCls} disabled={busy !== null} onclick={resplit}>
-					{busy === 'resplit' ? 'Splitting…' : 'Split again'}
+					{busy === 'resplit' ? 'Splitting…' : 'Split Again'}
 				</button>
 			</div>
 		</div>
