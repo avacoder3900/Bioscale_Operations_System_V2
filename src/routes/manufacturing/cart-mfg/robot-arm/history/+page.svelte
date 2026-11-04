@@ -64,7 +64,6 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">History</h2>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">Read from BIMS, so it works while the arm is down.</p>
 		</div>
 		<div class="flex gap-1 text-xs">
 			<a href="?" class="rounded-full border px-3 py-1 transition-colors {data.view === 'runs' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Wax-fill runs</a>
@@ -143,7 +142,6 @@
 				</a>
 			{/each}
 		</div>
-		<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Every Teach play, Go to pose and wax-fill grab / withdraw lands here as a replay; teleop, record and calibrate come from Maintenance.</p>
 
 		{#if sessions.length === 0}
 			<p class="py-8 text-center text-sm" style="color: var(--color-tron-text-secondary)">No sessions match the current filters.</p>

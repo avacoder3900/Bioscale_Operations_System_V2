@@ -146,9 +146,6 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Arm home (camera)</h1>
-			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				AprilTags on the arm and its surroundings, located by the camera in mm — the backstop for an arm that did not return home.
-			</p>
 		</div>
 		<label class="text-xs" style="color: var(--color-tron-text-secondary)">
 			Camera

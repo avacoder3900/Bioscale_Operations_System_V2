@@ -53,7 +53,6 @@
 	>
 		{busy ? 'Stopping…' : '■ Stop arm'}
 	</button>
-	<span class="opacity-70">arm only · the Run tab's STOP RUN halts the whole line</span>
 	{#if note}
 		<span class="basis-full" style="color: {note.ok ? '#4ade80' : '#fca5a5'}">{note.text}</span>
 	{/if}

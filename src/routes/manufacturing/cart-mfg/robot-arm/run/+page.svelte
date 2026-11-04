@@ -897,19 +897,6 @@
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Run — wax fill{#if rehearsal} <span class="text-sm font-semibold text-amber-300">(rehearsal protocol on the robot)</span>{/if}</h2>
 		</div>
-		<details class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-		<summary class="cursor-pointer">How a run works</summary>
-		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			One OT-2 run and one tip serve the whole loop: the robot homes, takes its tip, probes it once, aspirates and parks the tip in the wax (it stays warm) between carts.
-			Per cart: <span class="font-semibold">grab</span> (arm, while the OT-2 is parked) → <span class="font-semibold">scan</span> (the run goes to the taught scan position, the scanner is read) →
-			<span class="font-semibold">check</span> → <span class="font-semibold">fill</span>
-			{#if stage}at the taught cart location{:else}with the robot's carriage protocol{/if}{#if rehearsal}
-			<span class="font-semibold text-amber-300">— REHEARSAL: the p300 walks it with 200 µL tips and air, nothing is dispensed</span>{/if}
-			→ <span class="font-semibold">withdraw</span> (arm, while parked), for as many carts as you ask; on the last cart the OT-2 trashes its tip and homes while the arm withdraws.
-			If the scan fails — nothing read, or the cart is not a backed cart — the OT-2 goes back to the tube and the <span class="font-semibold">fail animation</span> plays instead of the fill; the loop stops.
-			The arm moves only while the robot reports it is parked in the wax; it never moves while the OT-2 is at the calibrator or over the stage.
-		</p>
-		</details>
 	</div>
 
 	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
@@ -1077,7 +1064,6 @@
 				{#if loop.opentronsRunId && !loop.runFinished}
 					<!-- The loop's one run, for the whole loop. Watch only: its ARM pauses are the loop's to resume, never the controller's auto-resume. -->
 					<EmbeddedRunController robotId={loop.robot._id} robotName={loop.robot.name} opentronsRunId={loop.opentronsRunId} autoResumeInitial={false} lockArmPauses={true} onStatusChange={onRunStatus} />
-					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">The run's "ARM PARKED" / "ARM AT_SCAN" pauses are the loop's handshake — the loop resumes them itself; Resume above is only for a Pause you press here.</p>
 				{/if}
 
 				{#if log.length}
@@ -1128,9 +1114,7 @@
 			{#if profileError}<p class="text-xs text-red-300">{profileError}</p>{/if}
 			{#if profile}
 				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s start to end{/if} · read {when(profile.generatedAt)}.
-					Seconds from the robot's own command timestamps. <span class="font-semibold">Parked (arm)</span> is the OT-2 idle in the wax while the arm withdraws and grabs (and the handshakes between);
-					<span class="font-semibold">At scan</span> is the gantry holding over the stage while the barcode is read; <span class="font-semibold">Gaps</span> is engine time between commands.
+					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s{/if} · read {when(profile.generatedAt)}.
 				</p>
 				<div class="overflow-x-auto">
 					<table class="w-full text-left text-[11px]">
@@ -1189,12 +1173,7 @@
 					</select>
 				</label>
 				<div class="grid grid-cols-2 gap-3">
-					{#if stage}
-						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
-							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
-							<span class="mt-1 block">Cart rotation and dispense depth are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab. The pipette goes all the way up before every move.</span>
-						</div>
-					{:else}
+					{#if !stage}
 						<label class="block">
 							<span style="color: var(--color-tron-text-secondary)">Deck position filled (1–24)</span>
 							<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
@@ -1208,24 +1187,21 @@
 					</label>
 				</div>
 				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
-					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels to fill (rows of 4 wax holes)</legend>
+					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels to fill</legend>
 					<div class="flex flex-wrap gap-4">
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> C <span style="color: var(--color-tron-text-secondary)">(row X, first from the taught hole)</span></label>
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> B <span style="color: var(--color-tron-text-secondary)">(row W, middle)</span></label>
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> A <span style="color: var(--color-tron-text-secondary)">(row V, last)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> C <span style="color: var(--color-tron-text-secondary)">(row X)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> B <span style="color: var(--color-tron-text-secondary)">(row W)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> A <span style="color: var(--color-tron-text-secondary)">(row V)</span></label>
 					</div>
-					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						Sent to the stage protocol as the carriage line's channel checkboxes. Each row is one tube trip: two channels = two trips per cart.
-						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot predates these checkboxes and fills all three rows — add the current stage .py to the library and deploy it.</span>{/if}
-					</p>
+					{#if data.protocol && !data.protocol.declaresChannels}<p class="mt-1 text-[11px] text-amber-300">The protocol on the robot predates these checkboxes and fills all three rows — deploy the current stage .py.</p>{/if}
 				</fieldset>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="grabDuringProbe" checked={data.settings.grabDuringProbe} class="mt-0.5" />
-					<span>First grab starts while the tip is being calibrated (ARM PROBING) instead of after (ARM CALIBRATED). <span class="text-amber-300">The grab path must keep clear of the tip calibrator.</span></span>
+					<span>First grab starts during tip calibration <span class="text-amber-300">(grab path must clear the calibrator)</span></span>
 				</label>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
-					<span>Withdraw and the next grab play as one arm path (one play per hand-over; the OT-2 is parked in the wax throughout).</span>
+					<span>Withdraw and the next grab as one arm path</span>
 				</label>
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
@@ -1251,16 +1227,7 @@
 							<span class="rounded border border-green-500/40 bg-green-900/15 px-2 py-0.5 text-[10px] font-bold uppercase text-green-300">Production stage fill</span>
 						{/if}
 					</div>
-					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						{#if data.protocol}
-							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span> —
-							{#if data.protocol.rehearsal}the p300 walks every station of the stage fill with 200 µL tips and air; nothing is dispensed. Real carts and barcodes are fine: the scanned cart is only checked (a backed cart passes, anything else takes the fail route) and no cart record changes.
-							{:else if data.protocol.declaresCartLocation}the stage protocol: fills the taught cart location (arm_cart_x/y/z).
-							{:else}the carriage protocol: fills the deck position; arm_cart_x/y/z not declared.{/if}
-						{:else}
-							<span class="text-amber-300">No wax-filling protocol on this robot yet.</span>
-						{/if}
-					</p>
+					{#if !data.protocol}<p class="mt-1 text-[11px] text-amber-300">No wax-filling protocol on this robot yet.</p>{/if}
 					<div class="mt-2 flex items-center gap-2">
 						<select bind:value={deployLibraryId} disabled={deploying || loop?.status === 'running'}
 							class="min-w-0 flex-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 disabled:opacity-40" style="color: var(--color-tron-text)">
@@ -1277,7 +1244,7 @@
 						</button>
 					</div>
 					{#if data.protocolOptions.length === 0}
-						<p class="mt-1 text-[11px] text-amber-300">No stage protocol in the library yet. The /opentrons page uploads straight to a robot and does not file the .py; add it here instead.</p>
+						<p class="mt-1 text-[11px] text-amber-300">No stage protocol in the library yet — add one below.</p>
 					{/if}
 					<div class="mt-2 flex flex-wrap items-center gap-2">
 						<label class="flex min-w-0 flex-1 items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
@@ -1294,9 +1261,6 @@
 					{#if deployMsg}
 						<p class="mt-1 text-[11px] {deployMsg.ok ? 'text-green-300' : 'text-red-300'}">{deployMsg.text}</p>
 					{/if}
-					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						Uploads the stored .py with the BIMS labware it loads, waits for the robot's analysis (up to about two minutes), then makes it this robot's wax-filling protocol. Not while a loop runs.
-					</p>
 				</div>
 			{/if}
 		</section>
@@ -1313,8 +1277,7 @@
 				{/if}
 			</div>
 			<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Chosen once and kept for every run. Made in <a href="/manufacturing/cart-mfg/robot-arm/teach" class="underline" style="color: var(--color-tron-cyan)">Animate</a> (move sets or sequences).
-				The fail animation plays instead of the fill when the scan fails; it may be the withdraw animation or its own.
+				Made in <a href="/manufacturing/cart-mfg/robot-arm/teach" class="underline" style="color: var(--color-tron-cyan)">Teach</a>.
 			</p>
 			{#if changingAnimations}
 				<form method="POST" action="?/saveAnimations" use:enhance={() => async ({ update }) => { changingAnimations = false; await update(); }} class="mt-3 space-y-3 text-xs">
@@ -1365,7 +1328,6 @@
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
 				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
-				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">What this robot's wax fill runs on. Taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab — the arm line's own studio for the single-cart stage.</p>
 			</div>
 			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage calibration</a>
 		</div>
@@ -1373,30 +1335,23 @@
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Scan position</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Where the gantry scanner reads the cart.
-					{#if calibration?.scanPosition?.taughtAt}Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}.{/if}
-				</div>
+				{#if calibration?.scanPosition?.taughtAt}<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}</div>{/if}
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Cart location</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					First wax hole rim, tip-neutral.
-					{#if calibration?.cartLocation?.tipAdjust}Probe at teach <span class="font-mono">{calibration.cartLocation.tipAdjust.x}, {calibration.cartLocation.tipAdjust.y}</span>.{:else if calibration?.cartLocation}<span class="text-amber-300">Taught without a probed tip — teach again.</span>{/if}
-				</div>
+				{#if calibration?.cartLocation && !calibration.cartLocation.tipAdjust}<div class="mt-1 text-[11px] text-amber-300">Taught without a probed tip — teach again.</div>{/if}
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense depth</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">
 					{#if calibration?.dispenseDepth}{Math.abs(calibration.dispenseDepth.mm)} mm {calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim{:else}not taught{/if}
 				</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Where the tip end sits when wax is dispensed.{#if !calibration?.dispenseDepth} <span class="text-amber-300">Required before a stage fill.</span>{/if}</div>
+				{#if !calibration?.dispenseDepth}<div class="mt-1 text-[11px] text-amber-300">Required before a stage fill.</div>{/if}
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Stage geometry</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}° · travel: all the way up</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">How the stage holds the cart. Every move between stations starts with a full lift of the pipette.</div>
+				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}°</div>
 			</div>
 		</div>
 	</section>

@@ -262,8 +262,6 @@
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Teach</h1>
 			<p class="text-xs" style={muted}>
-				Poses → move sets → sequences, which Run plays as grab, withdraw and fail.
-				Torque, Return to home and Stop arm are on the status card.
 				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import a piloted recording</a>
 			</p>
 		</div>

@@ -8,27 +8,27 @@
 		{
 			href: `${BASE}/control`,
 			title: 'Leader arm & recordings',
-			text: 'Mirror the leader arm (teleop), record a piloted motion to the Pi, replay a raw recording, manage the Pi’s recordings and the 30-day trash, and read the connection log.'
+			text: 'Teleop, record, replay, Pi recordings and trash, connection log.'
 		},
 		{
 			href: `${BASE}/cleanup`,
 			title: 'Clean-up',
-			text: 'Split a piloted recording into steps, tidy them, smooth, overlay a pilot’s corrections on an animated one, and send the result to Teach as a move set.'
+			text: 'Turn a piloted recording into steps, smooth it, send it to Teach.'
 		},
 		{
 			href: `${BASE}/jog`,
 			title: 'Jog',
-			text: 'Per-joint single-step nudges, torque on / off, reload the jog calibration and reset backlash state. The Cartesian pad needs the IK stack on the Pi.'
+			text: 'Per-joint nudges, backlash reset, jog calibration reload.'
 		},
 		{
 			href: `${BASE}/sync-zero`,
 			title: 'Sync zero & joint map',
-			text: 'The matched reference pose and the per-joint scale fit that map the leader arm onto the follower for teleop.'
+			text: 'Leader-to-follower mapping for teleop.'
 		},
 		{
 			href: `${BASE}/conveyor`,
 			title: 'Conveyor bench test',
-			text: 'Pulse the cooling belt on GPIO 22 for a typed number of milliseconds. Temporary: its controls move into Run later.'
+			text: 'Pulse the cooling belt.'
 		}
 	];
 </script>
@@ -36,9 +36,6 @@
 <div class="space-y-4">
 	<div>
 		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Maintenance</h2>
-		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			Tools behind the line. Torque, Return to home and Stop arm are on the status card, on every tab.
-		</p>
 	</div>
 	<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
 		{#each tools as t (t.href)}
