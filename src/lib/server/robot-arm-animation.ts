@@ -87,7 +87,7 @@ type User = { _id: string; username: string };
 
 /** Archived rows (now in the R2 trash) shaped like the lists' own rows. */
 function archivedRows(entries: any[], fill: Record<string, unknown>): any[] {
-	return entries.map((e) => ({ ...fill, ...(e.meta ?? {}), _id: e.itemId, name: e.name, archivedAt: e.archivedAt }));
+	return entries.map((e) => ({ ...fill, ...(e.meta ?? {}), _id: e.itemId, name: e.name, archivedAt: e.archivedAt, expiresAt: e.expiresAt }));
 }
 
 /** ArchiveError -> AnimateError, so the pages' failFrom shows it. */
@@ -480,6 +480,8 @@ export interface PoseSummary {
 	trimMeasuredAt: string | null;
 	notes: string | null;
 	archived: boolean;
+	/** When the 30-day trash deletes it for good (null: live, or archived before the trash). */
+	deletesAt: string | null;
 	createdAt: string | null;
 	updatedAt: string | null;
 	createdBy: { username?: string } | null;
@@ -497,6 +499,7 @@ export function poseSummary(d: any): PoseSummary {
 		trimMeasuredAt: d.trimMeasuredAt ? new Date(d.trimMeasuredAt).toISOString() : null,
 		notes: d.notes ?? null,
 		archived: !!d.archivedAt,
+		deletesAt: d.expiresAt ? new Date(d.expiresAt).toISOString() : null,
 		createdAt: d.createdAt ? new Date(d.createdAt).toISOString() : null,
 		updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : null,
 		createdBy: d.createdBy ?? null
@@ -982,6 +985,8 @@ export interface MoveSetSummary {
 	keyframes: Keyframe[];
 	rateHz: number;
 	archived: boolean;
+	/** When the 30-day trash deletes it for good (null: live, or archived before the trash). */
+	deletesAt: string | null;
 	updatedAt: string | null;
 	lastPlay: { at: string; by: { username?: string } | null; durationS: number | null } | null;
 }
@@ -1009,6 +1014,7 @@ function moveSetSummary(d: any): MoveSetSummary {
 		}),
 		rateHz: Number(d.rateHz) || DEFAULT_RATE_HZ,
 		archived: !!d.archivedAt,
+		deletesAt: d.expiresAt ? new Date(d.expiresAt).toISOString() : null,
 		updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : null,
 		lastPlay: d.lastPlay?.at ? { at: new Date(d.lastPlay.at).toISOString(), by: d.lastPlay.by ?? null, durationS: d.lastPlay.durationS ?? null } : null
 	};
@@ -1182,6 +1188,8 @@ export interface SequenceSummary {
 	notes: string | null;
 	items: SequenceItemRecord[];
 	archived: boolean;
+	/** When the 30-day trash deletes it for good (null: live, or archived before the trash). */
+	deletesAt: string | null;
 	updatedAt: string | null;
 	lastPlay: { at: string; by: { username?: string } | null; durationS: number | null } | null;
 	savedAs: { name: string; at: string; by: { username?: string } | null; frames: number; durationS: number }[];
@@ -1198,6 +1206,7 @@ function sequenceSummary(d: any): SequenceSummary {
 			joinEasing: isEasing(it.joinEasing) ? it.joinEasing : 'ease'
 		})),
 		archived: !!d.archivedAt,
+		deletesAt: d.expiresAt ? new Date(d.expiresAt).toISOString() : null,
 		updatedAt: d.updatedAt ? new Date(d.updatedAt).toISOString() : null,
 		lastPlay: d.lastPlay?.at ? { at: new Date(d.lastPlay.at).toISOString(), by: d.lastPlay.by ?? null, durationS: d.lastPlay.durationS ?? null } : null,
 		savedAs: (d.savedAs ?? []).map((s: any) => ({ name: s.name, at: new Date(s.at).toISOString(), by: s.by ?? null, frames: s.frames, durationS: s.durationS }))

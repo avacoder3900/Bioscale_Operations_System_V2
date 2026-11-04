@@ -3,6 +3,7 @@ import {
 	autoDurationS,
 	buildPath,
 	bulkPoseMessage,
+	daysLeftLabel,
 	cleanKeyframes,
 	cleanPoseIds,
 	cleanOffsets,
@@ -377,6 +378,16 @@ describe('planPoseDelete', () => {
 	it('names at most three move sets', () => {
 		const sets = ['A', 'B', 'C', 'D', 'E'].map((name) => ({ name, poseIds: ['used'] }));
 		expect(planPoseDelete(['used'], poses, sets).skipped[0].reason).toBe('used by move set "A", "B", "C" and 2 more');
+	});
+});
+
+describe('daysLeftLabel', () => {
+	it('counts whole days up, never below zero', () => {
+		const now = Date.parse('2026-11-04T12:00:00Z');
+		expect(daysLeftLabel('2026-12-04T12:00:00Z', now)).toBe('30 Days Left');
+		expect(daysLeftLabel('2026-11-05T01:00:00Z', now)).toBe('1 Day Left');
+		expect(daysLeftLabel('2026-11-01T00:00:00Z', now)).toBe('0 Days Left');
+		expect(daysLeftLabel(null, now)).toBe('');
 	});
 });
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 	import RobotArmControlBar from '$lib/components/RobotArmControlBar.svelte';
 	import { enhance } from '$app/forms';
+	import { daysLeftLabel } from '$lib/robot-arm/animation';
 	import { invalidateAll } from '$app/navigation';
 
 	let { data, form } = $props();
@@ -18,9 +19,6 @@
 			recordingBusy = false;
 		};
 	};
-	function daysLeft(iso: string): number {
-		return Math.max(0, Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000));
-	}
 
 
 	// `active` and `activeError` now arrive pre-separated from the server, so the
@@ -300,7 +298,7 @@
 								<tr>
 									<th class="px-3 py-2">Name</th>
 									<th class="px-3 py-2">Deleted</th>
-									<th class="px-3 py-2">Days Left</th>
+									<th class="px-3 py-2"></th>
 									<th class="px-3 py-2"></th>
 								</tr>
 							</thead>
@@ -313,7 +311,7 @@
 											{#if t.deletedBy?.username}· {t.deletedBy.username}{/if}
 										</td>
 										<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
-											{daysLeft(t.expiresAt)}
+											{daysLeftLabel(t.expiresAt)}
 										</td>
 										<td class="px-3 py-2 text-right">
 											<form method="POST" action="?/recoverRecording" use:enhance={recordingEnhance}>

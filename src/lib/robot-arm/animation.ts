@@ -1010,6 +1010,13 @@ export function planPoseDelete(
 }
 
 /** One line for the page: what a bulk action did and what it left alone. */
+/** "29 Days Left" until a deleted item leaves the 30-day trash for good; '' when it has no date. */
+export function daysLeftLabel(deletesAt: string | null | undefined, now = Date.now()): string {
+	if (!deletesAt) return '';
+	const n = Math.max(0, Math.ceil((new Date(deletesAt).getTime() - now) / 86_400_000));
+	return `${n} Day${n === 1 ? '' : 's'} Left`;
+}
+
 export function bulkPoseMessage(verb: string, done: number, skipped: PoseSkip[]): string {
 	const head = `${verb} ${done} pose${done === 1 ? '' : 's'}.`;
 	if (!skipped.length) return head;

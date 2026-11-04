@@ -23,6 +23,7 @@
 		heatCheck,
 		heatLevel,
 		poseGroup,
+		daysLeftLabel,
 		previewPath,
 		resolveForPreview,
 		stepCountLabel,
@@ -550,6 +551,7 @@
 								<input type="checkbox" checked={pickedArchived.has(p._id)} onchange={() => toggle(pickedArchived, p._id)} aria-label="Select {friendlyName(p.name)}" />
 								<span class="min-w-0 flex-1 truncate">{friendlyName(p.name)}</span>
 								{#if sets}<span class="shrink-0 text-[10px]" title="Used by {sets} move set{sets === 1 ? '' : 's'}: it can be restored, not deleted">In {sets} Set{sets === 1 ? '' : 's'}</span>{/if}
+								{#if p.deletesAt}<span class="shrink-0 text-[10px]">{daysLeftLabel(p.deletesAt)}</span>{/if}
 								<form method="POST" action="?/archivePose" use:enhance><input type="hidden" name="id" value={p._id} /><input type="hidden" name="restore" value="1" /><button type="submit" class="underline" style="color: var(--color-tron-cyan)">Restore</button></form>
 							</li>
 						{/each}
@@ -613,6 +615,7 @@
 							{#each deletedRows[col.kind] as r (r._id)}
 								<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
 									<span class="min-w-0 flex-1 truncate" style={muted} title={r.name}>{friendlyName(r.name)}</span>
+									{#if r.deletesAt}<span class="shrink-0 text-xs" style={muted}>{daysLeftLabel(r.deletesAt)}</span>{/if}
 									<form method="POST" action={isSets ? '?/archiveMoveSet' : '?/archiveSequence'} use:enhance>
 										<input type="hidden" name="id" value={r._id} /><input type="hidden" name="restore" value="1" /><input type="hidden" name="poses" value="1" />
 										<button type="submit" class="text-xs underline" style="color: var(--color-tron-cyan)" title={isSets ? 'Restore this move set and its deleted poses' : 'Restore this sequence'}>Restore</button>
