@@ -1072,7 +1072,7 @@
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
 	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
 
-	<div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+	<div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_340px]">
 		<!-- Canvas (left) -->
 		<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
@@ -1097,8 +1097,8 @@
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
 				</div>
 			</div>
-			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="display: flex; align-items: safe center; justify-content: safe center;">
-				<div style={`height: calc(min(56vh, 480px) * ${zoom}); flex: 0 0 auto;`}>
+			<div class="min-h-0 flex-1 overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="display: flex; align-items: stretch; justify-content: safe center;">
+				<div style={`min-height: calc(min(56vh, 480px) * ${zoom}); flex: 0 0 auto;`}>
 					<svg
 						bind:this={svgEl}
 						height="100%"
