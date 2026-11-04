@@ -165,6 +165,16 @@
 	const archivedPoses = $derived(poses.filter((p) => p.archived));
 	const pickedLive = $derived(activePoses.filter((p) => picked.has(p._id)).map((p) => p._id));
 	const pickedOld = $derived(archivedPoses.filter((p) => pickedArchived.has(p._id)).map((p) => p._id));
+	// Show Deleted draws a page at a time (hundreds of rows lagged the page): newest deletions first, searchable.
+	const DELETED_PAGE = 20;
+	let deletedQuery = $state('');
+	let deletedLimit = $state(DELETED_PAGE);
+	const deletedMatches = $derived.by(() => {
+		const q = deletedQuery.trim().toLowerCase();
+		const hits = q ? archivedPoses.filter((p) => friendlyName(p.name).toLowerCase().includes(q) || p.name.toLowerCase().includes(q)) : archivedPoses;
+		return [...hits].sort((a, b) => (b.deletesAt ?? '').localeCompare(a.deletesAt ?? ''));
+	});
+	const deletedShown = $derived(deletedMatches.slice(0, deletedLimit));
 	// How many move sets (archived ones too) use each pose: those poses can be restored but never deleted.
 	const setsUsing = $derived.by(() => {
 		const n = new Map<string, number>();
@@ -530,7 +540,8 @@
 				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} Deleted · {archivedPoses.length}</button>
 				{#if showArchived}
 					<div class="mt-1 flex flex-wrap items-center gap-2 text-xs" style={muted}>
-						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, archivedPoses.map((p) => p._id))}>{pickedOld.length === archivedPoses.length ? 'None' : 'All'}</button>
+						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, deletedMatches.map((p) => p._id))}>{deletedMatches.length && deletedMatches.every((p) => pickedArchived.has(p._id)) ? 'None' : 'All'}</button>
+						<input type="search" bind:value={deletedQuery} oninput={() => (deletedLimit = DELETED_PAGE)} placeholder="Search Deleted" class="{input} w-36 py-0.5 text-xs" style={inputStyle} aria-label="Search Deleted" />
 						<span class="grow"></span>
 						<form method="POST" action="?/archivePoses" use:enhance={clearAfter(pickedArchived)}>
 							<input type="hidden" name="restore" value="1" />
@@ -544,7 +555,7 @@
 						</form>
 					</div>
 					<ul class="mt-1 space-y-1 text-xs" style={muted}>
-						{#each archivedPoses as p (p._id)}
+						{#each deletedShown as p (p._id)}
 							{@const sets = setsUsing.get(p._id) ?? 0}
 							<li class="flex items-center gap-2">
 								<input type="checkbox" checked={pickedArchived.has(p._id)} onchange={() => toggle(pickedArchived, p._id)} aria-label="Select {friendlyName(p.name)}" />
@@ -555,6 +566,11 @@
 							</li>
 						{/each}
 					</ul>
+					{#if deletedMatches.length > deletedShown.length}
+						<button type="button" class="mt-1 text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (deletedLimit += DELETED_PAGE)}>Show More · {deletedMatches.length - deletedShown.length}</button>
+					{:else if deletedQuery && !deletedMatches.length}
+						<p class="mt-1 text-xs" style={muted}>No Match</p>
+					{/if}
 				{/if}
 			{/if}
 		</aside>
