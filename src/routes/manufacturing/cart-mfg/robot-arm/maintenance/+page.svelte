@@ -20,10 +20,6 @@
 		{
 			href: `${BASE}/sync-zero`,
 			title: 'Sync Zero & Joint Map'
-		},
-		{
-			href: `${BASE}/conveyor`,
-			title: 'Conveyor Bench Test'
 		}
 	];
 </script>

@@ -951,7 +951,7 @@
 						title={loop?.status === 'running' ? 'Not while a loop is running' : 'Home all axes'} class={ctlPlain}>
 						{robotBusy === 'home' ? 'Homing…' : 'Home'}
 					</button>
-					<a href="/manufacturing/cart-mfg/robot-arm/maintenance/conveyor" title="Pulse the cooling belt (bench test, under Maintenance)" class={ctlPlain}>Conveyor</a>
+					<a href="/manufacturing/cart-mfg/robot-arm/teach" title="Pulse the cooling belt (Teach tab)" class={ctlPlain}>Conveyor</a>
 					<!-- One Recover, as on the Robots board (2026-11-03): end the loop + force-reset, restart the robot server only when it is hung or unreachable (shift-click forces it). -->
 					<button type="button" onclick={(e) => void recover(e.shiftKey)} disabled={!robotId || robotBusy !== null}
 						title="Ends the loop, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"

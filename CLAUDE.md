@@ -2,13 +2,6 @@
 
 > **Security:** All auth, permission, and session code MUST follow patterns in [`SECURITY.md`](SECURITY.md). Read it before modifying any auth-related files.
 
-> **Robot Arm UI redesign — push every change right away (Alejandro, 2026-11-04):** while working on
-> `feat/arm-ui-redesign`, commit and `git push origin feat/arm-ui-redesign` after EVERY change, however
-> small — never batch edits or leave them uncommitted. Alejandro watches the branch live on a local dev
-> server and another Claude session works on the same branch. Before each commit: `git pull --no-rebase
-> origin feat/arm-ui-redesign` (never force-push this branch). This branch does not go to master until
-> Alejandro says so.
-
 ## Stack
 - **Framework:** SvelteKit 2 + Svelte 5
 - **Database:** MongoDB Atlas + Mongoose 9

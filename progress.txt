@@ -25496,3 +25496,15 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ 2b2fef3e
 Retrieve this exact code: git checkout 2b2fef3e
 What this deployment is for: the four Teach / Run / Stage requests above, live at the BIMS address.
+
+================================================================================
+2026-11-04 — master — Conveyor Bench Test page removed; Arm Home tab renamed Camera Check; redesign-branch note dropped
+================================================================================
+Maintenance > Conveyor Bench Test is gone (maintenance/conveyor deleted): the Conveyor Belt panel on Teach
+does the same job. The old /robot-arm/conveyor URL and the Run tab's Conveyor link now go to Teach; the
+Maintenance tooltip and layout comment no longer list the bench test. Calibrate's Arm Home tab and its page
+heading read Camera Check. CLAUDE.md: the "push every change to feat/arm-ui-redesign" note is removed —
+that branch is merged and retired; work goes to master. svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ (this commit)
+What this deployment is for: the three requests above.

@@ -5,7 +5,7 @@
 	 * Three tabs in the order an operator needs them — Run the wax-fill line,
 	 * Teach the arm its moves, Calibrate (arm home by camera, the OT-2 stage) —
 	 * History is its own page behind a button at the bottom of Run — plus a small Maintenance link for the leader-arm tools, the
-	 * Pi's recordings, jog, sync zero and the conveyor bench test, which the
+	 * Pi's recordings, jog and sync zero, which the
 	 * line no longer needs day to day.
 	 *
 	 * This is a real +layout.svelte rather than client-side tab state: the
@@ -137,7 +137,7 @@
 		<span class="grow"></span>
 		<a
 			href={maintenanceHref}
-			title="Leader arm, Pi recordings, jog, sync zero, clean-up, conveyor bench test"
+			title="Leader arm, Pi recordings, jog, sync zero, clean-up"
 			class="rounded-md px-2 py-1 text-[11px] transition-colors
 				{maintActive
 				? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]'

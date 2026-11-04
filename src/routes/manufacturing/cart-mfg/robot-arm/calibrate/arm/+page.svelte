@@ -163,7 +163,7 @@
 
 <div class="mx-auto max-w-7xl space-y-3">
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Arm Home</h1>
+		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Camera Check</h1>
 		<label class="text-xs" style="color: var(--color-tron-text-secondary)">
 			Camera
 			<select
