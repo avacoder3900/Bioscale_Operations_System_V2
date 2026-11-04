@@ -25411,3 +25411,11 @@ are reassigned, never deleted).
   production deployment, i.e. once this branch is on master.
 Tests: robot-arm-archive-purge.test.ts 2/2 (mismatched R2 copy blocks the delete). The real R2 round trip
 was not run locally (no R2_WORKER_URL in local .env). npm run check 13 errors (baseline).
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — archive purge cron UNSCHEDULED (built the wrong design)
+================================================================================
+a918b2dc kept archived items in Mongo and copied them to R2 only at day 30, keeping the R2 copy forever.
+Alejandro wants the opposite: on Archive/Delete, BIMS uploads the item to R2 (verified) and removes it from
+Mongo at once; it lives only in R2 for 30 days (restorable from there), then is deleted from R2 for good.
+The /api/cron/purge-robot-arm-archive entry is removed from vercel.json until the redesign is built, so the
+wrong version can never run. The verified recording-trash upload (uploadVerified) stays.

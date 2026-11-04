@@ -33,10 +33,6 @@
       "schedule": "0 5 * * *"
     },
     {
-      "path": "/api/cron/purge-robot-arm-archive",
-      "schedule": "15 5 * * *"
-    },
-    {
       "path": "/api/cron/robot-link-daily",
       "schedule": "10 0 * * *"
     }
