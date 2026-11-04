@@ -51,6 +51,25 @@
 
 	// ── page state ───────────────────────────────────────────────────────
 	let loop = $state<LoopView | null>(data.activeLoop);
+
+	// Recent Runs is hidden by default (2026-11-04); only an explicit Show is remembered as open.
+	const RECENT_HIDDEN_KEY = 'robot-arm:run-recent-hidden';
+	let recentHidden = $state(true);
+	$effect(() => {
+		try {
+			recentHidden = localStorage.getItem(RECENT_HIDDEN_KEY) !== '0';
+		} catch {
+			/* storage unavailable — default to hidden */
+		}
+	});
+	function setRecentHidden(value: boolean) {
+		recentHidden = value;
+		try {
+			localStorage.setItem(RECENT_HIDDEN_KEY, value ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 	let calibration = $state<CalibrationView | null>(data.calibration);
 	$effect(() => {
 		// A reload (invalidateAll after a save) refreshes both from the server.
@@ -913,7 +932,7 @@
 					{#if robotId}
 						<span class="truncate font-semibold" style="color: var(--color-tron-text)">{data.robotName ?? robotId}</span>
 						<span class="truncate {healthText(health?.status)}" title={health?.detail ?? ''}>
-							{health?.label ?? 'No Health Data'}{#if health?.detail} <span style="color: var(--color-tron-text-secondary)">— {health.detail}</span>{/if}
+							{health?.label ?? 'No Health Data'}
 						</span>
 					{:else}
 						<span style="color: var(--color-tron-text-secondary)">No OT-2 Chosen</span>
@@ -1158,7 +1177,6 @@
 	<summary class="cursor-pointer text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
 		Setup &amp; Calibration
 		{#if data.readiness.blocking.length}<span class="ml-2 rounded border border-amber-500/40 bg-amber-900/15 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-amber-200">{data.readiness.blocking.length} To Fix</span>{/if}
-		<span class="ml-2 text-[11px] font-normal normal-case tracking-normal">{data.robotName ?? 'No OT-2 Chosen'} · Grab {anim.grabAnimation?.name ?? '—'} · Withdraw {anim.withdrawAnimation?.name ?? '—'} · Fail {anim.failAnimation?.name ?? '—'}</span>
 	</summary>
 	<div class="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
 		<!-- ── Setup ─────────────────────────────────────────────────── -->
@@ -1199,7 +1217,7 @@
 				</fieldset>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="grabDuringProbe" checked={data.settings.grabDuringProbe} class="mt-0.5" />
-					<span>First Grab During Tip Probe <span class="text-amber-300">· Grab path must clear the tip calibrator.</span></span>
+					<span>First Grab During Tip Probe</span>
 				</label>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
@@ -1209,7 +1227,6 @@
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
 							Protocol On {data.robotName}: <span class="font-mono">{data.protocol.protocolName}</span>
-							{#if data.protocol.rehearsal}<span class="font-bold text-amber-300">· REHEARSAL</span>{/if}
 						{:else if data.settings.robotId}
 							<span class="text-amber-300">No wax-filling protocol on this robot.</span>
 						{/if}
@@ -1370,7 +1387,17 @@
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<div class="flex items-center justify-between gap-2">
 				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Runs</h3>
+				<button
+					type="button"
+					onclick={() => setRecentHidden(!recentHidden)}
+					class="min-h-[36px] rounded border px-3 text-xs"
+					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+					aria-expanded={!recentHidden}
+				>
+					{recentHidden ? 'Show' : 'Hide'}
+				</button>
 			</div>
+			{#if !recentHidden}
 			<table class="mt-2 w-full text-left text-xs">
 				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
 				<tbody>
@@ -1380,7 +1407,7 @@
 							<td class="pr-3">{l.startedBy ?? ''}</td>
 							<td class="pr-3">{l.robot.name}</td>
 							<td class="pr-3 font-mono">{l.completedRuns} / {l.requestedRuns}</td>
-							<td class="pr-3 {l.status === 'completed' ? 'text-green-300' : l.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">{l.status}</td>
+							<td class="pr-3 {l.status === 'completed' ? 'text-green-300' : l.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">{l.status ? l.status[0].toUpperCase() + l.status.slice(1) : ''}</td>
 							<td class="pr-3 text-[11px]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
 							<td class="py-1">
 								{#if l.opentronsRunId}
@@ -1393,6 +1420,7 @@
 					{/each}
 				</tbody>
 			</table>
+			{/if}
 		</section>
 	{/if}
 	<!-- History is its own page, one button away rather than a tab. -->
