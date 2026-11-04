@@ -25218,3 +25218,8 @@ POST /conveyor/off -> state 0, simulated false; pinctrl get 22 -> output, lo.
   remembers it in this browser (localStorage robot-arm:conveyor-default-ms, read once in onMount so the
   500 ms status polls never reset the Pulse box). 600 when nothing is saved. Page-only; no Pi change.
 npm run check 14 errors (baseline, none in touched files).
+Deployment: production - via Vercel GitHub integration on the push to master (GitHub status: success)
+  https://vercel.com/brevitest/bioscale-operations-system-mongodb/6Bq4RxqVJi67xqTj355KukTWoDPo
+Source: branch feat/arm-conveyor-page @ commit bb865c25 (fast-forwarded onto master)
+Retrieve this exact code: git checkout master at commit bb865c25
+What this deployment is for: Conveyor tab Default (ms) box.
