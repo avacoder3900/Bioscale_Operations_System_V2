@@ -1075,103 +1075,156 @@
 	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
 
 	<div class="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
-		<!-- Canvas -->
-		<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-				<div class="flex flex-wrap items-center gap-3">
-					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cartridge — {selCount} Selected</h2>
-					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's rim">
-						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">Hover For Coords</span>{/if}
-					</span>
+		<!-- Left column: the cartridge plane, then the stage's teach points under it -->
+		<div class="min-w-0 space-y-3">
+			<!-- Canvas -->
+			<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+				<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+					<div class="flex flex-wrap items-center gap-3">
+						<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cartridge — {selCount} Selected</h2>
+						<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's rim">
+							{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">Hover For Coords</span>{/if}
+						</span>
+					</div>
+					<div class="flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+						<label>Zoom <input type="range" min="0.6" max="4" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
+						<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
+						<span class="ml-2 inline-flex overflow-hidden rounded border border-[var(--color-tron-cyan)]/50" title="Turn the whole cart a quarter turn about the taught first hole and save it (the stage protocol reads the rotation at run start)">
+							<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">⟲ Rotate Cart</button>
+							<span class="border-x border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1 font-mono text-[var(--color-tron-cyan)]">{rotation}°</span>
+							<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Rotate Cart ⟳</button>
+						</span>
+						<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Reference grid (0.25mm fine · 1mm · 10mm bold)">Grid{showGrid ? ' ✓' : ''}</button>
+						<button type="button" onclick={() => (showRigid = !showRigid)} class="rounded border px-2 py-1 {showRigid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showRigid ? '' : 'color: var(--color-tron-text)'} title="Show where the rigid lattice puts each corrected hole">Lattice{showRigid ? ' ✓' : ''}</button>
+						<button type="button" onclick={selectAll} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select All</button>
+						<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
+						<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
+					</div>
 				</div>
-				<div class="flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					<label>Zoom <input type="range" min="0.6" max="4" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
-					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
-					<span class="ml-2 inline-flex overflow-hidden rounded border border-[var(--color-tron-cyan)]/50" title="Turn the whole cart a quarter turn about the taught first hole and save it (the stage protocol reads the rotation at run start)">
-						<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">⟲ Rotate Cart</button>
-						<span class="border-x border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1 font-mono text-[var(--color-tron-cyan)]">{rotation}°</span>
-						<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Rotate Cart ⟳</button>
-					</span>
-					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Reference grid (0.25mm fine · 1mm · 10mm bold)">Grid{showGrid ? ' ✓' : ''}</button>
-					<button type="button" onclick={() => (showRigid = !showRigid)} class="rounded border px-2 py-1 {showRigid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showRigid ? '' : 'color: var(--color-tron-text)'} title="Show where the rigid lattice puts each corrected hole">Lattice{showRigid ? ' ✓' : ''}</button>
-					<button type="button" onclick={selectAll} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select All</button>
-					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
-					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
-				</div>
-			</div>
-			<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="display: flex; align-items: safe center; justify-content: safe center;">
-				<div style={`height: calc(min(56vh, 480px) * ${zoom}); flex: 0 0 auto;`}>
-					<svg
-						bind:this={svgEl}
-						height="100%"
-						viewBox={`${bounds.x0} 0 ${bounds.x1 - bounds.x0} ${bounds.y1 - bounds.y0}`}
-						preserveAspectRatio="xMidYMid meet"
-						onpointerdown={onCanvasPointerDown}
-						onpointermove={onCanvasPointerMove}
-						onpointerup={onCanvasPointerUp}
-						onpointerleave={() => (hover = null)}
-						style="display:block; width:auto; touch-action:none; cursor: crosshair;"
-					>
-						<defs>
-							<pattern id="sgrid-025mm" x={bounds.x0} y="0" width="0.25" height="0.25" patternUnits="userSpaceOnUse">
-								<path d="M 0.25 0 L 0 0 0 0.25" fill="none" stroke="rgba(130,180,220,0.22)" stroke-width="0.02" />
-							</pattern>
-							<pattern id="sgrid-1mm" x={bounds.x0} y="0" width="1" height="1" patternUnits="userSpaceOnUse">
-								<rect width="1" height="1" fill="url(#sgrid-025mm)" />
-								<path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(130,180,220,0.40)" stroke-width="0.05" />
-							</pattern>
-							<pattern id="sgrid-10mm" x={bounds.x0} y="0" width="10" height="10" patternUnits="userSpaceOnUse">
-								<rect width="10" height="10" fill="url(#sgrid-1mm)" />
-								<path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(130,180,220,0.55)" stroke-width="0.1" />
-							</pattern>
-						</defs>
-						{#if showGrid}
-							<rect x={bounds.x0} y="0" width={bounds.x1 - bounds.x0} height={bounds.y1 - bounds.y0} fill="url(#sgrid-10mm)" />
-						{/if}
-						<!-- Which way is which: the OT-2's front (low y, toward the operator) is the bottom of the plane. -->
-						<text x={(bounds.x0 + bounds.x1) / 2} y={bounds.y1 - bounds.y0 - 0.8} font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">▼ Front · Toward You (−y)</text>
-						<text x={(bounds.x0 + bounds.x1) / 2} y="1.6" font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">Back Of The OT-2 (+y)</text>
-						<!-- Gate and row directions of the lattice at this rotation. -->
-						<defs>
-							<marker id="sarrow" viewBox="0 0 4 4" refX="3.5" refY="2" markerWidth="4" markerHeight="4" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="rgba(0,255,255,0.7)" /></marker>
-						</defs>
-						<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + gateDir.x * 1.25} y2={cy(wells[0].rigid.y + gateDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
-						<text x={wells[0].rigid.x + gateDir.x * 1.35} y={cy(wells[0].rigid.y + gateDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">Gates 4→1</text>
-						<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + rowDir.x * 1.25} y2={cy(wells[0].rigid.y + rowDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
-						<text x={wells[0].rigid.x + rowDir.x * 1.35} y={cy(wells[0].rigid.y + rowDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">Rows 1→3</text>
-						<!-- reagent holes: orientation only -->
-						{#each wells as w (`rg-${w.name}`)}
-							<circle cx={w.reagent.x} cy={cy(w.reagent.y)} r={wellR * 0.8} fill="rgba(80,170,215,0.35)" style="pointer-events:none;" />
-						{/each}
-						<!-- rigid lattice position of a corrected hole -->
-						{#if showRigid}
-							{#each wells as w (`rigid-${w.name}`)}
-								{#if w.offset.dx !== 0 || w.offset.dy !== 0}
-									<circle cx={w.rigid.x} cy={cy(w.rigid.y)} r={wellR} fill="none" stroke="rgba(217,160,80,0.45)" stroke-width="0.12" stroke-dasharray="0.3 0.2" style="pointer-events:none;" />
-									<line x1={w.rigid.x} y1={cy(w.rigid.y)} x2={w.x} y2={cy(w.y)} stroke="rgba(217,160,80,0.6)" stroke-width="0.1" style="pointer-events:none;" />
-								{/if}
+				<div class="overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="display: flex; align-items: safe center; justify-content: safe center;">
+					<div style={`height: calc(min(56vh, 480px) * ${zoom}); flex: 0 0 auto;`}>
+						<svg
+							bind:this={svgEl}
+							height="100%"
+							viewBox={`${bounds.x0} 0 ${bounds.x1 - bounds.x0} ${bounds.y1 - bounds.y0}`}
+							preserveAspectRatio="xMidYMid meet"
+							onpointerdown={onCanvasPointerDown}
+							onpointermove={onCanvasPointerMove}
+							onpointerup={onCanvasPointerUp}
+							onpointerleave={() => (hover = null)}
+							style="display:block; width:auto; touch-action:none; cursor: crosshair;"
+						>
+							<defs>
+								<pattern id="sgrid-025mm" x={bounds.x0} y="0" width="0.25" height="0.25" patternUnits="userSpaceOnUse">
+									<path d="M 0.25 0 L 0 0 0 0.25" fill="none" stroke="rgba(130,180,220,0.22)" stroke-width="0.02" />
+								</pattern>
+								<pattern id="sgrid-1mm" x={bounds.x0} y="0" width="1" height="1" patternUnits="userSpaceOnUse">
+									<rect width="1" height="1" fill="url(#sgrid-025mm)" />
+									<path d="M 1 0 L 0 0 0 1" fill="none" stroke="rgba(130,180,220,0.40)" stroke-width="0.05" />
+								</pattern>
+								<pattern id="sgrid-10mm" x={bounds.x0} y="0" width="10" height="10" patternUnits="userSpaceOnUse">
+									<rect width="10" height="10" fill="url(#sgrid-1mm)" />
+									<path d="M 10 0 L 0 0 0 10" fill="none" stroke="rgba(130,180,220,0.55)" stroke-width="0.1" />
+								</pattern>
+							</defs>
+							{#if showGrid}
+								<rect x={bounds.x0} y="0" width={bounds.x1 - bounds.x0} height={bounds.y1 - bounds.y0} fill="url(#sgrid-10mm)" />
+							{/if}
+							<!-- Which way is which: the OT-2's front (low y, toward the operator) is the bottom of the plane. -->
+							<text x={(bounds.x0 + bounds.x1) / 2} y={bounds.y1 - bounds.y0 - 0.8} font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">▼ Front · Toward You (−y)</text>
+							<text x={(bounds.x0 + bounds.x1) / 2} y="1.6" font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">Back Of The OT-2 (+y)</text>
+							<!-- Gate and row directions of the lattice at this rotation. -->
+							<defs>
+								<marker id="sarrow" viewBox="0 0 4 4" refX="3.5" refY="2" markerWidth="4" markerHeight="4" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="rgba(0,255,255,0.7)" /></marker>
+							</defs>
+							<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + gateDir.x * 1.25} y2={cy(wells[0].rigid.y + gateDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
+							<text x={wells[0].rigid.x + gateDir.x * 1.35} y={cy(wells[0].rigid.y + gateDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">Gates 4→1</text>
+							<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + rowDir.x * 1.25} y2={cy(wells[0].rigid.y + rowDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
+							<text x={wells[0].rigid.x + rowDir.x * 1.35} y={cy(wells[0].rigid.y + rowDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">Rows 1→3</text>
+							<!-- reagent holes: orientation only -->
+							{#each wells as w (`rg-${w.name}`)}
+								<circle cx={w.reagent.x} cy={cy(w.reagent.y)} r={wellR * 0.8} fill="rgba(80,170,215,0.35)" style="pointer-events:none;" />
 							{/each}
-						{/if}
-						{#each wells as w (w.name)}
-							{@const sel = selection.has(w.name)}
-							<circle
-								cx={w.x} cy={cy(w.y)} r={wellR}
-								fill={sel ? 'var(--color-tron-cyan)' : refWell === w.name ? '#f59e0b' : 'rgba(217,160,80,0.65)'}
-								stroke={w.index === 0 ? 'var(--color-tron-cyan)' : sel ? 'var(--color-tron-cyan)' : 'none'}
-								stroke-width={w.index === 0 ? 0.25 : 0.15}
-								onpointerdown={(e) => { e.stopPropagation(); }}
-								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
-								role="button" tabindex="-1"
-							><title>{w.name} (row {w.row}, gate {w.gate}{w.index === 0 ? ', first/taught' : ''}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{w.offset.dx || w.offset.dy || w.offset.dz ? ` · correction ${w.offset.dx}, ${w.offset.dy}, ${w.offset.dz}` : ''}</title></circle>
-							<text x={w.x} y={cy(w.y) - wellR - 0.4} font-size="1.1" text-anchor="middle" fill="rgba(200,220,240,0.7)" style="pointer-events:none; user-select:none;">{w.name}</text>
-						{/each}
-						{#if boxRect}
-							<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.15" />
-						{/if}
-					</svg>
+							<!-- rigid lattice position of a corrected hole -->
+							{#if showRigid}
+								{#each wells as w (`rigid-${w.name}`)}
+									{#if w.offset.dx !== 0 || w.offset.dy !== 0}
+										<circle cx={w.rigid.x} cy={cy(w.rigid.y)} r={wellR} fill="none" stroke="rgba(217,160,80,0.45)" stroke-width="0.12" stroke-dasharray="0.3 0.2" style="pointer-events:none;" />
+										<line x1={w.rigid.x} y1={cy(w.rigid.y)} x2={w.x} y2={cy(w.y)} stroke="rgba(217,160,80,0.6)" stroke-width="0.1" style="pointer-events:none;" />
+									{/if}
+								{/each}
+							{/if}
+							{#each wells as w (w.name)}
+								{@const sel = selection.has(w.name)}
+								<circle
+									cx={w.x} cy={cy(w.y)} r={wellR}
+									fill={sel ? 'var(--color-tron-cyan)' : refWell === w.name ? '#f59e0b' : 'rgba(217,160,80,0.65)'}
+									stroke={w.index === 0 ? 'var(--color-tron-cyan)' : sel ? 'var(--color-tron-cyan)' : 'none'}
+									stroke-width={w.index === 0 ? 0.25 : 0.15}
+									onpointerdown={(e) => { e.stopPropagation(); }}
+									onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
+									role="button" tabindex="-1"
+								><title>{w.name} (row {w.row}, gate {w.gate}{w.index === 0 ? ', first/taught' : ''}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{w.offset.dx || w.offset.dy || w.offset.dz ? ` · correction ${w.offset.dx}, ${w.offset.dy}, ${w.offset.dz}` : ''}</title></circle>
+								<text x={w.x} y={cy(w.y) - wellR - 0.4} font-size="1.1" text-anchor="middle" fill="rgba(200,220,240,0.7)" style="pointer-events:none; user-select:none;">{w.name}</text>
+							{/each}
+							{#if boxRect}
+								<rect x={boxRect.x} y={boxRect.y} width={boxRect.w} height={boxRect.h} fill="rgba(0,255,255,0.12)" stroke="var(--color-tron-cyan)" stroke-width="0.15" />
+							{/if}
+						</svg>
+					</div>
 				</div>
-			</div>
-		</section>
+			</section>
+		<!-- The stage's own teach points: what a deck definition would otherwise carry -->
+		<div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+			<section class="rounded-lg border {taught ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · First Hole</h2>
+				<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{rim ? `x ${fmt3(rim.x)} · y ${fmt3(rim.y)} · z ${fmt3(rim.z)}` : 'not taught'}</div>
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+					{#if rim?.taughtAt}Taught {when(rim.taughtAt)}{rim.taughtBy ? ` by ${rim.taughtBy}` : ''}.{/if}
+					{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
+				</p>
+				<button type="button" onclick={saveFirstHole} disabled={!pipetteId || busy || !hasTip || !tipAdjust || locked} class="w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={!hasTip || !tipAdjust ? 'Calibrate the tip first — the point is saved tip-neutral' : ''}>Save Here As First Hole</button>
+			</section>
+	
+			<section class="rounded-lg border {depthMm === null ? 'border-amber-500/40' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3 space-y-2">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Dispense Depth</h2>
+				<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{#if depthMm !== null}{Math.abs(depthMm)} mm {depthMm >= 0 ? 'below' : 'above'} the rim{#if rim} · tip end z {dispenseZ(rim.z, depthMm).toFixed(2)}{/if}{:else}not taught — protocol would hover {Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above{/if}</div>
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Allowed {DISPENSE_DEPTH_LIMITS.min} to {DISPENSE_DEPTH_LIMITS.max} mm.{#if calibration?.dispenseDepth?.taughtAt} Taught {when(calibration.dispenseDepth.taughtAt)}.{/if}</p>
+				{#if rim && liveZ !== null}<p class="text-[11px] {liveDepthOk ? 'text-green-300' : 'text-amber-300'}">Tip end now {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the rim{liveDepthOk ? '' : ' — outside the allowed range'}.</p>{/if}
+				<div class="grid grid-cols-2 gap-2">
+					<button type="button" onclick={goToDispenseHeight} disabled={!pipetteId || busy || !hasTip || !rim} class={pad} style="color: var(--color-tron-text)">Go To Dispense Height</button>
+					<button type="button" onclick={saveDispenseDepth} disabled={!pipetteId || busy || !hasTip || !rim || !liveDepthOk || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save Depth Here</button>
+				</div>
+			</section>
+	
+			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 space-y-2">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Geometry</h2>
+				<div class="grid grid-cols-2 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+					<label>Cart Rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+					<div class="text-[11px]">Travel Height<span class="mt-0.5 block" style="color: var(--color-tron-text-secondary)">All The Way Up</span></div>
+				</div>
+				<div class="grid grid-cols-3 gap-2">
+					<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn counter-clockwise, saved immediately">⟲ 90°</button>
+					<button type="button" onclick={saveGeometry} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save Geometry</button>
+					<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn clockwise, saved immediately">90° ⟳</button>
+				</div>
+			</section>
+	
+			<section class="rounded-lg border {calibration?.scanPosition ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
+				<div class="flex items-center justify-between">
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Scan Position</h2>
+					<button type="button" onclick={fireTestScan} disabled={testScanInFlight || !runId} class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test Scan'}</button>
+				</div>
+				<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{calibration?.scanPosition ? `x ${fmt3(calibration.scanPosition.x)} · y ${fmt3(calibration.scanPosition.y)} · z ${fmt3(calibration.scanPosition.z)}` : 'not taught'}</div>
+				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">{#if calibration?.scanPosition?.testScanBarcode}Test read <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}</p>
+				{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>{/if}
+				<div class="grid grid-cols-2 gap-2">
+					<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { lift: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move To</button>
+					<button type="button" onclick={saveScanPosition} disabled={!pipetteId || busy || hasTip || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save Here (No Tip)</button>
+				</div>
+			</section>
+		</div>
+		</div>
 
 		<!-- Right column: jog + tip + offset + protocol -->
 		<div class="min-w-0 space-y-3">
@@ -1378,56 +1431,6 @@
 		</section>
 	</div>
 
-	<!-- The stage's own teach points: what a deck definition would otherwise carry -->
-	<div class="grid grid-cols-1 gap-3 lg:grid-cols-4">
-		<section class="rounded-lg border {taught ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · First Hole</h2>
-			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{rim ? `x ${fmt3(rim.x)} · y ${fmt3(rim.y)} · z ${fmt3(rim.z)}` : 'not taught'}</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-				{#if rim?.taughtAt}Taught {when(rim.taughtAt)}{rim.taughtBy ? ` by ${rim.taughtBy}` : ''}.{/if}
-				{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
-			</p>
-			<button type="button" onclick={saveFirstHole} disabled={!pipetteId || busy || !hasTip || !tipAdjust || locked} class="w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={!hasTip || !tipAdjust ? 'Calibrate the tip first — the point is saved tip-neutral' : ''}>Save Here As First Hole</button>
-		</section>
-
-		<section class="rounded-lg border {depthMm === null ? 'border-amber-500/40' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Dispense Depth</h2>
-			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{#if depthMm !== null}{Math.abs(depthMm)} mm {depthMm >= 0 ? 'below' : 'above'} the rim{#if rim} · tip end z {dispenseZ(rim.z, depthMm).toFixed(2)}{/if}{:else}not taught — protocol would hover {Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above{/if}</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Allowed {DISPENSE_DEPTH_LIMITS.min} to {DISPENSE_DEPTH_LIMITS.max} mm.{#if calibration?.dispenseDepth?.taughtAt} Taught {when(calibration.dispenseDepth.taughtAt)}.{/if}</p>
-			{#if rim && liveZ !== null}<p class="text-[11px] {liveDepthOk ? 'text-green-300' : 'text-amber-300'}">Tip end now {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the rim{liveDepthOk ? '' : ' — outside the allowed range'}.</p>{/if}
-			<div class="grid grid-cols-2 gap-2">
-				<button type="button" onclick={goToDispenseHeight} disabled={!pipetteId || busy || !hasTip || !rim} class={pad} style="color: var(--color-tron-text)">Go To Dispense Height</button>
-				<button type="button" onclick={saveDispenseDepth} disabled={!pipetteId || busy || !hasTip || !rim || !liveDepthOk || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save Depth Here</button>
-			</div>
-		</section>
-
-		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Geometry</h2>
-			<div class="grid grid-cols-2 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-				<label>Cart Rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-				<div class="text-[11px]">Travel Height<span class="mt-0.5 block" style="color: var(--color-tron-text-secondary)">All The Way Up</span></div>
-			</div>
-			<div class="grid grid-cols-3 gap-2">
-				<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn counter-clockwise, saved immediately">⟲ 90°</button>
-				<button type="button" onclick={saveGeometry} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save Geometry</button>
-				<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn clockwise, saved immediately">90° ⟳</button>
-			</div>
-		</section>
-
-		<section class="rounded-lg border {calibration?.scanPosition ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<div class="flex items-center justify-between">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Scan Position</h2>
-				<button type="button" onclick={fireTestScan} disabled={testScanInFlight || !runId} class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test Scan'}</button>
-			</div>
-			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{calibration?.scanPosition ? `x ${fmt3(calibration.scanPosition.x)} · y ${fmt3(calibration.scanPosition.y)} · z ${fmt3(calibration.scanPosition.z)}` : 'not taught'}</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">{#if calibration?.scanPosition?.testScanBarcode}Test read <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}</p>
-			{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>{/if}
-			<div class="grid grid-cols-2 gap-2">
-				<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { lift: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move To</button>
-				<button type="button" onclick={saveScanPosition} disabled={!pipetteId || busy || hasTip || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save Here (No Tip)</button>
-			</div>
-		</section>
-	</div>
 
 	<!-- History -->
 	{#if calibration?.edits?.length}

@@ -11,8 +11,8 @@
 
 	const BASE = '/manufacturing/cart-mfg/robot-arm/calibrate';
 	const subtabs = [
-		{ href: `${BASE}/arm`, label: 'Arm Home', hint: 'Camera markers: is the arm home, send it home, recalibrate' },
-		{ href: `${BASE}/stage`, label: 'Stage (OT-2)', hint: 'Teach the single-cart stage on the OT-2 the arm feeds' }
+		{ href: `${BASE}/stage`, label: 'Stage (OT-2)', hint: 'Teach the single-cart stage on the OT-2 the arm feeds' },
+		{ href: `${BASE}/arm`, label: 'Arm Home', hint: 'Camera markers: is the arm home, send it home, recalibrate' }
 	];
 	let currentPath = $derived($page.url.pathname);
 </script>
