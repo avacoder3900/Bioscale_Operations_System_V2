@@ -25238,3 +25238,9 @@ Not done here (follow-ups): Calibrate › Stage still pays the arm layout's thre
 Run tab's Setup fields are unchanged inside the drawer; Vision keeps its own fuller Return to home.
 Tests: vitest robot-arm suites 13 files / 256 tests pass (incl. robot-arm-url-invariant). npm run check
 14 errors (baseline), no warnings in touched files.
+Deployment: preview - via Vercel GitHub integration on the push of feat/arm-ui-redesign (GitHub status: success)
+  https://bioscale-operations-system-mongodb-5wt1sv3gb-brevitest.vercel.app  (brevitest project)
+  https://bioscale-operations-system-mongodb-5mgm230cg.vercel.app  (personal project)
+  https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/2HHLMYz1TK8cqdECaXbiiskhpTbx
+Source: branch feat/arm-ui-redesign @ commit 09cf07bc (NOT on master)
+What this deployment is for: preview of the Robot Arm UI redesign, Robot Arm > Run / Teach / Calibrate / History.
