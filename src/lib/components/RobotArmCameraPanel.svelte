@@ -583,9 +583,7 @@
 			type="button"
 			onclick={() => (collapsed = !collapsed)}
 			class="min-h-[44px] shrink-0 rounded border px-3 text-xs"
-			style={collapsed
-				? 'border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)'
-				: 'border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)'}
+			style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
 			aria-expanded={!collapsed}
 		>
 			{collapsed ? 'Show' : 'Hide'}
