@@ -60,10 +60,11 @@
 
 	// Same key as the pre-redesign panel, so an operator's choice carries over.
 	const HIDDEN_KEY = 'robot-arm:connection-panel-hidden';
-	let hidden = $state(false);
+	// Hidden by default (2026-11-04); only an explicit Show is remembered as open.
+	let hidden = $state(true);
 	$effect(() => {
 		try {
-			hidden = localStorage.getItem(HIDDEN_KEY) === '1';
+			hidden = localStorage.getItem(HIDDEN_KEY) !== '0';
 		} catch {
 			/* storage unavailable — default to hidden */
 		}
