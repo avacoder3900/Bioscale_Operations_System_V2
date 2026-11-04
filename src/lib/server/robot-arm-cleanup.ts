@@ -379,7 +379,7 @@ export async function archiveCleanup(user: User, id: string) {
 	await connectDB();
 	const res = await RobotArmRecordingCleanup.updateOne(
 		{ _id: id, status: 'draft' },
-		{ $set: { status: 'archived', updatedBy: opRef(user) } }
+		{ $set: { status: 'archived', archivedAt: new Date(), updatedBy: opRef(user) } }
 	);
 	if (!res.matchedCount) throw new CleanupError('This clean-up no longer exists.', 404);
 	await audit(user, 'robot_arm.cleanup.archive', id, {});

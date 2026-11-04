@@ -18,7 +18,9 @@ import {
 } from '$lib/server/robot-arm-client';
 // Via the Worker, not the S3 client: production's direct R2 credentials are
 // not valid, and the Worker is the path the rest of the app uploads through.
-import { uploadViaWorker, downloadViaWorker } from '$lib/server/services/r2';
+import { downloadViaWorker } from '$lib/server/services/r2';
+// Upload + read back + compare: the Pi copy is only deleted once R2 provably holds it.
+import { uploadVerified } from '$lib/server/robot-arm-archive-purge';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import { stopArm } from '$lib/server/robot-arm-stop';
 import type { Actions, PageServerLoad } from './$types';
@@ -269,7 +271,7 @@ export const actions: Actions = {
 		const r2Key = `${RECORDING_TRASH_PREFIX}/${id}.json`;
 		const payload = Buffer.from(JSON.stringify(exported), 'utf8');
 		try {
-			await uploadViaWorker(payload, r2Key, 'application/json');
+			await uploadVerified(payload, r2Key, 'application/json');
 		} catch (err) {
 			return fail(502, {
 				error: `Could not save a recovery copy of "${name}", so it was not deleted: ${(err as Error).message}`

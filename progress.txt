@@ -25391,3 +25391,23 @@ servo bus, so a Conveyor Belt 600 ms move set did nothing although the pins are 
   says the arm does not move for a fires-only set.
 Tests: animation.test.ts 57/57; simulated /fires check. npm run check 13 errors (baseline).
 Not yet run on hardware from the page.
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — Robot Arm archive -> 30-day deletion, R2 copy verified first
+================================================================================
+Alejandro: archived arm items will not be used again, so they go after 30 days (AprilTags excluded: they
+are reassigned, never deleted).
+- src/lib/server/robot-arm-archive-purge.ts + daily cron /api/cron/purge-robot-arm-archive (vercel.json
+  15 5 * * *, CRON_SECRET / agent key). Covers poses (with their camera references), move sets, sequences,
+  superseded pose references, superseded Arm Home calibrations, archived camera presets, archived clean-ups.
+  Each item: JSON copy to R2 (robot-arm/archive-purged/<collection>/<id>.json) -> downloaded back and
+  compared (sha256 + length) -> only then deleted; any failure keeps it for the next run. R2 copies stay.
+  Kept while in use: Run (wax fill) Grab/Withdraw/Fail animations, move sets in a sequence, poses in a move
+  set. Order sequences -> move sets -> poses.
+- Recording clean-ups get archivedAt (older archived rows fall back to updatedAt).
+- Recording trash (Maintenance -> Leader Arm): the R2 recovery copy is now verified by read-back
+  (uploadVerified) before the recording is deleted on the Pi.
+- Read-only preview against production Mongo: nothing is past 30 days yet (archived now: 40 poses, 2 move
+  sets, 5 pose refs, 25 Arm Home cals), so the first deletions are ~1 month out. Crons run only on the
+  production deployment, i.e. once this branch is on master.
+Tests: robot-arm-archive-purge.test.ts 2/2 (mismatched R2 copy blocks the delete). The real R2 round trip
+was not run locally (no R2_WORKER_URL in local .env). npm run check 13 errors (baseline).

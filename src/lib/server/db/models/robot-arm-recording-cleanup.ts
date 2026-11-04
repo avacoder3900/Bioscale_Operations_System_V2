@@ -41,6 +41,8 @@ const robotArmRecordingCleanupSchema = new Schema(
 		_id: { type: String, required: true },
 		title: { type: String, default: '' },
 		status: { type: String, enum: ['draft', 'archived'], default: 'draft' },
+		/** When it was archived; deleted 30 days later (robot-arm-archive-purge). */
+		archivedAt: { type: Date, default: null },
 		sourceName: { type: String, required: true },
 		sourceModified: { type: String, default: null },
 		sourceSizeBytes: { type: Number, default: null },
