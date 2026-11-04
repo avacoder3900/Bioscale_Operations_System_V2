@@ -144,14 +144,22 @@ export async function archiveToR2(
 	}
 	const meta = typeof o.meta === 'function' ? o.meta(doc) : (o.meta ?? {});
 	await RobotArmArchiveEntry.create({ _id: entryId, kind, itemId: id, name, r2Key, sizeBytes: body.length, meta, archivedAt, archivedBy: opRef(user), expiresAt });
+	let removed = 0;
 	try {
 		for (const [key, filter] of Object.entries(o.related ?? {})) await RELATED[key].deleteMany(filter);
-		await MODEL[kind].deleteOne({ _id: id });
+		removed = (await MODEL[kind].deleteOne({ _id: id })).deletedCount ?? 0;
 	} catch (err) {
 		// The item is still in Mongo: undo the trash row and the R2 copy.
 		await RobotArmArchiveEntry.updateOne({ _id: entryId }, { $set: { restoredAt: new Date(), restoredBy: opRef(user) } });
 		await deleteViaWorker(r2Key).catch(() => {});
 		throw new ArchiveError(`"${name}" was not archived: ${(err as Error).message}`, 500);
+	}
+	if (!removed) {
+		// Archived twice at once (a double click, 2026-11-04 made 2-3 rows per pose): the request that
+		// removed it keeps its row; this one's row and R2 copy go.
+		await RobotArmArchiveEntry.updateOne({ _id: entryId }, { $set: { purgedAt: new Date() } });
+		await deleteViaWorker(r2Key).catch(() => {});
+		throw new ArchiveError(`"${name}" is already deleted.`, 409);
 	}
 	await AuditLog.create({
 		_id: generateId(),
@@ -199,10 +207,12 @@ export function tagCalibrationMeta(d: any): Record<string, unknown> {
 	};
 }
 
-/** Trash rows still in R2 (not restored, not purged), newest first. */
+/** Trash rows still in R2 (not restored, not purged), newest first, one per item. */
 export async function listArchived(kind: ArchiveKind, filter: Record<string, unknown> = {}, limit = 500): Promise<any[]> {
 	await connectDB();
-	return RobotArmArchiveEntry.find({ kind, restoredAt: null, purgedAt: null, ...filter }).sort({ archivedAt: -1 }).limit(limit).lean();
+	const rows = (await RobotArmArchiveEntry.find({ kind, restoredAt: null, purgedAt: null, ...filter }).sort({ archivedAt: -1 }).limit(limit).lean()) as any[];
+	const seen = new Set<string>();
+	return rows.filter((r) => !seen.has(r.itemId) && !!seen.add(r.itemId));
 }
 
 /** Put an archived item back from R2, under its old id. */
@@ -223,8 +233,10 @@ export async function restoreFromR2(user: User, kind: ArchiveKind, itemId: strin
 		const model = RELATED[key];
 		if (model && docs.length) await model.collection.insertMany(docs.map((d) => model.castObject(d)));
 	}
-	await RobotArmArchiveEntry.updateOne({ _id: entry._id }, { $set: { restoredAt: new Date(), restoredBy: opRef(user) } });
-	await deleteViaWorker(entry.r2Key).catch(() => {});
+	// Every open row of the item (a double click left extra ones) is closed with it.
+	const open = (await RobotArmArchiveEntry.find({ kind, itemId, restoredAt: null, purgedAt: null }).select('r2Key').lean()) as any[];
+	await RobotArmArchiveEntry.updateMany({ _id: { $in: open.map((r) => r._id) } }, { $set: { restoredAt: new Date(), restoredBy: opRef(user) } });
+	for (const r of open) await deleteViaWorker(r.r2Key).catch(() => {});
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'robot_arm_archive_entries',
@@ -239,10 +251,13 @@ export async function restoreFromR2(user: User, kind: ArchiveKind, itemId: strin
 /** Delete an archived item from R2 now (Delete For Good); the row is marked purged. */
 export async function purgeNow(user: User, kind: ArchiveKind, itemId: string): Promise<{ name: string } | null> {
 	await connectDB();
-	const entry = (await RobotArmArchiveEntry.findOne({ kind, itemId, restoredAt: null, purgedAt: null }).lean()) as any;
+	const open = (await RobotArmArchiveEntry.find({ kind, itemId, restoredAt: null, purgedAt: null }).sort({ archivedAt: -1 }).lean()) as any[];
+	const entry = open[0];
 	if (!entry) return null;
-	await deleteViaWorker(entry.r2Key);
-	await RobotArmArchiveEntry.updateOne({ _id: entry._id }, { $set: { purgedAt: new Date() } });
+	for (const r of open) {
+		await deleteViaWorker(r.r2Key);
+		await RobotArmArchiveEntry.updateOne({ _id: r._id }, { $set: { purgedAt: new Date() } });
+	}
 	await AuditLog.create({
 		_id: generateId(),
 		tableName: 'robot_arm_archive_entries',

@@ -85,9 +85,10 @@ import {
 
 type User = { _id: string; username: string };
 
-/** Archived rows (now in the R2 trash) shaped like the lists' own rows. */
-function archivedRows(entries: any[], fill: Record<string, unknown>): any[] {
-	return entries.map((e) => ({ ...fill, ...(e.meta ?? {}), _id: e.itemId, name: e.name, archivedAt: e.archivedAt, expiresAt: e.expiresAt }));
+/** Archived rows (now in the R2 trash) shaped like the lists' own rows; never one for an item in `rows`. */
+function archivedRows(entries: any[], fill: Record<string, unknown>, rows: any[] = []): any[] {
+	const inMongo = new Set(rows.map((r) => String(r._id)));
+	return entries.filter((e) => !inMongo.has(String(e.itemId))).map((e) => ({ ...fill, ...(e.meta ?? {}), _id: e.itemId, name: e.name, archivedAt: e.archivedAt, expiresAt: e.expiresAt }));
 }
 
 /** ArchiveError -> AnimateError, so the pages' failFrom shows it. */
@@ -509,7 +510,7 @@ export function poseSummary(d: any): PoseSummary {
 export async function listPoses(): Promise<PoseSummary[]> {
 	await connectDB();
 	const [rows, archived] = await Promise.all([RobotArmPose.find({}).select('-lastPlay').sort({ archivedAt: 1, createdAt: -1 }).lean(), listArchived('pose')]);
-	return [...(rows as any[]), ...archivedRows(archived, { positions: [] })].map(poseSummary);
+	return [...(rows as any[]), ...archivedRows(archived, { positions: [] }, rows as any[])].map(poseSummary);
 }
 
 async function assertPoseNameFree(name: string, exceptId?: string) {
@@ -1023,7 +1024,7 @@ function moveSetSummary(d: any): MoveSetSummary {
 export async function listMoveSets(): Promise<MoveSetSummary[]> {
 	await connectDB();
 	const [rows, archived] = await Promise.all([RobotArmMoveSet.find({}).sort({ archivedAt: 1, updatedAt: -1 }).lean(), listArchived('move_set')]);
-	return [...(rows as any[]), ...archivedRows(archived, { keyframes: [] })].map(moveSetSummary);
+	return [...(rows as any[]), ...archivedRows(archived, { keyframes: [] }, rows as any[])].map(moveSetSummary);
 }
 
 export async function getMoveSet(id: string): Promise<MoveSetSummary | null> {
@@ -1216,7 +1217,7 @@ function sequenceSummary(d: any): SequenceSummary {
 export async function listSequences(): Promise<SequenceSummary[]> {
 	await connectDB();
 	const [rows, archived] = await Promise.all([RobotArmSequence.find({}).sort({ archivedAt: 1, updatedAt: -1 }).lean(), listArchived('sequence')]);
-	return [...(rows as any[]), ...archivedRows(archived, { items: [] })].map(sequenceSummary);
+	return [...(rows as any[]), ...archivedRows(archived, { items: [] }, rows as any[])].map(sequenceSummary);
 }
 
 export async function getSequence(id: string): Promise<SequenceSummary | null> {
