@@ -1,12 +1,12 @@
 <script lang="ts">
 	/**
-	 * A move set's steps on one time bar (2026-10-28): grey for a move into a
-	 * pose, cyan for a hold on it, amber for a fire step (the arm holding while
+	 * A move set's steps on one time bar (2026-10-28): green for a move into a
+	 * pose, grey for a hold on it, blue for a fire step (the arm holding while
 	 * a trapdoor solenoid fires and the cartridge drops). Lengths are to scale,
 	 * so where a fire lands in the animation reads at a glance. Click a block
 	 * to select that step; the playhead follows a play.
 	 */
-	import type { RenderedPath } from '$lib/robot-arm/animation';
+	import { solenoidLabel, type RenderedPath } from '$lib/robot-arm/animation';
 
 	interface Props {
 		path: RenderedPath;
@@ -29,7 +29,7 @@
 			if (m.holdS > 0) {
 				out.push(
 					m.fire
-						? { kind: 'fire', from: m.t, to: m.t + m.holdS, index: m.index, label: `⚡${m.fire.solenoid}`, title: `Fire ${m.fire.solenoid} (GPIO ${m.fire.pin}) at ${m.t.toFixed(1)} s · ${m.fire.pulseMs} ms pulse, then wait ${(m.holdS - m.fire.pulseMs / 1000).toFixed(1)} s` }
+						? { kind: 'fire', from: m.t, to: m.t + m.holdS, index: m.index, label: solenoidLabel(m.fire.solenoid), title: `Fire ${solenoidLabel(m.fire.solenoid)} (GPIO ${m.fire.pin}) at ${m.t.toFixed(1)} s · ${m.fire.pulseMs} ms pulse, then wait ${(m.holdS - m.fire.pulseMs / 1000).toFixed(1)} s` }
 						: { kind: 'hold', from: m.t, to: m.t + m.holdS, index: m.index, label: '', title: `Hold ${m.label} · ${m.holdS.toFixed(1)} s` }
 				);
 			}
@@ -39,10 +39,10 @@
 	const total = $derived(Math.max(path.durationS, 0.001));
 	const pct = (t: number) => `${(Math.max(0, Math.min(total, t)) / total) * 100}%`;
 	const fill: Record<Block['kind'], string> = {
-		lead: 'rgba(148,163,184,0.18)',
-		move: 'rgba(148,163,184,0.35)',
-		hold: 'rgba(56,189,248,0.35)',
-		fire: 'rgba(245,158,11,0.55)'
+		lead: 'rgba(74,222,128,0.18)',
+		move: 'rgba(74,222,128,0.4)',
+		hold: 'rgba(148,163,184,0.35)',
+		fire: 'rgba(56,189,248,0.55)'
 	};
 </script>
 

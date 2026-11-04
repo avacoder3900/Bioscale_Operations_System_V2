@@ -316,7 +316,7 @@
 
 {#snippet useMarks(used: number, what: string, roles: Set<WaxRole> | undefined)}
 	{#if roles}
-		<span class="shrink-0" style="color: #fbbf24" title={waxTitle(roles)} aria-label={waxTitle(roles)}>
+		<span class="shrink-0" style="color: #94a3b8" title={waxTitle(roles)} aria-label={waxTitle(roles)}>
 			<svg class="h-3 w-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.7l5.66 5.66a8 8 0 11-11.32 0L12 2.7z" /></svg>
 		</span>
 	{/if}
@@ -338,7 +338,7 @@
 				<span class={chip} style="border-color: #ef4444; color: #fca5a5">Arm Unreachable</span>
 			{:else if armNow}
 				{#if armNow.torqueOn === false}
-					<span class={chip} style="border-color: #f59e0b; color: #fbbf24" title="Turn torque on from the status card before posing">Torque OFF</span>
+					<span class={chip} style="border-color: #94a3b8; color: #cbd5e1" title="Turn torque on from the status card before posing">Torque OFF</span>
 				{/if}
 				{#if heat?.maxC != null}
 					<span class="{chip} font-mono" style="border-color: var(--color-tron-border); color: {heatColor(heat.maxC)}" title={armNow.temps.map((t, i) => `servo ${i + 1}: ${t ?? '?'} °C`).join('\n')}>
@@ -573,7 +573,7 @@
 						{@const ms = isSets ? (r as MoveSetSummary) : null}
 						{@const sq = isSets ? null : (r as SequenceSummary)}
 						{@const cov = coverage(ms, sq)}
-						{@const covColor = cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
+						{@const covColor = isSets ? 'var(--color-tron-cyan)' : cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
 						<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
 							<a href="/manufacturing/cart-mfg/robot-arm/teach/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
 							{@render useMarks(ms ? (seqsUsing.get(r._id) ?? 0) : 0, 'sequence', ms ? waxRoles.sets.get(r._id) : waxRoles.seqs.get(r._id))}

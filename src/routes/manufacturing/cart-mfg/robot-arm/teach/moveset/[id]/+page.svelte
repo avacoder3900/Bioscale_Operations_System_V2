@@ -6,7 +6,7 @@
 	 * live. Play, Stop and Save as a recording on the Pi.
 	 *
 	 * Fire steps (2026-10-28): a step can instead fire a cartridge trapdoor
-	 * solenoid (A or B). It sits in the list like a pose, in amber; the arm
+	 * solenoid (A or B). It sits in the list like a pose, in blue; the arm
 	 * holds where it is for the pulse plus the wait after it. The strip above
 	 * the list shows where each fire lands in the animation.
 	 */
@@ -244,7 +244,6 @@
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
 	const btn = 'min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40';
 	const cyan = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
-	const amber = 'background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;';
 	const green = 'background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid #4ade80;';
 	const red = 'background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;';
 	const card = 'rounded border p-3 sm:p-4';
@@ -306,11 +305,11 @@
 					{@const min = minFor(i)}
 					{#if k.fire}
 						{@const f = k.fire}
-						<!-- A fire step: amber, so it never reads as a pose. -->
-						<li class="rounded border p-2" style="border-color: {selected === i ? '#f59e0b' : 'rgba(245,158,11,0.45)'}; background: {selected === i ? 'rgba(245,158,11,0.10)' : 'rgba(245,158,11,0.04)'}">
+						<!-- A fire step: blue, so it never reads as a pose. -->
+						<li class="rounded border p-2" style="border-color: {selected === i ? '#38bdf8' : 'rgba(56,189,248,0.45)'}; background: {selected === i ? 'rgba(56,189,248,0.10)' : 'rgba(56,189,248,0.04)'}">
 							<div class="flex items-center gap-2">
 								<span class="w-5 font-mono text-xs" style={muted}>{i + 1}</span>
-								<button type="button" class="min-w-0 flex-1 truncate text-left text-sm font-semibold" style="color: #fbbf24" onclick={() => (selected = i)}>Fire {solenoidLabel(f.solenoid)}</button>
+								<button type="button" class="min-w-0 flex-1 truncate text-left text-sm font-semibold" style="color: var(--color-tron-cyan)" onclick={() => (selected = i)}>Fire {solenoidLabel(f.solenoid)}</button>
 								<button type="button" onclick={() => move(i, -1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Earlier">▲</button>
 								<button type="button" onclick={() => move(i, 1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Later">▼</button>
 								<button type="button" onclick={() => remove(i)} class="px-1 text-xs text-red-300" title="Remove">✕</button>
@@ -411,7 +410,7 @@
 			<div class="flex flex-wrap items-center gap-2">
 				<span class="text-[11px]" style={muted}>Fire Step {selected != null && kfs[selected] ? `After Step ${selected + 1}` : 'At The End'}:</span>
 				{#each FIRE_TARGETS as s (s.id)}
-					<button type="button" onclick={() => addFire(s.id)} class="rounded px-3 py-1 text-sm font-semibold" style={amber} title="Add a step that fires {s.label} (GPIO {s.pin})">Fire {s.id === 'conveyor' ? s.label : s.id}</button>
+					<button type="button" onclick={() => addFire(s.id)} class="rounded px-3 py-1 text-sm font-semibold" style={cyan} title="Add a step that fires {s.label} (GPIO {s.pin})">Fire {s.id === 'conveyor' ? s.label : s.id}</button>
 				{/each}
 			</div>
 			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save Move Set' : 'Saved'}</button>
@@ -421,7 +420,7 @@
 		<div class="space-y-3">
 			{#if selFire?.fire}
 				<div class={card} style={cardStyle}>
-					<h2 class="text-sm font-semibold" style="color: #fbbf24">Step {selected! + 1}: Fire {solenoidLabel(selFire.fire.solenoid)}</h2>
+					<h2 class="text-sm font-semibold" style="color: var(--color-tron-cyan)">Step {selected! + 1}: Fire {solenoidLabel(selFire.fire.solenoid)}</h2>
 				</div>
 				<SolenoidPanel status={solenoids} {armReachable} step={selFire.fire} />
 			{:else if selPose}
@@ -450,7 +449,7 @@
 					<!-- Plain POST to Teach's action: the result (and any poses kept) shows on Teach. -->
 					<form method="POST" action="/manufacturing/cart-mfg/robot-arm/teach?/archiveMoveSet" onsubmit={confirmArchive}>
 						<input type="hidden" name="id" value={moveSet._id} /><input type="hidden" name="poses" value="0" />
-						<button type="submit" class="text-xs underline" style={muted}>Archive Move Set</button>
+						<button type="submit" class="rounded px-3 py-1.5 text-sm font-semibold" style={red}>Archive Move Set</button>
 					</form>
 				</div>
 			</details>

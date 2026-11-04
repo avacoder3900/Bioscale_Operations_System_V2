@@ -71,7 +71,7 @@
 	const clampMs = (v: number) => Math.min(MAX_PULSE_MS, Math.max(MIN_PULSE_MS, Math.round(Number.isFinite(v) ? v : DEFAULT_PULSE_MS)));
 	const pinOn = (pin: number) => status?.pins?.[String(pin)]?.state === 1;
 	const muted = 'color: var(--color-tron-text-secondary)';
-	const amber = 'background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;';
+	const blue = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
 	const input = 'rounded border bg-black/40 px-2 py-1 text-sm';
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
 </script>
@@ -107,7 +107,7 @@
 
 	<div class="mt-3 flex flex-wrap items-end gap-2">
 		{#if step}
-			<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber}
+			<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
 				disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(step.solenoid, step.pulseMs)}
 				title="Pulse this step's solenoid now. The arm does not move.">
 				{firing ? 'Firing…' : `Test Fire ${step.solenoid === 'conveyor' ? solenoidLabel(step.solenoid) : step.solenoid} · ${step.pulseMs} ms`}
@@ -120,7 +120,7 @@
 				</span>
 			</label>
 			{#each SOLENOIDS as s (s.id)}
-				<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber}
+				<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
 					disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(s.id, pulseMs)}
 					title="Pulse {s.label} (GPIO {s.pin}) now. The arm does not move.">
 					{firing === s.id ? 'Firing…' : `Test Fire ${s.id}`}

@@ -164,7 +164,7 @@
 			<button
 				type="button"
 				onclick={() => send('conveyorForceOff')}
-				class="min-h-[44px] w-full rounded border border-red-500 bg-red-500/25 px-3 py-1.5 text-sm font-semibold text-red-200 transition-colors hover:bg-red-500/40"
+				class="min-h-[44px] w-full rounded border border-slate-400 bg-slate-500/15 px-3 py-1.5 text-sm font-semibold text-slate-200 transition-colors hover:bg-slate-500/30"
 			>
 				Force Off
 			</button>

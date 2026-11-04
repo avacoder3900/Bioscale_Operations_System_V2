@@ -10,7 +10,7 @@
 	 * gets there, and the ▮ at the end of a hold to change how long it holds.
 	 * The component only reports; the page owns the keyframes.
 	 */
-	import { ENCODER_MAX, type RenderedPath } from '$lib/robot-arm/animation';
+	import { ENCODER_MAX, solenoidLabel, type RenderedPath } from '$lib/robot-arm/animation';
 
 	interface Props {
 		path: RenderedPath | null;
@@ -164,7 +164,7 @@
 		{#if path}
 			{#each path.markers as m, i (i)}
 				{#if m.holdS > 0}
-					<rect x={x(m.t)} y={TOP} width={Math.max(1, x(m.t + m.holdS) - x(m.t))} height={H - TOP} fill={m.kind === 'fire' ? 'rgba(245,158,11,0.12)' : 'rgba(56,189,248,0.08)'} />
+					<rect x={x(m.t)} y={TOP} width={Math.max(1, x(m.t + m.holdS) - x(m.t))} height={H - TOP} fill={m.kind === 'fire' ? 'rgba(56,189,248,0.12)' : 'rgba(148,163,184,0.08)'} />
 				{/if}
 			{/each}
 			{#each lanes as l (l.s)}
@@ -178,9 +178,9 @@
 				<!-- svelte-ignore a11y_click_events_have_key_events -->
 				<!-- svelte-ignore a11y_no_static_element_interactions -->
 				<g style="cursor: {onselect && m.index >= 0 ? 'pointer' : 'default'}" onclick={() => m.index >= 0 && onselect?.(m.index)}>
-					<!-- A fire step (cartridge trapdoor) is an amber line at the moment the Pi fires it. -->
-					<line x1={x(m.t)} x2={x(m.t)} y1={TOP} y2={H} stroke={sel ? '#38bdf8' : m.kind === 'fire' ? '#f59e0b' : m.kind === 'pose' ? '#e5e7eb' : '#a78bfa'} stroke-width={sel || m.kind === 'fire' ? 1.5 : 0.8} stroke-dasharray={m.kind === 'pose' || m.kind === 'fire' ? '' : '3 2'} />
-					<text x={x(m.t) + 2} y={H + 12} font-size="9" fill={sel ? '#38bdf8' : m.kind === 'fire' ? '#fbbf24' : 'var(--color-tron-text)'}>{m.fire ? `⚡ ${m.fire.solenoid}` : m.label}</text>
+					<!-- A fire step (trapdoor or conveyor belt) is a blue line at the moment the Pi fires it. -->
+					<line x1={x(m.t)} x2={x(m.t)} y1={TOP} y2={H} stroke={sel ? '#e0f2fe' : m.kind === 'fire' ? '#38bdf8' : m.kind === 'pose' ? '#e5e7eb' : '#a78bfa'} stroke-width={sel || m.kind === 'fire' ? 1.5 : 0.8} stroke-dasharray={m.kind === 'pose' || m.kind === 'fire' ? '' : '3 2'} />
+					<text x={x(m.t) + 2} y={H + 12} font-size="9" fill={sel ? '#e0f2fe' : m.kind === 'fire' ? '#38bdf8' : 'var(--color-tron-text)'}>{m.fire ? solenoidLabel(m.fire.solenoid) : m.label}</text>
 				</g>
 			{/each}
 			{#each editMarkers as { m, j } (j)}

@@ -73,9 +73,9 @@
 </script>
 
 <div class="space-y-2">
-	<!-- One chrome row: crumb + title left, arm state right. Short on purpose so the content starts high. -->
-	<div class="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
-		<div class="flex min-w-0 items-center gap-1.5 text-xs">
+	<!-- One chrome row (2026-11-04): crumb + title, the tabs, then arm state and Maintenance on the right. -->
+	<div class="flex flex-wrap items-center gap-1 border-b pb-1.5" style="border-color: var(--color-tron-border)">
+		<div class="mr-2 flex min-w-0 items-center gap-1.5 text-xs">
 			<a
 				href="/manufacturing/cart-mfg"
 				class="transition-colors hover:text-[var(--color-tron-cyan)]"
@@ -84,33 +84,6 @@
 			<span style="color: var(--color-tron-text-secondary)">/</span>
 			<h1 class="text-sm font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
 		</div>
-
-		<!-- Headline facts only; the status card in the rail has the rest. -->
-		<div class="flex items-center gap-2 text-[11px]">
-			<!-- Arm Reachable · version lives in the ARM card's Connection Details (2026-11-04). -->
-			{#if data.arm.reachable}
-				{#if dryRun === true}
-					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-px text-amber-300">
-						DRY RUN
-					</span>
-				{/if}
-			{:else}
-				<span class="flex items-center gap-1.5">
-					<span class="h-2 w-2 rounded-full bg-red-500"></span>
-					<span class="text-red-400">Arm Unreachable</span>
-				</span>
-			{/if}
-		</div>
-	</div>
-
-	{#if !data.arm.reachable && data.arm.error}
-		<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs">
-			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
-		</div>
-	{/if}
-
-	<!-- Tab strip: three short tabs left, Maintenance tucked right. -->
-	<div class="flex flex-wrap items-center gap-1 border-b pb-1.5" style="border-color: var(--color-tron-border)">
 		{#each tabs as tab (tab.href)}
 			{@const active = currentPath.startsWith(tab.href)}
 			<a
@@ -129,6 +102,20 @@
 			</a>
 		{/each}
 		<span class="grow"></span>
+		<span class="flex items-center gap-2 text-[11px]">
+			{#if data.arm.reachable}
+				{#if dryRun === true}
+					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-px text-amber-300">
+						DRY RUN
+					</span>
+				{/if}
+			{:else}
+				<span class="flex items-center gap-1.5">
+					<span class="h-2 w-2 rounded-full bg-red-500"></span>
+					<span class="text-red-400">Arm Unreachable</span>
+				</span>
+			{/if}
+		</span>
 		<a
 			href={maintenanceHref}
 			title="Leader arm, Pi recordings, jog, sync zero, clean-up"
@@ -141,6 +128,12 @@
 			Maintenance
 		</a>
 	</div>
+
+	{#if !data.arm.reachable && data.arm.error}
+		<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs">
+			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
+		</div>
+	{/if}
 
 	<!--
 		Status card and camera are a right rail on wide screens so they are

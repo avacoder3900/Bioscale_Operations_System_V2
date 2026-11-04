@@ -117,7 +117,7 @@
 		}
 	}
 
-	const color = $derived(!known ? 'var(--color-tron-text-secondary)' : torqueOn ? '#4ade80' : torqueOn === false ? '#f59e0b' : 'var(--color-tron-text-secondary)');
+	const color = $derived(!known ? 'var(--color-tron-text-secondary)' : torqueOn ? '#4ade80' : torqueOn === false ? '#94a3b8' : 'var(--color-tron-text-secondary)');
 	const label = $derived(!known ? '?' : torqueOn ? 'ON' : torqueOn === false ? 'OFF' : 'MIXED');
 </script>
 
@@ -141,7 +141,7 @@
 		onclick={() => set(false)}
 		disabled={!armReachable || busy || torqueOn === false}
 		class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40"
-		style="background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;"
+		style="background: rgba(148,163,184,0.12); color: #cbd5e1; border: 1px solid #94a3b8;"
 		title="The arm goes limp — support it"
 	>
 		Off
