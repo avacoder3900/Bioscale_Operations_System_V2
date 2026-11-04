@@ -1,12 +1,13 @@
 import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { purgeExpiredArchive } from '$lib/server/robot-arm-archive-purge';
+import { purgeExpiredArchive } from '$lib/server/robot-arm-archive';
 import type { RequestHandler } from './$types';
 
-// Daily: Robot Arm items archived (or superseded) more than 30 days ago are
-// copied to R2, the copy is verified, then they are deleted. See
-// $lib/server/robot-arm-archive-purge for what is covered and what is kept.
+// Daily: Robot Arm items archived to the R2 trash more than 30 days ago are
+// deleted from R2 for good, and their trash rows marked purged. Archiving
+// itself (upload, verify, remove from Mongo) happens when the button is
+// pressed — see $lib/server/robot-arm-archive.
 
 function authenticate(request: Request): void {
 	// CRON_SECRET Bearer (Vercel sends it automatically when the env var is set)
@@ -19,9 +20,8 @@ function authenticate(request: Request): void {
 async function run(request: Request) {
 	authenticate(request);
 	const report = await purgeExpiredArchive();
-	const purged = Object.values(report.purged).reduce((n, a) => n + a.length, 0);
-	console.log(`[ARM ARCHIVE PURGE] purged=${purged} failed=${report.failed.length}`);
-	return json({ success: report.failed.length === 0, purgedCount: purged, ...report });
+	console.log(`[ARM ARCHIVE PURGE] purged=${report.purged} failed=${report.failed.length}`);
+	return json({ success: report.failed.length === 0, purgedCount: report.purged, failed: report.failed });
 }
 
 export const GET: RequestHandler = ({ request }) => run(request);

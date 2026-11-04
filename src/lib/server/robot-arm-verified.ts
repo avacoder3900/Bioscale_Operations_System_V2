@@ -28,6 +28,7 @@
  *   POST /cameras/{name}/apriltags/detect, and (via writeAndPlay)
  *   POST /recordings/restore + POST /replay/start. No new Pi route.
  */
+import { archiveSuperseded } from '$lib/server/robot-arm-archive';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmPose, RobotArmPoseCalibration, RobotArmVerifiedRun } from '$lib/server/db/models';
 import { robotArm } from './robot-arm-client';
@@ -369,7 +370,10 @@ export async function calibratePose(
 		servoSource: servos.source,
 		captureDriftSteps
 	});
-	if (previous.length) await RobotArmPoseCalibration.updateMany({ _id: { $in: previous.map((p) => p._id) } }, { $set: { status: 'superseded', supersededAt: at, supersededBy: _id } });
+	if (previous.length) {
+		await RobotArmPoseCalibration.updateMany({ _id: { $in: previous.map((p) => p._id) } }, { $set: { status: 'superseded', supersededAt: at, supersededBy: _id } });
+		await archiveSuperseded(user, 'pose_calibration', previous.map((p) => String(p._id)));
+	}
 	await audit(user, 'robot_arm.verified.pose_reference', 'robot_arm_pose_calibrations', _id, {
 		poseId: o.poseId,
 		poseName: pose.name,
@@ -405,7 +409,10 @@ export async function setPoseTolerances(user: User, calibrationId: string, raw: 
 export async function retirePoseCalibration(user: User, calibrationId: string): Promise<boolean> {
 	await connectDB();
 	const res = await RobotArmPoseCalibration.updateOne({ _id: calibrationId, status: 'active' }, { $set: { status: 'superseded', supersededAt: new Date(), supersededBy: null } });
-	if (res.modifiedCount) await audit(user, 'robot_arm.verified.pose_reference_retire', 'robot_arm_pose_calibrations', calibrationId, {});
+	if (res.modifiedCount) {
+		await audit(user, 'robot_arm.verified.pose_reference_retire', 'robot_arm_pose_calibrations', calibrationId, {});
+		await archiveSuperseded(user, 'pose_calibration', [calibrationId]);
+	}
 	return res.modifiedCount > 0;
 }
 

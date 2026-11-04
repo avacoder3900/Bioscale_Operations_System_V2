@@ -20,7 +20,7 @@ import {
 // not valid, and the Worker is the path the rest of the app uploads through.
 import { downloadViaWorker } from '$lib/server/services/r2';
 // Upload + read back + compare: the Pi copy is only deleted once R2 provably holds it.
-import { uploadVerified } from '$lib/server/robot-arm-archive-purge';
+import { uploadVerified } from '$lib/server/robot-arm-archive';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import { stopArm } from '$lib/server/robot-arm-stop';
 import type { Actions, PageServerLoad } from './$types';

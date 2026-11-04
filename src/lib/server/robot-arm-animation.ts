@@ -33,6 +33,7 @@
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
 import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
+import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2 } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
 	autoDurationS,
@@ -83,6 +84,21 @@ import {
 } from '$lib/robot-arm/animation';
 
 type User = { _id: string; username: string };
+
+/** Archived rows (now in the R2 trash) shaped like the lists' own rows. */
+function archivedRows(entries: any[], fill: Record<string, unknown>): any[] {
+	return entries.map((e) => ({ ...fill, ...(e.meta ?? {}), _id: e.itemId, name: e.name, archivedAt: e.archivedAt }));
+}
+
+/** ArchiveError -> AnimateError, so the pages' failFrom shows it. */
+async function viaArchive<T>(fn: () => Promise<T>): Promise<T> {
+	try {
+		return await fn();
+	} catch (err) {
+		if (err instanceof ArchiveError) throw new AnimateError(err.message, err.status);
+		throw err;
+	}
+}
 
 /** Scratch recording every Play / Go to writes on the Pi (overwritten each time). */
 export const PREVIEW_RECORDING = 'animate-preview';
@@ -489,8 +505,8 @@ export function poseSummary(d: any): PoseSummary {
 
 export async function listPoses(): Promise<PoseSummary[]> {
 	await connectDB();
-	const rows = await RobotArmPose.find({}).select('-lastPlay').sort({ archivedAt: 1, createdAt: -1 }).lean();
-	return (rows as any[]).map(poseSummary);
+	const [rows, archived] = await Promise.all([RobotArmPose.find({}).select('-lastPlay').sort({ archivedAt: 1, createdAt: -1 }).lean(), listArchived('pose')]);
+	return [...(rows as any[]), ...archivedRows(archived, { positions: [] })].map(poseSummary);
 }
 
 async function assertPoseNameFree(name: string, exceptId?: string) {
@@ -575,13 +591,31 @@ export async function updatePose(user: User, id: string, input: { name: unknown;
 	return poseSummary(await RobotArmPose.findById(id).lean());
 }
 
+/**
+ * Archive = to the R2 trash with its camera references, refused while a move
+ * set uses it; restore = back from R2 (refused if its name is taken now).
+ */
 export async function setPoseArchived(user: User, id: string, archived: boolean): Promise<void> {
 	await connectDB();
-	const doc = (await RobotArmPose.findById(id).lean()) as any;
-	if (!doc) throw new AnimateError('Pose not found.', 404);
-	if (!archived) await assertPoseNameFree(doc.name, id);
-	await RobotArmPose.updateOne({ _id: id }, { $set: { archivedAt: archived ? new Date() : null } });
-	await audit(user, archived ? 'robot_arm.animate.pose_archive' : 'robot_arm.animate.pose_restore', 'robot_arm_poses', id, { name: doc.name });
+	if (archived) {
+		const doc = (await RobotArmPose.findById(id).select('name positions basis').lean()) as any;
+		if (!doc) throw new AnimateError('Pose not found.', 404);
+		await viaArchive(() => archiveToR2(user, 'pose', id, { name: doc.name, meta: { positions: doc.positions, basis: doc.basis }, related: { poseCalibrations: { poseId: id } } }));
+		await audit(user, 'robot_arm.animate.pose_archive', 'robot_arm_poses', id, { name: doc.name });
+		return;
+	}
+	const entry = (await listArchived('pose', { itemId: id }, 1))[0];
+	if (!entry) {
+		const legacy = (await RobotArmPose.findOne({ _id: id, archivedAt: { $ne: null } }).select('name').lean()) as any;
+		if (!legacy) throw new AnimateError('Pose not found in the archive.', 404);
+		await assertPoseNameFree(legacy.name, id);
+		await RobotArmPose.updateOne({ _id: id }, { $set: { archivedAt: null } });
+		await audit(user, 'robot_arm.animate.pose_restore', 'robot_arm_poses', id, { name: legacy.name, legacy: true });
+		return;
+	}
+	await assertPoseNameFree(entry.name, id);
+	await viaArchive(() => restoreFromR2(user, 'pose', id));
+	await audit(user, 'robot_arm.animate.pose_restore', 'robot_arm_poses', id, { name: entry.name });
 }
 
 export interface PoseBulkResult {
@@ -606,7 +640,8 @@ function poseIdsOrThrow(raw: unknown[]): string[] {
 export async function setPosesArchived(user: User, rawIds: unknown[], archived: boolean): Promise<PoseBulkResult> {
 	await connectDB();
 	const ids = poseIdsOrThrow(rawIds);
-	const docs = (await RobotArmPose.find({ _id: { $in: ids } }).select('_id name archivedAt').lean()) as any[];
+	const [live, inTrash] = await Promise.all([RobotArmPose.find({ _id: { $in: ids } }).select('_id name').lean(), listArchived('pose', { itemId: { $in: ids } })]);
+	const docs = [...(live as any[]).map((d) => ({ _id: String(d._id), name: d.name, archivedAt: null })), ...inTrash.map((e) => ({ _id: e.itemId, name: e.name, archivedAt: e.archivedAt }))];
 	const byId = new Map(docs.map((d) => [String(d._id), d]));
 	const out: PoseBulkResult = { done: [], skipped: [] };
 	for (const id of ids) {
@@ -628,34 +663,22 @@ export async function setPosesArchived(user: User, rawIds: unknown[], archived: 
 }
 
 /**
- * Delete archived poses for good. Only poses no move set uses (planPoseDelete);
- * each pose's active camera references are retired (kept, as history), and
- * the audit entry carries the whole pose so it can be put back by hand.
+ * Delete archived poses for good: they are already in the R2 trash (archiving
+ * refuses a pose a move set uses), so this deletes the R2 copy now instead of
+ * at day 30. A pose that is not archived is skipped.
  */
 export async function deleteArchivedPoses(user: User, rawIds: unknown[]): Promise<PoseBulkResult> {
 	await connectDB();
 	const ids = poseIdsOrThrow(rawIds);
-	const [docs, sets] = (await Promise.all([
-		RobotArmPose.find({ _id: { $in: ids } }).select('-lastPlay').lean(),
-		RobotArmMoveSet.find({ 'keyframes.poseId': { $in: ids } }).select('name keyframes.poseId').lean()
-	])) as [any[], any[]];
-	const plan = planPoseDelete(
-		ids,
-		docs.map((d) => ({ _id: String(d._id), name: d.name, archived: !!d.archivedAt })),
-		sets.map((s) => ({ name: s.name, poseIds: (s.keyframes ?? []).map((k: any) => String(k.poseId ?? '')).filter(Boolean) }))
-	);
-	const byId = new Map(docs.map((d) => [String(d._id), d]));
-	const out: PoseBulkResult = { done: [], skipped: plan.skipped };
-	for (const id of plan.deletable) {
-		const pose = byId.get(id);
-		// Still archived: a restore from another tab since the plan wins.
-		const res = await RobotArmPose.deleteOne({ _id: id, archivedAt: { $ne: null } });
-		if (!res.deletedCount) {
-			out.skipped.push({ id, name: pose.name, reason: 'restored meanwhile' });
+	const out: PoseBulkResult = { done: [], skipped: [] };
+	for (const id of ids) {
+		const gone = await purgeNow(user, 'pose', id);
+		if (!gone) {
+			const live = (await RobotArmPose.findById(id).select('name').lean()) as any;
+			out.skipped.push({ id, name: live?.name ?? id, reason: live ? 'not archived' : 'not found' });
 			continue;
 		}
-		const refs = await RobotArmPoseCalibration.updateMany({ poseId: id, status: 'active' }, { $set: { status: 'superseded', supersededAt: new Date(), supersededBy: null } });
-		await audit(user, 'robot_arm.animate.pose_delete', 'robot_arm_poses', id, { name: pose.name, pose: JSON.parse(JSON.stringify(pose)), referencesRetired: refs.modifiedCount });
+		await audit(user, 'robot_arm.animate.pose_delete', 'robot_arm_poses', id, { name: gone.name });
 		out.done.push(id);
 	}
 	return out;
@@ -993,8 +1016,8 @@ function moveSetSummary(d: any): MoveSetSummary {
 
 export async function listMoveSets(): Promise<MoveSetSummary[]> {
 	await connectDB();
-	const rows = await RobotArmMoveSet.find({}).sort({ archivedAt: 1, updatedAt: -1 }).lean();
-	return (rows as any[]).map(moveSetSummary);
+	const [rows, archived] = await Promise.all([RobotArmMoveSet.find({}).sort({ archivedAt: 1, updatedAt: -1 }).lean(), listArchived('move_set')]);
+	return [...(rows as any[]), ...archivedRows(archived, { keyframes: [] })].map(moveSetSummary);
 }
 
 export async function getMoveSet(id: string): Promise<MoveSetSummary | null> {
@@ -1037,12 +1060,21 @@ export async function updateMoveSet(user: User, id: string, input: { name: unkno
 	return moveSetSummary(await RobotArmMoveSet.findById(id).lean());
 }
 
+/** Archive = to the R2 trash, refused while a sequence or a Run animation uses it; restore = back from R2. */
 export async function setMoveSetArchived(user: User, id: string, archived: boolean): Promise<void> {
 	await connectDB();
-	const doc = (await RobotArmMoveSet.findById(id).lean()) as any;
-	if (!doc) throw new AnimateError('Move set not found.', 404);
-	await RobotArmMoveSet.updateOne({ _id: id }, { $set: { archivedAt: archived ? new Date() : null } });
-	await audit(user, archived ? 'robot_arm.animate.move_set_archive' : 'robot_arm.animate.move_set_restore', 'robot_arm_move_sets', id, { name: doc.name });
+	if (!archived && !(await listArchived('move_set', { itemId: id }, 1)).length) {
+		// Archived before the R2 trash (archivedAt in Mongo): restore in place.
+		const legacy = (await RobotArmMoveSet.findOne({ _id: id, archivedAt: { $ne: null } }).select('name').lean()) as any;
+		if (!legacy) throw new AnimateError('Move set not found.', 404);
+		await RobotArmMoveSet.updateOne({ _id: id }, { $set: { archivedAt: null } });
+		await audit(user, 'robot_arm.animate.move_set_restore', 'robot_arm_move_sets', id, { name: legacy.name, legacy: true });
+		return;
+	}
+	const name = archived ? ((await RobotArmMoveSet.findById(id).select('name').lean()) as any)?.name : (await listArchived('move_set', { itemId: id }, 1))[0]?.name;
+	if (name == null) throw new AnimateError('Move set not found.', 404);
+	await viaArchive<unknown>(() => (archived ? archiveToR2(user, 'move_set', id, { name }) : restoreFromR2(user, 'move_set', id)));
+	await audit(user, archived ? 'robot_arm.animate.move_set_archive' : 'robot_arm.animate.move_set_restore', 'robot_arm_move_sets', id, { name });
 }
 
 /**
@@ -1131,8 +1163,8 @@ function sequenceSummary(d: any): SequenceSummary {
 
 export async function listSequences(): Promise<SequenceSummary[]> {
 	await connectDB();
-	const rows = await RobotArmSequence.find({}).sort({ archivedAt: 1, updatedAt: -1 }).lean();
-	return (rows as any[]).map(sequenceSummary);
+	const [rows, archived] = await Promise.all([RobotArmSequence.find({}).sort({ archivedAt: 1, updatedAt: -1 }).lean(), listArchived('sequence')]);
+	return [...(rows as any[]), ...archivedRows(archived, { items: [] })].map(sequenceSummary);
 }
 
 export async function getSequence(id: string): Promise<SequenceSummary | null> {
@@ -1181,12 +1213,21 @@ export async function updateSequence(user: User, id: string, input: { name: unkn
 	return sequenceSummary(await RobotArmSequence.findById(id).lean());
 }
 
+/** Archive = to the R2 trash, refused while a Run animation uses it; restore = back from R2. */
 export async function setSequenceArchived(user: User, id: string, archived: boolean): Promise<void> {
 	await connectDB();
-	const doc = (await RobotArmSequence.findById(id).lean()) as any;
-	if (!doc) throw new AnimateError('Sequence not found.', 404);
-	await RobotArmSequence.updateOne({ _id: id }, { $set: { archivedAt: archived ? new Date() : null } });
-	await audit(user, archived ? 'robot_arm.animate.sequence_archive' : 'robot_arm.animate.sequence_restore', 'robot_arm_sequences', id, { name: doc.name });
+	if (!archived && !(await listArchived('sequence', { itemId: id }, 1)).length) {
+		// Archived before the R2 trash (archivedAt in Mongo): restore in place.
+		const legacy = (await RobotArmSequence.findOne({ _id: id, archivedAt: { $ne: null } }).select('name').lean()) as any;
+		if (!legacy) throw new AnimateError('Sequence not found.', 404);
+		await RobotArmSequence.updateOne({ _id: id }, { $set: { archivedAt: null } });
+		await audit(user, 'robot_arm.animate.sequence_restore', 'robot_arm_sequences', id, { name: legacy.name, legacy: true });
+		return;
+	}
+	const name = archived ? ((await RobotArmSequence.findById(id).select('name').lean()) as any)?.name : (await listArchived('sequence', { itemId: id }, 1))[0]?.name;
+	if (name == null) throw new AnimateError('Sequence not found.', 404);
+	await viaArchive<unknown>(() => (archived ? archiveToR2(user, 'sequence', id, { name }) : restoreFromR2(user, 'sequence', id)));
+	await audit(user, archived ? 'robot_arm.animate.sequence_archive' : 'robot_arm.animate.sequence_restore', 'robot_arm_sequences', id, { name });
 }
 
 /** The sequence as one keyframe list (joins included). */

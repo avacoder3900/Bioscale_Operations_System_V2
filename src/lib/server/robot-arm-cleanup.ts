@@ -35,6 +35,7 @@ import {
 	type CleanDraft
 } from '$lib/robot-arm/recording-cleanup';
 import { DEFAULT_RATE_HZ } from '$lib/robot-arm/animation';
+import { archiveToR2, ArchiveError } from '$lib/server/robot-arm-archive';
 import { seriesFromFrames, type OverlayOptions } from '$lib/robot-arm/recording-overlay';
 import {
 	SMOOTHING_OFF,
@@ -375,13 +376,17 @@ export async function resplitCleanup(user: User, id: string, o: { thresholdSteps
 	return draft.steps.length;
 }
 
+/** Archive = move to the R2 trash for 30 days (robot-arm-archive), then gone. */
 export async function archiveCleanup(user: User, id: string) {
 	await connectDB();
-	const res = await RobotArmRecordingCleanup.updateOne(
-		{ _id: id, status: 'draft' },
-		{ $set: { status: 'archived', archivedAt: new Date(), updatedBy: opRef(user) } }
-	);
-	if (!res.matchedCount) throw new CleanupError('This clean-up no longer exists.', 404);
+	const doc = (await RobotArmRecordingCleanup.findOne({ _id: id, status: 'draft' }).select('name').lean()) as any;
+	if (!doc) throw new CleanupError('This clean-up no longer exists.', 404);
+	try {
+		await archiveToR2(user, 'cleanup', id, { name: doc.name });
+	} catch (err) {
+		if (err instanceof ArchiveError) throw new CleanupError(err.message, err.status);
+		throw err;
+	}
 	await audit(user, 'robot_arm.cleanup.archive', id, {});
 }
 

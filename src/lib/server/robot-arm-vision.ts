@@ -19,6 +19,7 @@
  * and "home" needs the encoders and the arm tags to agree.
  */
 import sharp from 'sharp';
+import { archiveSuperseded, listArchived, tagCalibrationMeta } from '$lib/server/robot-arm-archive';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmTag, RobotArmTagCalibration } from '$lib/server/db/models';
 import { robotArm, type AprilTagDetectResponse } from './robot-arm-client';
@@ -480,13 +481,14 @@ export async function homeStepsByCamera(): Promise<Record<string, (number | null
 /** Active calibration per camera (with thumbnails) and the recent history (without). */
 export async function loadCalibrations(): Promise<{ active: CalibrationSummary[]; history: CalibrationSummary[] }> {
 	await connectDB();
+	// History = retired calibrations, now in the R2 trash (30 days); their list fields are kept on the trash row.
 	const [active, history] = await Promise.all([
 		RobotArmTagCalibration.find({ status: 'active' }).sort({ capturedAt: -1 }).lean(),
-		RobotArmTagCalibration.find({ status: 'superseded' }).select('-thumbnailDataUrl').sort({ capturedAt: -1 }).limit(10).lean()
+		listArchived('tag_calibration', {}, 10)
 	]);
 	return {
 		active: (active as any[]).map((d) => calibrationSummary(d, { withThumb: true })),
-		history: (history as any[]).map((d) => calibrationSummary(d, { withThumb: false }))
+		history: (history as any[]).map((e) => calibrationSummary({ ...(e.meta ?? {}), _id: e.itemId, status: 'superseded', supersededAt: e.meta?.supersededAt ?? e.archivedAt }, { withThumb: false }))
 	};
 }
 
@@ -713,6 +715,7 @@ export async function saveCalibration(
 			{ _id: { $in: previous.map((p) => p._id) } },
 			{ $set: { status: 'superseded', supersededAt: now, supersededBy: _id } }
 		);
+		await archiveSuperseded(user, 'tag_calibration', previous.map((p) => String(p._id)), tagCalibrationMeta);
 	}
 	await audit('robot_arm.vision.calibrate', 'robot_arm_tag_calibrations', _id, user, {
 		cameraName: o.cameraName,
@@ -755,7 +758,10 @@ export async function updateHoming(user: User, id: string, input: { baseRangeDeg
 export async function retireCalibration(user: User, id: string): Promise<boolean> {
 	await connectDB();
 	const res = await RobotArmTagCalibration.updateOne({ _id: id, status: 'active' }, { $set: { status: 'superseded', supersededAt: new Date(), supersededBy: null } });
-	if (res.modifiedCount) await audit('robot_arm.vision.retire', 'robot_arm_tag_calibrations', id, user, {});
+	if (res.modifiedCount) {
+		await audit('robot_arm.vision.retire', 'robot_arm_tag_calibrations', id, user, {});
+		await archiveSuperseded(user, 'tag_calibration', [id], tagCalibrationMeta);
+	}
 	return res.modifiedCount > 0;
 }
 

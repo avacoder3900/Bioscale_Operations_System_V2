@@ -25419,3 +25419,23 @@ Alejandro wants the opposite: on Archive/Delete, BIMS uploads the item to R2 (ve
 Mongo at once; it lives only in R2 for 30 days (restorable from there), then is deleted from R2 for good.
 The /api/cron/purge-robot-arm-archive entry is removed from vercel.json until the redesign is built, so the
 wrong version can never run. The verified recording-trash upload (uploadVerified) stays.
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — Robot Arm archive = R2 trash for 30 days (redesign of a918b2dc)
+================================================================================
+Pressing Archive (poses, move sets, sequences, clean-ups) or retiring/replacing a camera reference or an
+Arm Home calibration now: uploads a JSON copy through the R2 Worker, downloads it back and compares it
+(uploadVerified), writes a RobotArmArchiveEntry trash row (robot_arm_archive_entries, name + small list
+fields only), then removes the item from Mongo. Restore puts it back from R2 under its old id. The daily
+cron /api/cron/purge-robot-arm-archive (re-scheduled 15 5 * * *) deletes R2 copies past 30 days and marks
+the rows purgedAt (rows rewritten, never deleted). Nothing is kept after 30 days.
+- Archive is refused while in use; the message names every user (move sets for a pose, sequences and
+  Run Grab/Withdraw/Fail for a move set, Run slots for a sequence).
+- Delete For Good on archived poses deletes the R2 copy now.
+- Calibration History reads retired Arm Home calibrations from the trash rows.
+- Items archived before this (still archivedAt in Mongo: 40 poses, 2 move sets) restore in place.
+- NOT done yet: camera presets still archive in Mongo; the one-time move of the already-archived items
+  to R2 (user chose "move them now"); local .env R2_WORKER_URL for the dev server. The R2 round trip was
+  not run end to end (no R2 settings locally) — first real archive in production is the first test.
+Files: src/lib/server/robot-arm-archive.ts (+ .test.ts), db/models/robot-arm-archive-entry.ts,
+robot-arm-animation.ts, robot-arm-cleanup.ts, robot-arm-vision.ts, robot-arm-verified.ts, the cron route,
+vercel.json. Tests: robot-arm-archive.test.ts 2/2, animation.test.ts 57/57. npm run check 13 (baseline).

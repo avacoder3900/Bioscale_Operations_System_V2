@@ -14,7 +14,7 @@ vi.mock('$lib/server/services/r2', () => ({
 	})
 }));
 
-const { uploadVerified } = await import('./robot-arm-archive-purge');
+const { uploadVerified } = await import('./robot-arm-archive');
 
 describe('uploadVerified (R2 copy proven before any delete)', () => {
 	beforeEach(() => {
