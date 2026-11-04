@@ -25244,7 +25244,7 @@ Deployment: preview - via Vercel GitHub integration on the push of feat/arm-ui-r
   https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/2HHLMYz1TK8cqdECaXbiiskhpTbx
 Source: branch feat/arm-ui-redesign @ commit 09cf07bc (NOT on master)
 What this deployment is for: preview of the Robot Arm UI redesign, Robot Arm > Run / Teach / Calibrate / History.
-=======
+
 2026-11-04 — feat/arm-conveyor-page — Conveyor: default pulse 600 ms + Force Off button
 ================================================================================
 - Conveyor tab: Pulse (ms) defaults to 600 (was 1000); conveyor.py PulseRequest default matches.
@@ -25291,3 +25291,12 @@ Deployment: production - via Vercel GitHub integration on the push to master (Gi
 Source: branch feat/arm-conveyor-page @ commit c6a91078 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at commit c6a91078
 What this deployment is for: Conveyor default pulse stored in BIMS, saved with the Save button.
+=======
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-awbeq73g9-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit 9654861f (NOT on master)
+What this deployment is for: Run tab without the readiness notes; History is a page behind one button at the bottom of Run, no longer a tab.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-ei59h4wi6-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit 0c55e3af (NOT on master)
+What this deployment is for: Run tab Setup without the Test mode checkbox.
