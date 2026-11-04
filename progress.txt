@@ -25451,3 +25451,17 @@ Source: branch feat/arm-ui-redesign @ the merge commit pushed to master today (g
 Retrieve this exact code: git checkout master at that commit
 What this deployment is for: the redesigned Robot Arm page and today's arm features, live at the BIMS address.
 Pi already has fires.py, conveyor.py and replay_settle.py from today; nothing else to install.
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — shorter tab buttons, condensed headers (preview)
+================================================================================
+Tab strip is one short row (text-xs, 14 px icons, py-1); breadcrumb + "Robot Arm" + arm state collapsed
+into one text-xs row; outer stack space-y-2. Every page title is text-base (was text-2xl / xl / lg) and
+shorter: "Arm Home", "Stage", "Wax Fill →", "Leader Arm", "Sync Zero". Page stacks space-y-3; calibrate
+sub-tabs and History pills py-0.5. svelte-check 14 errors (baseline). Pre-existing on the branch, not
+fixed here: robot-arm-url-invariant.test.ts fails because dab4cf35 dropped the ROBOT_ARM_BASE_URL text
+from RobotArmCameraPanel.svelte.
+Deployment: preview — https://bioscale-operations-system-mongodb-bqj829er1.vercel.app/manufacturing/cart-mfg/robot-arm/run
+Source: branch feat/arm-ui-redesign @ d02d1f6f
+Retrieve this exact code: git checkout d02d1f6f
+What this deployment is for: Alejandro asked for shorter tab buttons so more fits on screen, and shorter,
+condensed headers. Preview only.
