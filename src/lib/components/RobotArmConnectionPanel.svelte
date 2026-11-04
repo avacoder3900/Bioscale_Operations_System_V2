@@ -65,7 +65,7 @@
 		try {
 			hidden = localStorage.getItem(HIDDEN_KEY) === '1';
 		} catch {
-			/* storage unavailable — default to shown */
+			/* storage unavailable — default to hidden */
 		}
 	});
 	function setHidden(value: boolean) {
@@ -91,7 +91,7 @@
 		try {
 			hiddenDiagnosis = localStorage.getItem(DIAGNOSIS_HIDDEN_KEY);
 		} catch {
-			/* storage unavailable — default to shown */
+			/* storage unavailable — default to hidden */
 		}
 	});
 	const diagnosis = $derived(!preflight?.ok ? (preflight?.diagnosis ?? null) : null);
