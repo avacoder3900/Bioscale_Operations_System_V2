@@ -53,6 +53,8 @@ const cycleSchema = new Schema(
 		chainedGrab: Boolean,
 		/** 2026-10-30: the daemon's scan_at_pause command for this cycle's scan (it reads the scanner the moment the run pauses at the scan position). */
 		scanCommandId: String,
+		/** 2026-11-04: the arm did not reach the end of this cycle's last play; a replay is allowed only from that animation's start pose. */
+		arrivalMiss: Boolean,
 		/**
 		 * When the OT-2 reported its gantry home before each arm move. cycleGrab /
 		 * cycleWithdraw / cycleFail refuse to play the arm without a fresh stamp,

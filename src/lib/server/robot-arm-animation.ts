@@ -1457,6 +1457,14 @@ export async function animationEnd(ref: { kind: 'move_set' | 'sequence'; id: str
 	return { name: `${r.summary.name} · ${last.name}`, target: (last.target ?? last.positions).map(Number) };
 }
 
+/** Where a move set or sequence expects the arm to BE when it starts: its first pose's target. */
+export async function animationStart(ref: { kind: 'move_set' | 'sequence'; id: string }): Promise<AnimationEnd> {
+	const r = ref.kind === 'sequence' ? await resolveSequence(ref.id) : await resolveMoveSet(ref.id);
+	const first = r.keyframes.find((k) => !k.fire);
+	if (!first) throw new AnimateError(`"${r.summary.name}" has no poses.`, 409);
+	return { name: `${r.summary.name} · ${first.name}`, target: (first.target ?? first.positions).map(Number) };
+}
+
 export interface ArrivalCheck {
 	ok: boolean;
 	positions: number[];

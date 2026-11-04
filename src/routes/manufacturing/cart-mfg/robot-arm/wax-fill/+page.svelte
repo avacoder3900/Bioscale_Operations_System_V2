@@ -249,7 +249,11 @@
 				const loopId = loop._id;
 				const tag = `Loop ${cycle.index}/${loop.requestedRuns}`;
 				if (cycle.step === 'grab') {
-					if (stopAsked) break;
+					if (stopAsked) {
+						// The server ends the loop at a grab; a stop asked during a chained play leaves it running (the grabbed cart is filled first).
+						await refreshLoop();
+						if (loop?.status !== 'running') break;
+					}
 					// The run must be parked (tip in the wax tube) for this cart before the arm swings in;
 					// the server refuses cycleGrab otherwise.
 					note(
@@ -300,7 +304,10 @@
 					}
 					loop = r.data.loop;
 				} else if (cycle.step === 'scan') {
-					if (stopAsked) break;
+					if (stopAsked) {
+						await refreshLoop();
+						if (loop?.status !== 'running') break;
+					}
 					if (!cycle.scanSeq) {
 						// The scan sends the gantry over the stage: the run must be parked first
 						// (on cycle 1 its start-up may still be finishing under the grab).
@@ -500,7 +507,7 @@
 			}
 			loop = r.data.loop;
 			if (r.data.stoppedArm) note(r.data.torqueOn ? 'Stopped — the arm is holding its position.' : 'Stopped, but torque could NOT be re-enabled — the arm may be limp.', r.data.torqueOn ? 'warn' : 'error');
-			else if (loop!.status === 'running') note('Stop requested — the current fill and withdraw finish first.', 'warn');
+			else if (loop!.status === 'running') note(r.data.message ?? 'Stop requested — the current fill and withdraw finish first.', 'warn');
 			else note('Stopped.', 'warn');
 			if (r.data.endSent) note('The OT-2 was told to end: it trashes its tip and homes.', 'warn');
 			if (r.data.note) note(String(r.data.note), 'error');

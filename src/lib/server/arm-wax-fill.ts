@@ -108,6 +108,7 @@ import {
 	playbackActive,
 	stopPlayback,
 	animationEnd,
+	animationStart,
 	checkArrival,
 	playChain,
 	type AnimationEnd,
@@ -246,7 +247,8 @@ function settingsView(d: any): SettingsView {
 		cartPosition: Number(d?.cartPosition) || 1,
 		waxSourceLot: d?.waxSourceLot ?? null,
 		testMode: !!d?.testMode,
-		channels: { c: d?.channels?.c !== false, b: d?.channels?.b !== false, a: d?.channels?.a !== false },
+		// Default channel A only (Alejandro, 2026-11-04): C and B are on only when saved so.
+		channels: { c: d?.channels?.c === true, b: d?.channels?.b === true, a: d?.channels?.a !== false },
 		grabDuringProbe: d?.grabDuringProbe !== false,
 		chainGrab: d?.chainGrab !== false,
 		grabAnimation: animRef(d?.grabAnimation),
@@ -277,7 +279,7 @@ export async function saveSetup(
 	await connectDB();
 	const robotId = String(input.robotId ?? '').trim();
 	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds.');
-	const channels: Record<ChannelKey, boolean> = { c: input.channels?.c !== false, b: input.channels?.b !== false, a: input.channels?.a !== false };
+	const channels: Record<ChannelKey, boolean> = { c: input.channels?.c === true, b: input.channels?.b === true, a: input.channels?.a !== false };
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
 	const grabDuringProbe = input.grabDuringProbe !== false;
 	const chainGrab = input.chainGrab !== false;
@@ -860,6 +862,8 @@ export interface LoopCycleView {
 	chainedGrab: boolean;
 	/** The daemon's scan_at_pause command for this cycle's scan, when one was queued. */
 	scanCommandId: string | null;
+	/** The arm did not reach the end of this cycle's last play; Resume replays it only from the animation's start pose. */
+	arrivalMiss: boolean;
 	/** When the OT-2 confirmed its gantry home before each arm move (cycleHomeGantry). */
 	gantryHomedForGrabAt: string | null;
 	gantryHomedForWithdrawAt: string | null;
@@ -932,6 +936,7 @@ function loopView(d: any): LoopView {
 				filledAt: iso(c.filledAt),
 				chainedGrab: !!c.chainedGrab,
 				scanCommandId: c.scanCommandId ?? null,
+				arrivalMiss: !!c.arrivalMiss,
 				gantryHomedForGrabAt: iso(c.gantryHomedForGrabAt),
 				gantryHomedForWithdrawAt: iso(c.gantryHomedForWithdrawAt),
 				gantryHomedForFailAt: iso(c.gantryHomedForFailAt),
@@ -1619,9 +1624,42 @@ async function assertArrived(user: User, loopId: string, cycle: any, ref: Animat
 		tol: check.tol
 	});
 	if (!check.ok) {
+		await patchCycle(loopId, cycle.index, { arrivalMiss: true });
 		throw new ArmWaxFillError(
 			`${ARRIVAL_MISS} the arm did not reach the end of the ${what} ("${end.name}": servo ${check.worst!.servo} is ${check.worst!.steps} steps off, limit ${check.tol}). ` +
-				`The OT-2 was NOT moved. Check the arm — torque, the Pi's run ${armRunId ?? ''} on the Control tab — then press Resume to play the ${what} again from where the arm is, or STOP RUN.`,
+				`The OT-2 was NOT moved. Check the arm (torque; the Pi's run ${armRunId ?? ''} on the Control tab). Resume replays the ${what} only if the arm is back where that animation starts; ` +
+				'otherwise use Return to home on the ARM CONNECTION card, press STOP RUN and start a new run.',
+			409
+		);
+	}
+	if (cycle.arrivalMiss) await patchCycle(loopId, cycle.index, { arrivalMiss: false });
+}
+
+/**
+ * After an arrival miss the arm is somewhere the loop did not expect, and a
+ * play's lead-in is a straight tween from wherever the arm is — through the
+ * OT-2 or the tower, for all BIMS knows. So a replay is allowed only when the
+ * arm is back at the animation's START pose; anything else means Return to
+ * home and a new run (2026-11-04).
+ */
+async function assertReadyToReplay(user: User, loopId: string, cycle: any, ref: AnimationRef | null, what: string): Promise<void> {
+	if (!cycle.arrivalMiss || !ref) return;
+	let start: AnimationEnd;
+	let check: ArrivalCheck;
+	try {
+		start = await animationStart(ref);
+		check = await checkArrival(start.target);
+	} catch (err) {
+		throw new ArmWaxFillError(
+			`The arm could not be read before replaying the ${what} (${err instanceof Error ? err.message : String(err)}). Use Return to home on the ARM CONNECTION card, press STOP RUN and start a new run.`,
+			502
+		);
+	}
+	await audit(user, 'arm_wax_fill.replay_check', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, what, pose: start.name, target: start.target, positions: check.positions, off: check.off, worst: check.worst, tol: check.tol, ok: check.ok });
+	if (!check.ok) {
+		throw new ArmWaxFillError(
+			`The ${what} is not replayed: after the earlier miss the arm is not where "${start.name}" starts (servo ${check.worst!.servo} is ${check.worst!.steps} steps off, limit ${check.tol}). ` +
+				'Use Return to home on the ARM CONNECTION card, press STOP RUN and start a new run.',
 			409
 		);
 	}
@@ -1693,9 +1731,20 @@ async function enqueueBridgeCommand(robot: any, user: User, kind: BridgeKind, pa
 async function pollBridgeCommand(id: string, kind: BridgeKind, waitMs: number): Promise<{ done: true; body: any } | { done: false }> {
 	const deadline = Date.now() + waitMs;
 	for (;;) {
-		const doc = (await Ot2BridgeCommand.findById(id).select('status result error').lean()) as any;
-		if (doc?.status === 'completed') return { done: true, body: doc.result?.body ?? {} };
-		if (doc?.status === 'failed' || doc?.status === 'expired') throw new BridgeCommandFailed(kind, doc.status, doc.error ?? null);
+		const doc = (await Ot2BridgeCommand.findById(id).select('status result error createdAt ttlMs').lean()) as any;
+		if (!doc) throw new BridgeCommandFailed(kind, 'expired', 'the command record is gone');
+		if (doc.status === 'completed') return { done: true, body: doc.result?.body ?? {} };
+		if (doc.status === 'failed' || doc.status === 'expired') throw new BridgeCommandFailed(kind, doc.status, doc.error ?? null);
+		// Nobody else reaps a command the daemon never claimed, or claimed and never
+		// answered (the daemon's own poll is the only reaper, and a daemon that is
+		// gone does not poll): past its TTL it is dead, not pending (2026-11-04).
+		const ageMs = doc.createdAt ? Date.now() - new Date(doc.createdAt).getTime() : 0;
+		const ttlMs = Number(doc.ttlMs);
+		if ((doc.status === 'pending' || doc.status === 'claimed') && Number.isFinite(ttlMs) && ttlMs > 0 && ageMs > ttlMs) {
+			const why = `no answer from the bridge daemon within ${Math.round(ttlMs / 1000)} s (command ${doc.status})`;
+			await Ot2BridgeCommand.updateOne({ _id: id, status: { $in: ['pending', 'claimed'] } }, { $set: { status: 'expired', error: why, completedAt: new Date() } }).catch(() => {});
+			throw new BridgeCommandFailed(kind, 'expired', why);
+		}
 		if (Date.now() >= deadline) return { done: false };
 		await waitMs_(BRIDGE_POLL_MS);
 	}
@@ -2023,6 +2072,7 @@ export async function cycleGrab(user: User, loopId: string): Promise<{ play: Pla
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, grabWant(cycle.index, (await getSettings()).grabDuringProbe), 'grab', { uninstructed: !cycle.scanSeq });
+	await assertReadyToReplay(user, loopId, cycle, animRef(loop.grabAnimation), 'grab');
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
 	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date() });
 	await audit(user, 'arm_wax_fill.cycle_grab', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
@@ -2250,6 +2300,7 @@ export async function cycleFail(user: User, loopId: string): Promise<{ play: Pla
 	if (!cycle.skipSeq) throw new ArmWaxFillError('The skip instruction has not been sent yet — the gantry may still be over the stage.', 409);
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'play the fail animation', { uninstructed: true });
+	await assertReadyToReplay(user, loopId, cycle, animRef(loop.failAnimation), 'fail animation');
 	const p = await play(user, animRef(loop.failAnimation), 'fail');
 	await patchCycle(loopId, cycle.index, { failArmRunId: p.runId });
 	await audit(user, 'arm_wax_fill.cycle_fail', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, failedStep: cycle.failedStep ?? null, armRunId: p.runId, durationS: p.durationS });
@@ -2446,7 +2497,9 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 	// next cart, or CLEAR of this one — and the OT-2 stays in the tube throughout.
 	const withdrawRef = animRef(loop.withdrawAnimation);
 	const grabRef = animRef(loop.grabAnimation);
-	let chainedGrab = !last && (await getSettings()).chainGrab && !!withdrawRef && !!grabRef;
+	// A replay after a miss: only from the withdraw's start pose, and never chained.
+	await assertReadyToReplay(user, loopId, cycle, withdrawRef, 'withdraw');
+	let chainedGrab = !last && !cycle.arrivalMiss && (await getSettings()).chainGrab && !!withdrawRef && !!grabRef;
 	let p: PlayResult;
 	if (chainedGrab) {
 		try {
@@ -2474,7 +2527,9 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 	const completedRuns = Number(loop.completedRuns ?? 0) + 1;
 	await patchCycle(loopId, cycle.index, { step: 'done', endedAt: now });
 	const finished = Number(cycle.index) >= Number(loop.requestedRuns);
-	if (finished || loop.stopRequested) {
+	// A stop asked during a chained play: the next cart is already on the stage, so
+	// it is scanned, filled and withdrawn first — its withdraw is then the last.
+	if (finished || (loop.stopRequested && !chained)) {
 		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns, status: finished ? 'completed' : 'stopped', endedAt: now } });
 		// Stop requested during this withdraw: the end has not gone out yet.
 		if (!loop.ending) {
@@ -2555,14 +2610,23 @@ export async function loopFinish(user: User, loopId: string): Promise<{ done: bo
  * the protocol trashes its tip and homes (allowed beside a stopped or moving
  * arm: the trash and home are neither the calibrator nor the stage).
  */
-export async function stopLoop(user: User, loopId: string): Promise<{ loop: LoopView; stoppedArm: boolean; torqueOn: boolean | null; endSent: boolean; note: string | null }> {
+export async function stopLoop(user: User, loopId: string): Promise<{ loop: LoopView; stoppedArm: boolean; torqueOn: boolean | null; endSent: boolean; note: string | null; message: string | null }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { stopRequested: true } });
 	let stoppedArm = false;
 	let torqueOn: boolean | null = null;
 	let endSent = false;
 	let note: string | null = null;
-	if (['grab', 'scan', 'decide', 'fail', 'withdraw'].includes(cycle.step)) {
+	let message: string | null = null;
+	if (cycle.step === 'withdraw') {
+		// The withdraw finishes (halting it mid-path could leave the cart in the
+		// gripper); the loop ends after it. Chained, the play is also grabbing the
+		// next cart: that cart is scanned, filled and withdrawn before the end
+		// (cycleWithdrawDone, 2026-11-04).
+		message = cycle.chainedGrab
+			? 'Stop requested — the arm finishes the withdraw and the grab of the next cart; that cart is filled and withdrawn, then the run ends.'
+			: 'Stop requested — the withdraw finishes first, then the run ends.';
+	} else if (['grab', 'scan', 'decide', 'fail'].includes(cycle.step)) {
 		if (cycle.step !== 'scan' && cycle.step !== 'decide') {
 			const active = await playbackActive().catch(() => null);
 			if (active) {
@@ -2580,8 +2644,8 @@ export async function stopLoop(user: User, loopId: string): Promise<{ loop: Loop
 			if (note) await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { error: note } });
 		}
 	}
-	await audit(user, 'arm_wax_fill.stop', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, endSent, note });
-	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn, endSent, note };
+	await audit(user, 'arm_wax_fill.stop', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, endSent, note, chainedGrab: !!cycle.chainedGrab });
+	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn, endSent, note, message };
 }
 
 /**

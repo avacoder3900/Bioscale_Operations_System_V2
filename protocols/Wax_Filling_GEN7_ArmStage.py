@@ -318,10 +318,11 @@ def add_parameters(parameters: protocol_api.Parameters):
     # row of four holes each. On the stage the cart has ONE taught orientation,
     # so channel C is always row X (the first row from the taught hole), B row
     # W, A row V. Unticked rows are skipped: fewer tube trips per cart.
+    # Defaults (Alejandro, 2026-11-04): channel A only — C and B off.
     parameters.add_bool(variable_name="row_pattern_0", display_name="Channel C",
-        description="Fill channel C (row X, the first row from the taught hole) on every cart.", default=True)
+        description="Fill channel C (row X, the first row from the taught hole) on every cart.", default=False)
     parameters.add_bool(variable_name="row_pattern_1", display_name="Channel B",
-        description="Fill channel B (row W, the middle row) on every cart.", default=True)
+        description="Fill channel B (row W, the middle row) on every cart.", default=False)
     parameters.add_bool(variable_name="row_pattern_2", display_name="Channel A",
         description="Fill channel A (row V, the last row from the taught hole) on every cart.", default=True)
     # No travel-height parameter: the pipette goes ALL THE WAY UP (Z-only home)

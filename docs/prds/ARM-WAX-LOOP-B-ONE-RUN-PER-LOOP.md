@@ -217,3 +217,18 @@ keeps going. A marker is the LAST ARM pause or announcement in the log; a later 
   `replay.stop` webhook first (no Pi round trip). Every page request to the Pi is bounded (8 s poll, 60 s action),
   the poll runs every 0.5 s near the end, and loop plays settle with torque only (no droop learning). BIMS-side polls:
   AWAIT_POLL 750 ms (was 1.5 s), BRIDGE_POLL 250 ms (was 500).
+
+### 5.9 Audit fixes (2026-11-04)
+- **Channels default to A only** (row_pattern_2 on; C and B off) in both stage .py files and the arm's Setup
+  (Alejandro). A settings document saved before this keeps what was saved.
+- **A bridge command past its TTL is dead.** `pollBridgeCommand` expires a `pending` / `claimed` command older than
+  its ttlMs itself (the daemon's own poll was the only reaper; a daemon that is gone never polls). The scan step then
+  takes the fail route instead of asking every 85 s forever.
+- **A stop during a withdraw lets the play finish.** `stopLoop` at step `withdraw` no longer halts the arm (the cart
+  could be in the gripper); the loop ends after the withdraw. Chained, the next cart is already on the stage:
+  `cycleWithdrawDone` opens its cycle at `scan`, it is filled and withdrawn, and that withdraw is the last one. The
+  page keeps driving while the server says the loop is running.
+- **A replay after an arrival miss only from the start pose.** The miss is remembered on the cycle (`arrivalMiss`);
+  `cycleGrab` / `cycleWithdraw` / `cycleFail` then read the arm against the animation's FIRST pose (`animationStart`,
+  150 steps) and refuse otherwise ("Use Return to home, press STOP RUN and start a new run"); a replayed withdraw is
+  never chained. A later arrival clears the flag.

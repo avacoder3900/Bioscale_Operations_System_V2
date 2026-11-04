@@ -43,3 +43,12 @@ master with what went where and the per-cart numbers.
 - With two channels ticked in Setup the fill does two tube trips per cart instead of three.
 - If an arm play ends without the arm at the animation's end pose, the loop stops where it is with
   `ARM DID NOT ARRIVE: …` and the OT-2 is not moved; Resume plays that step again.
+
+## Update 2026-11-04
+
+- Item 1 is done for the arm's OT-2 (Robot 1 B14): ot2-bridge **1.6.0**, which carries `scan_at_pause`, was deployed
+  there on 2026-11-03 (Jacob). B07 and R04 still run 1.4.0 — not needed for the arm line.
+- Item 2 is still open and the files changed again: both stage .py now default to **channel A only** (C and B off)
+  and carry the replay guard's expectations. Re-add both to the library and deploy the rehearsal before the next loop.
+- Setup on the Wax fill tab: a settings document saved on 2026-10-30 with all three channels ticked keeps them;
+  untick C and B there if that is what was saved.

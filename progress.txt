@@ -25125,3 +25125,33 @@ B07 and R04 still run 1.4.0 (all three were on 1.4.0 — the repo's 1.5.0 was ne
 mid-fill at 19:10Z, so they get 1.6.0 in their next idle window: scp -O scripts/ot2-bridge.py
 root@<robot>:/data/ot2-bridge/ot2-bridge.py && systemctl restart ot2-bridge (gate: no current run, no
 maintenance run). Until then the BIMS-side window (restart command within 4 min) covers them.
+
+2026-11-04 — feat/arm-loop-audit-fixes — Arm wax-fill audit fixes: channels default A only, dead bridge commands expire, stop during a withdraw/chain lets the play finish, replay after a miss only from the start pose
+================================================================================
+Alejandro asked for an audit of predicted bugs in the 2026-10-30 speed batch (no loop has run on it yet; B14 — the
+arm's OT-2 — got daemon 1.6.0 with scan_at_pause on 11-03). Eight findings; he asked for the top three fixed and the
+channel defaults changed to C and B off.
+
+- Channels default to A only: ArmWaxFillSettings (c/b false, a true), settingsView / saveSetup (C and B on only when
+  saved so), both stage .py (row_pattern_0/1 default False); the rehearsal test pins the defaults in both files.
+- pollBridgeCommand reaps a pending / claimed command older than its ttlMs (expired + BridgeCommandFailed). Before,
+  only the daemon's own poll expired commands, so a daemon that died after claiming scan_at_pause (B14's 11-03 WiFi
+  collapse is the shape) left cycleScanRead answering "pending" every 85 s forever.
+- stopLoop at step 'withdraw' no longer halts the arm mid-path (the cart could be in the gripper; chained, the next
+  cart too) — stopRequested only, the play finishes; returns `message` the page shows. cycleWithdrawDone: a stop
+  during a CHAINED play does not end the loop — the cart the play grabbed is scanned, filled and withdrawn (its
+  withdraw is the last, `end` goes out then). The page's grab / scan branches follow the server's loop status
+  instead of breaking on stopAsked.
+- Arrival miss remembered on the cycle (arrivalMiss). cycleGrab / cycleWithdraw / cycleFail call
+  assertReadyToReplay: the arm is read against the animation's FIRST pose (animationStart, 150 steps) and the replay
+  is refused otherwise ("Use Return to home on the ARM CONNECTION card, press STOP RUN and start a new run"); a
+  replayed withdraw is never chained; a later arrival clears the flag. Audit arm_wax_fill.replay_check.
+Docs: PRD §5.9; the 10-30 handoff gets a 11-04 update (daemon done on B14 via 1.6.0; both protocols still to re-add
+and deploy, now with channel A as the only default).
+Tests: protocol tests 4/4; vitest robot-arm dir + robot-arm-lock 224/224; svelte-check 14/448 baseline.
+
+Deployment: production - via Vercel GitHub integration on the push to master
+Source: branch feat/arm-loop-audit-fixes (fast-forwarded onto master; sha in the deploy-log entry after this one)
+What this deployment is for: the arm wax-fill loop cannot hang on a dead bridge command, a stop never halts a
+withdraw with a cart in the gripper, a replay after an arrival miss is allowed only from the animation's start pose,
+and the channel default is A only.

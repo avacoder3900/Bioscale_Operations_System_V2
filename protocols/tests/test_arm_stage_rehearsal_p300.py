@@ -90,8 +90,12 @@ def main():
                  'row_pattern_0', 'row_pattern_1', 'row_pattern_2'):
         assert name in p.names, name
         assert name in q.names, 'production lost ' + name
-    # Channels and the ARM PROBING announcement: the same in both files.
+    # Channels and the ARM PROBING announcement: the same in both files. Default: A only (2026-11-04).
     assert reh.STAGE_ROW_CHANNEL == prod.STAGE_ROW_CHANNEL
+    for params in (p, q):
+        assert params.by_name['row_pattern_0']['default'] is False
+        assert params.by_name['row_pattern_1']['default'] is False
+        assert params.by_name['row_pattern_2']['default'] is True
     for s in (src, open(PRODUCTION, encoding='utf-8').read()):
         assert "pick_up_and_calibrate_tip(announce='ARM PROBING')" in s
         assert s.count("protocol.comment(announce)") == 1

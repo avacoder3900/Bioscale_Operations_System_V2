@@ -48,8 +48,9 @@ const armWaxFillSettingsSchema = new Schema(
 		 * hole), B = row W, A = row V. Sent to the protocol as row_pattern_0/1/2.
 		 */
 		channels: {
-			c: { type: Boolean, default: true },
-			b: { type: Boolean, default: true },
+			// Defaults (Alejandro, 2026-11-04): channel A only — C and B off.
+			c: { type: Boolean, default: false },
+			b: { type: Boolean, default: false },
 			a: { type: Boolean, default: true }
 		},
 		/** The arm's first grab may start while the OT-2 probes its tip ('ARM PROBING'), not only after ('ARM CALIBRATED'). */
