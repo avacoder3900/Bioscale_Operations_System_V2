@@ -1,10 +1,34 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
+	import { onMount } from 'svelte';
 
 	let { data, form } = $props();
 
+	// The default pulse is a per-browser setting, remembered across reloads.
+	const DEFAULT_KEY = 'robot-arm:conveyor-default-ms';
+	let defaultMs = $state(600);
 	let pulseMs = $state(600);
+	onMount(() => {
+		try {
+			const saved = Number(localStorage.getItem(DEFAULT_KEY));
+			if (Number.isInteger(saved) && saved >= 10 && saved <= data.pulseMaxMs) {
+				defaultMs = saved;
+				pulseMs = saved;
+			}
+		} catch {
+			/* storage unavailable — keep 600 */
+		}
+	});
+	function setDefault() {
+		if (!Number.isInteger(defaultMs) || defaultMs < 10 || defaultMs > data.pulseMaxMs) return;
+		pulseMs = defaultMs;
+		try {
+			localStorage.setItem(DEFAULT_KEY, String(defaultMs));
+		} catch {
+			/* ignore */
+		}
+	}
 	let delayMs = $state(0);
 	let busy = $state(false);
 
@@ -71,6 +95,19 @@
 				<input
 					type="number"
 					bind:value={pulseMs}
+					min="10"
+					max={data.pulseMaxMs}
+					step="10"
+					class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+					style="color: var(--color-tron-text)"
+				/>
+			</label>
+			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
+				Default (ms)
+				<input
+					type="number"
+					bind:value={defaultMs}
+					onchange={setDefault}
 					min="10"
 					max={data.pulseMaxMs}
 					step="10"

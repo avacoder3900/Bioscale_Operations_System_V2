@@ -25211,3 +25211,10 @@ Retrieve this exact code: git checkout master at commit 090e01ad
 What this deployment is for: Conveyor tab default 600 ms + Force Off button.
 Pi: updated conveyor.py copied to ~/robot-arm/src/server, robot-arm restarted with /sessions/active null;
 POST /conveyor/off -> state 0, simulated false; pinctrl get 22 -> output, lo.
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Conveyor: Default (ms) box
+================================================================================
+- Conveyor tab: new Default (ms) box above Delay. Changing it sets Pulse (ms) to the new value and
+  remembers it in this browser (localStorage robot-arm:conveyor-default-ms, read once in onMount so the
+  500 ms status polls never reset the Pulse box). 600 when nothing is saved. Page-only; no Pi change.
+npm run check 14 errors (baseline, none in touched files).
