@@ -56,11 +56,14 @@
 
 <style>
 	.mfg-sidebar {
+		/* Same grid as the page behind it, fixed so the lines stay aligned with it. */
+		background-attachment: fixed;
 		width: 30px;
 		transition: width 0.15s ease;
 	}
 	.mfg-sidebar:hover {
 		width: 180px;
+		box-shadow: 4px 0 12px rgb(0 0 0 / 0.35);
 	}
 	.mfg-sidebar .nav-label {
 		opacity: 0;
@@ -73,8 +76,11 @@
 </style>
 
 <div class="flex">
-	<!-- Sidebar: icons only, expand on hover -->
-	<aside class="mfg-sidebar sticky top-14 h-[calc(100vh-3.5rem)] shrink-0 overflow-hidden border-r border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] {hideSidebarOnTouch ? '[@media(pointer:coarse)]:hidden' : ''}">
+	<!-- Sidebar: icons only, expand on hover. The wrapper holds the 30px column
+	     in the flex row; the aside is absolute inside it, so hovering widens it
+	     over the page instead of pushing the content right. -->
+	<div class="sticky top-14 z-30 h-[calc(100vh-3.5rem)] w-[30px] shrink-0 {hideSidebarOnTouch ? '[@media(pointer:coarse)]:hidden' : ''}">
+	<aside class="mfg-sidebar tron-grid-bg absolute left-0 top-0 h-full overflow-hidden border-r border-[var(--color-tron-border)]">
 		<!-- preload on hover: the page's server load starts while the pointer is still
 		     on the link, so the click lands on data already in flight (app-wide default
 		     is "tap", which only helps touch devices). -->
@@ -112,6 +118,7 @@
 			{/if}
 		{/if}
 	</aside>
+	</div>
 
 	<!-- Main content -->
 	<div class="min-w-0 flex-1 p-4 lg:p-6">
