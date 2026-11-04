@@ -32,6 +32,7 @@
 		type SolenoidStatus
 	} from '$lib/robot-arm/animation';
 	import SolenoidPanel from '$lib/components/robot-arm/SolenoidPanel.svelte';
+	import ConveyorPanel from '$lib/components/robot-arm/ConveyorPanel.svelte';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
 	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
@@ -367,8 +368,9 @@
 				{/if}
 			{/key}
 
-			<!-- The cartridge trapdoors, under the pose editor. Fire steps go in a move set (open it → ⚡ A / ⚡ B); this tests them without the arm. -->
+			<!-- The cartridge trapdoors, under the pose editor, then the conveyor belt. Fire steps go in a move set; these test the GPIO without the arm. -->
 			<SolenoidPanel status={(data.solenoids ?? null) as SolenoidStatus | null} {armReachable} />
+			<ConveyorPanel initial={data.conveyor} />
 		</div>
 
 		<!-- pose library -->

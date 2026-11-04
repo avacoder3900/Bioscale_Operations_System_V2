@@ -32,6 +32,7 @@ import {
 	type PoseBulkResult
 } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
+import { conveyorActions, loadConveyor } from '$lib/server/robot-arm-conveyor';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
 import { bulkPoseMessage, friendlyName } from '$lib/robot-arm/animation';
@@ -44,7 +45,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	// The Pi's servo driver is not thread-safe and a running session owns the
 	// bus, so the follower is only read when nothing is running.
 	const active = await playbackActive().catch(() => null);
-	const [poses, moveSets, sequences, arm, holder, poseCalibrations, verifiedRun, solenoids] = await Promise.all([
+	const [poses, moveSets, sequences, arm, holder, poseCalibrations, verifiedRun, solenoids, conveyor] = await Promise.all([
 		listPoses().catch(() => null),
 		listMoveSets().catch(() => null),
 		listSequences().catch(() => null),
@@ -56,7 +57,9 @@ export const load: PageServerLoad = async ({ locals }) => {
 		listPoseCalibrations().catch(() => []),
 		activeVerifiedRun().catch(() => null),
 		// The trapdoor solenoids (GPIO, not the servo bus — fine to read mid-play).
-		solenoidStatus()
+		solenoidStatus(),
+		// The conveyor belt (GPIO 22), shown under the solenoids.
+		loadConveyor()
 	]);
 	// Home per camera (Vision tab calibration): the pose editor's default reference marker.
 	const homeSteps = await homeStepsByCamera().catch(() => ({}));
@@ -73,6 +76,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		poseCalibrations: JSON.parse(JSON.stringify(poseCalibrations)),
 		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null)),
 		solenoids: JSON.parse(JSON.stringify(solenoids)),
+		conveyor: JSON.parse(JSON.stringify(conveyor)),
 		homeSteps
 	};
 };
@@ -86,6 +90,7 @@ function bulkFlash(verb: string, r: PoseBulkResult) {
 
 export const actions: Actions = {
 	...sharedAnimateActions,
+	...conveyorActions,
 
 	// The follower tracks the control (leader) arm under torque — quick rough posing.
 	poseWithLeader: async ({ locals }) => {

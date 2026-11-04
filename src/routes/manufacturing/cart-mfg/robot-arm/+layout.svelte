@@ -110,10 +110,6 @@
 					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-amber-300">
 						DRY RUN
 					</span>
-				{:else if dryRun === false}
-					<span class="rounded border border-red-500/50 bg-red-500/10 px-2 py-0.5 text-red-300">
-						LIVE MOTION
-					</span>
 				{/if}
 			{:else}
 				<span class="flex items-center gap-1.5">

@@ -79,9 +79,32 @@
 
 	const reachable = $derived(preflight !== null);
 	const dryRun = $derived(preflight?.checks?.dry_run?.value);
-	// dry_run.ok is always true on the Pi (it's a config choice, not a fault),
-	// so liveMotion keys off the value and treats "unknown" as not-live.
-	const liveMotion = $derived(reachable && dryRun === false);
+	// LIVE MOTION (DRY_RUN off on the Pi) is the normal state and is not shown
+	// (Alejandro, 2026-11-04); only DRY RUN gets a chip.
+
+	// The preflight warning (e.g. the leader BusLinker missing) collapses to a
+	// Show Warning chip. The hidden TEXT is remembered, not a flag, so a new or
+	// different warning shows again. Same key as the pre-redesign layout.
+	const DIAGNOSIS_HIDDEN_KEY = 'robot-arm:diagnosis-hidden';
+	let hiddenDiagnosis = $state<string | null>(null);
+	$effect(() => {
+		try {
+			hiddenDiagnosis = localStorage.getItem(DIAGNOSIS_HIDDEN_KEY);
+		} catch {
+			/* storage unavailable — default to shown */
+		}
+	});
+	const diagnosis = $derived(!preflight?.ok ? (preflight?.diagnosis ?? null) : null);
+	const diagnosisHidden = $derived(!!diagnosis && hiddenDiagnosis === diagnosis);
+	function setDiagnosisHidden(value: boolean) {
+		hiddenDiagnosis = value ? diagnosis : null;
+		try {
+			if (value && diagnosis) localStorage.setItem(DIAGNOSIS_HIDDEN_KEY, diagnosis);
+			else localStorage.removeItem(DIAGNOSIS_HIDDEN_KEY);
+		} catch {
+			/* ignore */
+		}
+	}
 
 	// NB: do not name this `state` — `$state` would then parse as a store
 	// subscription rather than the rune, and svelte-check rejects it.
@@ -128,9 +151,9 @@
 	class="rounded border p-3 sm:p-4"
 	style="border-color: var(--color-tron-border); background: var(--color-tron-surface);"
 >
-	<div class="flex flex-wrap items-center justify-between gap-2">
+	<div class="flex items-start justify-between gap-2">
 		<h2
-			class="inline-flex items-center gap-2 text-sm font-semibold tracking-wide"
+			class="inline-flex min-w-0 flex-wrap items-center gap-2 text-sm font-semibold tracking-wide"
 			style="color: var(--color-tron-text)"
 		>
 			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}" title={label}></span>
@@ -138,11 +161,9 @@
 			<span class="text-xs font-normal" style="color: {dotColor}">{label}</span>
 			{#if dryRun === true}
 				<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" style="background: rgba(34,197,94,0.15); color: #22c55e;">DRY RUN</span>
-			{:else if liveMotion}
-				<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" style="background: rgba(239,68,68,0.15); color: #ef4444;">⚠ LIVE MOTION</span>
 			{/if}
 		</h2>
-		<div class="flex items-center gap-2">
+		<div class="flex shrink-0 items-center gap-2">
 			<button
 				type="button"
 				onclick={refresh}
@@ -178,12 +199,27 @@
 				on the Pi. Last connected {relativeTime(lastConnected)}.
 			</p>
 		</div>
-	{:else if !preflight?.ok && preflight?.diagnosis}
+	{:else if diagnosis && diagnosisHidden}
+		<button
+			type="button"
+			onclick={() => setDiagnosisHidden(false)}
+			class="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
+		>
+			Show Warning
+		</button>
+	{:else if diagnosis}
 		<div
-			class="mt-2 rounded border p-2 text-xs"
+			class="mt-2 flex items-start gap-3 rounded border p-2 text-xs"
 			style="border-color: #f59e0b; background: rgba(245,158,11,0.08); color: var(--color-tron-text)"
 		>
-			⚠ {preflight.diagnosis}
+			<span class="flex-1">⚠ {diagnosis}</span>
+			<button
+				type="button"
+				onclick={() => setDiagnosisHidden(true)}
+				class="shrink-0 rounded border border-amber-500/40 px-2 py-0.5 font-semibold text-amber-200 hover:bg-amber-500/20"
+			>
+				Hide
+			</button>
 		</div>
 	{/if}
 

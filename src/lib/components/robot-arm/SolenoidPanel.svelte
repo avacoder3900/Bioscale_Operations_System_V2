@@ -78,7 +78,7 @@
 
 <section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">⚡ TRAPDOOR SOLENOIDS</h2>
+		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">Trapdoor Solenoids</h2>
 		<div class="flex flex-wrap items-center gap-1.5 text-[11px]">
 			{#each SOLENOIDS as s (s.id)}
 				<span class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono" style="border-color: var(--color-tron-border); color: {pinOn(s.pin) ? '#fbbf24' : 'var(--color-tron-text-secondary)'}" title="{s.label} on GPIO {s.pin}">
@@ -91,17 +91,17 @@
 
 	<p class="mt-1 text-[11px]" style={muted}>
 		{#if !armReachable}
-			The arm Pi is unreachable.
+			Arm Pi Unreachable
 		{:else if !status}
-			No solenoid status from the Pi.
+			No Solenoid Status
 		{:else}
-			{status.simulated ? 'Simulated: the Pi has no GPIO right now, so firing only times out the pulse.' : 'Pins are live on the Pi.'}
-			{status.replayFire ? ' Fire steps play on this Pi.' : ''}
+			{status.simulated ? 'Simulated: No GPIO' : 'Pins Live'}
+			{status.replayFire ? ' · Fire Steps Supported' : ''}
 		{/if}
 	</p>
 	{#if armReachable && status && !status.replayFire}
 		<p class="mt-1 text-[11px]" style="color: #fbbf24">
-			The Pi's replay cannot fire steps yet (update replay_settle.py and gpio.py on the Pi and restart robot-arm). Move sets with fire steps will refuse to play; Test fire still works.
+			Pi replay cannot fire steps; move sets with fire steps will not play.
 		</p>
 	{/if}
 
@@ -110,7 +110,7 @@
 			<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber}
 				disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(step.solenoid, step.pulseMs)}
 				title="Pulse this step's solenoid now. The arm does not move.">
-				{firing ? 'Firing…' : `Test fire ${step.solenoid} · ${step.pulseMs} ms`}
+				{firing ? 'Firing…' : `Test Fire ${step.solenoid} · ${step.pulseMs} ms`}
 			</button>
 		{:else}
 			<label class="text-[11px]" style={muted}>Pulse (ms)
@@ -123,11 +123,10 @@
 				<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={amber}
 					disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(s.id, pulseMs)}
 					title="Pulse {s.label} (GPIO {s.pin}) now. The arm does not move.">
-					{firing === s.id ? 'Firing…' : `Test fire ${s.id}`}
+					{firing === s.id ? 'Firing…' : `Test Fire ${s.id}`}
 				</button>
 			{/each}
 		{/if}
 	</div>
 	{#if note}<p class="mt-2 text-xs" style="color: {note.ok ? '#4ade80' : '#fca5a5'}">{note.text}</p>{/if}
-	<p class="mt-2 text-[11px]" style={muted}>One solenoid at a time: the Pi refuses a second pulse while one is on, so both trapdoors never open together.</p>
 </section>
