@@ -25557,3 +25557,12 @@ sequences, Pi recordings trash). svelte-check 13 errors (baseline); arm unit tes
 Deployment: production — via Vercel GitHub integration on each push to master (builds not watched)
 Source: branch master @ 645cac68, daa7c112, and this commit
 What this deployment is for: the color, delete and Days Left requests above.
+================================================================================
+2026-11-04 — master — Stage canvas fills the row beside Jog (c08e2c6a)
+================================================================================
+Grid cells stretch; the plane box is flex-1 with the plane stretched inside, min-height 56vh/480px × zoom.
+No gap under the canvas on wide screens. svelte-check 14 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ c08e2c6a
+Retrieve this exact code: git checkout c08e2c6a
+What this deployment is for: Alejandro's second screenshot — the gap under the canvas.
