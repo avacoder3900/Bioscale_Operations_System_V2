@@ -333,7 +333,7 @@
 		{#each SERVOS as s (s)}
 			{@const r = ranges[s]}
 			{@const ticks = axisTicks(r.min, r.max, 6)}
-			<div class="grid grid-cols-[6.5rem_1fr] items-start gap-x-3 gap-y-1 sm:grid-cols-[7.5rem_1fr_auto]">
+			<div class="grid grid-cols-[6.5rem_1fr] items-start gap-x-3 gap-y-1 sm:grid-cols-[7.5rem_1fr]">
 				<div class="pt-1">
 					<div class="text-sm" style="color: var(--color-tron-text)">{JOINT_LABELS[s]}</div>
 					<div class="text-[10px]" style="color: var(--color-tron-text-secondary)">
@@ -370,7 +370,7 @@
 						{/each}
 					</div>
 				</div>
-				<div class="col-span-2 flex items-center gap-1 sm:col-span-1">
+				<div class="col-start-2 flex flex-wrap items-center gap-1">
 					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] - 10)} aria-label="minus 10">−10</button>
 					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] - 1)} aria-label="minus 1">−1</button>
 					<!-- Exact entry: type a step value and press Enter (or leave the box) to apply it; the slider follows. -->
