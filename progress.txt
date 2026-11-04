@@ -25376,3 +25376,18 @@ small. Do not batch edits or leave them uncommitted: he watches this branch live
 and a second Claude session works on the same branch. Before each commit: `git pull --no-rebase origin
 feat/arm-ui-redesign`; never force-push this branch. It does not go to master until he says so. Same
 rule is at the top of CLAUDE.md.
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — Fires-only move sets play without the arm (fc8ee278)
+================================================================================
+Root cause: a move set with only fire steps still went through the replay, whose play first reads the
+follower servos ("No follower motor answered" with the arm's power unplugged) and whose replay needs the
+servo bus, so a Conveyor Belt 600 ms move set did nothing although the pins are on the Pi.
+- Pi: src/server/fires.py (POST /fires/play {fires:[{t,pin,ms}]}, GET /fires/status, POST /fires/stop),
+  coils via gpio.pulse_blocking, GPIO 22 (Pin 15) via conveyor.pulse_blocking on its own FireTimer; no
+  servo bus. Installed 12:23 local via scripts/install_fires_router.py (backup app.py.bak-fires), restarted
+  with /sessions/active null; /fires/status -> {"active":null}.
+- BIMS: fireOnlySchedule() in $lib/robot-arm/animation.ts; writeAndPlay sends fires-only lists to
+  /fires/play; playbackActive / stopPlayback / afterPlay handle fires- run ids; the move-set Play confirm
+  says the arm does not move for a fires-only set.
+Tests: animation.test.ts 57/57; simulated /fires check. npm run check 13 errors (baseline).
+Not yet run on hardware from the page.
