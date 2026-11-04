@@ -33,6 +33,25 @@
 	const cameraNames = $derived([...new Set([...cameras.map((c) => c.name), ...calibrations.map((c) => c.cameraName)])]);
 
 	let chosen = $state<string | null>(null);
+
+	// Calibration History is hidden by default (2026-11-04); only an explicit Show is remembered as open.
+	const HISTORYHIDDEN_KEY = 'robot-arm:calibration-history-hidden';
+	let historyHidden = $state(true);
+	$effect(() => {
+		try {
+			historyHidden = localStorage.getItem(HISTORYHIDDEN_KEY) !== '0';
+		} catch {
+			/* storage unavailable — default to hidden */
+		}
+	});
+	function setHistoryHidden(value: boolean) {
+		historyHidden = value;
+		try {
+			localStorage.setItem(HISTORYHIDDEN_KEY, value ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 	// After mount, not at module top: the server render has no storage, and
 	// reading it during hydration would make the two disagree.
 	$effect(() => {
@@ -343,7 +362,19 @@
 
 	{#if history.length}
 		<section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
-			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">CALIBRATION HISTORY</h2>
+			<div class="flex items-center justify-between gap-2">
+				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">CALIBRATION HISTORY</h2>
+				<button
+					type="button"
+					onclick={() => setHistoryHidden(!historyHidden)}
+					class="min-h-[36px] rounded border px-3 text-xs"
+					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+					aria-expanded={!historyHidden}
+				>
+					{historyHidden ? 'Show' : 'Hide'}
+				</button>
+			</div>
+			{#if !historyHidden}
 			<ul class="mt-2 space-y-1 text-xs" style="color: var(--color-tron-text-secondary)">
 				{#each history as h (h._id)}
 					<li>
@@ -354,6 +385,7 @@
 					</li>
 				{/each}
 			</ul>
+			{/if}
 		</section>
 	{/if}
 </div>

@@ -20,6 +20,25 @@
 	let showArchived = $state(false);
 	let newTagId = $state<number | null>(null);
 
+	// The Tag Registry is hidden by default (2026-11-04); only an explicit Show is remembered as open.
+	const REGISTRYHIDDEN_KEY = 'robot-arm:tag-registry-hidden';
+	let registryHidden = $state(true);
+	$effect(() => {
+		try {
+			registryHidden = localStorage.getItem(REGISTRYHIDDEN_KEY) !== '0';
+		} catch {
+			/* storage unavailable — default to hidden */
+		}
+	});
+	function setRegistryHidden(value: boolean) {
+		registryHidden = value;
+		try {
+			localStorage.setItem(REGISTRYHIDDEN_KEY, value ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
+
 	const active = $derived(tags.filter((t) => !t.archived));
 	const archived = $derived(tags.filter((t) => t.archived));
 	const groups = $derived([...new Set(tags.map((t) => t.group).filter((g): g is string => !!g))].sort());
@@ -39,7 +58,19 @@
 </script>
 
 <section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
-	<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">TAG REGISTRY</h2>
+	<div class="flex items-center justify-between gap-2">
+		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">TAG REGISTRY</h2>
+		<button
+			type="button"
+			onclick={() => setRegistryHidden(!registryHidden)}
+			class="min-h-[36px] rounded border px-3 text-xs"
+			style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+			aria-expanded={!registryHidden}
+		>
+			{registryHidden ? 'Show' : 'Hide'}
+		</button>
+	</div>
+	{#if !registryHidden}
 
 	<datalist id="arm-tag-groups">
 		{#each groups as g}<option value={g}></option>{/each}
@@ -146,5 +177,6 @@
 				{/each}
 			</ul>
 		{/if}
+	{/if}
 	{/if}
 </section>

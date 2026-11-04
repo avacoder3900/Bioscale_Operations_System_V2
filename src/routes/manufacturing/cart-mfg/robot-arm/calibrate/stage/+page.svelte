@@ -70,6 +70,25 @@
 
 	// ── the cartridge on the stage ───────────────────────────────────────────
 	let calibration = $state<CalibrationView | null>(data.calibration);
+
+	// Recent Edits is hidden by default (2026-11-04); only an explicit Show is remembered as open.
+	const EDITS_HIDDEN_KEY = 'robot-arm:stage-recent-edits-hidden';
+	let editsHidden = $state(true);
+	$effect(() => {
+		try {
+			editsHidden = localStorage.getItem(EDITS_HIDDEN_KEY) !== '0';
+		} catch {
+			/* storage unavailable — default to hidden */
+		}
+	});
+	function setEditsHidden(value: boolean) {
+		editsHidden = value;
+		try {
+			localStorage.setItem(EDITS_HIDDEN_KEY, value ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 	$effect(() => {
 		calibration = data.calibration;
 	});
@@ -1413,8 +1432,20 @@
 	<!-- History -->
 	{#if calibration?.edits?.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Edits</h2>
-			<div class="overflow-x-auto">
+			<div class="flex items-center justify-between gap-2">
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Edits</h2>
+				<button
+					type="button"
+					onclick={() => setEditsHidden(!editsHidden)}
+					class="min-h-[36px] rounded border px-3 text-xs"
+					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+					aria-expanded={!editsHidden}
+				>
+					{editsHidden ? 'Show' : 'Hide'}
+				</button>
+			</div>
+			{#if !editsHidden}
+			<div class="mt-2 overflow-x-auto">
 				<table class="w-full text-left text-[11px]">
 					<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Hole</th><th class="px-2 py-1">Δ (x,y,z)</th><th class="px-2 py-1">After</th><th class="px-2 py-1">What</th><th class="px-2 py-1">By</th><th class="px-2 py-1">When</th></tr></thead>
 					<tbody style="color: var(--color-tron-text)">
@@ -1431,6 +1462,7 @@
 					</tbody>
 				</table>
 			</div>
+			{/if}
 		</section>
 	{/if}
 </div>
