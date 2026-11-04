@@ -25529,3 +25529,17 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ 23af0604
 Retrieve this exact code: git checkout 23af0604
 What this deployment is for: Alejandro's screenshot of the empty left column under the Stage cards.
+
+================================================================================
+2026-11-04 — master — Teach: Archive on every move set (with its poses); Return To Home + move set Play blue
+================================================================================
+Teach > Move Sets: an Archive button on each row. It confirms, then offers the poses no other live move set
+uses (listed in the dialog); poses another move set still uses stay, and the message names what uses them.
+Show Archived under Move Sets restores a move set with its archived poses. The move set page's Archive
+posts to the same Teach action (its old ?/archive action is removed). New: setMoveSetArchivedWithPoses in
+robot-arm-animation.ts (whoUses per pose, then setPoseArchived -> R2 trash). Colors: Return To Home
+(ReturnHomeControl, Calibrate > Camera Check) and the move set page's Play are blue; yellow is for warnings.
+svelte-check 14 errors (baseline per 942994c8; none in touched files); 224 arm unit tests pass.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 3f182710 (ad44a686 + 3f182710)
+What this deployment is for: easier move set archiving, and the first yellow-to-blue buttons.
