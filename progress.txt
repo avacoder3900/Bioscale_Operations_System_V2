@@ -25349,3 +25349,18 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-pjk69oviz-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit e3ac5d73 (NOT on master)
 What this deployment is for: Run — Recent Runs under Stage calibration in the Setup drawer.
+================================================================================
+2026-11-04 — feat/arm-ui-redesign — Conveyor belt fire steps in move sets (GPIO 22 = Pin 15)
+================================================================================
+- Move-set fire steps can target the conveyor belt ('conveyor', 20-600000 ms, default 600) besides
+  solenoids A/B: FIRE_TARGETS / maxPulseMs in $lib/robot-arm/animation.ts, model enum, move-set editor
+  (Fire Conveyor Belt, Target select), Test Fire via /conveyor/pulse, play refuses without the Pi support.
+- Pi: conveyor.pulse_blocking() + REPLAY_FIRE_SUPPORTED; replay_settle.py runs GPIO 22 fires on their own
+  FireTimer so a long belt pulse never delays a trapdoor. Installed on arm-pi 11:52 local (backups
+  conveyor.py.bak-pre-replay-fire, replay_settle.py.bak-pre-conveyor), robot-arm restarted with
+  /sessions/active null; /conveyor/status and /gpio/status both report replay_fire true, simulated false.
+- Also this session: Teach "Import Teleop Recording"; New Pose sliders follow the arm while Live is off
+  (poll 1500 -> 300 ms; Pi /servos ~70 ms); Hide/Show (hidden by default) on Run Recent Runs and on
+  Calibrate Recent Edits / Calibration History / Tag Registry; Run text trims.
+Tests: animation.test.ts 56/56 (+2 conveyor); simulated FireTimer check. npm run check 13 errors (baseline).
+Not yet run on hardware: a move set with a conveyor step.
