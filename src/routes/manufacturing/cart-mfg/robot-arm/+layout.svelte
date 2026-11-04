@@ -70,7 +70,7 @@
 		{
 			// Recording clean-up: split a recording into steps, edit, save as a new one.
 			href: `${BASE}/cleanup`,
-			label: 'Clean-up',
+			label: 'Clean-Up',
 			icon: 'M4 6h16M4 12h10M4 18h6m9-5l-3 3 3 3m-3-3h5'
 		},
 		{
@@ -82,14 +82,14 @@
 		{
 			// The arm feeds one cart at a time to an OT-2 running the wax-filling protocol.
 			href: `${BASE}/wax-fill`,
-			label: 'Wax fill',
+			label: 'Wax Fill',
 			icon: 'M4 7h16M4 7l2 12h12l2-12M9 7V4h6v3m-6 6h6'
 		},
 		{
 			// The arm line's own calibration studio: the single-cart stage on its OT-2
 			// (scan position, tip-neutral cart location, dispense depth, stage geometry).
 			href: `${BASE}/stage-calibration`,
-			label: 'Stage calibration',
+			label: 'Stage Calibration',
 			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-9-3v6m-3-3h6M12 7a5 5 0 110 10 5 5 0 010-10z'
 		},
 		{
@@ -195,10 +195,6 @@
 					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-2 py-0.5 text-amber-300">
 						DRY RUN
 					</span>
-				{:else if dryRun === false}
-					<span class="rounded border border-red-500/50 bg-red-500/10 px-2 py-0.5 text-red-300">
-						LIVE MOTION
-					</span>
 				{/if}
 			{:else}
 				<span class="flex items-center gap-1.5">
@@ -212,10 +208,6 @@
 	{#if !data.arm.reachable && data.arm.error}
 		<div class="rounded-lg border border-red-500/40 bg-red-500/10 p-3 text-xs">
 			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
-			<p class="mt-1" style="color: var(--color-tron-text-secondary)">
-				Check <code>ROBOT_ARM_BASE_URL</code> and <code>ROBOT_ARM_API_KEY</code>. Run history below
-				still works — it reads from BIMS, not the arm.
-			</p>
 		</div>
 	{:else if diagnosis && diagnosisHidden}
 		<button

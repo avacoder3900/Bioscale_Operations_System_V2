@@ -41,13 +41,13 @@
 
 <div class="mx-auto max-w-7xl space-y-4 p-4">
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Robot Arm — Run Log</h1>
+		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Run Log</h1>
 		<a
 			href="/manufacturing/cart-mfg/robot-arm"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
-			← back
+			← Back
 		</a>
 	</div>
 
@@ -62,7 +62,7 @@
 					: 'border-[var(--color-tron-border)]'}"
 				style={data.filters.type === t ? '' : 'color: var(--color-tron-text-secondary)'}
 			>
-				{t}
+				{t[0].toUpperCase() + t.slice(1)}
 			</a>
 		{/each}
 		<span style="color: var(--color-tron-text-secondary)" class="self-center pl-3 pr-1"
@@ -76,7 +76,7 @@
 					: 'border-[var(--color-tron-border)]'}"
 				style={data.filters.status === s ? '' : 'color: var(--color-tron-text-secondary)'}
 			>
-				{s}
+				{s[0].toUpperCase() + s.slice(1)}
 			</a>
 		{/each}
 	</div>
@@ -84,7 +84,7 @@
 	<!-- Table -->
 	{#if data.runs.length === 0}
 		<p class="py-8 text-center text-sm" style="color: var(--color-tron-text-secondary)">
-			No runs match the current filters.
+			No Runs
 		</p>
 	{:else}
 		<div class="overflow-hidden rounded-lg border border-[var(--color-tron-border)]">
@@ -96,7 +96,7 @@
 					<tr>
 						<th class="px-3 py-2">Type</th>
 						<th class="px-3 py-2">Status</th>
-						<th class="px-3 py-2">Triggered by</th>
+						<th class="px-3 py-2">Triggered By</th>
 						<th class="px-3 py-2">Lot</th>
 						<th class="px-3 py-2">Started</th>
 						<th class="px-3 py-2">Ended</th>
@@ -146,14 +146,14 @@
 						<a
 							href={pageHref(data.page - 1)}
 							class="rounded border border-[var(--color-tron-border)] px-2 py-1 transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-							style="color: var(--color-tron-text)">← prev</a
+							style="color: var(--color-tron-text)">← Prev</a
 						>
 					{/if}
 					{#if data.page < totalPages}
 						<a
 							href={pageHref(data.page + 1)}
 							class="rounded border border-[var(--color-tron-border)] px-2 py-1 transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
-							style="color: var(--color-tron-text)">next →</a
+							style="color: var(--color-tron-text)">Next →</a
 						>
 					{/if}
 				</div>

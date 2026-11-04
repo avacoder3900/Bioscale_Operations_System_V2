@@ -49,7 +49,7 @@
 		const label = c.verifyStep != null ? `to "${friendlyName(run.steps[c.verifyStep].name)}"` : `steps ${c.from + 1}–${c.to + 1}`;
 		if (run.cursor.phase === 'play') return `Starting the move ${label}…`;
 		if (run.cursor.phase === 'playing') return `Moving ${label} · ${vr.elapsedS.toFixed(0)} / ${(run.playing?.durationS ?? 0).toFixed(1)} s`;
-		if (run.cursor.phase === 'verify') return `Checking "${friendlyName(run.steps[c.verifyStep ?? c.to].name)}" with the camera…`;
+		if (run.cursor.phase === 'verify') return `Checking "${friendlyName(run.steps[c.verifyStep ?? c.to].name)}"…`;
 		return '';
 	});
 
@@ -62,14 +62,14 @@
 	{@const st = run ? (STATUS[run.status] ?? { label: run.status, color: '#fbbf24' }) : null}
 	<div class="rounded border p-3 text-sm sm:p-4" style="border-color: {st?.color ?? 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
 		<div class="flex flex-wrap items-center gap-3">
-			<span class="font-semibold" style="color: var(--color-tron-text)">Verified run{run ? `: ${friendlyName(run.name)}` : ''}</span>
+			<span class="font-semibold" style="color: var(--color-tron-text)">Verified Run{run ? `: ${friendlyName(run.name)}` : ''}</span>
 			{#if st}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(0,0,0,0.3); color: {st.color}">{st.label}</span>{/if}
 			{#if run}<span class="text-xs" style={muted}>{run.passedSteps} / {run.verifiedSteps} checks passed · camera {run.cameraName}</span>{/if}
 			<span class="grow"></span>
 			{#if run?.status === 'running'}
 				<button type="button" class={btn} style={red} onclick={() => vr.stop()} disabled={vr.busy && !vr.active}>Stop</button>
 			{:else if run}
-				<button type="button" class="text-xs underline" style={muted} onclick={() => vr.clear()}>close</button>
+				<button type="button" class="text-xs underline" style={muted} onclick={() => vr.clear()}>Close</button>
 			{/if}
 		</div>
 
@@ -80,10 +80,10 @@
 
 		{#if run?.failure}
 			<div class="mt-2 rounded border border-red-500/50 bg-red-900/15 p-2 text-xs text-red-200">
-				Stopped at step {run.failure.step + 1}: {run.failure.message} The arm is holding where it stopped (torque on). Nothing retries — fix the pose or its tolerances and run again.
+				Stopped at step {run.failure.step + 1}: {run.failure.message} Arm holding (torque on).
 			</div>
 		{:else if run?.status === 'passed'}
-			<p class="mt-2 text-xs" style="color: #4ade80">Every checked step landed where its reference says.</p>
+			<p class="mt-2 text-xs" style="color: #4ade80">All Checks Passed</p>
 		{/if}
 
 		{#if run}
@@ -100,7 +100,7 @@
 								{#if s.verify && s.tolerances}<span class="font-mono" style={muted}> · {s.tolerances.positionMm} mm / {s.tolerances.angleDeg}° / {s.tolerances.steps} st</span>{/if}
 								{#if r}
 									<span class="block" style="color: {r.passed ? 'var(--color-tron-text-secondary)' : '#fca5a5'}">
-										{r.passed ? `landed — encoders within ${r.residualMax ?? '?'} step(s)${r.markers.length ? `, ${r.markers.filter((m) => m.status === 'ok').length}/${r.markers.length} tags ok` : ''}` : r.message}
+										{r.passed ? `Landed · encoders within ${r.residualMax ?? '?'} step(s)${r.markers.length ? `, ${r.markers.filter((m) => m.status === 'ok').length}/${r.markers.length} tags ok` : ''}` : r.message}
 									</span>
 								{/if}
 							</span>

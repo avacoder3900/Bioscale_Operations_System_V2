@@ -599,7 +599,7 @@
 					class="rounded border border-red-500/40 bg-red-500/10 p-3 text-xs"
 					style="color: var(--color-tron-text)"
 				>
-					Arm unreachable — no camera. Check <code>ROBOT_ARM_BASE_URL</code>.
+					Arm Unreachable
 				</div>
 			{:else if camerasError}
 				<div
@@ -613,8 +613,7 @@
 					class="rounded border p-3 text-xs"
 					style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
 				>
-					No cameras configured on the Pi. Check the <code>cameras:</code> block in
-					<code>hardware.yaml</code>.
+					No Cameras Configured
 				</div>
 			{:else}
 				<!-- Viewport -->
@@ -653,7 +652,7 @@
 							{#if paused}
 								Paused
 							{:else if !tabVisible}
-								Paused — tab in background
+								Paused In Background
 							{:else}
 								Connecting…
 							{/if}
@@ -678,7 +677,7 @@
 						<div
 							class="absolute inset-x-0 bottom-0 bg-black/70 px-2 py-1 text-center text-[11px] text-white"
 						>
-							{paused ? 'Paused' : 'Paused — tab in background'}
+							{paused ? 'Paused' : 'Paused In Background'}
 						</div>
 					{/if}
 				</div>
@@ -693,11 +692,11 @@
 				{#if selectedStatus && !selectedStatus.running && frameCount === 0}
 					<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if selectedStatus.state === 'absent'}
-							No colour camera found on the Pi (nothing matches the configured device).
+							No Colour Camera Found
 						{:else if selectedStatus.state === 'error' && selectedStatus.error}
 							Camera worker stopped: {selectedStatus.error}
 						{:else}
-							Camera worker was idle at page load{selectedStatus.device ? ` (${selectedStatus.device})` : ''}. Requesting frames starts it — give it a moment.
+							Camera Idle{selectedStatus.device ? ` (${selectedStatus.device})` : ''}
 						{/if}
 					</p>
 				{/if}
@@ -769,8 +768,8 @@
 						style="border-color: var(--color-tron-border); background: var(--color-tron-bg); color: {resolution === 'full' ? 'var(--color-tron-cyan)' : 'var(--color-tron-text)'}"
 						aria-label="Resolution"
 					>
-						<option value="fit">fit</option>
-						<option value="full">full res</option>
+						<option value="fit">Fit</option>
+						<option value="full">Full Res</option>
 					</select>
 
 					<!-- View-only: detection and coordinates keep the camera's own orientation. -->

@@ -136,25 +136,22 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">LIVE TAGS</h2>
-			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				Every calibrated tag now (solid) against its home position (dashed). The white edge is the tag's printed top.
-			</p>
 		</div>
 		<div class="flex items-center gap-2">
 			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Consecutive frames the Pi stacks pixel by pixel into one image before the detector runs. Cuts sensor noise by about the square root of the count for 33 ms per frame at 30 fps and no extra detect. 5 = 1/6 s (what a step check uses; a calibration takes 5 detections of 5-frame stacks). The arm must hold still while the stack is captured.">
-				average
+				Average
 				<select bind:value={average} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
 					{#each AVERAGE_OPTIONS as f}<option value={f}>{f}</option>{/each}
 				</select>
 			</label>
 			<label class="text-xs" style="color: var(--color-tron-text-secondary)" title="Separate detections the Pi averages each tag's corners over before answering. 1 = live; 3 or 5 = steadier numbers for a parked arm (each detection ~0.6 s). The jitter column shows what was averaged away.">
-				detections
+				Detections
 				<select bind:value={frames} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
 					{#each FRAME_OPTIONS as f}<option value={f}>{f}</option>{/each}
 				</select>
 			</label>
 			<label class="text-xs" style="color: var(--color-tron-text-secondary)">
-				per s
+				Per s
 				<select bind:value={rate} class="ml-1 rounded border bg-black/40 px-1 py-0.5 text-xs" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
 					{#each RATE_OPTIONS as f}<option value={f}>{f}</option>{/each}
 				</select>
@@ -167,17 +164,17 @@
 				style="background: {running ? 'rgba(239,68,68,0.15)' : 'rgba(56,189,248,0.15)'}; color: {running ? '#fca5a5' : 'var(--color-tron-cyan)'}; border: 1px solid {running ? '#ef4444' : 'var(--color-tron-cyan)'};"
 				title={suspended ? 'Off while the arm returns home' : ''}
 			>
-				{running ? 'Stop' : 'Start live view'}
+				{running ? 'Stop' : 'Start Live View'}
 			</button>
 		</div>
 	</div>
 	{#if suspended}
-		<p class="mt-2 text-xs" style="color: #f59e0b">Live tags are off while the arm returns home — start them again once it finishes.</p>
+		<p class="mt-2 text-xs" style="color: #f59e0b">Live tags off: arm returning home.</p>
 	{/if}
 
 	{#if !calibration}
 		<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">
-			Camera <span class="font-mono">{camera || '—'}</span> has no calibration yet — calibrate it below, then watch it live.
+			Camera <span class="font-mono">{camera || '—'}</span> Not Calibrated
 		</p>
 	{:else}
 		{#if assessment}
@@ -194,14 +191,14 @@
 			{#if assessment.cameraShift}
 				<p class="mt-1 text-xs" style="color: {assessment.cameraShift.compensated ? '#f59e0b' : 'var(--color-tron-text-secondary)'}">
 					Camera {assessment.cameraShift.compensated ? 'has shifted' : 'steady'}: {fmt(assessment.cameraShift.mm)} mm / {fmt(assessment.cameraShift.deg)}°
-					on {assessment.cameraShift.fixedUsed}/{assessment.cameraShift.fixedSeen} fixed tag(s){assessment.cameraShift.compensated ? ' — undone before judging the arm; recalibrate when convenient' : ''}.
+					on {assessment.cameraShift.fixedUsed}/{assessment.cameraShift.fixedSeen} fixed tag(s){assessment.cameraShift.compensated ? ' · compensated' : ''}
 				</p>
 			{:else}
-				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">No fixed tag in view — a camera bump cannot be told apart from the arm moving.</p>
+				<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">No fixed tag in view.</p>
 			{/if}
 		{/if}
 		{#if error}<p class="mt-2 text-xs text-red-300">{error}</p>{/if}
-		{#if stale}<p class="mt-2 text-xs" style="color: #f59e0b">No new detection for {Math.round((now - (lastAt ?? now)) / 1000)} s — the picture below is old.</p>{/if}
+		{#if stale}<p class="mt-2 text-xs" style="color: #f59e0b">No new detection for {Math.round((now - (lastAt ?? now)) / 1000)} s.</p>{/if}
 
 		<div class="mt-3 grid gap-4 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
 			<VisionStage
@@ -209,7 +206,7 @@
 				width={det?.width || calibration.frameWidth}
 				height={det?.height || calibration.frameHeight}
 				tags={stageTags}
-				emptyText={running ? 'Waiting for the first detection…' : 'Start the live view to see the camera'}
+				emptyText={running ? 'Waiting…' : 'Live View Off'}
 				alt="Live camera frame with detected tags"
 			/>
 			<div class="overflow-x-auto">
@@ -218,13 +215,13 @@
 						<tr class="text-left" style="color: var(--color-tron-text-secondary)">
 							<th class="py-1 pr-2 font-medium">Tag</th>
 							<th class="py-1 pr-2 font-medium">Status</th>
-							<th class="py-1 pr-2 text-right font-medium" title="Distance from home after undoing any camera shift. Red = over {tolMm} mm.">off mm</th>
-							<th class="py-1 pr-2 text-right font-medium" title="D415 depth now minus depth at calibration (signed, + = further from the camera). The raw sensor change; off mm uses this depth as the tag's distance whenever both sides have a reading.">Δdepth mm</th>
-							<th class="py-1 pr-2 text-right font-medium" title={tolDeg > 0 ? `Spin about the tag's own normal. Red = over ${tolDeg}°.` : 'Spin about the tag\'s own normal (not checked).'}>spin °</th>
-							<th class="py-1 pr-2 text-right font-medium" title="Tilt of the tag's normal from home. Advisory only: a square tag seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle. ? = that coin toss this frame.">tilt °</th>
-							{#if anyPx}<th class="py-1 pr-2 text-right font-medium" title="Picture distance, % of frame width; used when a tag has no pose. Red = over {(calibration.tolerances.pixel * 100).toFixed(1)} %.">off px</th>{/if}
-							<th class="py-1 text-right font-medium" title="Distance from the camera used for the judgment. D = the D415 depth (the pose slid along its sight line to it); (brackets) = a depth reading that could not be used this frame, so the image distance was.">dist mm</th>
-							{#if (det?.framesUsed ?? 1) > 1}<th class="py-1 pl-2 text-right font-medium" title="Corner noise the Pi averaged away: mean standard deviation of the tag's 8 corner coordinates across the {det?.framesUsed} frames, in pixels. The 2026-10-23 baseline on a parked scene was 0.10-0.35 px per tag.">jitter px</th>{/if}
+							<th class="py-1 pr-2 text-right font-medium" title="Distance from home after undoing any camera shift. Red = over {tolMm} mm.">Off mm</th>
+							<th class="py-1 pr-2 text-right font-medium" title="D415 depth now minus depth at calibration (signed, + = further from the camera). The raw sensor change; off mm uses this depth as the tag's distance whenever both sides have a reading.">ΔDepth mm</th>
+							<th class="py-1 pr-2 text-right font-medium" title={tolDeg > 0 ? `Spin about the tag's own normal. Red = over ${tolDeg}°.` : 'Spin about the tag\'s own normal (not checked).'}>Spin °</th>
+							<th class="py-1 pr-2 text-right font-medium" title="Tilt of the tag's normal from home. Advisory only: a square tag seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle. ? = that coin toss this frame.">Tilt °</th>
+							{#if anyPx}<th class="py-1 pr-2 text-right font-medium" title="Picture distance, % of frame width; used when a tag has no pose. Red = over {(calibration.tolerances.pixel * 100).toFixed(1)} %.">Off px</th>{/if}
+							<th class="py-1 text-right font-medium" title="Distance from the camera used for the judgment. D = the D415 depth (the pose slid along its sight line to it); (brackets) = a depth reading that could not be used this frame, so the image distance was.">Dist mm</th>
+							{#if (det?.framesUsed ?? 1) > 1}<th class="py-1 pl-2 text-right font-medium" title="Corner noise the Pi averaged away: mean standard deviation of the tag's 8 corner coordinates across the {det?.framesUsed} frames, in pixels. The 2026-10-23 baseline on a parked scene was 0.10-0.35 px per tag.">Jitter px</th>{/if}
 						</tr>
 					</thead>
 					<tbody>
@@ -255,13 +252,9 @@
 				</table>
 				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					Tolerance {calibration.tolerances.positionMm} mm{calibration.tolerances.angleDeg > 0 ? `, ${calibration.tolerances.angleDeg}°` : ' (angle not checked)'}.
-					A <span style="color: {OVER_COLOR}">red</span> number is the one over tolerance that makes its tag MOVED.
-					Tilt is advisory: a square seen nearly head-on has two poses that fit its corners equally, so tilt can flip by twice the viewing angle (a "?" marks that coin toss; the pose agreeing with the calibration is used).
-					Distance marked D is the D415's depth: when both the calibration and this frame have a reading for a tag, its pose is slid along its sight line to that depth, so off mm no longer jitters with the tag's size on the picture. Without depth on both sides the tag falls back to the image distance; (brackets) = the unused depth reading.
-					Δdepth is the depth reading now minus at calibration (+ = further away).
-					{#if det?.frameSource}Detected on {det.frameSource === 'raw' ? 'the sensor\'s own pixels' : 'a decoded JPEG (older Pi software)'}{(det.framesAveraged ?? 1) > 1 ? `, ${det.framesAveraged} frames stacked per image${det.captureMs != null ? ` in ${det.captureMs} ms` : ''}${det.motionLuma != null ? `, motion ${det.motionLuma.toFixed(1)}` : ''}` : ''}{(det.framesUsed ?? 1) > 1 ? `, corners averaged over ${det.framesUsed} detections` : ''}.{/if}
-					{#if average > 1 && det && det.framesAveraged == null}The Pi did not stack frames (its software predates frame stacking).{/if}
-					{#if det?.framesAveraged != null && det.framesAveraged < average}Only {det.framesAveraged} of {average} frames were captured within the Pi's time budget (a slow shutter?).{/if}
+					{#if det?.frameSource}Detected on {det.frameSource === 'raw' ? 'the sensor\'s own pixels' : 'a decoded JPEG'}{(det.framesAveraged ?? 1) > 1 ? `, ${det.framesAveraged} frames stacked per image${det.captureMs != null ? ` in ${det.captureMs} ms` : ''}${det.motionLuma != null ? `, motion ${det.motionLuma.toFixed(1)}` : ''}` : ''}{(det.framesUsed ?? 1) > 1 ? `, corners averaged over ${det.framesUsed} detections` : ''}.{/if}
+					{#if average > 1 && det && det.framesAveraged == null}The Pi did not stack frames.{/if}
+					{#if det?.framesAveraged != null && det.framesAveraged < average}Only {det.framesAveraged} of {average} frames captured.{/if}
 					{#if calibration.intrinsicsSource === 'nominal'}Nominal intrinsics — mm are approximate.{/if}
 				</p>
 			</div>

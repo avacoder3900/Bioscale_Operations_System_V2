@@ -65,9 +65,9 @@
 		{/if}
 	</div>
 	<div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-		<span><span class="mr-1 inline-block h-2 w-3 align-middle" style="background: {fill.move}"></span>move</span>
-		<span><span class="mr-1 inline-block h-2 w-3 align-middle" style="background: {fill.hold}"></span>hold</span>
-		<span><span class="mr-1 inline-block h-2 w-3 align-middle" style="background: {fill.fire}"></span>fire (arm waits)</span>
+		<span><span class="mr-1 inline-block h-2 w-3 align-middle" style="background: {fill.move}"></span>Move</span>
+		<span><span class="mr-1 inline-block h-2 w-3 align-middle" style="background: {fill.hold}"></span>Hold</span>
+		<span><span class="mr-1 inline-block h-2 w-3 align-middle" style="background: {fill.fire}"></span>Fire</span>
 		<span class="grow"></span>
 		<span class="font-mono">0 – {path.durationS.toFixed(1)} s</span>
 	</div>

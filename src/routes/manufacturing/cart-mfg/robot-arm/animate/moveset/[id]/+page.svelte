@@ -116,7 +116,7 @@
 	}
 
 	const blocked = $derived(!armReachable || data.holder != null || !!data.active || playback.running || playback.busy || vr.active || vr.busy);
-	const blockReason = $derived(!armReachable ? 'The arm is unreachable.' : playback.running || playback.busy ? 'The arm is playing.' : vr.active || vr.busy ? 'A verified run is in progress.' : data.active || data.holder ? 'The arm is running something — stop it first.' : '');
+	const blockReason = $derived(!armReachable ? 'The arm is unreachable.' : playback.running || playback.busy ? 'The arm is playing.' : vr.active || vr.busy ? 'A verified run is in progress.' : data.active || data.holder ? 'The arm is running something.' : '');
 
 	// Local copy of the keyframes; Save posts it as JSON.
 	let name = $state('');
@@ -256,7 +256,7 @@
 					onclick={() => { if (confirm(`The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
 				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}
 					title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No step has a camera reference — capture one below' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
-					onclick={playVerified}>◎ Play verified</button>
+					onclick={playVerified}>◎ Play Verified</button>
 			{/if}
 		</div>
 	</div>
@@ -275,7 +275,7 @@
 	{/if}
 	<VerifiedRunPanel {vr} />
 	{#if firesBlocked}
-		<p class="text-xs" style="color: #fbbf24">This move set fires solenoids, but the Pi's replay cannot fire steps yet — Play stays off until the Pi is updated. Test fire works.</p>
+		<p class="text-xs" style="color: #fbbf24">The Pi's replay cannot fire steps yet.</p>
 	{/if}
 	{#if render.path && (hasFires || kfs.length > 1)}
 		<StepStrip path={render.path} selectedIndex={selected} {playheadS} onselect={(i) => (selected = i)} />
@@ -316,7 +316,7 @@
 											<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={f.pulseMs} onchange={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, MAX_PULSE_MS)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
 										</span>
 									</label>
-									<label class="block">Wait after (s) — the cartridge drops; the arm waits
+									<label class="block">Wait After (s)
 										<span class="mt-1 flex items-center gap-2">
 											<input type="range" min={MIN_FIRE_WAIT_S} max="10" step="0.1" value={Math.min(10, k.holdS)} oninput={(e) => (k.holdS = tenth(clamp(Number(e.currentTarget.value), MIN_FIRE_WAIT_S, MAX_HOLD_S)))} class="min-w-0 flex-1" aria-label="Wait after firing" />
 											<input type="number" min={MIN_FIRE_WAIT_S} max={MAX_HOLD_S} step="0.1" value={k.holdS} onchange={(e) => (k.holdS = tenth(clamp(Number(e.currentTarget.value), MIN_FIRE_WAIT_S, MAX_HOLD_S)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Wait after firing in seconds" />
@@ -333,7 +333,7 @@
 						<div class="flex items-center gap-2">
 							<span class="w-5 font-mono text-xs" style={muted}>{i + 1}</span>
 							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: {p ? 'var(--color-tron-text)' : '#fca5a5'}" onclick={() => (selected = i)} title={p?.name}>
-								{p ? friendlyName(p.name) : 'missing pose'}{p?.archived ? ' (archived)' : ''}
+								{p ? friendlyName(p.name) : 'Missing Pose'}{p?.archived ? ' (Archived)' : ''}
 							</button>
 							{#if verifyWanted(k.verify, hasRef(k.poseId))}
 								<span class="text-[10px]" style="color: {hasRef(k.poseId) ? '#4ade80' : '#ef4444'}" title={hasRef(k.poseId) ? `Checked with the camera in a verified run (${camera})` : calFor(k.poseId)?.stale ? 'Verification on, but the reference is stale — retake it' : 'Verification on, but this pose has no camera reference — capture one or set the check to off'}>◎</span>
@@ -350,8 +350,8 @@
 						{/if}
 						{#if selected === i}
 							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
-								<label>Move in (s)
-									{#if i === firstPoseIndex}<span class="mt-1 block py-1">start</span>
+								<label>Move In (s)
+									{#if i === firstPoseIndex}<span class="mt-1 block py-1">Start</span>
 									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style="{inputStyle}; {k.durationS < min ? 'border-color: #ef4444' : ''}" />{/if}
 								</label>
 								<label>Easing
@@ -363,62 +363,53 @@
 							{#if i !== firstPoseIndex && k.durationS < min}<p class="mt-1 text-[11px] text-red-300">Too fast for this move — at least {min} s.</p>{/if}
 							<!-- ARM-09: this step's camera check and its own tolerances (blank = the pose reference's) -->
 							<div class="mt-2 grid grid-cols-4 gap-2 text-[11px]" style={muted}>
-								<label>Camera check
+								<label>Camera Check
 									<select value={verifyMode(k)} onchange={(e) => setVerify(k, e.currentTarget.value)} class="{input} mt-1 w-full" style={inputStyle} title="auto = checked when the pose has a reference for the camera">
-										<option value="auto">auto{calFor(k.poseId) ? ' (on)' : ' (off)'}</option>
-										<option value="on">on</option>
-										<option value="off">off</option>
+										<option value="auto">Auto{calFor(k.poseId) ? ' (On)' : ' (Off)'}</option>
+										<option value="on">On</option>
+										<option value="off">Off</option>
 									</select>
 								</label>
 								<label>mm<input type="number" step="0.1" min="0.1" max={MAX_POSITION_MM} value={k.tolerances?.positionMm ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.positionMm ?? '')} oninput={(e) => setTol(k, 'positionMm', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
-								<label>spin °<input type="number" step="0.1" min="0" max={MAX_ANGLE_DEG} value={k.tolerances?.angleDeg ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.angleDeg ?? '')} oninput={(e) => setTol(k, 'angleDeg', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
-								<label>steps<input type="number" step="1" min="1" max={MAX_TOLERANCE_STEPS} value={k.tolerances?.steps ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.steps ?? '')} oninput={(e) => setTol(k, 'steps', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
+								<label>Spin °<input type="number" step="0.1" min="0" max={MAX_ANGLE_DEG} value={k.tolerances?.angleDeg ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.angleDeg ?? '')} oninput={(e) => setTol(k, 'angleDeg', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
+								<label>Steps<input type="number" step="1" min="1" max={MAX_TOLERANCE_STEPS} value={k.tolerances?.steps ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.steps ?? '')} oninput={(e) => setTol(k, 'steps', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
 							</div>
 							{#if k.offsets}
 								<p class="mt-1 text-[11px]" style="color: #fbbf24">
-									This step was adjusted on the old timeline (the arm goes slightly off the pose here).
-									<button type="button" class="underline" onclick={() => delete k.offsets}>use the pose as is</button>
+									Adjusted On Old Timeline
+									<button type="button" class="underline" onclick={() => delete k.offsets}>Use The Pose As Is</button>
 								</p>
 							{/if}
 						{:else}
-							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === firstPoseIndex ? 'start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}</div>
+							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === firstPoseIndex ? 'Start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}</div>
 						{/if}
 					</li>
 					{/if}
 				{/each}
 			</ol>
-			{#if !kfs.length}<p class="text-xs" style={muted}>No steps yet — add a pose or a fire step below.</p>{/if}
+			{#if !kfs.length}<p class="text-xs" style={muted}>No Steps Yet</p>{/if}
 
 			<div class="flex items-center gap-2">
 				<select bind:value={addPoseId} class="{input} min-w-0 flex-1" style={inputStyle} aria-label="Add pose">
-					<option value="">Add a pose…</option>
+					<option value="">Add A Pose…</option>
 					{#each activePoses as ap (ap._id)}<option value={ap._id}>{friendlyName(ap.name)}</option>{/each}
 				</select>
 				<button type="button" onclick={add} disabled={!addPoseId} class="rounded px-3 py-1 text-sm font-semibold disabled:opacity-40" style={cyan}>Add</button>
 			</div>
 			<div class="flex flex-wrap items-center gap-2">
-				<span class="text-[11px]" style={muted}>Fire step {selected != null && kfs[selected] ? `after step ${selected + 1}` : 'at the end'}:</span>
+				<span class="text-[11px]" style={muted}>Fire Step {selected != null && kfs[selected] ? `After Step ${selected + 1}` : 'At The End'}:</span>
 				{#each SOLENOIDS as s (s.id)}
 					<button type="button" onclick={() => addFire(s.id)} class="rounded px-3 py-1 text-sm font-semibold" style={amber} title="Add a step that fires {s.label} (GPIO {s.pin})">⚡ {s.id}</button>
 				{/each}
 			</div>
-			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save move set' : 'Saved'}</button>
+			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save Move Set' : 'Saved'}</button>
 		</form>
 
 		<!-- pose editor for the selected keyframe (or, for a fire step, the solenoids) -->
 		<div class="space-y-3">
 			{#if selFire?.fire}
 				<div class={card} style={cardStyle}>
-					<h2 class="text-sm font-semibold" style="color: #fbbf24">⚡ Step {selected! + 1}: fire {solenoidLabel(selFire.fire.solenoid)}</h2>
-					<p class="mt-1 text-xs" style={muted}>
-						When the play reaches this step the arm holds on {holdsOn(selected!)}. The Pi pulses {solenoidLabel(selFire.fire.solenoid)}
-						(GPIO {solenoidPin(selFire.fire.solenoid)}) for {selFire.fire.pulseMs} ms, then waits {selFire.holdS} s for the cartridge to drop
-						before the next step: {fireStepS(selFire).toFixed(1)} s in all.
-					</p>
-					<p class="mt-2 text-[11px]" style={muted}>
-						The Pi fires on the recording's clock, separately from the arm, so the arm settling into a pose never delays a trapdoor.
-						Two fire steps in a row are always at least {MIN_FIRE_WAIT_S} s apart, and the Pi never has both coils on at once.
-					</p>
+					<h2 class="text-sm font-semibold" style="color: #fbbf24">⚡ Step {selected! + 1}: Fire {solenoidLabel(selFire.fire.solenoid)}</h2>
 				</div>
 				<SolenoidPanel status={solenoids} {armReachable} step={selFire.fire} />
 			{:else if selPose}
@@ -426,30 +417,28 @@
 					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} {home} />
 					<PoseCameraCard pose={selPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(selPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
 				{/key}
-				<p class="text-[11px]" style={muted}>Saving a pose changes it in every move set that uses it. "Save as new" makes a new pose and uses it for this step.</p>
 				{#if selPose.trim}
 					<form method="POST" action="?/clearDroop" use:enhance class="text-[11px]" style={muted}>
 						<input type="hidden" name="poseId" value={selPose._id} />
-						This captured pose has a learned droop correction. <button type="submit" class="underline">forget it</button>
+						Learned Droop Correction <button type="submit" class="underline">Forget It</button>
 					</form>
 				{/if}
 			{:else}
-				<div class={card} style={cardStyle}><p class="text-sm" style={muted}>Select a step to edit its pose.</p></div>
+				<div class={card} style={cardStyle}><p class="text-sm" style={muted}>No Step Selected</p></div>
 			{/if}
 
 			<details class="{card} text-sm" style={cardStyle}>
-				<summary class="cursor-pointer text-xs" style={muted}>More: save as a recording on the Pi, archive</summary>
+				<summary class="cursor-pointer text-xs" style={muted}>Save To Pi / Archive</summary>
 				<div class="mt-3 flex flex-wrap items-end gap-2">
 					<form method="POST" action="?/saveToPi" use:enhance class="flex flex-wrap items-end gap-2">
-						<label class="block text-xs" style={muted}>Recording name<input name="recordingName" required maxlength="100" value={friendlyName(moveSet.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
+						<label class="block text-xs" style={muted}>Recording Name<input name="recordingName" required maxlength="100" value={friendlyName(moveSet.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
 						<button type="submit" class="rounded px-3 py-1.5 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={dirty || !kfs.length}>Save to Pi</button>
 					</form>
 					<span class="grow"></span>
 					<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this move set?')) e.preventDefault(); }}>
-						<button type="submit" class="text-xs underline" style={muted}>archive move set</button>
+						<button type="submit" class="text-xs underline" style={muted}>Archive Move Set</button>
 					</form>
 				</div>
-				<p class="mt-2 text-[11px]" style={muted}>A recording on the Pi can be replayed from the Control tab and used in tasks.</p>
 			</details>
 		</div>
 	</div>

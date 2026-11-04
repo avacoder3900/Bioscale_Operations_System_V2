@@ -229,7 +229,7 @@
 				<line x1={x(Math.min(playheadS, total))} x2={x(Math.min(playheadS, total))} y1={TOP} y2={H} stroke="#4ade80" stroke-width="2" />
 			{/if}
 		{:else}
-			<text x={W / 2} y={H / 2} text-anchor="middle" font-size="12" fill="var(--color-tron-text-secondary)">Add poses to see the path</text>
+			<text x={W / 2} y={H / 2} text-anchor="middle" font-size="12" fill="var(--color-tron-text-secondary)">No Poses</text>
 		{/if}
 	</svg>
 </div>

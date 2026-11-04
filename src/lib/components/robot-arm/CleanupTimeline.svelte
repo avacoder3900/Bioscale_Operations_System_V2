@@ -103,12 +103,12 @@
 <div class="space-y-2">
 	<div class="flex items-center justify-between gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 		<div class="flex flex-wrap items-center gap-3">
-			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-slate-400"></span> recorded</span>
-			<span class="flex items-center gap-1"><span class="inline-block h-2.5 w-4 rounded-sm bg-cyan-400/25 ring-1 ring-cyan-400/50"></span> step</span>
-			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-amber-400"></span> your version</span>
+			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-slate-400"></span> Recorded</span>
+			<span class="flex items-center gap-1"><span class="inline-block h-2.5 w-4 rounded-sm bg-cyan-400/25 ring-1 ring-cyan-400/50"></span> Step</span>
+			<span class="flex items-center gap-1"><span class="inline-block h-0.5 w-4 bg-amber-400"></span> Your Version</span>
 		</div>
 		<div class="flex items-center gap-1">
-			zoom
+			Zoom
 			{#each [1, 2, 4, 8, 16] as z (z)}
 				<button
 					type="button"
@@ -205,7 +205,7 @@
 	<!-- Playback strip: the cleaned version, block width = step time. -->
 	<div class="flex items-center gap-2">
 		<div class="w-24 shrink-0 text-[11px]" style="color: var(--color-tron-text-secondary)">
-			playback<br /><span class="font-mono">{fmtS(playbackS)}</span>
+			Playback<br /><span class="font-mono">{fmtS(playbackS)}</span>
 		</div>
 		<div class="flex h-6 min-w-0 flex-1 overflow-hidden rounded border border-[var(--color-tron-border)] bg-black/30">
 			{#each steps as s (s.step.id)}

@@ -103,15 +103,14 @@
 			<div>
 				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">DEPTH STREAM</h2>
 				<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-					D415 depth resolution for the tags' distance.
-					{#if cfg}· {cfg.mode} ({cfg.width}×{cfg.height} @ {cfg.fps} fps){cfg.persisted ? ', remembered' : ''}{st?.running ? ` · streaming${st.measured_fps != null ? ` ${st.measured_fps} fps` : ''}` : ' · idle'}{/if}
+					{#if cfg}{cfg.mode} ({cfg.width}×{cfg.height} @ {cfg.fps} fps){cfg.persisted ? ', remembered' : ''}{st?.running ? ` · streaming${st.measured_fps != null ? ` ${st.measured_fps} fps` : ''}` : ' · idle'}{/if}
 				</p>
 			</div>
-			<span class="text-xs" style="color: var(--color-tron-text-secondary)">{open ? 'hide' : 'show'}</span>
+			<span class="text-xs" style="color: var(--color-tron-text-secondary)">{open ? 'Hide' : 'Show'}</span>
 		</summary>
 
 		{#if !armReachable}
-			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">The arm Pi is unreachable.</p>
+			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">Arm Pi Unreachable</p>
 		{:else if !installed}
 			<p class="mt-3 text-xs" style="color: #f59e0b">{notInstalledReason}</p>
 		{:else if cfg}
@@ -126,38 +125,33 @@
 					{/each}
 				</fieldset>
 				<label class="block" style="color: var(--color-tron-text-secondary)">
-					Frame rate
+					Frame Rate
 					<select value={String(cfg.fps)} disabled={busy} onchange={(e) => void apply({ fps: Number((e.currentTarget as HTMLSelectElement).value) })} class="ml-1 rounded border bg-black/40 px-1 py-0.5" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
 						{#each cfg.fps_choices as f (f)}<option value={String(f)}>{f} fps</option>{/each}
 					</select>
 				</label>
 				<label class="flex items-center gap-1" style="color: var(--color-tron-text)" title="Save the mode on the Pi ({cfg.file}) so it survives a restart.">
 					<input type="checkbox" bind:checked={persist} class="accent-cyan-400" />
-					Remember on the Pi
+					Remember On The Pi
 				</label>
 				{#if busy}<span style="color: var(--color-tron-text-secondary)">Switching…</span>{/if}
 				{#if error}<span class="text-red-300">{error}</span>{/if}
 			</div>
 
 			<div class="mt-3 grid gap-x-6 gap-y-1 font-mono text-xs sm:grid-cols-2 lg:grid-cols-4" style="color: var(--color-tron-text)">
-				<div><span style="color: var(--color-tron-text-secondary)">stream</span> {st?.running ? 'running' : 'idle'}{st?.device ? ` on ${st.device}` : ''}</div>
-				<div><span style="color: var(--color-tron-text-secondary)">measured</span> {st?.measured_fps != null ? `${st.measured_fps} fps` : '—'} <span style="color: var(--color-tron-text-secondary)">of {cfg.fps}</span></div>
-				<div><span style="color: var(--color-tron-text-secondary)">reader CPU</span> {st?.child_cpu_pct != null ? `${st.child_cpu_pct} %` : '—'}</div>
-				<div><span style="color: var(--color-tron-text-secondary)">frame</span> {st ? kb(st.frame_bytes) : '—'}{st?.last_frame_age_s != null ? `, ${st.last_frame_age_s} s old` : ''}</div>
+				<div><span style="color: var(--color-tron-text-secondary)">Stream</span> {st?.running ? 'running' : 'idle'}{st?.device ? ` on ${st.device}` : ''}</div>
+				<div><span style="color: var(--color-tron-text-secondary)">Measured</span> {st?.measured_fps != null ? `${st.measured_fps} fps` : '—'} <span style="color: var(--color-tron-text-secondary)">of {cfg.fps}</span></div>
+				<div><span style="color: var(--color-tron-text-secondary)">Reader CPU</span> {st?.child_cpu_pct != null ? `${st.child_cpu_pct} %` : '—'}</div>
+				<div><span style="color: var(--color-tron-text-secondary)">Frame</span> {st ? kb(st.frame_bytes) : '—'}{st?.last_frame_age_s != null ? `, ${st.last_frame_age_s} s old` : ''}</div>
 				<div><span style="color: var(--color-tron-text-secondary)">Pi</span> {thermal?.temp_c != null ? `${thermal.temp_c} °C` : '—'}{thermal?.now?.length ? ` (${thermal.now.join(', ')})` : ''}</div>
-				<div><span style="color: var(--color-tron-text-secondary)">service CPU</span> {thermal?.service_cpu_pct != null ? `${thermal.service_cpu_pct} %` : '—'}</div>
-				<div><span style="color: var(--color-tron-text-secondary)">frames</span> {st?.frames ?? '—'}</div>
+				<div><span style="color: var(--color-tron-text-secondary)">Service CPU</span> {thermal?.service_cpu_pct != null ? `${thermal.service_cpu_pct} %` : '—'}</div>
+				<div><span style="color: var(--color-tron-text-secondary)">Frames</span> {st?.frames ?? '—'}</div>
 				{#if st?.error}<div class="sm:col-span-2 lg:col-span-4" style="color: #f59e0b">{st.error}</div>{/if}
 			</div>
-			<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				The depth stream runs only while something samples it (Live Tags, a check, a calibration) and stops after a minute idle, so start Live Tags to compare modes.
-				720p is the sensor's native depth; 480p is decimated from it. 720p costs more USB bandwidth and reader CPU (the numbers above), and should make the D415 distance and the Δdepth column steadier.
-				Switching restarts the depth stream (about a second); colour video is unaffected. The colour→depth map was measured at 848x480 and is scaled per axis for 720p.
-			</p>
 		{:else if error}
 			<p class="mt-3 text-xs text-red-300">{error}</p>
 		{:else}
-			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">Reading the depth stream mode…</p>
+			<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">Reading…</p>
 		{/if}
 	</details>
 </section>

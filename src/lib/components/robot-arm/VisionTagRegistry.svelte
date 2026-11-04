@@ -24,8 +24,8 @@
 	const archived = $derived(tags.filter((t) => t.archived));
 	const groups = $derived([...new Set(tags.map((t) => t.group).filter((g): g is string => !!g))].sort());
 	const byRole = $derived([
-		{ role: 'arm', label: 'On the arm', list: active.filter((t) => t.role === 'arm') },
-		{ role: 'fixed', label: 'Fixed (camera-shift reference)', list: active.filter((t) => t.role === 'fixed') }
+		{ role: 'arm', label: 'On The Arm', list: active.filter((t) => t.role === 'arm') },
+		{ role: 'fixed', label: 'Fixed', list: active.filter((t) => t.role === 'fixed') }
 	]);
 	const newSize = $derived(newTagId != null ? sheetSizeMm(newTagId) : null);
 
@@ -40,11 +40,6 @@
 
 <section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
 	<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">TAG REGISTRY</h2>
-	<p class="max-w-2xl text-xs" style="color: var(--color-tron-text-secondary)">
-		AprilTag 36h11 from the printed sheet (services/robot-arm/calibration/apriltag-sheet.pdf). Each ID goes on one spot only.
-		Size is the edge of the black square — measure it if the print might be scaled. Put at least one tag on something
-		fixed (deck, Opentron) so a bumped camera can be measured and undone.
-	</p>
 
 	<datalist id="arm-tag-groups">
 		{#each groups as g}<option value={g}></option>{/each}
@@ -57,31 +52,30 @@
 		</label>
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 			Size mm
-			<input name="sizeMm" type="number" step="0.1" min="1" max="500" placeholder={newSize != null ? String(newSize) : 'size'} class={input} style={inputStyle} />
+			<input name="sizeMm" type="number" step="0.1" min="1" max="500" placeholder={newSize != null ? String(newSize) : 'Size'} class={input} style={inputStyle} />
 		</label>
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 			On
 			<select name="role" required class={input} style={inputStyle}>
-				<option value="arm">the arm</option>
-				<option value="fixed">something fixed</option>
+				<option value="arm">The Arm</option>
+				<option value="fixed">Something Fixed</option>
 			</select>
 		</label>
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 			Name
-			<input name="name" required maxlength="60" placeholder="e.g. Wrist, Deck front-left" class={input} style={inputStyle} />
+			<input name="name" required maxlength="60" placeholder="e.g. Wrist, Deck Front-Left" class={input} style={inputStyle} />
 		</label>
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-			Group (optional)
+			Group
 			<input name="group" list="arm-tag-groups" maxlength="40" class={input} style={inputStyle} />
 		</label>
 		<button type="submit" class="min-h-[34px] rounded px-4 text-sm font-semibold" style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);">
 			Register
 		</button>
 	</form>
-	<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Leave size empty to use the printed sheet's size for that ID.</p>
 
 	{#if !active.length}
-		<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">No tags registered yet — run Detect in Calibrate and register what the camera sees.</p>
+		<p class="mt-3 text-xs" style="color: var(--color-tron-text-secondary)">No Tags Registered</p>
 	{/if}
 
 	{#each byRole as g (g.role)}
@@ -99,13 +93,13 @@
 									<input name="tagId" type="number" min="0" max={MAX_TAG_ID} required value={t.tagId} class={input} style={inputStyle} aria-label="Tag ID" />
 									<input name="sizeMm" type="number" step="0.1" min="1" max="500" required value={t.sizeMm} class={input} style={inputStyle} aria-label="Size mm" />
 									<select name="role" class={input} style={inputStyle} aria-label="On">
-										<option value="arm" selected={t.role === 'arm'}>the arm</option>
-										<option value="fixed" selected={t.role === 'fixed'}>something fixed</option>
+										<option value="arm" selected={t.role === 'arm'}>The Arm</option>
+										<option value="fixed" selected={t.role === 'fixed'}>Something Fixed</option>
 									</select>
 									<input name="name" required maxlength="60" value={t.name} class={input} style={inputStyle} aria-label="Name" />
 									<input name="group" list="arm-tag-groups" maxlength="40" value={t.group ?? ''} class={input} style={inputStyle} aria-label="Group" />
 									<button type="submit" class="min-h-[30px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">Save</button>
-									<button type="button" onclick={() => (editingId = null)} class="px-2 text-xs" style="color: var(--color-tron-text-secondary)">cancel</button>
+									<button type="button" onclick={() => (editingId = null)} class="px-2 text-xs" style="color: var(--color-tron-text-secondary)">Cancel</button>
 								</form>
 							{:else}
 								<div class="flex flex-wrap items-center gap-2 text-sm">
@@ -119,10 +113,10 @@
 									>
 									<span class="text-xs" style="color: var(--color-tron-text-secondary)">{t.sizeMm} mm{t.group ? ` · ${t.group}` : ''}</span>
 									<span class="grow"></span>
-									<button type="button" onclick={() => (editingId = t._id)} class="text-xs underline" style="color: var(--color-tron-cyan)">edit</button>
+									<button type="button" onclick={() => (editingId = t._id)} class="text-xs underline" style="color: var(--color-tron-cyan)">Edit</button>
 									<form method="POST" action="?/archiveTag" use:enhance>
 										<input type="hidden" name="id" value={t._id} />
-										<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">archive</button>
+										<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">Archive</button>
 									</form>
 								</div>
 							{/if}
@@ -135,7 +129,7 @@
 
 	{#if archived.length}
 		<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style="color: var(--color-tron-text-secondary)">
-			{showArchived ? 'Hide' : 'Show'} archived ({archived.length})
+			{showArchived ? 'Hide' : 'Show'} Archived ({archived.length})
 		</button>
 		{#if showArchived}
 			<ul class="mt-1 space-y-1">
@@ -146,7 +140,7 @@
 						<form method="POST" action="?/archiveTag" use:enhance>
 							<input type="hidden" name="id" value={t._id} />
 							<input type="hidden" name="restore" value="1" />
-							<button type="submit" class="underline" style="color: var(--color-tron-cyan)">restore</button>
+							<button type="submit" class="underline" style="color: var(--color-tron-cyan)">Restore</button>
 						</form>
 					</li>
 				{/each}

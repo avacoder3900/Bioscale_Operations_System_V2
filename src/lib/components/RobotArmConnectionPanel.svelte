@@ -76,8 +76,7 @@
 	const reachable = $derived(preflight !== null);
 	const dryRun = $derived(preflight?.checks?.dry_run?.value);
 	// dry_run.ok is always true on the Pi (it's a config choice, not a fault),
-	// so liveMotion keys off the value and treats "unknown" as not-live.
-	const liveMotion = $derived(reachable && dryRun === false);
+	// so only DRY RUN gets a chip; live motion is the normal state (not shown, 2026-11-04).
 
 	// NB: do not name this `state` — `$state` would then parse as a store
 	// subscription rather than the rune, and svelte-check rejects it.
@@ -134,14 +133,7 @@
 			{label}
 		</span>
 
-		{#if liveMotion}
-			<span
-				class="rounded px-1.5 py-0.5 text-[10px] font-semibold"
-				style="background: rgba(239,68,68,0.15); color: #ef4444;"
-			>
-				⚠ LIVE MOTION
-			</span>
-		{:else if dryRun === true}
+		{#if dryRun === true}
 			<span
 				class="rounded px-1.5 py-0.5 text-[10px] font-semibold"
 				style="background: rgba(34,197,94,0.15); color: #22c55e;"
@@ -151,7 +143,7 @@
 		{/if}
 
 		<span class="text-[10px]" style="color: var(--color-tron-text-secondary)">
-			last connected {relativeTime(lastConnected)}
+			Last Connected {relativeTime(lastConnected)}
 		</span>
 	</div>
 {:else}
@@ -230,13 +222,6 @@
 				>
 					DRY RUN
 				</span>
-			{:else if liveMotion}
-				<span
-					class="rounded px-2 py-0.5 text-xs font-semibold"
-					style="background: rgba(239,68,68,0.15); color: #ef4444;"
-				>
-					⚠ LIVE MOTION
-				</span>
 			{/if}
 		{/if}
 	</div>
@@ -252,13 +237,9 @@
 			class="mt-3 rounded border p-2 text-xs"
 			style="border-color: #ef4444; background: rgba(239,68,68,0.08); color: var(--color-tron-text)"
 		>
-			<p class="font-semibold">Cannot reach the robot arm.</p>
+			<p class="font-semibold">Cannot Reach Robot Arm</p>
 			<p class="mt-1 break-all" style="color: var(--color-tron-text-secondary)">
 				{preflightError}
-			</p>
-			<p class="mt-1" style="color: var(--color-tron-text-secondary)">
-				Check ROBOT_ARM_BASE_URL and ROBOT_ARM_API_KEY, and that the robot-arm service is running
-				on the Pi.
 			</p>
 		</div>
 	{:else}
@@ -280,7 +261,7 @@
 		{#if preflight?.candidates?.length}
 			<div class="mt-3">
 				<p class="text-xs font-semibold" style="color: var(--color-tron-text-secondary)">
-					Detected boards
+					Detected Boards
 				</p>
 				<ul class="mt-1 space-y-1">
 					{#each preflight.candidates as c (c.port)}
@@ -310,7 +291,7 @@
 		class="mt-3 border-t pt-2 text-xs"
 		style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
 	>
-		Last connected <span style="color: var(--color-tron-text)">{relativeTime(lastConnected)}</span>
+		Last Connected <span style="color: var(--color-tron-text)">{relativeTime(lastConnected)}</span>
 	</p>
 	{/if}
 	</section>

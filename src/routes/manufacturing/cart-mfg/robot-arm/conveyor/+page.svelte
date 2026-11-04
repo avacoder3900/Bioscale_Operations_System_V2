@@ -72,9 +72,9 @@
 					style="background: {status.state ? '#22c55e' : '#6b7280'}"
 				></span>
 				{#if status.phase === 'on'}
-					On · {seconds(status.ends_in_ms)} left
+					On · {seconds(status.ends_in_ms)} Left
 				{:else if status.phase === 'delay'}
-					Waiting · on in {seconds((status.ends_in_ms ?? 0) - (status.ms ?? 0))}
+					Waiting · On In {seconds((status.ends_in_ms ?? 0) - (status.ms ?? 0))}
 				{:else}
 					Off
 				{/if}

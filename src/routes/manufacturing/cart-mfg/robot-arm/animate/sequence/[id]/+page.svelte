@@ -185,9 +185,9 @@
 			<thead>
 				<tr class="text-left" style="color: var(--color-tron-text-secondary)">
 					<th class="py-1 pr-2 font-medium">#</th>
-					<th class="py-1 pr-2 font-medium">Move set</th>
-					<th class="py-1 pr-2 font-medium">Join from previous (s)</th>
-					<th class="py-1 pr-2 font-medium">Join easing</th>
+					<th class="py-1 pr-2 font-medium">Move Set</th>
+					<th class="py-1 pr-2 font-medium">Join From Previous (s)</th>
+					<th class="py-1 pr-2 font-medium">Join Easing</th>
 					<th class="py-1 font-medium"></th>
 				</tr>
 			</thead>
@@ -200,13 +200,13 @@
 							<select bind:value={it.moveSetId} class={input} style={inputStyle}>
 								{#each activeMoveSets as m (m._id)}<option value={m._id}>{friendlyName(m.name)} ({stepCountLabel(m.keyframes)})</option>{/each}
 							</select>
-							{#if r?.missing}<span class="ml-1 text-red-300">missing or empty move set</span>{/if}
+							{#if r?.missing}<span class="ml-1 text-red-300">Missing Or Empty Move Set</span>{/if}
 						</td>
 						<td class="py-1 pr-2">
 							{#if i === 0}
-								<span style="color: var(--color-tron-text-secondary)">start</span>
+								<span style="color: var(--color-tron-text-secondary)">Start</span>
 							{:else}
-								<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={it.joinDurationS ?? ''} placeholder="auto {r?.autoJoinS ?? ''}" oninput={(e) => setJoin(i, e.currentTarget.value)} class="{input} w-24" style={inputStyle} />
+								<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={it.joinDurationS ?? ''} placeholder="Auto {r?.autoJoinS ?? ''}" oninput={(e) => setJoin(i, e.currentTarget.value)} class="{input} w-24" style={inputStyle} />
 							{/if}
 						</td>
 						<td class="py-1 pr-2">
@@ -225,21 +225,20 @@
 				{/each}
 			</tbody>
 		</table>
-		{#if !items.length}<p class="text-xs" style="color: var(--color-tron-text-secondary)">No move sets yet — add one below. The same move set can appear more than once.</p>{/if}
+		{#if !items.length}<p class="text-xs" style="color: var(--color-tron-text-secondary)">No Move Sets Yet</p>{/if}
 		{#if problems.length}<ul class="list-disc pl-5 text-xs text-red-300">{#each problems as pr}<li>{pr.message}</li>{/each}</ul>{/if}
 
 		<div class="flex flex-wrap items-end gap-2">
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Add move set
+			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Add Move Set
 				<select bind:value={addId} class="{input} mt-1 block w-56" style={inputStyle}>
-					<option value="">choose…</option>
+					<option value="">Choose…</option>
 					{#each activeMoveSets as m (m._id)}<option value={m._id}>{friendlyName(m.name)}</option>{/each}
 				</select>
 			</label>
 			<button type="button" onclick={add} disabled={!addId} class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan}>Add</button>
 			<span class="grow"></span>
-			<button type="submit" class={btn} style={green} disabled={!dirty}>{dirty ? 'Save changes' : 'Saved'}</button>
+			<button type="submit" class={btn} style={green} disabled={!dirty}>{dirty ? 'Save Changes' : 'Saved'}</button>
 		</div>
-		<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Leave the join blank for an automatic length based on how far the arm has to travel.</p>
 	</form>
 
 	<div class="flex flex-wrap items-center gap-2 rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
@@ -248,25 +247,25 @@
 		{:else}
 			<button type="button" class={btn} style={amber} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || playback.busy}
 				title={dirty ? 'Save first' : 'Tween from where the arm is to the first pose, then play the whole sequence'}
-				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(sequence.name)); }}>Play on the arm</button>
+				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(sequence.name)); }}>Play On The Arm</button>
 			<button type="button" class={btn} style={green} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || !camera || !anyVerified}
 				title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No pose in this sequence has a camera reference' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
-				onclick={playVerified}>◎ Play verified</button>
-			<label class="flex items-center gap-1 text-xs" style="color: var(--color-tron-text-secondary)">camera
+				onclick={playVerified}>◎ Play Verified</button>
+			<label class="flex items-center gap-1 text-xs" style="color: var(--color-tron-text-secondary)">Camera
 				<select value={camera} onchange={(e) => { chosenCamera = e.currentTarget.value; saveChosenCamera(e.currentTarget.value); }} class="{input} py-0.5 text-xs" style={inputStyle} aria-label="Camera">
 					{#each cameraNames as n (n)}<option value={n}>{n}</option>{/each}
-					{#if !cameraNames.length}<option value="">no camera</option>{/if}
+					{#if !cameraNames.length}<option value="">No Camera</option>{/if}
 				</select>
 			</label>
 		{/if}
 		<form method="POST" action="?/saveToPi" use:enhance class="flex items-end gap-2">
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Save on the Pi as recording<input name="recordingName" required maxlength="100" value={friendlyName(sequence.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
+			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Recording Name<input name="recordingName" required maxlength="100" value={friendlyName(sequence.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
 			<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold disabled:opacity-40" style={cyan} disabled={dirty || !flat.length}>Save to Pi</button>
 		</form>
-		{#if sequence.savedAs.length}<span class="text-xs" style="color: var(--color-tron-text-secondary)">saved on the Pi</span>{/if}
+		{#if sequence.savedAs.length}<span class="text-xs" style="color: var(--color-tron-text-secondary)">Saved On The Pi</span>{/if}
 		<span class="grow"></span>
 		<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this sequence?')) e.preventDefault(); }}>
-			<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">archive</button>
+			<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">Archive</button>
 		</form>
 	</div>
 </div>

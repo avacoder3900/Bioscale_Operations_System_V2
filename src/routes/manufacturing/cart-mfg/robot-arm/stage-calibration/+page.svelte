@@ -305,8 +305,8 @@
 	}
 	function applyMsg(verb: string, r: any): string {
 		const rej = r.failed?.length ? ` ⚠ ${r.failed.length} skipped (${r.failed.map((f: any) => `${f.wellName}: ${f.reason}`).join('; ')}).` : '';
-		const how = r.mode === 'translate' ? ' (whole cart moved — the first hole was re-taught)' : '';
-		return `${verb} to ${r.applied} hole(s)${how} — saved to BIMS.${rej} Live for "Move to hole" now; the next fill reads it at start.`;
+		const how = r.mode === 'translate' ? ' (whole cart moved)' : '';
+		return `${verb} to ${r.applied} hole(s)${how} — saved to BIMS.${rej}`;
 	}
 	async function applyToSelection() {
 		if (selection.size === 0) {
@@ -337,7 +337,7 @@
 	}
 	async function applyAbsolute() {
 		if (selection.size === 0) {
-			errMsg = 'Select one or more holes — the typed position sets the anchor; the group moves with it';
+			errMsg = 'Select one or more holes';
 			return;
 		}
 		const a = anchor ? wellByName.get(anchor) : null;
@@ -366,7 +366,7 @@
 		}
 		const a = anchor ? wellByName.get(anchor) : null;
 		if (!a) {
-			errMsg = 'Click the trusted (jog-verified) hole last — it becomes the anchor';
+			errMsg = 'Click the anchor hole last';
 			return;
 		}
 		const edits: Edit[] = [];
@@ -471,7 +471,7 @@
 			zAxis = pipetteMount === 'right' ? 'rightZ' : 'leftZ';
 			msg = pipetteId ? `Run open: ${pipetteName} on ${pipetteMount}.` : 'Run opened but no pipette could be loaded — jog will fail.';
 			if (pipetteId && pipetteMismatch)
-				errMsg = `The run opened ${pipetteName} on the ${pipetteMount} mount, but ${data.protocol?.protocolName ?? 'the protocol on the robot'} teaches with the ${pip} (${tiprack}). Close the run and open it on the other mount — a probe with this pipette would use the wrong tip and depth.`;
+				errMsg = `The run opened ${pipetteName} on the ${pipetteMount} mount, but this protocol teaches with the ${pip}. Close the run and open the other mount.`;
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -524,7 +524,7 @@
 			return;
 		}
 		if (locked) {
-			errMsg = 'A wax-fill loop is running on this robot — calibration waits until it ends.';
+			errMsg = 'A wax-fill loop is running on this robot.';
 			return;
 		}
 		clearMsg();
@@ -578,7 +578,7 @@
 
 	/** To a hole's tip-neutral rim + this tip's adjust, APPROACH_Z_MM above it — all the way up first, then straight down over it (the fill's frame). */
 	async function moveToWellSafe(name: string) {
-		if (!taught) throw new Error('Teach the first hole first — the holes are laid out from it.');
+		if (!taught) throw new Error('Teach the first hole first.');
 		const w = wellByName.get(name);
 		if (!w) throw new Error(`Unknown hole ${name}`);
 		const a = adj();
@@ -592,7 +592,7 @@
 			await refreshPosition();
 			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ!, hasTip } : null;
 			refWell = name;
-			msg = `At nominal of ${name}${hasTip ? (tipAdjust ? ' (tip on, probed)' : ' (tip on, NOT probed — capture will carry this tip\'s bend)') : ' (no tip)'}. Jog onto the real hole, then Capture.`;
+			msg = `At nominal of ${name}${hasTip ? (tipAdjust ? ' (tip on, probed)' : ' (tip on, NOT probed)') : ' (no tip)'}.`;
 		});
 	const captureOffset = () =>
 		act(async () => {
@@ -601,7 +601,7 @@
 				const was = nominal.hasTip ? 'tip was on' : 'no tip';
 				nominal = null;
 				refWell = null;
-				throw new Error(`Tip state changed since "Move to hole" (${was}, now ${hasTip ? 'tip on' : 'no tip'}). Move to the hole again so nominal + capture share one frame, then Capture.`);
+				throw new Error(`Tip state changed since "Move to hole" (${was}, now ${hasTip ? 'tip on' : 'no tip'}). Move to the hole again.`);
 			}
 			await refreshPosition();
 			if (liveX === null || liveY === null || liveZ === null) throw new Error('Could not read position');
@@ -609,7 +609,7 @@
 			dy = +(liveY - nominal.y).toFixed(3);
 			// Nominal was parked APPROACH_Z_MM above the rim: add it back so dz is the true rim delta.
 			dz = +(liveZ - nominal.z + APPROACH_Z_MM).toFixed(3);
-			msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}. Select the holes to apply it to.`;
+			msg = `Captured offset from ${refWell}: dx=${dx} dy=${dy} dz=${dz}.`;
 		});
 
 	// ── Tour / Fill motion (as the Studio; the stage protocol's heights) ───────
@@ -716,7 +716,7 @@
 				await fillMoveAbs(name, STAGE_PREJUMP_MM, { forceDirect: true }); // retract to the pre-jump height
 				await lift(); // all the way up before leaving the hole
 			}
-			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s)${depthMm === null ? ' at the protocol\'s default depth (teach the dispense depth below)' : ''}`;
+			if (!fillStop) msg = `Fill motion complete — ${chosen.length} hole(s)${depthMm === null ? ' at the protocol\'s default depth' : ''}`;
 		} catch (e) {
 			errMsg = e instanceof Error ? e.message : String(e);
 		} finally {
@@ -728,7 +728,7 @@
 	}
 	function pauseFillMotion() {
 		fillPaused = true;
-		msg = 'Fill motion paused — Resume to continue, or Stop to end.';
+		msg = 'Fill motion paused.';
 	}
 	function resumeFillMotion() {
 		fillPaused = false;
@@ -816,7 +816,7 @@
 		calibrating = true;
 		await act(async () => {
 			let pickedUpNow = false;
-			if (pipetteMismatch) throw new Error(`The run's pipette is ${pipetteName}, not the ${pip} this protocol teaches with — close the run and open the other mount.`);
+			if (pipetteMismatch) throw new Error(`The run's pipette is ${pipetteName}, not the ${pip}.`);
 			if (!hasTip) {
 				msg = `Picking up a ${pip} tip (${tiprack} ${tipWell})…`;
 				await doPickUpTip();
@@ -828,7 +828,7 @@
 				msg = `Moving to the tip calibrator (${calX}, ${calY}, ${approachZNow})…`;
 				await doGoToCalibrator(approachZNow);
 			}
-			msg = 'Calibrating tip on the fixture… (slow limit-switch probe; the tip stays on)';
+			msg = 'Calibrating tip on the fixture…';
 			const res = await api('/api/scanner/calibrate-tip', {
 				method: 'POST',
 				body: JSON.stringify({ robotId, mount: pipetteMount, tipProfile, tipWell, runId, pipetteId, calibrator: { x: calX, y: calY, z: probeZNow } })
@@ -838,7 +838,7 @@
 				nominal = null;
 				refWell = null;
 				await refreshPosition();
-				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}. Tip kept on; applied to every move-to. Move to a hole to set a fresh nominal.`;
+				msg = `Tip calibrated: adjust x=${tipAdjust.x} y=${tipAdjust.y}.`;
 			} else {
 				throw new Error((typeof res?.error === 'string' && res.error) || 'Calibration returned no adjust');
 			}
@@ -848,7 +848,7 @@
 	const pickUpTipAction = () =>
 		act(async () => {
 			await doPickUpTip();
-			msg = `Tip on (no probe) — next fresh ${tipWell}. Enough for Fill motion / depth; Calibrate tip before teaching the first hole.`;
+			msg = `Tip on (no probe) — next fresh ${tipWell}.`;
 		});
 	const swapTipAction = () =>
 		act(async () => {
@@ -858,7 +858,7 @@
 			nominal = null;
 			refWell = null;
 			await doPickUpTip();
-			msg = `${dropped ? 'Dropped the old tip and picked' : 'Picked'} a fresh tip — Calibrate tip again before capturing.`;
+			msg = `${dropped ? 'Dropped the old tip and picked' : 'Picked'} a fresh tip (not probed).`;
 		});
 	const dropTipAction = () =>
 		act(async () => {
@@ -875,17 +875,17 @@
 			const z = checkedZ(calZ, 'Approach Z');
 			if (z === null) throw new Error(errMsg ?? 'Approach Z');
 			await doGoToCalibrator(z);
-			msg = `At the tip-calibrator approach point (${calX}, ${calY}, ${z}). Jog to fine-tune.`;
+			msg = `At the tip-calibrator approach point (${calX}, ${calY}, ${z}).`;
 		});
 	function captureCalibratorFromLive() {
 		if (liveX === null || liveY === null || liveZ === null) {
-			errMsg = 'No live position — open a run and move/jog first';
+			errMsg = 'No live position';
 			return;
 		}
 		calX = +liveX.toFixed(3);
 		calY = +liveY.toFixed(3);
 		calZ = +liveZ.toFixed(3);
-		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}). Click Save to persist.`;
+		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}); not saved yet.`;
 	}
 	async function saveCalibratorPosition() {
 		if (checkedZ(calZ, 'Approach Z') === null || checkedZ(probeZ, 'Probe Z') === null) return;
@@ -935,14 +935,14 @@
 	}
 	const saveScanPosition = () =>
 		act(async () => {
-			if (hasTip) throw new Error('Drop the tip before saving the scan position — the scanner sweep runs without one.');
+			if (hasTip) throw new Error('Drop the tip before saving the scan position.');
 			const p = await readLive();
 			const r = await postAction('saveScanPosition', { x: String(p.x), y: String(p.y), z: String(p.z), pipetteMount: pipetteMount ?? '', pipetteName: pipetteName ?? '', ...(testScanLatest ? { testScanBarcode: testScanLatest } : {}) });
 			if (r) msg = r.success;
 		});
 	const saveFirstHole = () =>
 		act(async () => {
-			if (!hasTip || !tipAdjust) throw new Error('Calibrate the tip first — the first hole is saved tip-neutral (live − that tip\'s probe adjust).');
+			if (!hasTip || !tipAdjust) throw new Error('Calibrate the tip first.');
 			const p = await readLive();
 			const r = await postAction('saveCartLocation', {
 				x: String(p.x),
@@ -964,11 +964,11 @@
 	const goToDispenseHeight = () =>
 		act(async () => {
 			if (!rim) throw new Error('Teach the first hole first.');
-			if (!hasTip) throw new Error('Pick up a tip first — the depth is about the tip end.');
+			if (!hasTip) throw new Error('Pick up a tip first.');
 			const a = adj();
 			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: rim.z + STAGE_PREJUMP_MM }, { lift: true });
 			await moveAbs({ x: rim.x + a.x, y: rim.y + a.y, z: dispenseZ(rim.z, depthMm) }, { direct: true });
-			msg = depthMm === null ? `At the protocol's default (${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim) — jog Z to where the wax should land, then save.` : `At the taught dispense height (${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim). Jog Z to change it, then save.`;
+			msg = depthMm === null ? `At the protocol's default (${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim).` : `At the taught dispense height (${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim).`;
 			await refreshPosition();
 		});
 	const liveDepth = $derived(rim && liveZ !== null ? depthFromLive(rim.z, liveZ) : null);
@@ -994,7 +994,7 @@
 		const next = (((rotation + deltaDeg) % 360) + 360) % 360;
 		rotationDeg = next;
 		const r = await postAction('saveStageGeometry', { rotationDeg: String(next) });
-		if (r) msg = `Cart rotated to ${next}° about the first hole — ${facing}. All 12 holes follow; per-hole corrections are kept.`;
+		if (r) msg = `Cart rotated to ${next}° — ${facing}.`;
 	}
 
 	const fmt3 = (n: number) => n.toFixed(2);
@@ -1008,27 +1008,24 @@
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
 			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Stage Calibration Studio</h1>
-			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				The robot arm's single-cart stage. Teach the first wax hole, jog to a hole, capture the real offset, select holes, apply it. Corrections persist in BIMS and the stage protocol reads them at every run start — nothing to upload.
-			</p>
 		</div>
-		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax fill tab →</a>
+		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax Fill Tab →</a>
 	</div>
 
 	<!-- Pickers -->
 	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
-				<span class="bg-[var(--color-tron-cyan)]/20 px-2.5 py-1.5 text-[var(--color-tron-cyan)]" title="One Gen7 cartridge on the arm's elevated stage">Cartridge on stage</span>
-				<span class="px-2.5 py-1.5" title="Tube rack · slot 10 — the fill reads its labware definition as on a deck robot">Tube rack 10</span>
-				<span class="px-2.5 py-1.5" title="Tip rack · slot 11">Tip rack 11</span>
+				<span class="bg-[var(--color-tron-cyan)]/20 px-2.5 py-1.5 text-[var(--color-tron-cyan)]" title="One Gen7 cartridge on the arm's elevated stage">Cartridge On Stage</span>
+				<span class="px-2.5 py-1.5" title="Tube rack · slot 10 — the fill reads its labware definition as on a deck robot">Tube Rack 10</span>
+				<span class="px-2.5 py-1.5" title="Tip rack · slot 11">Tip Rack 11</span>
 			</div>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Robot
-			<div class="mt-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">{robotName}<span class="ml-1 opacity-60">· the OT-2 the arm feeds</span></div>
+			<div class="mt-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-xs" style="color: var(--color-tron-text)">{robotName}</div>
 			{#if robotId}<span class="mt-1 block"><TransportPill state={robotConn} onRetry={() => void robotSession?.retryDirect()} /></span>{/if}
 		</div>
-		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Pipette mount
+		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Pipette Mount
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
 				{#each [['left', 'Left'], ['right', 'Right']] as [m, lbl] (m)}
 					<button type="button" disabled={!!runId} onclick={() => { desiredMount = m as 'left' | 'right'; zAxis = m === 'right' ? 'rightZ' : 'leftZ'; }}
@@ -1036,24 +1033,23 @@
 						title={runId ? 'Close the run to switch mounts' : `Open the run on the ${lbl.toLowerCase()} mount (the ${pip} is normally on the ${data.teach?.defaultMount ?? 'right'})`}>{lbl}</button>
 				{/each}
 			</div>
-			{#if runId}<div class="mt-0.5 text-[10px]">close run to switch</div>{/if}
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Tip
 			<div class="mt-1 rounded border px-2 py-1.5 text-xs {data.protocol?.rehearsal ? 'border-amber-500/50 bg-amber-900/15 text-amber-200' : 'border-[var(--color-tron-border)] bg-black/30'}" style={data.protocol?.rehearsal ? '' : 'color: var(--color-tron-text)'}
 				title="Follows the wax-filling protocol on the robot: the production stage fill teaches with the p20 (20 µL rack, probe Z = zCalWax); the p300 / air rehearsal teaches with the p300 (200 µL rack, probe Z = zCalReagent → z_cal_p300).">
-				<span class="font-semibold">{pip}</span> · {tipUl} µL rack · slot 11
-				{#if data.protocol?.rehearsal}<span class="ml-1 font-bold uppercase">· rehearsal on the robot</span>{:else}<span class="ml-1 opacity-60">· production stage fill</span>{/if}
+				<span class="font-semibold">{pip}</span> · {tipUl} µL Rack · Slot 11
+				{#if data.protocol?.rehearsal}<span class="ml-1 font-bold uppercase">· Rehearsal On The Robot</span>{:else}<span class="ml-1 opacity-60">· Production Stage Fill</span>{/if}
 			</div>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">
 			12 wax holes · 6 × 9 mm lattice · rotation {rotation}° ({facing}) ·
 			{#if taught}first hole <span class="font-mono">({fmt3(rim!.x)}, {fmt3(rim!.y)}, {fmt3(rim!.z)})</span>{:else}<span class="text-amber-300">first hole not taught</span>{/if}
 		</div>
-		{#if locked}<div class="text-xs text-amber-300">A wax-fill loop is running on this robot — motion is locked until it ends.</div>{/if}
+		{#if locked}<div class="text-xs text-amber-300">A wax-fill loop is running on this robot; motion is locked.</div>{/if}
 	</div>
 
 	{#if !robotId}
-		<div class="rounded border border-amber-500/40 bg-amber-900/15 p-3 text-xs text-amber-200">No OT-2 is chosen for the arm yet — pick it in <a href={WAX_FILL_HREF} class="underline">Wax fill → Setup</a>, then come back here.</div>
+		<div class="rounded border border-amber-500/40 bg-amber-900/15 p-3 text-xs text-amber-200">No OT-2 chosen: <a href={WAX_FILL_HREF} class="underline">Wax Fill → Setup</a></div>
 	{/if}
 	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
@@ -1064,30 +1060,26 @@
 		<section class="flex min-w-0 flex-col rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="mb-2 flex flex-wrap items-center justify-between gap-2">
 				<div class="flex flex-wrap items-center gap-3">
-					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cartridge — {selCount} selected</h2>
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Cartridge — {selCount} Selected</h2>
 					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's rim">
-						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover the cart for coords</span>{/if}
+						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">Hover For Coords</span>{/if}
 					</span>
 				</div>
 				<div class="flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Zoom <input type="range" min="0.6" max="4" step="0.2" bind:value={zoom} /> {zoom.toFixed(1)}×</label>
 					<button type="button" onclick={() => (zoom = 1)} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Fit</button>
 					<span class="ml-2 inline-flex overflow-hidden rounded border border-[var(--color-tron-cyan)]/50" title="Turn the whole cart a quarter turn about the taught first hole and save it (the stage protocol reads the rotation at run start)">
-						<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">⟲ Rotate cart</button>
+						<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">⟲ Rotate Cart</button>
 						<span class="border-x border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2 py-1 font-mono text-[var(--color-tron-cyan)]">{rotation}°</span>
-						<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Rotate cart ⟳</button>
+						<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="px-2 py-1 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Rotate Cart ⟳</button>
 					</span>
 					<button type="button" onclick={() => (showGrid = !showGrid)} class="rounded border px-2 py-1 {showGrid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showGrid ? '' : 'color: var(--color-tron-text)'} title="Reference grid (0.25mm fine · 1mm · 10mm bold)">Grid{showGrid ? ' ✓' : ''}</button>
 					<button type="button" onclick={() => (showRigid = !showRigid)} class="rounded border px-2 py-1 {showRigid ? 'border-[var(--color-tron-cyan)]/60 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)]'}" style={showRigid ? '' : 'color: var(--color-tron-text)'} title="Show where the rigid lattice puts each corrected hole">Lattice{showRigid ? ' ✓' : ''}</button>
-					<button type="button" onclick={selectAll} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select all</button>
+					<button type="button" onclick={selectAll} class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Select All</button>
 					<button type="button" onclick={() => (deselectMode = !deselectMode)} class="rounded border px-2 py-1 {deselectMode ? 'border-amber-500/60 bg-amber-900/20 text-amber-300' : 'border-[var(--color-tron-border)] hover:border-[var(--color-tron-cyan)]'}" style={deselectMode ? '' : 'color: var(--color-tron-text)'} title="When on, box-drag/click removes holes from the selection">Deselect{deselectMode ? ' ✓' : ''}</button>
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
 				</div>
 			</div>
-			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Drag a box to select a group (Shift adds). Click a hole to toggle; the last clicked is the anchor. Wax holes are amber (the first, taught hole is ringed); the blue dots are the paired reagent holes, drawn for orientation only. Deck mm, to scale. Esc clears everything.
-				{#if !taught}<span class="text-amber-300"> The cart is drawn at the origin until the first hole is taught (Stage → First hole).</span>{/if}
-			</p>
 			<div class="flex-1 overflow-auto rounded border border-[var(--color-tron-border)] bg-black/40" style="max-height: 85vh; display: flex; align-items: safe center; justify-content: safe center;">
 				<div style={`width:${zoom * 100}%; flex: 0 0 auto;`}>
 					<svg
@@ -1118,16 +1110,16 @@
 							<rect x={bounds.x0} y="0" width={bounds.x1 - bounds.x0} height={bounds.y1 - bounds.y0} fill="url(#sgrid-10mm)" />
 						{/if}
 						<!-- Which way is which: the OT-2's front (low y, toward the operator) is the bottom of the plane. -->
-						<text x={(bounds.x0 + bounds.x1) / 2} y={bounds.y1 - bounds.y0 - 0.8} font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">▼ front · toward you (−y)</text>
-						<text x={(bounds.x0 + bounds.x1) / 2} y="1.6" font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">back of the OT-2 (+y)</text>
+						<text x={(bounds.x0 + bounds.x1) / 2} y={bounds.y1 - bounds.y0 - 0.8} font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">▼ Front · Toward You (−y)</text>
+						<text x={(bounds.x0 + bounds.x1) / 2} y="1.6" font-size="1.3" text-anchor="middle" fill="rgba(200,220,240,0.55)" style="pointer-events:none; user-select:none;">Back Of The OT-2 (+y)</text>
 						<!-- Gate and row directions of the lattice at this rotation. -->
 						<defs>
 							<marker id="sarrow" viewBox="0 0 4 4" refX="3.5" refY="2" markerWidth="4" markerHeight="4" orient="auto"><path d="M0,0 L4,2 L0,4 z" fill="rgba(0,255,255,0.7)" /></marker>
 						</defs>
 						<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + gateDir.x * 1.25} y2={cy(wells[0].rigid.y + gateDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
-						<text x={wells[0].rigid.x + gateDir.x * 1.35} y={cy(wells[0].rigid.y + gateDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">gates 4→1</text>
+						<text x={wells[0].rigid.x + gateDir.x * 1.35} y={cy(wells[0].rigid.y + gateDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">Gates 4→1</text>
 						<line x1={wells[0].rigid.x} y1={cy(wells[0].rigid.y)} x2={wells[0].rigid.x + rowDir.x * 1.25} y2={cy(wells[0].rigid.y + rowDir.y * 1.25)} stroke="rgba(0,255,255,0.45)" stroke-width="0.12" marker-end="url(#sarrow)" style="pointer-events:none;" />
-						<text x={wells[0].rigid.x + rowDir.x * 1.35} y={cy(wells[0].rigid.y + rowDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">rows 1→3</text>
+						<text x={wells[0].rigid.x + rowDir.x * 1.35} y={cy(wells[0].rigid.y + rowDir.y * 1.35)} font-size="1.1" text-anchor="middle" fill="rgba(0,255,255,0.7)" style="pointer-events:none; user-select:none;">Rows 1→3</text>
 						<!-- reagent holes: orientation only -->
 						{#each wells as w (`rg-${w.name}`)}
 							<circle cx={w.reagent.x} cy={cy(w.reagent.y)} r={wellR * 0.8} fill="rgba(80,170,215,0.35)" style="pointer-events:none;" />
@@ -1168,7 +1160,7 @@
 				<div class="flex items-center justify-between">
 					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Jog</h2>
 					{#if !runId}
-						<button type="button" onclick={startMaintenance} disabled={connecting || !robotId || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">{connecting ? 'Opening…' : 'Open run'}</button>
+						<button type="button" onclick={startMaintenance} disabled={connecting || !robotId || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">{connecting ? 'Opening…' : 'Open Run'}</button>
 					{:else}
 						<div class="flex gap-2">
 							<button type="button" onclick={homeRobot} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Home</button>
@@ -1176,7 +1168,7 @@
 						</div>
 					{/if}
 				</div>
-				{#if runId}<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">pipette {pipetteName} ({pipetteMount})</p>{/if}
+				{#if runId}<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Pipette {pipetteName} ({pipetteMount})</p>{/if}
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 					<label>Step <select bind:value={stepSize} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono text-xs" style="color: var(--color-tron-text)">
 						<option value={0.1}>0.1</option><option value={0.5}>0.5</option><option value={1}>1</option><option value={5}>5</option><option value={10}>10</option><option value={25}>25</option>
@@ -1195,8 +1187,8 @@
 					<div></div>
 				</div>
 				<div class="mt-1 grid grid-cols-2 gap-1">
-					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis(zAxis, stepSize)} class={pad} style="color: var(--color-tron-text)">Z + up</button>
-					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis(zAxis, -stepSize)} class={pad} style="color: var(--color-tron-text)">Z − down</button>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis(zAxis, stepSize)} class={pad} style="color: var(--color-tron-text)">Z + Up</button>
+					<button type="button" disabled={!pipetteId || busy} onclick={() => jogAxis(zAxis, -stepSize)} class={pad} style="color: var(--color-tron-text)">Z − Down</button>
 				</div>
 				<div class="mt-2 flex items-center justify-between rounded border border-[var(--color-tron-border)] bg-black/30 p-2 font-mono text-xs" style="color: var(--color-tron-text)">
 					<span>x {liveX !== null ? liveX.toFixed(2) : '—'}</span>
@@ -1207,114 +1199,100 @@
 					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">tip end {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the taught rim</p>
 				{/if}
 				<div class="mt-2 grid grid-cols-2 gap-2">
-					<button type="button" onclick={moveToSelectedHole} disabled={!pipetteId || busy || selCount !== 1 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Select exactly one hole — parks the tip 2 mm above its rim, this tip's adjust applied">Move to hole</button>
-					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture offset</button>
+					<button type="button" onclick={moveToSelectedHole} disabled={!pipetteId || busy || selCount !== 1 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Select exactly one hole — parks the tip 2 mm above its rim, this tip's adjust applied">Move To Hole</button>
+					<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture Offset</button>
 				</div>
 
 				<!-- Tip -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
 					<div class="mb-1 flex items-center justify-between text-[11px]" style="color: var(--color-tron-text-secondary)">
 						<span class="font-bold uppercase tracking-wider">Tip</span>
-						<span>{hasTip ? '🟢 tip on' : 'no tip'} · {pip} · {tipUl} µL rack{tipAdjust ? ` · zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
+						<span>{hasTip ? '🟢 Tip On' : 'No Tip'} · {pip} · {tipUl} µL Rack{tipAdjust ? ` · Zeroed (${tipAdjust.x}, ${tipAdjust.y})` : ''}</span>
 					</div>
 					<div class="mb-2 flex items-center gap-2 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						<span>Pick from</span>
+						<span>Pick From</span>
 						<input type="text" bind:value={tipWell} disabled={busy} class="w-12 rounded border border-[var(--color-tron-border)] bg-black/40 px-1 py-0.5 text-center font-mono text-[11px]" style="color: var(--color-tron-text)" title="Rack position of the next fresh tip (column-major). Overtype if the rack was reloaded." />
-						{#if data.teach?.nextTipWell}<span title="Where the robot's tip tracker / Studio cursor says the next fresh tip is">next fresh: <span class="font-mono">{data.teach.nextTipWell}</span> · {data.teach.nextTipSource}</span>{/if}
+						{#if data.teach?.nextTipWell}<span title="Where the robot's tip tracker / Studio cursor says the next fresh tip is">Next Fresh: <span class="font-mono">{data.teach.nextTipWell}</span> · {data.teach.nextTipSource}</span>{/if}
 						<button type="button" onclick={() => (tipWell = 'A1')} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-1.5 py-0.5 hover:border-[var(--color-tron-cyan)]/60" title="Rack was refilled — start from A1 again">Refilled → A1</button>
 					</div>
 					{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}
-						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point is taught for {robotName} — the probe would drive to the protocol's default. Teach it in the <strong>Tip calibrator</strong> panel below first.</p>
+						<p class="mb-1 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">No calibrator point taught for {robotName}; the probe uses the protocol default.</p>
 					{/if}
 					{#if pipetteMismatch}
-						<p class="mb-1 rounded border border-red-400/50 bg-red-900/20 px-1.5 py-1 text-[10px] leading-tight text-red-200">The run's pipette is <span class="font-mono">{pipetteName}</span> on the {pipetteMount} mount, but the protocol on the robot teaches with the <strong>{pip}</strong>. Close the run and open it on the other mount.</p>
+						<p class="mb-1 rounded border border-red-400/50 bg-red-900/20 px-1.5 py-1 text-[10px] leading-tight text-red-200">The run's pipette is <span class="font-mono">{pipetteName}</span>, not the <strong>{pip}</strong>. Close the run and open the other mount.</p>
 					{/if}
 					<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || pipetteMismatch} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a {pip} tip, travels to the tip calibrator, then runs the slow limit-switch probe ({tipProfile} profile, probe Z = {zCalKey}). Keeps the tip on for tuning.">
-						{calibrating ? 'Calibrating tip…' : hasTip ? 'Calibrate tip (probe, keeps tip)' : `Calibrate tip (picks up a ${pip} tip first)`}
+						{calibrating ? 'Calibrating Tip…' : hasTip ? 'Calibrate Tip' : `Pick Up A ${pip} Tip And Calibrate`}
 					</button>
-					{#if !calibrating}
-						<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
-							{#if !hasTip}Picks up <span class="font-mono">{tiprack} {tipWell}</span> from slot 11, moves to ({calX}, {calY}, {calZ}), then probes at z {probeZ}.
-							{:else if atCalibratorNow()}Probes from the current jogged position — already within {CAL_AT_TOLERANCE_MM} mm of the calibrator, so it will not travel.
-							{:else}Moves to ({calX}, {calY}, {calZ}), then probes at z {probeZ}.{/if}
-						</p>
-					{/if}
-					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap tip — drop it, take a fresh one from the rack</button>
-					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}</button>
-					<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop tip (for the scan position)</button>
+					<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap Tip</button>
+					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick Up Another Tip' : 'Pick Up Tip Without Probing'}</button>
+					<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop Tip</button>
 					{#if tipAdjust}
-						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear tip adjust</button>
+						<button type="button" onclick={() => (tipAdjust = null)} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1 text-[10px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Clear Tip Adjust</button>
 					{/if}
 				</div>
 
 				<!-- Offset → selection -->
 				<div class="mt-3 rounded border border-[var(--color-tron-border)] bg-black/20 p-2">
-					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → selection</div>
+					<div class="mb-1 text-[11px] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Offset → Selection</div>
 					<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 						<label>dx <input type="number" step="0.01" bind:value={dx} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 						<label>dy <input type="number" step="0.01" bind:value={dy} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 						<label>dz <input type="number" step="0.01" bind:value={dz} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 					</div>
-					<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0 || !taught} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Apply to {selCount} selected hole{selCount === 1 ? '' : 's'}</button>
-					<button type="button" onclick={applyGlobalShift} disabled={busy || !taught} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">⤧ Shift whole cart by this offset</button>
-					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Anchor: jog to one hole → Capture → <strong>Shift whole cart</strong> moves the taught first hole (all 12 follow). Apply to a subset writes per-hole corrections (±{HOLE_OFFSET_LIMIT_MM} mm max).</p>
-					<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, whole cart, set-position or align)">↶ Undo last {undoStack.length ? `(${undoStack.length})` : ''}</button>
+					<button type="button" onclick={applyToSelection} disabled={busy || selCount === 0 || !taught} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Apply To {selCount} Selected Hole{selCount === 1 ? '' : 's'}</button>
+					<button type="button" onclick={applyGlobalShift} disabled={busy || !taught} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-2 text-xs font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40">⤧ Shift Whole Cart By This Offset</button>
+					<button type="button" onclick={undoLast} disabled={busy || undoStack.length === 0} class="mt-2 w-full rounded border border-amber-500/50 bg-amber-900/15 px-3 py-2 text-xs font-semibold text-amber-300 hover:bg-amber-900/25 disabled:opacity-40" title="Revert the last applied shift (offset, whole cart, set-position or align)">↶ Undo Last {undoStack.length ? `(${undoStack.length})` : ''}</button>
 				</div>
 			</section>
 
 			<!-- Tip calibrator: the fixture point the probe uses — taught here, robot-keyed (the arm's OT-2 has no deck). -->
 			<section class="rounded-lg border border-purple-400/40 bg-[var(--color-tron-surface)] p-3">
 				<div class="flex items-center justify-between">
-					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip calibrator</h2>
+					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tip Calibrator</h2>
 					<span class="text-[10px] {data.teach?.calibrator?.source === 'default' ? 'text-amber-300' : ''}" style={data.teach?.calibrator?.source === 'default' ? '' : 'color: var(--color-tron-text-secondary)'}>
-						{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}not taught — protocol defaults{:else}{data.teach.calibrator.source}{data.teach.calibrator.taughtAt ? ` · ${when(data.teach.calibrator.taughtAt)}` : ''}{data.teach.calibrator.taughtBy ? ` · ${data.teach.calibrator.taughtBy}` : ''}{/if}
+						{#if !data.teach?.calibrator || data.teach.calibrator.source === 'default'}Not Taught · Protocol Defaults{:else}{data.teach.calibrator.source}{data.teach.calibrator.taughtAt ? ` · ${when(data.teach.calibrator.taughtAt)}` : ''}{data.teach.calibrator.taughtBy ? ` · ${data.teach.calibrator.taughtBy}` : ''}{/if}
 					</span>
 				</div>
-				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">
-					The limit-switch fixture every tip is probed on. Its point is this robot's own (the arm's OT-2 has no deck) and becomes the fill's cal_x / cal_y / z_cal.
-					Teach it: <strong>Open run</strong> → <strong>Pick up tip (no probe)</strong> → <strong>Go to calibrator</strong> → jog the tip onto the fixture → <strong>From live</strong> → <strong>Save</strong>. Then <strong>Calibrate tip</strong> to confirm the probe reads.
-				</p>
 				<div class="mt-2 grid grid-cols-3 gap-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
 					<label>calX <input type="number" step="0.1" bind:value={calX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 					<label>calY <input type="number" step="0.1" bind:value={calY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 					<label title="Pre-probe travel height: where the tip parks before the probe runs. Never the touch-off depth.">Approach Z <input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={calZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /></label>
 				</div>
 				<div class="mt-2 grid grid-cols-2 gap-2 rounded border border-purple-400/30 bg-purple-900/10 p-1.5 text-[10px]" style="color: var(--color-tron-text-secondary)">
-					<label class="block" title={tipProfile === 'reagent' ? 'Touch-off depth the limit-switch probe descends to with the p300 / 200 µL tip — the rehearsal\'s z_cal_p300 for this robot' : 'Touch-off depth the limit-switch probe descends to — production z_cal for this robot'}>Probe Z — {pip} · {tipProfile} ({zCalKey})
+					<label class="block" title={tipProfile === 'reagent' ? 'Touch-off depth the limit-switch probe descends to with the p300 / 200 µL tip — the rehearsal\'s z_cal_p300 for this robot' : 'Touch-off depth the limit-switch probe descends to — production z_cal for this robot'}>Probe Z · {pip} ({zCalKey})
 						<input type="number" step="0.1" min={CAL_Z_MIN} max={CAL_Z_MAX} bind:value={probeZ} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
-					<label class="block" title="Largest probe adjust the fill accepts before it stops (raw, carries this fixture's baseline). Blank = the protocol's 4.0">Max tip adjust (mm)
+					<label class="block" title="Largest probe adjust the fill accepts before it stops (raw, carries this fixture's baseline). Blank = the protocol's 4.0">Max Tip Adjust (mm)
 						<input type="number" step="0.1" min="0.3" max="12" bind:value={maxAdjust} class="mt-0.5 w-full rounded border border-purple-400/40 bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
 				</div>
-				<p class="mt-1 text-[10px] leading-tight" style="color: var(--color-tron-text-secondary)">Approach Z is travel-only — "Calibrate tip" and "Go to calibrator" park there; the probe descends to Probe Z under its own protection. "Calibrate tip" uses what is typed here immediately; Save writes it to production.</p>
-				<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go to calibrator (park, no probe)</button>
+				<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go To Calibrator</button>
 				<div class="mt-1 grid grid-cols-2 gap-2">
-					<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the calX / calY / Approach Z fields">From live ↧</button>
+					<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the calX / calY / Approach Z fields">From Live ↧</button>
 					<button type="button" onclick={saveCalibratorPosition} disabled={busy || !robotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robotName}</button>
 				</div>
 			</section>
 
 			<!-- Protocol on robot (the Studio's "Sync" — nothing to upload here) -->
 			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol on robot</h2>
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol On Robot</h2>
 				<div class="mt-2 space-y-1 text-[11px]">
 					{#if !data.protocol}
-						<p class="text-amber-300">No wax-filling protocol on {robotName} — upload <span class="font-mono">protocols/Wax_Filling_GEN7_ArmStage.py</span> on <a href="/opentrons" class="underline">/opentrons</a> and deploy it to this robot.</p>
+						<p class="text-amber-300">No wax-filling protocol on {robotName}.</p>
 					{:else if !data.protocol.declaresCartLocation}
-						<p class="text-amber-300"><span class="font-mono">{data.protocol.protocolName}</span> is the carriage protocol — it reads no stage calibration. Upload Wax_Filling_GEN7_ArmStage.py to this robot.</p>
+						<p class="text-amber-300"><span class="font-mono">{data.protocol.protocolName}</span> is the carriage protocol; it reads no stage calibration.</p>
 					{:else}
 						<p style="color: var(--color-tron-text)">✓ <span class="font-mono">{data.protocol.protocolName}</span> reads the first hole, rotation and dispense depth.</p>
 						{#if data.protocol.rehearsal}
-							<p class="text-amber-300">REHEARSAL (p300, 200 µL tips, air): this page picks up, probes and teaches with the <strong>p300</strong>; Probe Z saves to zCalReagent (the rehearsal's z_cal_p300). A cart location taught with it must be re-taught with the p20 before a production fill.</p>
+							<p class="text-amber-300">REHEARSAL (p300): re-teach the cart location with the p20 before a production fill.</p>
 						{/if}
 						<p class={data.teach?.protocolDeclaresHoleOffsets ? '' : 'text-amber-300'} style={data.teach?.protocolDeclaresHoleOffsets ? 'color: var(--color-tron-text)' : ''}>
-							{data.teach?.protocolDeclaresHoleOffsets ? '✓ reads the per-hole corrections (hole_01…12).' : '○ this upload predates per-hole corrections — re-upload the stage .py to this robot for Apply / Align to reach the fill.'}
+							{data.teach?.protocolDeclaresHoleOffsets ? '✓ reads the per-hole corrections (hole_01…12).' : '○ This upload predates per-hole corrections; Apply / Align will not reach the fill.'}
 						</p>
 					{/if}
-					<p style="color: var(--color-tron-text-secondary)">Nothing to sync: every value on this page is sent to the robot as run-time parameters at each run start.</p>
 				</div>
-				<button type="button" onclick={() => void invalidateAll()} class="mt-2 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Re-check</button>
+				<button type="button" onclick={() => void invalidateAll()} class="mt-2 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Re-Check</button>
 			</section>
 		</div>
 	</div>
@@ -1322,7 +1300,7 @@
 	<!-- Under-canvas tools: they act on the CURRENT SELECTION -->
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-3">
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill motion</h2>
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill Motion</h2>
 			{#if touring}
 				<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
 				<div class="grid grid-cols-4 gap-1">
@@ -1347,39 +1325,36 @@
 				</div>
 			{:else}
 				<div class="grid grid-cols-2 gap-1">
-					<button type="button" onclick={startTour} disabled={!pipetteId || busy || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through all 12 holes in fill order">Run through all holes</button>
-					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): all the way up → pre-jump → dispense depth → dwell → pre-jump → all the way up">▶ Fill motion ({selCount} selected)</button>
+					<button type="button" onclick={startTour} disabled={!pipetteId || busy || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through all 12 holes in fill order">Run Through All Holes</button>
+					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): all the way up → pre-jump → dispense depth → dwell → pre-jump → all the way up">▶ Fill Motion ({selCount} Selected)</button>
 				</div>
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					<span class="opacity-70">Fill:</span>
-					<label class="flex items-center gap-1"><input type="checkbox" bind:checked={fillMatchProtocol} /> Protocol speed</label>
+					<label class="flex items-center gap-1"><input type="checkbox" bind:checked={fillMatchProtocol} /> Protocol Speed</label>
 					{#if !fillMatchProtocol}<label>Cap <input type="number" min="1" max="400" step="1" bind:value={fillSpeed} class="w-14 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> mm/s</label>{/if}
 					<label>Dwell <input type="number" min="0" max="5000" step="50" bind:value={fillDwellMs} class="w-16 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-0.5 font-mono" style="color: var(--color-tron-text)" /> ms</label>
 				</div>
-				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)"><strong>Fill motion</strong> mimics the stage fill at each selected hole (all the way up → {STAGE_PREJUMP_MM} mm pre-jump → {depthMm === null ? `${Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above the rim (protocol default — depth not taught)` : `${Math.abs(depthMm)} mm ${depthMm >= 0 ? 'below' : 'above'} the rim`} → {fillDwellMs} ms dwell → {STAGE_PREJUMP_MM} mm → all the way up), in fill order.{hasTip ? '' : ' Pick up a tip first to match the real fill height.'}</p>
 			{/if}
 		</section>
 
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
-			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm, tip-neutral) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta. Prefilled with the anchor's current coords.</p>
-			<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more move with it)` : ''}` : 'Select one or more holes'}</div>
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set Position → Selection</h2>
+			<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">{anchor ? `Anchor: ${anchor}${selCount > 1 ? ` (+${selCount - 1} more)` : ''}` : 'Select One Or More Holes'}</div>
 			<div class="mt-2 grid grid-cols-3 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 				<label>x <input type="number" step="0.01" bind:value={setX} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<label>y <input type="number" step="0.01" bind:value={setY} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<label>z <input type="number" step="0.01" bind:value={setZ} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 			</div>
 			<button type="button" onclick={applyAbsolute} disabled={busy || selCount === 0 || !taught} class="mt-2 w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-sm font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">
-				{selCount === 0 ? 'Select one or more holes' : selCount === 1 ? `Set ${anchor} to this position` : `Move ${selCount} holes (anchor ${anchor})`}
+				{selCount === 0 ? 'Select One Or More Holes' : selCount === 1 ? `Set ${anchor} To This Position` : `Move ${selCount} Holes (Anchor ${anchor})`}
 			</button>
 		</section>
 
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Align selection → anchor hole</h2>
-			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Fixes holes that drifted relative to each other. Jog-verify ONE good hole, select the group (box-drag), click the good hole <strong>last</strong> so it's the anchor. Every other selected hole snaps onto the cartridge's rigid 6 × 9 mm lattice carrying the anchor's correction. Z untouched.</p>
-			<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">{anchor && selCount >= 2 ? `Anchor: ${anchor} (correction ${wellByName.get(anchor)?.offset.dx ?? 0}, ${wellByName.get(anchor)?.offset.dy ?? 0}) — ${selCount - 1} other hole(s) selected` : 'Select the holes, click the trusted hole last'}</div>
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Align Selection → Anchor Hole</h2>
+			<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">{anchor && selCount >= 2 ? `Anchor: ${anchor} (correction ${wellByName.get(anchor)?.offset.dx ?? 0}, ${wellByName.get(anchor)?.offset.dy ?? 0}) — ${selCount - 1} other hole(s) selected` : 'Select Holes · Anchor Last'}</div>
 			<button type="button" onclick={alignSelectionToAnchor} disabled={busy || selCount < 2 || !taught} class="mt-2 w-full rounded border border-cyan-500/50 bg-cyan-900/20 px-3 py-2 text-sm font-bold text-cyan-300 hover:bg-cyan-900/30 disabled:opacity-40">
-				{selCount < 2 ? 'Select the holes + an anchor hole' : `⌗ Align ${selCount - 1} hole(s) to ${anchor}`}
+				{selCount < 2 ? 'Select Holes And An Anchor' : `⌗ Align ${selCount - 1} Hole(s) To ${anchor}`}
 			</button>
 		</section>
 	</div>
@@ -1387,52 +1362,50 @@
 	<!-- The stage's own teach points: what a deck definition would otherwise carry -->
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-4">
 		<section class="rounded-lg border {taught ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · first hole</h2>
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · First Hole</h2>
 			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{rim ? `x ${fmt3(rim.x)} · y ${fmt3(rim.y)} · z ${fmt3(rim.z)}` : 'not taught'}</div>
 			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
-				The rim of the cart's first wax hole (row 1, gate 4 — X2). Calibrate a tip, jog the <strong>tip end</strong> onto that rim, save: stored tip-neutral (live − this tip's adjust); the other 11 follow from it. Re-teaching it keeps the per-hole corrections.
 				{#if rim?.taughtAt}Taught {when(rim.taughtAt)}{rim.taughtBy ? ` by ${rim.taughtBy}` : ''}.{/if}
 				{#if rim?.tipAdjust}Probe at teach <span class="font-mono">{rim.tipAdjust.x}, {rim.tipAdjust.y}</span>.{:else if rim}<span class="text-amber-300"> Taught without a probed tip — teach again.</span>{/if}
 			</p>
-			<button type="button" onclick={saveFirstHole} disabled={!pipetteId || busy || !hasTip || !tipAdjust || locked} class="w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={!hasTip || !tipAdjust ? 'Calibrate the tip first — the point is saved tip-neutral' : ''}>Save here as first hole</button>
+			<button type="button" onclick={saveFirstHole} disabled={!pipetteId || busy || !hasTip || !tipAdjust || locked} class="w-full rounded border border-green-500/50 bg-green-900/20 px-3 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={!hasTip || !tipAdjust ? 'Calibrate the tip first — the point is saved tip-neutral' : ''}>Save Here As First Hole</button>
 		</section>
 
 		<section class="rounded-lg border {depthMm === null ? 'border-amber-500/40' : 'border-[var(--color-tron-border)]'} bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · dispense depth</h2>
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Dispense Depth</h2>
 			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{#if depthMm !== null}{Math.abs(depthMm)} mm {depthMm >= 0 ? 'below' : 'above'} the rim{#if rim} · tip end z {dispenseZ(rim.z, depthMm).toFixed(2)}{/if}{:else}not taught — protocol would hover {Math.abs(DISPENSE_DEPTH_DEFAULT_MM)} mm above{/if}</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">How far into the first wax hole the <strong>tip end</strong> goes when wax is dispensed (dispense_depth). "Go to dispense height" parks it at the current value; jog Z to where the wax should land, save. Allowed {DISPENSE_DEPTH_LIMITS.min} (hover) to {DISPENSE_DEPTH_LIMITS.max} mm into the {WAX_HOLE_DEPTH_MM} mm hole.{#if calibration?.dispenseDepth?.taughtAt} Taught {when(calibration.dispenseDepth.taughtAt)}.{/if}</p>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Allowed {DISPENSE_DEPTH_LIMITS.min} to {DISPENSE_DEPTH_LIMITS.max} mm.{#if calibration?.dispenseDepth?.taughtAt} Taught {when(calibration.dispenseDepth.taughtAt)}.{/if}</p>
 			{#if rim && liveZ !== null}<p class="text-[11px] {liveDepthOk ? 'text-green-300' : 'text-amber-300'}">Tip end now {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the rim{liveDepthOk ? '' : ' — outside the allowed range'}.</p>{/if}
 			<div class="grid grid-cols-2 gap-2">
-				<button type="button" onclick={goToDispenseHeight} disabled={!pipetteId || busy || !hasTip || !rim} class={pad} style="color: var(--color-tron-text)">Go to dispense height</button>
-				<button type="button" onclick={saveDispenseDepth} disabled={!pipetteId || busy || !hasTip || !rim || !liveDepthOk || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save depth here</button>
+				<button type="button" onclick={goToDispenseHeight} disabled={!pipetteId || busy || !hasTip || !rim} class={pad} style="color: var(--color-tron-text)">Go To Dispense Height</button>
+				<button type="button" onclick={saveDispenseDepth} disabled={!pipetteId || busy || !hasTip || !rim || !liveDepthOk || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save Depth Here</button>
 			</div>
 		</section>
 
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 space-y-2">
-			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · geometry</h2>
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Geometry</h2>
 			<div class="grid grid-cols-2 gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
-				<label>Cart rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
-				<div class="text-[11px]">Travel height<span class="mt-0.5 block" style="color: var(--color-tron-text-secondary)">None to set: the pipette goes <strong>all the way up</strong> (top of Z) before every move — here and in the fill.</span></div>
+				<label>Cart Rotation (°) <input type="number" step="0.5" min="-360" max="360" bind:value={rotationDeg} class="mt-0.5 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<div class="text-[11px]">Travel Height<span class="mt-0.5 block" style="color: var(--color-tron-text-secondary)">All The Way Up</span></div>
 			</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Rotation: counter-clockwise from above, about the first hole, vs a carriage slot. <strong>90° = this stage</strong>: the cart turned a quarter turn so the gates run toward you (gate 4 at the back, gate 1 nearest you) and the rows run left → right. 270° (or −90°) = the same quarter turn the other way; 0° = as on a carriage. The plane's arrows show the result; save to redraw. Travel height: the clearance the tip arrives at and leaves the cart at; lower it if the stage is tall.</p>
 			<div class="grid grid-cols-3 gap-2">
 				<button type="button" onclick={() => void rotateCart(-90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn counter-clockwise, saved immediately">⟲ 90°</button>
-				<button type="button" onclick={saveGeometry} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save geometry</button>
+				<button type="button" onclick={saveGeometry} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-2 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">Save Geometry</button>
 				<button type="button" onclick={() => void rotateCart(90)} disabled={busy || locked} class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Quarter turn clockwise, saved immediately">90° ⟳</button>
 			</div>
 		</section>
 
 		<section class="rounded-lg border {calibration?.scanPosition ? 'border-[var(--color-tron-border)]' : 'border-amber-500/40'} bg-[var(--color-tron-surface)] p-3 space-y-2">
 			<div class="flex items-center justify-between">
-				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · scan position</h2>
-				<button type="button" onclick={fireTestScan} disabled={testScanInFlight || !runId} class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test scan'}</button>
+				<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage · Scan Position</h2>
+				<button type="button" onclick={fireTestScan} disabled={testScanInFlight || !runId} class="rounded border border-[var(--color-tron-cyan)] px-2 py-1 text-[11px] font-bold text-[var(--color-tron-cyan)] disabled:opacity-40">{testScanInFlight ? 'Reading…' : 'Test Scan'}</button>
 			</div>
 			<div class="font-mono text-xs" style="color: var(--color-tron-cyan)">{calibration?.scanPosition ? `x ${fmt3(calibration.scanPosition.x)} · y ${fmt3(calibration.scanPosition.y)} · z ${fmt3(calibration.scanPosition.z)}` : 'not taught'}</div>
-			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">Where the gantry scanner reads the cart the arm placed. Jog with <strong>no tip on</strong> (the sweep runs without one), fire a test scan, save.{#if calibration?.scanPosition?.testScanBarcode} Test read <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}</p>
+			<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">{#if calibration?.scanPosition?.testScanBarcode}Test read <span class="font-mono">{calibration.scanPosition.testScanBarcode}</span>.{/if}</p>
 			{#if testScanLatest}<div class="break-all rounded bg-black/40 p-2 font-mono text-xs" style="color: var(--color-tron-cyan)">{testScanLatest}</div>{:else if testScanError}<p class="text-[11px] text-red-300">{testScanError}</p>{/if}
 			<div class="grid grid-cols-2 gap-2">
-				<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { lift: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move to</button>
-				<button type="button" onclick={saveScanPosition} disabled={!pipetteId || busy || hasTip || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save here (no tip)</button>
+				<button type="button" onclick={() => void act(async () => { await moveAbs(calibration!.scanPosition!, { lift: true }); msg = 'At the scan position.'; await refreshPosition(); })} disabled={!pipetteId || busy || !calibration?.scanPosition} class={pad} style="color: var(--color-tron-text)">Move To</button>
+				<button type="button" onclick={saveScanPosition} disabled={!pipetteId || busy || hasTip || locked} class="rounded border border-green-500/50 bg-green-900/20 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40" title={hasTip ? 'Drop the tip first — the sweep runs without one' : ''}>Save Here (No Tip)</button>
 			</div>
 		</section>
 	</div>
@@ -1440,7 +1413,7 @@
 	<!-- History -->
 	{#if calibration?.edits?.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent edits</h2>
+			<h2 class="mb-2 text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Edits</h2>
 			<div class="overflow-x-auto">
 				<table class="w-full text-left text-[11px]">
 					<thead style="color: var(--color-tron-text-secondary)"><tr><th class="px-2 py-1">Hole</th><th class="px-2 py-1">Δ (x,y,z)</th><th class="px-2 py-1">After</th><th class="px-2 py-1">What</th><th class="px-2 py-1">By</th><th class="px-2 py-1">When</th></tr></thead>

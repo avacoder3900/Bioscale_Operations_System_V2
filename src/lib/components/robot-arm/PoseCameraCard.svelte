@@ -183,39 +183,34 @@
 <section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
 	<div class="flex flex-wrap items-center gap-3">
 		<button type="button" class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)" onclick={() => (open = !open)}>
-			{open ? '▾' : '▸'} Camera reference
+			{open ? '▾' : '▸'} Camera Reference
 		</button>
 		{#if calibration}
 			<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(74,222,128,0.15); color: #4ade80">VERIFIED POSE</span>
-			{#if calibration.stale}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(245,158,11,0.15); color: #fbbf24" title="The pose's goals changed after this reference was taken — a verified run refuses it until it is retaken.">STALE — retake</span>{/if}
+			{#if calibration.stale}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(245,158,11,0.15); color: #fbbf24" title="The pose's goals changed after this reference was taken — a verified run refuses it until it is retaken.">STALE</span>{/if}
 		{:else}
-			<span class="text-[11px]" style={muted}>none for this camera — the pose is played without a camera check</span>
+			<span class="text-[11px]" style={muted}>No Reference</span>
 		{/if}
 		<span class="grow"></span>
 		<label class="flex items-center gap-1 text-xs" style={muted}>
-			camera
+			Camera
 			<select value={camera} onchange={(e) => oncamera(e.currentTarget.value)} class="{input} py-0.5 text-xs" style={inputStyle} aria-label="Camera">
 				{#each cameras as n (n)}<option value={n}>{n}</option>{/each}
-				{#if !cameras.length}<option value="">no camera</option>{/if}
+				{#if !cameras.length}<option value="">No Camera</option>{/if}
 			</select>
 		</label>
 	</div>
 
 	{#if open}
-		<p class="mt-2 text-xs" style={muted}>
-			A verified run checks this step against the picture and the encoder reading taken with the arm <em>on</em> the pose, landed by a play.
-			Go to pose, look at it, then capture. Set the tolerances after the picture: Check now shows the real residuals with the arm still.
-		</p>
-
 		{#if note}<p class="mt-2 text-xs" style="color: {note.kind === 'error' ? '#fca5a5' : note.kind === 'warn' ? '#fbbf24' : '#4ade80'}">{note.text}</p>{/if}
 
 		<div class="mt-3 flex flex-wrap items-center gap-2">
 			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, the way Capture does: {CALIBRATION_FRAMES} detections, each on a {CALIBRATION_AVERAGE}-frame average (hold the arm still)">
-				{detecting ? 'Detecting…' : det ? 'Detect again' : 'Detect tags'}
+				{detecting ? 'Detecting…' : det ? 'Detect Again' : 'Detect Tags'}
 			</button>
 			{#if !atPose}
-				<button type="button" class={btn} style={amber} disabled={!canAct} title={blocked ? blockReason : 'The arm plays to the pose (absolute goals), then holds it'} onclick={() => ongoto(pose)}>Go to pose</button>
-				<span class="text-xs" style={muted}>{arm ? `the arm is ${offBy} steps from this pose (needs ≤ ${AT_POSE_STEPS})` : 'the arm has not been read'}</span>
+				<button type="button" class={btn} style={amber} disabled={!canAct} title={blocked ? blockReason : 'The arm plays to the pose (absolute goals), then holds it'} onclick={() => ongoto(pose)}>Go To Pose</button>
+				<span class="text-xs" style={muted}>{arm ? `${offBy} steps off · max ${AT_POSE_STEPS}` : 'Arm Not Read'}</span>
 			{:else}
 				<form
 					method="POST"
@@ -238,13 +233,13 @@
 					<input type="hidden" name="poseId" value={pose._id} />
 					<input type="hidden" name="camera" value={camera} />
 					<button type="submit" class={btn} style={green} disabled={!canAct || !camera || capturing} title={blocked ? blockReason : 'One detection + the encoders, with the arm where it is'}>
-						{capturing ? 'Capturing…' : calibration ? 'Retake reference' : 'Capture reference'}
+						{capturing ? 'Capturing…' : calibration ? 'Retake Reference' : 'Capture Reference'}
 					</button>
 				</form>
-				<span class="text-xs" style="color: #4ade80">the arm is on this pose ({offBy} steps off at most)</span>
+				<span class="text-xs" style="color: #4ade80">On Pose · {offBy} steps off</span>
 			{/if}
 			{#if calibration}
-				<button type="button" class={btn} style={cyan} disabled={!canAct || checking} onclick={runCheck} title="No motion: detect and compare with the reference">{checking ? 'Checking…' : 'Check now'}</button>
+				<button type="button" class={btn} style={cyan} disabled={!canAct || checking} onclick={runCheck} title="No motion: detect and compare with the reference">{checking ? 'Checking…' : 'Check Now'}</button>
 			{/if}
 		</div>
 
@@ -258,11 +253,11 @@
 						{det.tags.length} tag(s) in view over {det.framesUsed} frame(s) · {det.width}×{det.height}{atPose ? ' · arm on this pose' : ' · arm not on this pose'}
 					</p>
 					{#if detArm.length}
-						<p style="color: #4ade80">Capture will accept this view: {detArm.length} arm tag(s){detFixed.length ? `, ${detFixed.length} fixed` : ''}.</p>
+						<p style="color: #4ade80">Ready: {detArm.length} arm tag(s){detFixed.length ? `, ${detFixed.length} fixed` : ''}.</p>
 					{:else}
-						<p style="color: #fca5a5">No registered arm tag in view — Capture would refuse. Bring an arm tag into view (or check its role on the Vision tab).</p>
+						<p style="color: #fca5a5">No registered arm tag in view.</p>
 					{/if}
-					{#if detArm.length && !detFixed.length}<p style="color: #fbbf24">No fixed tag in view: a bumped camera will read as the arm being off.</p>{/if}
+					{#if detArm.length && !detFixed.length}<p style="color: #fbbf24">No fixed tag in view.</p>{/if}
 					<ul class="space-y-0.5 font-mono">
 						{#each det.tags as d (d.id)}
 							<li style="color: {d.registered?.role === 'arm' ? '#4ade80' : d.registered ? 'var(--color-tron-text)' : '#fbbf24'}">
@@ -270,7 +265,6 @@
 							</li>
 						{/each}
 					</ul>
-					{#if detNew.length}<p style={muted}>Register new tags on the Vision tab; unregistered tags are not part of a reference.</p>{/if}
 				</div>
 			</div>
 		{/if}
@@ -278,12 +272,12 @@
 		{#if calibration}
 			<div class="mt-3 grid gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
 				<div>
-					<VisionStage src={full?.thumbnailDataUrl ?? null} width={calibration.frameWidth} height={calibration.frameHeight} tags={refTags} alt="Reference picture" emptyText="Loading the reference picture…" />
+					<VisionStage src={full?.thumbnailDataUrl ?? null} width={calibration.frameWidth} height={calibration.frameHeight} tags={refTags} alt="Reference picture" emptyText="Loading…" />
 					<p class="mt-1 text-[11px]" style={muted}>
 						Taken {when(calibration.capturedAt)}{calibration.capturedBy?.username ? ` by ${calibration.capturedBy.username}` : ''} · {calibration.armTags} arm tag(s), {calibration.fixedTags} fixed
 						· encoders {Object.entries(calibration.jointSteps).map(([k, v]) => `${k}:${v}`).join(' ')}
 					</p>
-					{#if !calibration.fixedTags}<p class="text-[11px]" style="color: #fbbf24">No fixed tag in this view: a bumped camera will read as the arm being off.</p>{/if}
+					{#if !calibration.fixedTags}<p class="text-[11px]" style="color: #fbbf24">No fixed tag in this view.</p>{/if}
 				</div>
 				<div class="space-y-3 text-xs">
 					<!-- tolerances: set AFTER the photo, per pose; a move-set step can override them -->
@@ -303,20 +297,19 @@
 					>
 						<input type="hidden" name="calibrationId" value={calibration._id} />
 						<label style={muted}>Position (mm)<input name="positionMm" type="number" step="0.1" min="0.1" max={MAX_POSITION_MM} bind:value={posMm} class="{input} mt-1 block w-24" style={inputStyle} /></label>
-						<label style={muted}>Spin (°, 0 = off)<input name="angleDeg" type="number" step="0.1" min="0" max={MAX_ANGLE_DEG} bind:value={angDeg} class="{input} mt-1 block w-24" style={inputStyle} /></label>
+						<label style={muted}>Spin (°)<input name="angleDeg" type="number" step="0.1" min="0" max={MAX_ANGLE_DEG} bind:value={angDeg} class="{input} mt-1 block w-24" style={inputStyle} /></label>
 						<label style={muted}>Encoders (steps)<input name="steps" type="number" step="1" min="1" max={MAX_TOLERANCE_STEPS} bind:value={steps} class="{input} mt-1 block w-24" style={inputStyle} /></label>
-						<button type="submit" class={btn} style={cyan}>Save tolerances</button>
-						<span class="w-full text-[11px]" style={muted}>These are the pose's defaults; each move-set step can override them.</span>
+						<button type="submit" class={btn} style={cyan}>Save Tolerances</button>
 					</form>
 
 					{#if check}
 						{@const v = VERDICT[check.verdict] ?? { label: check.verdict, color: '#fbbf24' }}
 						<div class="rounded border p-2" style="border-color: {v.color}">
-							<div class="flex items-center gap-2"><span class="font-semibold" style="color: {v.color}">{v.label}</span><span style={muted}>just now</span></div>
+							<div class="flex items-center gap-2"><span class="font-semibold" style="color: {v.color}">{v.label}</span><span style={muted}>Just Now</span></div>
 							<p class="mt-1" style="color: var(--color-tron-text)">{check.message}</p>
 							{#if check.residuals}
 								<p class="mt-1 font-mono" style={muted}>
-									encoders: {Object.entries(check.residuals).map(([k, r]) => `J${k} ${r > 0 ? '+' : ''}${r}`).join('  ')} (limit ±{check.tolerances.steps})
+									Encoders: {Object.entries(check.residuals).map(([k, r]) => `J${k} ${r > 0 ? '+' : ''}${r}`).join('  ')} (limit ±{check.tolerances.steps})
 								</p>
 							{/if}
 							{#if check.markers.length}
@@ -342,10 +335,10 @@
 					{/if}
 
 					<details>
-						<summary class="cursor-pointer" style={muted}>more</summary>
+						<summary class="cursor-pointer" style={muted}>More</summary>
 						<form method="POST" action="?/retirePoseCalibration" use:enhance class="mt-1">
 							<input type="hidden" name="calibrationId" value={calibration._id} />
-							<button type="submit" class="underline" style={muted} onclick={(e) => { if (!confirm('Retire this reference? The pose will not be verified until a new one is captured.')) e.preventDefault(); }}>retire this reference</button>
+							<button type="submit" class="underline" style={muted} onclick={(e) => { if (!confirm('Retire this reference? The pose will not be verified until a new one is captured.')) e.preventDefault(); }}>Retire This Reference</button>
 						</form>
 					</details>
 				</div>

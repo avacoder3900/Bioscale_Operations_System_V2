@@ -25242,3 +25242,21 @@ Deployment: production - via Vercel GitHub integration on the push to master (Gi
 Source: branch feat/arm-conveyor-page @ commit c6a91078 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at commit c6a91078
 What this deployment is for: Conveyor default pulse stored in BIMS, saved with the Save button.
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Robot Arm UI text: Title Case everywhere, explanatory text removed
+================================================================================
+Alejandro's rule (now in CLAUDE.md "UI Text (MANDATORY)"): capitalize every word of every title; titles
+describe what they do, so no blurbs, hint lines, em-dash asides or parenthetical explanations.
+- 35 .svelte files: every Robot Arm route (layout tabs now "Wax Fill", "Stage Calibration", "Clean-Up";
+  control, jog, calibrate, vision, runs, cleanup*, animate*, wax-fill, stage-calibration, conveyor) and
+  the arm components (RobotArmCameraPanel "Return To Home", RobotArmConnectionPanel, ControlBar, all of
+  src/lib/components/robot-arm/). Buttons/headings/labels/options/placeholders Title Cased; descriptive
+  paragraphs and hints removed; status lines cut to the report. Text-only, line-local edits.
+- Kept on purpose: every confirm() dialog word for word (safety prompts: STOP RUN, Reset, Torque On,
+  Follow Leader, verified run), title= tooltips, live readouts, the "Saved on the Pi … Control tab"
+  notice (code matches on that text).
+- LIVE MOTION chip removed (layout strip + ARM CONNECTION panel); DRY RUN chip stays.
+- Trapdoor Solenoids heading: Title Case, no emoji. Conveyor status "On · N s Left" / "Waiting · On In".
+- Same Conveyor/Solenoid/ARM-card changes for Sam's redesign are on branch
+  feat/arm-ui-redesign-hide-show (dd7e0156, on top of feat/arm-ui-redesign) — not merged into his branch.
+npm run check 14 errors (baseline, none in touched files).

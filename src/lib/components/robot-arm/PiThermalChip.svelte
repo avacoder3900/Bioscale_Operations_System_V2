@@ -75,10 +75,10 @@
 	let fastUntil = 0;
 
 	const FLAG_TEXT: Record<string, string> = {
-		throttled: 'throttled',
-		freq_capped: 'clock capped',
-		soft_temp_limit: 'soft temp limit',
-		under_voltage: 'under-voltage'
+		throttled: 'Throttled',
+		freq_capped: 'Clock Capped',
+		soft_temp_limit: 'Soft Temp Limit',
+		under_voltage: 'Under-Voltage'
 	};
 	const BOOT_TEXT: Record<string, string> = {
 		throttled_occurred: 'throttled',
@@ -94,8 +94,8 @@
 		if (!thermal) return '';
 		const t = thermal.temp_c != null ? `${Math.round(thermal.temp_c)} °C` : '?';
 		if (flags.length) return `Pi ${t} · ${flags.join(', ')}`;
-		if (level === 'critical') return `Pi ${t} · critical`;
-		if (level === 'hot') return `Pi ${t} · hot`;
+		if (level === 'critical') return `Pi ${t} · Critical`;
+		if (level === 'hot') return `Pi ${t} · Hot`;
 		return `Pi ${t}`;
 	});
 	let title = $derived.by(() => {
@@ -225,11 +225,11 @@
 	// Short label for the common servo failures; the full Pi message is the tooltip.
 	let servoErrorLabel = $derived.by(() => {
 		if (!servosError) return '';
-		if (busBusy) return 'Servos: paused · arm is moving';
-		if (/No follower motor answered/i.test(servosError)) return 'Servos: no answer · arm power or follower USB';
-		if (/follower arm not connected/i.test(servosError)) return 'Servos: follower not connected';
-		if (/robot-arm 5\d\d/.test(servosError)) return 'Servos: Pi could not read the bus';
-		return 'Servos: unavailable';
+		if (busBusy) return 'Servos: Paused · Arm Moving';
+		if (/No follower motor answered/i.test(servosError)) return 'Servos: No Answer · Arm Power Or Follower USB';
+		if (/follower arm not connected/i.test(servosError)) return 'Servos: Follower Not Connected';
+		if (/robot-arm 5\d\d/.test(servosError)) return 'Servos: Bus Read Failed';
+		return 'Servos: Unavailable';
 	});
 	let servoErrorTitle = $derived(
 		busBusy

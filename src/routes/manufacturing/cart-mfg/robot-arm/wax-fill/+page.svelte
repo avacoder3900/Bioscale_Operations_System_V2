@@ -43,7 +43,7 @@
 		fill: 'Fill',
 		withdraw: 'Withdraw',
 		done: 'Done',
-		fail: 'Fail animation',
+		fail: 'Fail Animation',
 		failed: 'Failed',
 		stopped: 'Stopped'
 	};
@@ -129,8 +129,8 @@
 		}
 	}
 	const animationOptions = $derived([
-		...data.moveSets.map((m: { _id: string; name: string; keyframes: number }) => ({ value: `move_set:${m._id}`, label: `${m.name} (move set, ${m.keyframes} poses)` })),
-		...data.sequences.map((s: { _id: string; name: string; items: number }) => ({ value: `sequence:${s._id}`, label: `${s.name} (sequence, ${s.items} move sets)` }))
+		...data.moveSets.map((m: { _id: string; name: string; keyframes: number }) => ({ value: `move_set:${m._id}`, label: `${m.name} (Move Set, ${m.keyframes} Poses)` })),
+		...data.sequences.map((s: { _id: string; name: string; items: number }) => ({ value: `sequence:${s._id}`, label: `${s.name} (Sequence, ${s.items} Move Sets)` }))
 	]);
 	const animValue = (a: { kind: string; id: string } | null) => (a ? `${a.kind}:${a.id}` : '');
 
@@ -259,8 +259,8 @@
 					note(
 						cycle.index === 1
 							? data.settings.grabDuringProbe
-								? `${tag}: waiting for the OT-2 to home and take its tip — the grab starts the moment it announces ARM PROBING (the probe, the first aspirate and the park overlap the grab).`
-								: `${tag}: waiting for the OT-2 to home, take its tip and calibrate it — the grab starts the moment it announces ARM CALIBRATED, while it aspirates and parks.`
+								? `${tag}: waiting for the OT-2 to home and take its tip; the grab starts at ARM PROBING.`
+								: `${tag}: waiting for the OT-2 to home, take its tip and calibrate it; the grab starts at ARM CALIBRATED.`
 							: `${tag}: the OT-2 is clear of the stage — grab.`
 					);
 					let parked = false;
@@ -390,7 +390,7 @@
 					const chained = !last && data.settings.chainGrab && !!loop.grabAnimation;
 					note(
 						chained
-							? `${tag}: withdraw + the next cart's grab as one arm path — playing "${loop.withdrawAnimation?.name ?? ''}" then "${loop.grabAnimation?.name ?? ''}" (the OT-2 stays parked in the wax).`
+							? `${tag}: withdraw + the next cart's grab as one arm path — playing "${loop.withdrawAnimation?.name ?? ''}" then "${loop.grabAnimation?.name ?? ''}".`
 							: `${tag}: withdraw — playing "${loop.withdrawAnimation?.name ?? ''}"${last ? ' (last cart: the OT-2 trashes its tip and homes meanwhile)' : ''}.`
 					);
 					const p = await playStep('cycleWithdraw', chained ? `Withdraw + grab (loops ${cycle.index} → ${cycle.index + 1})` : `Withdraw (loop ${cycle.index})`);
@@ -413,7 +413,7 @@
 					const nextCycle = loop!.cycles[loop!.cycles.length - 1];
 					note(
 						r.data.next
-							? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled${nextCycle?.step === 'scan' ? '; the next cart is already on the stage (its grab played with the withdraw)' : ''}.`
+							? `${tag} done — ${loop!.completedRuns} of ${loop!.requestedRuns} filled${nextCycle?.step === 'scan' ? '; the next cart is already on the stage' : ''}.`
 							: `Run ${loop!.status}: ${loop!.completedRuns} of ${loop!.requestedRuns} filled${loop!.skippedRuns ? `, ${loop!.skippedRuns} skipped` : ''}.`
 					);
 				} else if (cycle.step === 'fail') {
@@ -572,11 +572,11 @@
 	async function homeAfterHalt() {
 		if (!loop || returnHome.running) return;
 		halt = { phase: 'ot2', error: null, ot2Homed: false };
-		note('Homing the OT-2 (every axis) — the arm waits for the robot to confirm.');
+		note('Homing the OT-2.');
 		const h = await post('haltHomeGantry', { loopId: loop._id });
 		if (!h.ok) {
 			halt = { phase: 'error', error: `${h.error} The arm was NOT moved.`, ot2Homed: false };
-			note(`OT-2 home refused: ${h.error} The arm was NOT moved — fix the robot, then "Try again", or use Return to home on the ARM CONNECTION card once the OT-2 is home.`, 'error');
+			note(`OT-2 home refused: ${h.error} The arm was NOT moved.`, 'error');
 			return;
 		}
 		for (const n of h.data?.notes ?? []) note(`OT-2: ${n}.`, 'warn');
@@ -603,9 +603,9 @@
 			case 'letting_go':
 				return 'Stop run: waiting for the step in progress to let go…';
 			case 'ot2':
-				return 'Stop run: homing the OT-2 (every axis) — the arm waits for the robot to confirm…';
+				return 'Stop run: homing the OT-2…';
 			case 'arm':
-				if (rl?.closing) return 'Stop run: arm home — closing the claw (final step)…';
+				if (rl?.closing) return 'Stop run: closing the claw…';
 				return `Stop run: arm returning home — attempt ${rl?.attempt ?? 0} · ${Math.round(((returnHome.now - (rl?.startedAt ?? returnHome.now)) / 1000))} s of ${HOME_LOOP_MS / 1000} s${rl?.stopping ? ' · stopping after this jog, then closing the mouth…' : ''}`;
 			case 'done':
 				return `Stop run complete: OT-2 home, arm home (${rl?.outcome ?? 'done'}), ${rl?.clawClosed ? 'claw closed' : 'claw NOT confirmed closed'}.`;
@@ -691,7 +691,7 @@
 	async function restartServer() {
 		if (!robotId || robotBusy) return;
 		const name = data.robotName ?? 'this robot';
-		const extra = loop?.status === 'running' ? '\n\nA loop is running: the robot server refuses the restart while a fill is live; stop or reset the loop first if it needs to come down now.' : '';
+		const extra = loop?.status === 'running' ? '\n\nA loop is running: the restart is refused while a fill is live.' : '';
 		if (!confirm(`Restart the robot server on ${name}?\n\nThis clears a hung engine (~90 s to come back). Any in-progress run on this robot will be cancelled.${extra}`)) return;
 		robotBusy = 'restart';
 		robotMsg = null;
@@ -881,17 +881,7 @@
 
 <div class="space-y-4">
 	<div>
-		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax fill</h2>
-		<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			One OT-2 run and one tip serve the whole loop: the robot homes, takes its tip, probes it once, aspirates and parks the tip in the wax (it stays warm) between carts.
-			Per cart: <span class="font-semibold">grab</span> (arm, while the OT-2 is parked) → <span class="font-semibold">scan</span> (the run goes to the taught scan position, the scanner is read) →
-			<span class="font-semibold">check</span> → <span class="font-semibold">fill</span>
-			{#if stage}at the taught cart location{:else}with the robot's carriage protocol{/if}{#if rehearsal}
-			<span class="font-semibold text-amber-300">— REHEARSAL: the p300 walks it with 200 µL tips and air, nothing is dispensed</span>{/if}
-			→ <span class="font-semibold">withdraw</span> (arm, while parked), for as many carts as you ask; on the last cart the OT-2 trashes its tip and homes while the arm withdraws.
-			If the scan fails — nothing read, or the cart is not a backed cart — the OT-2 goes back to the tube and the <span class="font-semibold">fail animation</span> plays instead of the fill; the loop stops.
-			The arm moves only while the robot reports it is parked in the wax; it never moves while the OT-2 is at the calibrator or over the stage.
-		</p>
+		<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax Fill</h2>
 	</div>
 
 	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
@@ -911,21 +901,21 @@
 							{health?.label ?? 'No health data'}{#if health?.detail} <span style="color: var(--color-tron-text-secondary)">— {health.detail}</span>{/if}
 						</span>
 					{:else}
-						<span style="color: var(--color-tron-text-secondary)">No OT-2 chosen — pick one in Setup.</span>
+						<span style="color: var(--color-tron-text-secondary)">No OT-2 Chosen</span>
 					{/if}
 				</div>
 				<div class="flex flex-wrap items-center gap-1">
 					<a href={STAGE_CALIBRATION_HREF}
 						title="This robot's wax-fill calibration: scan position, tip-neutral cart location, dispense depth, stage geometry (its own tab)"
 						class="{ctl} border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">
-						Stage calibration
+						Stage Calibration
 					</a>
 					<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
 						{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
 					</button>
 					<button type="button" onclick={toggleLights} disabled={!robotId || robotBusy !== null} title="Toggle the rail lights"
 						class="{ctl} {lightsOn ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
-						{lightsOn === null ? 'Lights' : lightsOn ? 'Lights on' : 'Lights off'}
+						{lightsOn === null ? 'Lights' : lightsOn ? 'Lights On' : 'Lights Off'}
 					</button>
 					<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || loop?.status === 'running'}
 						title={loop?.status === 'running' ? 'Not while a loop is running' : 'Home all axes'} class={ctlPlain}>
@@ -959,7 +949,7 @@
 					<button type="button" onclick={stop} disabled={busy || haltBusy || loop.stopRequested}
 						title="Lets the cart being filled finish and the arm withdraw it, then ends the loop"
 						class="rounded border border-red-500/50 bg-red-900/15 px-4 py-2 text-sm font-bold text-red-300 hover:bg-red-900/25 disabled:opacity-40">
-						{loop.stopRequested ? 'Stopping after this cart…' : 'Stop after this cart'}
+						{loop.stopRequested ? 'Stopping After This Cart…' : 'Stop After This Cart'}
 					</button>
 					<button type="button" onclick={stopRun} disabled={busy || haltBusy}
 						title="Halts NOW: stops the arm and the OT-2 run where they are, then homes the OT-2 and runs the arm's Return to home"
@@ -968,7 +958,7 @@
 					</button>
 				</div>
 			{:else if haltBusy}
-				<span class="text-xs font-semibold text-amber-300">Stop run in progress…</span>
+				<span class="text-xs font-semibold text-amber-300">Stop Run In Progress…</span>
 			{:else}
 				<form class="flex items-center gap-2" onsubmit={(e) => { e.preventDefault(); void start(); }}>
 					<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
@@ -978,7 +968,7 @@
 					</label>
 					<button type="submit" disabled={busy || haltBusy || data.readiness.blocking.length > 0}
 						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-sm font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
-						{busy ? 'Starting…' : `Start a ${rehearsal ? 'rehearsal ' : ''}run of ${runs} loop${runs === 1 ? '' : 's'}`}
+						{busy ? 'Starting…' : `Start A ${rehearsal ? 'Rehearsal ' : ''}Run Of ${runs} Loop${runs === 1 ? '' : 's'}`}
 					</button>
 				</form>
 			{/if}
@@ -992,13 +982,13 @@
 					<button type="button" onclick={() => returnHome.stop(haltCamera)} disabled={returnHome.loop.stopping}
 						title="Stops the arm within one jog, then closes the mouth"
 						class="rounded border border-red-500 bg-red-900/30 px-2 py-0.5 font-semibold text-red-200 disabled:opacity-40">
-						Stop returning
+						Stop Returning
 					</button>
 				{:else if halt?.phase === 'error' && loop && loop.status !== 'running'}
 					<button type="button" onclick={() => void homeAfterHalt()}
 						title={halt.ot2Homed ? 'Run the arm’s Return to home again (the OT-2 homes again first)' : 'Home the OT-2 again, then the arm'}
 						class="rounded border border-amber-500 bg-amber-900/30 px-2 py-0.5 font-semibold text-amber-100">
-						Try again
+						Try Again
 					</button>
 				{/if}
 				{#if returnHome.result?.frozen}
@@ -1046,7 +1036,7 @@
 					<div>
 						<button type="button" onclick={() => void loadProfile(loop!._id)} disabled={profileBusy} class={ctlPlain}
 							title="Read this loop's OT-2 run back from the robot and lay its seconds out per cart and per station">
-							{profileBusy && profileLoopId === loop._id ? 'Reading the run…' : 'Fill profile'}
+							{profileBusy && profileLoopId === loop._id ? 'Reading The Run…' : 'Fill Profile'}
 						</button>
 					</div>
 				{/if}
@@ -1063,7 +1053,6 @@
 				{#if loop.opentronsRunId && !loop.runFinished}
 					<!-- The loop's one run, for the whole loop. Watch only: its ARM pauses are the loop's to resume, never the controller's auto-resume. -->
 					<EmbeddedRunController robotId={loop.robot._id} robotName={loop.robot.name} opentronsRunId={loop.opentronsRunId} autoResumeInitial={false} lockArmPauses={true} onStatusChange={onRunStatus} />
-					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">The run's "ARM PARKED" / "ARM AT_SCAN" pauses are the loop's handshake — the loop resumes them itself; Resume above is only for a Pause you press here.</p>
 				{/if}
 
 				{#if log.length}
@@ -1080,7 +1069,7 @@
 					<details class="text-xs">
 						<summary class="cursor-pointer" style="color: var(--color-tron-text-secondary)">Cycles ({loop.cycles.length})</summary>
 						<table class="mt-2 w-full text-left text-[11px]">
-							<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-2">#</th><th class="pr-2">Step</th><th class="pr-2">Cart</th><th class="pr-2">Robot run</th><th>Note</th></tr></thead>
+							<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-2">#</th><th class="pr-2">Step</th><th class="pr-2">Cart</th><th class="pr-2">Robot Run</th><th>Note</th></tr></thead>
 							<tbody>
 								{#each loop.cycles as c (c.index)}
 									<tr style="color: var(--color-tron-text)">
@@ -1103,10 +1092,10 @@
 	{#if profileLoopId}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2" aria-label="Fill profile">
 			<div class="flex flex-wrap items-center justify-between gap-2">
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Fill profile · loop <span class="font-mono normal-case tracking-normal">{profileLoopId.slice(0, 8)}…</span></h3>
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Fill Profile · Loop <span class="font-mono normal-case tracking-normal">{profileLoopId.slice(0, 8)}…</span></h3>
 				<div class="flex items-center gap-1">
 					<button type="button" onclick={() => void loadProfile(profileLoopId!, true)} disabled={profileBusy} class={ctlPlain} title="Read the run from the robot again (the saved profile is replaced)">
-						{profileBusy ? 'Reading…' : 'Re-read from the robot'}
+						{profileBusy ? 'Reading…' : 'Re-Read From The Robot'}
 					</button>
 					<button type="button" onclick={() => { profile = null; profileLoopId = null; profileError = null; }} class={ctlPlain}>Hide</button>
 				</div>
@@ -1115,8 +1104,6 @@
 			{#if profile}
 				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s start to end{/if} · read {when(profile.generatedAt)}.
-					Seconds from the robot's own command timestamps. <span class="font-semibold">Parked (arm)</span> is the OT-2 idle in the wax while the arm withdraws and grabs (and the handshakes between);
-					<span class="font-semibold">At scan</span> is the gantry holding over the stage while the barcode is read; <span class="font-semibold">Gaps</span> is engine time between commands.
 				</p>
 				<div class="overflow-x-auto">
 					<table class="w-full text-left text-[11px]">
@@ -1150,7 +1137,7 @@
 					</ul>
 				{/if}
 			{:else if profileBusy}
-				<p class="text-xs" style="color: var(--color-tron-text-secondary)">Reading the run's command log from the robot…</p>
+				<p class="text-xs" style="color: var(--color-tron-text-secondary)">Reading The Run…</p>
 			{/if}
 		</section>
 	{/if}
@@ -1161,9 +1148,9 @@
 			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Setup</h3>
 			<form method="POST" action="?/saveSetup" use:enhance class="mt-3 space-y-3 text-xs">
 				<label class="block">
-					<span style="color: var(--color-tron-text-secondary)">OT-2 the arm feeds</span>
+					<span style="color: var(--color-tron-text-secondary)">OT-2</span>
 					<select name="robotId" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
-						<option value="">— pick a robot —</option>
+						<option value="">— Pick A Robot —</option>
 						{#each data.robots as r (r._id)}<option value={r._id} selected={r._id === data.settings.robotId}>{r.name}</option>{/each}
 					</select>
 				</label>
@@ -1171,55 +1158,54 @@
 					{#if stage}
 						<div class="block text-[11px]" style="color: var(--color-tron-text-secondary)">
 							<span class="block" style="color: var(--color-tron-text-secondary)">Stage</span>
-							<span class="mt-1 block">Cart rotation and dispense depth are taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab. The pipette goes all the way up before every move.</span>
+							<span class="mt-1 block"><a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage Calibration</a></span>
 						</div>
 					{:else}
 						<label class="block">
-							<span style="color: var(--color-tron-text-secondary)">Deck position filled (1–24)</span>
+							<span style="color: var(--color-tron-text-secondary)">Deck Position (1–24)</span>
 							<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
 								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
 						</label>
 					{/if}
 					<label class="block">
-						<span style="color: var(--color-tron-text-secondary)">Wax lot (optional)</span>
-						<input name="waxSourceLot" value={data.settings.waxSourceLot ?? ''} placeholder="stamped on each wax run"
+						<span style="color: var(--color-tron-text-secondary)">Wax Lot</span>
+						<input name="waxSourceLot" value={data.settings.waxSourceLot ?? ''} placeholder="Optional"
 							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
 				</div>
 				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
-					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels to fill (rows of 4 wax holes)</legend>
+					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels To Fill</legend>
 					<div class="flex flex-wrap gap-4">
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> C <span style="color: var(--color-tron-text-secondary)">(row X, first from the taught hole)</span></label>
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> B <span style="color: var(--color-tron-text-secondary)">(row W, middle)</span></label>
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> A <span style="color: var(--color-tron-text-secondary)">(row V, last)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> C <span style="color: var(--color-tron-text-secondary)">(Row X)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> B <span style="color: var(--color-tron-text-secondary)">(Row W)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> A <span style="color: var(--color-tron-text-secondary)">(Row V)</span></label>
 					</div>
 					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-						Sent to the stage protocol as the carriage line's channel checkboxes. Each row is one tube trip: two channels = two trips per cart.
-						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot predates these checkboxes and fills all three rows — add the current stage .py to the library and deploy it.</span>{/if}
+						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot fills all three rows; deploy the current stage .py.</span>{/if}
 					</p>
 				</fieldset>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="grabDuringProbe" checked={data.settings.grabDuringProbe} class="mt-0.5" />
-					<span>First grab starts while the tip is being calibrated (ARM PROBING) instead of after (ARM CALIBRATED). <span class="text-amber-300">The grab path must keep clear of the tip calibrator.</span></span>
+					<span>First Grab During Tip Probe <span class="text-amber-300">· Grab path must clear the tip calibrator.</span></span>
 				</label>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
-					<span>Withdraw and the next grab play as one arm path (one play per hand-over; the OT-2 is parked in the wax throughout).</span>
+					<span>Chain Withdraw And Next Grab</span>
 				</label>
 				<label class="flex items-center gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="testMode" checked={data.settings.testMode} />
-					Test mode — a barcode the system does not know becomes a synthetic backed cart (as in the wax wizard's test mode)
+					Test Mode: Accept Unknown Barcodes
 				</label>
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
-							Protocol on {data.robotName}: <span class="font-mono">{data.protocol.protocolName}</span>
+							Protocol On {data.robotName}: <span class="font-mono">{data.protocol.protocolName}</span>
 							{#if data.protocol.rehearsal}<span class="font-bold text-amber-300">· REHEARSAL</span>{/if}
 						{:else if data.settings.robotId}
 							<span class="text-amber-300">No wax-filling protocol on this robot.</span>
 						{/if}
 					</span>
-					<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save setup</button>
+					<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save Setup</button>
 				</div>
 			</form>
 
@@ -1227,19 +1213,19 @@
 			{#if data.settings.robotId}
 				<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3 text-xs">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol on the robot</span>
+						<span class="font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol On The Robot</span>
 						{#if data.protocol?.rehearsal}
-							<span class="rounded border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-300">Rehearsal · p300 · air · no wax</span>
+							<span class="rounded border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-300">Rehearsal · p300 · Air · No Wax</span>
 						{:else if data.protocol?.declaresCartLocation}
-							<span class="rounded border border-green-500/40 bg-green-900/15 px-2 py-0.5 text-[10px] font-bold uppercase text-green-300">Production stage fill</span>
+							<span class="rounded border border-green-500/40 bg-green-900/15 px-2 py-0.5 text-[10px] font-bold uppercase text-green-300">Production Stage Fill</span>
 						{/if}
 					</div>
 					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
-							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span> —
-							{#if data.protocol.rehearsal}the p300 walks every station of the stage fill with 200 µL tips and air; nothing is dispensed. Real carts and barcodes are fine: the scanned cart is only checked (a backed cart passes, anything else takes the fail route) and no cart record changes.
-							{:else if data.protocol.declaresCartLocation}the stage protocol: fills the taught cart location (arm_cart_x/y/z).
-							{:else}the carriage protocol: fills the deck position; arm_cart_x/y/z not declared.{/if}
+							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span> ·
+							{#if data.protocol.rehearsal}Rehearsal: nothing is dispensed.
+							{:else if data.protocol.declaresCartLocation}Stage protocol.
+							{:else}Carriage protocol; arm_cart_x/y/z not declared.{/if}
 						{:else}
 							<span class="text-amber-300">No wax-filling protocol on this robot yet.</span>
 						{/if}
@@ -1247,39 +1233,36 @@
 					<div class="mt-2 flex items-center gap-2">
 						<select bind:value={deployLibraryId} disabled={deploying || loop?.status === 'running'}
 							class="min-w-0 flex-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 disabled:opacity-40" style="color: var(--color-tron-text)">
-							<option value="">— choose a stage protocol from the library —</option>
+							<option value="">— Choose A Stage Protocol —</option>
 							{#each data.protocolOptions as o (o.libraryId)}
 								<option value={o.libraryId}>
-									{o.protocolName}{o.rehearsal ? ' · REHEARSAL (p300, air)' : ' · production fill'} · file {o.fileHash8}{o.addedAt ? ` added ${new Date(o.addedAt).toLocaleString()}` : ''}{o.onRobot ? ' · on the robot now' : o.lastDeployedAt ? ` · last deployed ${new Date(o.lastDeployedAt).toLocaleDateString()}` : ' · never deployed here'}
+									{o.protocolName}{o.rehearsal ? ' · REHEARSAL (p300, Air)' : ' · Production Fill'} · File {o.fileHash8}{o.addedAt ? ` Added ${new Date(o.addedAt).toLocaleString()}` : ''}{o.onRobot ? ' · On The Robot Now' : o.lastDeployedAt ? ` · Last Deployed ${new Date(o.lastDeployedAt).toLocaleDateString()}` : ' · Never Deployed Here'}
 								</option>
 							{/each}
 						</select>
 						<button type="button" onclick={() => void deployProtocol()} disabled={!deployLibraryId || deploying || loop?.status === 'running'}
 							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
-							{deploying ? 'Deploying…' : 'Deploy to robot'}
+							{deploying ? 'Deploying…' : 'Deploy To Robot'}
 						</button>
 					</div>
 					{#if data.protocolOptions.length === 0}
-						<p class="mt-1 text-[11px] text-amber-300">No stage protocol in the library yet. The /opentrons page uploads straight to a robot and does not file the .py; add it here instead.</p>
+						<p class="mt-1 text-[11px] text-amber-300">No Stage Protocol In The Library</p>
 					{/if}
 					<div class="mt-2 flex flex-wrap items-center gap-2">
 						<label class="flex min-w-0 flex-1 items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
-							<span class="shrink-0">Add a stage .py to the library</span>
+							<span class="shrink-0">Add Stage .py To Library</span>
 							<input type="file" accept=".py" disabled={addingToLibrary}
 								onchange={(e) => (libraryFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
 								class="min-w-0 flex-1 text-[11px] file:mr-2 file:rounded file:border file:border-[var(--color-tron-border)] file:bg-black/30 file:px-2 file:py-1 file:text-[11px] file:text-[var(--color-tron-text)]" />
 						</label>
 						<button type="button" onclick={() => void addToLibrary()} disabled={!libraryFile || addingToLibrary}
 							class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
-							{addingToLibrary ? 'Adding…' : 'Add to library'}
+							{addingToLibrary ? 'Adding…' : 'Add To Library'}
 						</button>
 					</div>
 					{#if deployMsg}
 						<p class="mt-1 text-[11px] {deployMsg.ok ? 'text-green-300' : 'text-red-300'}">{deployMsg.text}</p>
 					{/if}
-					<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">
-						Uploads the stored .py with the BIMS labware it loads, waits for the robot's analysis (up to about two minutes), then makes it this robot's wax-filling protocol. Not while a loop runs.
-					</p>
 				</div>
 			{/if}
 		</section>
@@ -1291,50 +1274,46 @@
 				{#if !changingAnimations}
 					<button type="button" onclick={() => (changingAnimations = true)} disabled={loop?.status === 'running'}
 						class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
-						Change animations
+						Change Animations
 					</button>
 				{/if}
 			</div>
-			<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-				Chosen once and kept for every run. Made in <a href="/manufacturing/cart-mfg/robot-arm/animate" class="underline" style="color: var(--color-tron-cyan)">Animate</a> (move sets or sequences).
-				The fail animation plays instead of the fill when the scan fails; it may be the withdraw animation or its own.
-			</p>
 			{#if changingAnimations}
 				<form method="POST" action="?/saveAnimations" use:enhance={() => async ({ update }) => { changingAnimations = false; await update(); }} class="mt-3 space-y-3 text-xs">
 					<label class="block">
-						<span style="color: var(--color-tron-text-secondary)">Grab — plays before the scan</span>
+						<span style="color: var(--color-tron-text-secondary)">Grab</span>
 						<select name="grab" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
-							<option value="">— pick —</option>
+							<option value="">— Pick —</option>
 							{#each animationOptions as o (o.value)}<option value={o.value} selected={o.value === animValue(anim.grabAnimation)}>{o.label}</option>{/each}
 						</select>
 					</label>
 					<label class="block">
-						<span style="color: var(--color-tron-text-secondary)">Withdraw — plays after the fill</span>
+						<span style="color: var(--color-tron-text-secondary)">Withdraw</span>
 						<select name="withdraw" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
-							<option value="">— pick —</option>
+							<option value="">— Pick —</option>
 							{#each animationOptions as o (o.value)}<option value={o.value} selected={o.value === animValue(anim.withdrawAnimation)}>{o.label}</option>{/each}
 						</select>
 					</label>
 					<label class="block">
-						<span style="color: var(--color-tron-text-secondary)">Fail — plays instead of the fill when the scan fails (nothing read, or the cart is not a backed cart); the run then stops</span>
+						<span style="color: var(--color-tron-text-secondary)">Fail</span>
 						<select name="fail" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
-							<option value="">— pick —</option>
+							<option value="">— Pick —</option>
 							{#each animationOptions as o (o.value)}<option value={o.value} selected={o.value === animValue(anim.failAnimation)}>{o.label}</option>{/each}
 						</select>
 					</label>
 					<div class="flex justify-end gap-2">
 						<button type="button" onclick={() => (changingAnimations = false)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs" style="color: var(--color-tron-text)">Cancel</button>
-						<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save animations</button>
+						<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save Animations</button>
 					</div>
 				</form>
 			{:else}
 				<dl class="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-xs">
 					<dt style="color: var(--color-tron-text-secondary)">Grab</dt>
-					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.grabAnimation?.name ?? '— not chosen —'}{#if anim.grabAnimation}<span class="ml-1 font-normal opacity-60">({anim.grabAnimation.kind === 'sequence' ? 'sequence' : 'move set'})</span>{/if}</dd>
+					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.grabAnimation?.name ?? '— Not Chosen —'}{#if anim.grabAnimation}<span class="ml-1 font-normal opacity-60">({anim.grabAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
 					<dt style="color: var(--color-tron-text-secondary)">Withdraw</dt>
-					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.withdrawAnimation?.name ?? '— not chosen —'}{#if anim.withdrawAnimation}<span class="ml-1 font-normal opacity-60">({anim.withdrawAnimation.kind === 'sequence' ? 'sequence' : 'move set'})</span>{/if}</dd>
+					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.withdrawAnimation?.name ?? '— Not Chosen —'}{#if anim.withdrawAnimation}<span class="ml-1 font-normal opacity-60">({anim.withdrawAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
 					<dt style="color: var(--color-tron-text-secondary)">Fail</dt>
-					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.failAnimation?.name ?? '— not chosen —'}{#if anim.failAnimation}<span class="ml-1 font-normal opacity-60">({anim.failAnimation.kind === 'sequence' ? 'sequence' : 'move set'}{anim.withdrawAnimation && animValue(anim.failAnimation) === animValue(anim.withdrawAnimation) ? ', same as withdraw' : ''})</span>{/if}</dd>
+					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.failAnimation?.name ?? '— Not Chosen —'}{#if anim.failAnimation}<span class="ml-1 font-normal opacity-60">({anim.failAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'}{anim.withdrawAnimation && animValue(anim.failAnimation) === animValue(anim.withdrawAnimation) ? ', Same As Withdraw' : ''})</span>{/if}</dd>
 				</dl>
 				{#if anim.animationsChangedAt}
 					<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Last changed {when(anim.animationsChangedAt)}{anim.animationsChangedBy ? ` by ${anim.animationsChangedBy}` : ''}.</p>
@@ -1347,39 +1326,35 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-3">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
-				<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">What this robot's wax fill runs on. Taught on the <a href={STAGE_CALIBRATION_HREF} class="underline" style="color: var(--color-tron-cyan)">Stage calibration</a> tab — the arm line's own studio for the single-cart stage.</p>
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage Calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
 			</div>
-			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage calibration</a>
+			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage Calibration</a>
 		</div>
 		<div class="grid grid-cols-1 gap-3 text-xs md:grid-cols-2 xl:grid-cols-4">
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-				<div class="font-semibold" style="color: var(--color-tron-text)">Scan position</div>
+				<div class="font-semibold" style="color: var(--color-tron-text)">Scan Position</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
 				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					Where the gantry scanner reads the cart.
 					{#if calibration?.scanPosition?.taughtAt}Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}.{/if}
 				</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-				<div class="font-semibold" style="color: var(--color-tron-text)">Cart location</div>
+				<div class="font-semibold" style="color: var(--color-tron-text)">Cart Location</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
 				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
-					First wax hole rim, tip-neutral.
 					{#if calibration?.cartLocation?.tipAdjust}Probe at teach <span class="font-mono">{calibration.cartLocation.tipAdjust.x}, {calibration.cartLocation.tipAdjust.y}</span>.{:else if calibration?.cartLocation}<span class="text-amber-300">Taught without a probed tip — teach again.</span>{/if}
 				</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense depth</div>
+				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense Depth</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">
 					{#if calibration?.dispenseDepth}{Math.abs(calibration.dispenseDepth.mm)} mm {calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim{:else}not taught{/if}
 				</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Where the tip end sits when wax is dispensed.{#if !calibration?.dispenseDepth} <span class="text-amber-300">Required before a stage fill.</span>{/if}</div>
+				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">{#if !calibration?.dispenseDepth}<span class="text-amber-300">Required before a stage fill.</span>{/if}</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-				<div class="font-semibold" style="color: var(--color-tron-text)">Stage geometry</div>
+				<div class="font-semibold" style="color: var(--color-tron-text)">Stage Geometry</div>
 				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">rotation {calibration?.stageRotationDeg ?? 0}° · travel: all the way up</div>
-				<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">How the stage holds the cart. Every move between stations starts with a full lift of the pipette.</div>
 			</div>
 		</div>
 	</section>
@@ -1387,7 +1362,7 @@
 	<!-- ── History ───────────────────────────────────────────────────── -->
 	{#if data.recentLoops.length}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent loops</h3>
+			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Loops</h3>
 			<table class="mt-2 w-full text-left text-xs">
 				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
 				<tbody>

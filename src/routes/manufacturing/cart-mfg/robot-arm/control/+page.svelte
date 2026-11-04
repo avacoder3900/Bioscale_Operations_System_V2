@@ -68,11 +68,11 @@
 	const taskStartBlocked = $derived(!armReachable || dryRun !== true || holder != null);
 	const taskBlockReason = $derived(
 		!armReachable
-			? 'The arm is unreachable — check the connection panel.'
+			? 'Arm Unreachable'
 			: dryRun !== true
-				? 'Run Task is validated for dry-run only (ARM-01 §7.4). The arm is in live motion: set DRY_RUN=true in ~/robot-arm/.env on the Pi and restart the robot-arm service to re-enable it.'
+				? 'Dry Run Only: Arm In Live Motion'
 				: holder != null
-					? 'The arm is already running something. If the session bar reads STALE, that run was never closed out and will keep blocking this until it is resolved.'
+					? 'Arm Busy'
 					: ''
 	);
 
@@ -128,14 +128,14 @@
 <div class="mx-auto max-w-7xl space-y-6">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Robot Arm — Remote Control
+			Remote Control
 		</h1>
 		<a
 			href="/manufacturing/cart-mfg"
 			class="text-xs transition-colors hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text-secondary)"
 		>
-			← back
+			← Back
 		</a>
 	</div>
 
@@ -167,7 +167,7 @@
 					<a
 						href="/manufacturing/cart-mfg/robot-arm/runs/{form.runId}"
 						class="ml-2 underline"
-						style="color: var(--color-tron-cyan)">view run →</a
+						style="color: var(--color-tron-cyan)">View Run →</a
 					>
 				{/if}
 			</div>
@@ -186,7 +186,7 @@
 			class="flex flex-wrap items-center justify-between gap-2 rounded border px-3 py-2 text-xs transition-colors hover:border-[var(--color-tron-cyan)]"
 			style="border-color: var(--color-tron-border); background: var(--color-tron-surface); color: var(--color-tron-text-secondary);"
 		>
-			<span><span class="font-semibold" style="color: var(--color-tron-text)">Arm not back home?</span> Check it against the camera markers, or send it home, on the Vision tab.</span>
+			<span><span class="font-semibold" style="color: var(--color-tron-text)">Arm Not Back Home?</span></span>
 			<span style="color: var(--color-tron-cyan)">Vision →</span>
 		</a>
 
@@ -200,9 +200,6 @@
 			>
 				<div>
 					<h2 class="font-semibold" style="color: var(--color-tron-cyan)">Teleop</h2>
-					<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-						Leader-to-follower mirror.
-					</p>
 				</div>
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 					Rate (Hz)
@@ -217,11 +214,11 @@
 					/>
 				</label>
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Duration (s, blank = until stopped)
+					Duration (s)
 					<input
 						type="number"
 						name="duration_s"
-						placeholder="e.g. 60"
+						placeholder="Until Stopped"
 						min="1"
 						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
 						style="color: var(--color-tron-text)"
@@ -231,7 +228,7 @@
 					type="submit"
 					disabled={!!active}
 					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start teleop</button
+					style="color: var(--color-tron-cyan)">Start Teleop</button
 				>
 			</form>
 
@@ -243,9 +240,6 @@
 			>
 				<div>
 					<h2 class="font-semibold" style="color: var(--color-tron-cyan)">Record</h2>
-					<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-						Teleop + capture frames to JSONL.
-					</p>
 				</div>
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 					Name
@@ -271,11 +265,11 @@
 					/>
 				</label>
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Duration (s, blank = until stopped)
+					Duration (s)
 					<input
 						type="number"
 						name="duration_s"
-						placeholder="e.g. 30"
+						placeholder="Until Stopped"
 						min="1"
 						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
 						style="color: var(--color-tron-text)"
@@ -285,7 +279,7 @@
 					type="submit"
 					disabled={!!active}
 					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start recording</button
+					style="color: var(--color-tron-cyan)">Start Recording</button
 				>
 			</form>
 
@@ -297,9 +291,6 @@
 			>
 				<div>
 					<h2 class="font-semibold" style="color: var(--color-tron-cyan)">Replay</h2>
-					<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-						Drive follower from a recording. Leader is not used.
-					</p>
 				</div>
 				{#if active?.kind === 'replay'}
 					<!--
@@ -332,14 +323,14 @@
 					</div>
 				{/if}
 				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Recording (Pi path)
+					Recording
 					<select
 						name="source"
 						required
 						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
 						style="color: var(--color-tron-text)"
 					>
-						<option value="">— pick one —</option>
+						<option value="">— Pick One —</option>
 						{#each data.piRecordings as r (r.path)}
 							<option value={r.path}>{r.name}</option>
 						{/each}
@@ -361,7 +352,7 @@
 					type="submit"
 					disabled={!!active || data.piRecordings.length === 0}
 					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start replay</button
+					style="color: var(--color-tron-cyan)">Start Replay</button
 				>
 			</form>
 		</div>
@@ -379,9 +370,6 @@
 			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
 				SOLENOIDS (GPIO)
 			</h2>
-			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
-				Energize a solenoid for the pulse length, then release. The Pi caps a pulse at 2000 ms.
-			</p>
 
 			<div class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-[12rem_minmax(0,1fr)]">
 				<div class="space-y-3">
@@ -398,7 +386,7 @@
 						/>
 					</label>
 					<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-						Gap between pins (ms, sequence only)
+						Gap (ms)
 						<input
 							type="number"
 							bind:value={gapMs}
@@ -445,18 +433,18 @@
 							class="min-h-[44px] w-full rounded px-3 py-1.5 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 							style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
 						>
-							GPIO 17 then 27
+							GPIO 17 Then 27
 						</button>
 					</form>
 				</div>
 			</div>
 			{#if gpioBusy}
 				<p class="mt-2 text-xs" style="color: #f59e0b">
-					Pulsing... the Pi holds the pin for the full length before answering.
+					Pulsing…
 				</p>
 			{:else if !armReachable}
 				<p class="mt-2 text-xs" style="color: #f59e0b">
-					The arm Pi is unreachable, so the solenoids cannot be driven.
+					Arm Pi Unreachable
 				</p>
 			{/if}
 		</section>
@@ -472,7 +460,7 @@
 
 			{#if (data.tasks ?? []).length === 0}
 				<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					No tasks available — the arm is unreachable or its registry is empty.
+					No Tasks
 				</p>
 			{:else}
 				<form method="POST" action="?/startTask" class="mt-3 space-y-3">
@@ -490,7 +478,7 @@
 							class="mt-1 min-h-[44px] w-full rounded border bg-transparent px-2 text-sm sm:w-auto sm:min-w-[22rem]"
 							style="border-color: var(--color-tron-border); color: var(--color-tron-text)"
 						>
-							<option value="" disabled>Select a task…</option>
+							<option value="" disabled>Select A Task…</option>
 							{#each data.tasks as t (t.name)}
 								<option value={t.name}>{t.name}</option>
 							{/each}
@@ -507,7 +495,7 @@
 
 					<div>
 						<label for="lot_id" class="block text-xs" style="color: var(--color-tron-text-secondary)"
-							>Lot (optional)</label
+							>Lot (Optional)</label
 						>
 						<input
 							type="text"
@@ -524,7 +512,7 @@
 						class="min-h-[44px] w-full rounded px-4 text-sm font-semibold disabled:opacity-40 sm:w-auto"
 						style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
 					>
-						Start task
+						Start Task
 					</button>
 					{#if taskStartBlocked}
 						<span class="block text-xs" style="color: #f59e0b">{taskBlockReason}</span>
@@ -557,15 +545,9 @@
 				<div
 					class="mb-3 overflow-hidden rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)]"
 				>
-					<p
-						class="border-b border-[var(--color-tron-border)] px-3 py-2 text-xs"
-						style="color: var(--color-tron-text-secondary)"
-					>
-						Deleted recordings are kept for 30 days, then removed automatically.
-					</p>
 					{#if deletedRecordings.length === 0}
 						<p class="px-3 py-2 text-xs" style="color: var(--color-tron-text-secondary)">
-							Nothing in the trash.
+							Trash Empty
 						</p>
 					{:else}
 						<table class="w-full text-xs">
@@ -576,7 +558,7 @@
 								<tr>
 									<th class="px-3 py-2">Name</th>
 									<th class="px-3 py-2">Deleted</th>
-									<th class="px-3 py-2">Days left</th>
+									<th class="px-3 py-2">Days Left</th>
 									<th class="px-3 py-2"></th>
 								</tr>
 							</thead>
@@ -614,7 +596,7 @@
 
 			{#if data.piRecordings.length === 0}
 				<p class="text-sm" style="color: var(--color-tron-text-secondary)">
-					No recordings on the Pi yet.
+					No Recordings
 				</p>
 			{:else}
 				<div
@@ -641,7 +623,7 @@
 											href={`/manufacturing/cart-mfg/robot-arm/cleanup?source=${encodeURIComponent(r.name)}`}
 											class="ml-2 font-sans text-[11px] hover:underline"
 											style="color: var(--color-tron-cyan)"
-											title="Split this recording into steps and clean it up">clean up</a
+											title="Split this recording into steps and clean it up">Clean Up</a
 										>
 									</td>
 									<td class="px-3 py-2" style="color: var(--color-tron-text-secondary)">
@@ -692,11 +674,11 @@
 				class="mb-2 text-sm font-bold uppercase tracking-wider"
 				style="color: var(--color-tron-text-secondary)"
 			>
-				Connection log
+				Connection Log
 			</h2>
 			{#if (data.connectionLog ?? []).length === 0}
 				<p class="text-sm" style="color: var(--color-tron-text-secondary)">
-					No connection history yet — the first observation was just recorded.
+					No Connection History
 				</p>
 			{:else}
 				<div
@@ -719,14 +701,14 @@
 									<td class="whitespace-nowrap px-3 py-2 font-mono">{logTime(row.createdAt)}</td>
 									<td class="px-3 py-2">
 										<span style="color: {row.success ? '#22c55e' : '#ef4444'}">
-											{row.success ? '● reachable' : '● unreachable'}
+											{row.success ? '● Reachable' : '● Unreachable'}
 										</span>
 									</td>
 									<td class="break-all px-3 py-2" style="color: var(--color-tron-text-secondary)">
 										{#if row.success}
-											{row.eventData?.reason === 'change' ? 'recovered' : 'still up'}
+											{row.eventData?.reason === 'change' ? 'Recovered' : 'Still Up'}
 										{:else}
-											{row.errorMessage || 'unreachable'}
+											{row.errorMessage || 'Unreachable'}
 										{/if}
 									</td>
 								</tr>
@@ -734,10 +716,6 @@
 						</tbody>
 					</table>
 				</div>
-				<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-					Recorded when this page is loaded — on every change of state, and at most hourly
-					while it is steady. A gap means nobody was watching, not that the arm was up.
-				</p>
 			{/if}
 		</section>
 	</div>

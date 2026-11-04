@@ -71,13 +71,13 @@
 			case 'ok':
 				return 'OK';
 			case 'single_pose':
-				return 'Offset only (1 pose)';
+				return 'Offset Only (1 Pose)';
 			case 'insufficient_range':
-				return 'Range too small — mirroring';
+				return 'Mirroring: Range Too Small';
 			case 'implausible_scale':
-				return 'Slope rejected — mirroring';
+				return 'Mirroring: Slope Rejected';
 			case 'no_fit':
-				return 'No data';
+				return 'No Data';
 			default:
 				return status ?? '—';
 		}
@@ -120,14 +120,14 @@
 <div class="mx-auto max-w-5xl space-y-6 p-4">
 	<div class="flex items-center justify-between">
 		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Robot Arm — Sync Zero Calibration
+			Sync Zero Calibration
 		</h1>
 		<a
 			href="/manufacturing/cart-mfg/robot-arm/control"
 			class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs font-medium transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]"
 			style="color: var(--color-tron-text)"
 		>
-			← Back to robot arm
+			← Back To Robot Arm
 		</a>
 	</div>
 
@@ -135,12 +135,7 @@
 	{#if data.active}
 		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-3 text-sm">
 			<p class="font-medium text-yellow-400">
-				Session active: {data.active.kind} ({data.active.run_id})
-			</p>
-			<p class="mt-1 text-xs text-yellow-200/80">
-				Stop the session from the
-				<a href="/manufacturing/cart-mfg/robot-arm/control" class="underline">control page</a>
-				before capturing — the arm bus is single-owner.
+				Session Active: {data.active.kind} ({data.active.run_id})
 			</p>
 		</div>
 	{/if}
@@ -159,54 +154,36 @@
 	<!-- Fetch error from the host -->
 	{#if errorMsg}
 		<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm">
-			<p class="font-medium text-red-400">Cannot reach robot-arm server</p>
+			<p class="font-medium text-red-400">Cannot Reach Robot-Arm Server</p>
 			<p class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">{errorMsg}</p>
 		</div>
 	{/if}
 
 	<!-- What is sync zero — short explainer -->
-	<div
-		class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 text-sm"
-		style="color: var(--color-tron-text-secondary)"
-	>
-		<p>
-			A <span style="color: var(--color-tron-cyan)">sync zero</span> is the matched
-			reference pose for leader and follower. Pose both arms in a known shape —
-			typically both straight up with the gripper closed — then press
-			<span class="font-semibold">Capture</span>. From then on, every teleop and record
-			session starts from that calibrated neutral instead of whatever pose the arms
-			happen to be in when GO is pressed.
-		</p>
-		<p class="mt-2">
-			Saved on the host at <code class="font-mono text-xs">calibrations/sync_zero.json</code>.
-			Survives reboots. Clear it any time to revert to capture-at-start behavior.
-		</p>
-	</div>
 
 	<!-- Saved zero status -->
 	<div
 		class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
 	>
 		<h2 class="text-sm font-semibold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
-			Saved zero
+			Saved Zero
 		</h2>
 		{#if saved}
 			<dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
-				<dt style="color: var(--color-tron-text-secondary)">Captured at</dt>
+				<dt style="color: var(--color-tron-text-secondary)">Captured At</dt>
 				<dd class="font-mono" style="color: var(--color-tron-text)">
 					{fmtDate(saved.captured_at)}
 				</dd>
-				<dt style="color: var(--color-tron-text-secondary)">Captured by</dt>
+				<dt style="color: var(--color-tron-text-secondary)">Captured By</dt>
 				<dd style="color: var(--color-tron-text)">
-					{saved.captured_by?.username ?? 'unknown'}
+					{saved.captured_by?.username ?? 'Unknown'}
 				</dd>
 				<dt style="color: var(--color-tron-text-secondary)">Version</dt>
 				<dd class="font-mono" style="color: var(--color-tron-text)">{saved.version}</dd>
 			</dl>
 		{:else}
 			<p class="mt-2 text-sm" style="color: var(--color-tron-text-secondary)">
-				No sync zero saved. Teleop and record will lock neutrals to whatever pose the
-				arms are in when GO is pressed. Capture a zero to make it repeatable.
+				No Sync Zero Saved
 			</p>
 		{/if}
 	</div>
@@ -220,17 +197,17 @@
 				class="border-b border-[var(--color-tron-border)] px-4 py-2 text-sm font-semibold uppercase tracking-wider"
 				style="color: var(--color-tron-text-secondary)"
 			>
-				Live positions {saved ? '(deltas vs saved zero)' : ''}
+				Live Positions
 			</h2>
 			<table class="w-full text-sm">
 				<thead class="text-xs" style="color: var(--color-tron-text-secondary)">
 					<tr class="border-b border-[var(--color-tron-border)]">
 						<th class="px-3 py-2 text-left">Joint</th>
-						<th class="px-3 py-2 text-right">Leader saved</th>
-						<th class="px-3 py-2 text-right">Leader live</th>
+						<th class="px-3 py-2 text-right">Leader Saved</th>
+						<th class="px-3 py-2 text-right">Leader Live</th>
 						<th class="px-3 py-2 text-right">Δ</th>
-						<th class="px-3 py-2 text-right">Follower saved</th>
-						<th class="px-3 py-2 text-right">Follower live</th>
+						<th class="px-3 py-2 text-right">Follower Saved</th>
+						<th class="px-3 py-2 text-right">Follower Live</th>
 						<th class="px-3 py-2 text-right">Δ</th>
 					</tr>
 				</thead>
@@ -254,9 +231,6 @@
 					{/each}
 				</tbody>
 			</table>
-			<p class="px-4 py-2 text-xs" style="color: var(--color-tron-text-secondary)">
-				Refresh the page to re-read positions. Encoder ticks: 0–4095 per joint.
-			</p>
 		</div>
 	{/if}
 
@@ -264,9 +238,6 @@
 	<div
 		class="rounded-xl border-2 border-[var(--color-tron-cyan)]/40 bg-[var(--color-tron-surface)] p-6 text-center"
 	>
-		<p class="text-xs uppercase tracking-widest" style="color: var(--color-tron-text-secondary)">
-			Pose both arms to a matched reference, then
-		</p>
 		<form method="POST" action="?/capture" class="mt-4">
 			<button
 				type="submit"
@@ -279,7 +250,7 @@
 		</form>
 		{#if data.active}
 			<p class="mt-2 text-xs text-yellow-400">
-				Capture is disabled while a session is active.
+				Disabled: Session Active
 			</p>
 		{/if}
 	</div>
@@ -290,26 +261,17 @@
 	>
 		<div class="flex items-center justify-between">
 			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">
-				Joint Map — Multi-Pose Calibration
+				Multi-Pose Joint Map
 			</h2>
 			<span class="text-xs uppercase tracking-widest" style="color: var(--color-tron-text-secondary)">
-				{poses.length} pose{poses.length === 1 ? '' : 's'} · {calibratedCount}/{mapJointNames.length}
-				joints fitted
+				{poses.length} Pose{poses.length === 1 ? '' : 's'} · {calibratedCount}/{mapJointNames.length}
+				Joints Fitted
 			</span>
 		</div>
 
-		<p class="text-xs leading-relaxed" style="color: var(--color-tron-text-secondary)">
-			Sync zero above captures a single matched pose, which can only ever produce an
-			<em>offset</em>. The leader and follower use different gearing (1/345, 1/191, 1/147), so a
-			pure mirror over-travels on some joints. Capturing several poses spread across each
-			joint's range lets the host fit a per-joint <em>scale</em> as well. Aim for at least 3
-			poses, moved as far apart as the arm comfortably allows — a joint that barely moves
-			between poses cannot be fitted and will fall back to mirroring.
-		</p>
-
 		{#if mapError}
 			<div class="rounded-lg border-2 border-yellow-500/60 bg-yellow-900/20 p-3">
-				<p class="text-xs text-yellow-300">Live read unavailable: {mapError}</p>
+				<p class="text-xs text-yellow-300">Live Read Unavailable: {mapError}</p>
 			</div>
 		{/if}
 
@@ -323,13 +285,9 @@
 			>
 				CAPTURE POSE
 			</button>
-			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-				Hand-pose both arms to the same physical position, then capture. The follower is held
-				briefly during the read and released again, so it stays limp between poses.
-			</p>
 			{#if data.active}
 				<p class="mt-2 text-xs text-yellow-400">
-					Capture is disabled while a session is active.
+					Disabled: Session Active
 				</p>
 			{/if}
 		</form>
@@ -341,7 +299,7 @@
 					class="mb-2 text-xs uppercase tracking-widest"
 					style="color: var(--color-tron-text-secondary)"
 				>
-					Fit — {fit.n_poses} pose{fit.n_poses === 1 ? '' : 's'}, fitted {fmtDate(fit.fitted_at)}
+					Fit — {fit.n_poses} Pose{fit.n_poses === 1 ? '' : 's'}, Fitted {fmtDate(fit.fitted_at)}
 				</h3>
 				<table class="w-full text-sm">
 					<thead>
@@ -356,12 +314,12 @@
 								>Offset</th
 							>
 							<th class="py-1 text-right font-normal" style="color: var(--color-tron-text-secondary)"
-								>Max resid.</th
+								>Max Resid.</th
 							>
 							{#if mapLive}
 								<th
 									class="py-1 text-right font-normal"
-									style="color: var(--color-tron-text-secondary)">Tracking err.</th
+									style="color: var(--color-tron-text-secondary)">Tracking Err.</th
 								>
 							{/if}
 							<th class="py-1 text-left font-normal" style="color: var(--color-tron-text-secondary)"
@@ -388,23 +346,14 @@
 						{/each}
 					</tbody>
 				</table>
-				{#if mapLive}
-					<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">
-						Tracking error is the follower's actual position minus what the current fit predicts.
-						An error that grows as you move that joint means its scale is still wrong — capture
-						more poses across its travel.
-					</p>
-				{/if}
 			</div>
 		{:else if hostUnreachable}
 			<p class="text-sm text-yellow-300">
-				Calibration state unknown — could not reach the robot-arm host. This does
-				<span class="font-semibold">not</span> mean the arm is uncalibrated; a fitted map may
-				well be saved on the host.
+				Calibration State Unknown: Host Unreachable
 			</p>
 		{:else}
 			<p class="text-sm" style="color: var(--color-tron-text-secondary)">
-				No joint map saved. Teleop mirrors the leader 1:1.
+				No Joint Map Saved
 			</p>
 		{/if}
 
@@ -415,7 +364,7 @@
 					class="mb-2 text-xs uppercase tracking-widest"
 					style="color: var(--color-tron-text-secondary)"
 				>
-					Captured poses
+					Captured Poses
 				</h3>
 				<ul class="space-y-1">
 					{#each poses as pose (pose.index)}
@@ -454,7 +403,7 @@
 					class="text-xs underline transition-colors hover:text-red-400 disabled:cursor-not-allowed disabled:text-gray-600 disabled:no-underline"
 					style="color: var(--color-tron-text-secondary)"
 				>
-					Clear joint map
+					Clear Joint Map
 				</button>
 			</form>
 		{/if}
@@ -468,7 +417,7 @@
 				class="text-xs underline transition-colors hover:text-red-400"
 				style="color: var(--color-tron-text-secondary)"
 			>
-				Clear saved sync zero
+				Clear Saved Sync Zero
 			</button>
 		</form>
 	{/if}

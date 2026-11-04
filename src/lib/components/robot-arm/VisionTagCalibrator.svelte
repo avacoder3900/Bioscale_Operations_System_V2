@@ -85,11 +85,6 @@
 	<div class="flex flex-wrap items-start justify-between gap-3">
 		<div>
 			<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">CALIBRATE</h2>
-			<p class="max-w-2xl text-xs" style="color: var(--color-tron-text-secondary)">
-				Park the arm at home first. Detect, register any new tag the camera finds, then save — that frame and the servo positions read on
-				either side of it become home. Saving needs both: the servos must answer, hold still during the capture, and at least one arm tag
-				must be in view. Recalibrate whenever a tag is moved or added. A bumped camera does not need a recalibration if fixed tags are in view.
-			</p>
 		</div>
 		<button
 			type="button"
@@ -98,7 +93,7 @@
 			class="min-h-[40px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40"
 			style="background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);"
 		>
-			{detecting ? 'Detecting…' : det ? 'Detect again' : 'Detect tags'}
+			{detecting ? 'Detecting…' : det ? 'Detect Again' : 'Detect Tags'}
 		</button>
 	</div>
 
@@ -114,7 +109,7 @@
 					{#if det.detector}· {det.detector}{/if}
 				</p>
 				{#if !det.tags.length}
-					<p style="color: #f59e0b">No tags found. Check the lighting, that tags face the camera, and that they are large enough for their distance.</p>
+					<p style="color: #f59e0b">No tags found.</p>
 				{/if}
 				<ul class="space-y-1">
 					{#each det.tags as d (d.id)}
@@ -133,16 +128,16 @@
 									>
 									<span class="text-[10px] uppercase" style="color: var(--color-tron-text-secondary)">{reg.role} · {reg.sizeMm} mm</span>
 								{:else}
-									<span style="color: #f59e0b">not registered</span>
+									<span style="color: #f59e0b">Not Registered</span>
 								{/if}
 								<span class="grow"></span>
-								<span class="font-mono" style="color: var(--color-tron-text-secondary)">{d.pose ? `${Math.round(d.pose.t[2])} mm away` : 'no pose'}</span>
+								<span class="font-mono" style="color: var(--color-tron-text-secondary)">{d.pose ? `${Math.round(d.pose.t[2])} mm away` : 'No Pose'}</span>
 								{#if !reg}
-									<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggle(d.id)}>register</button>
+									<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggle(d.id)}>Register</button>
 								{/if}
 							</div>
 							{#if tooSmall(d)}
-								<p class="mt-0.5" style="color: #f59e0b">Small for this distance — may drop out. Use a bigger tag here, or move it closer.</p>
+								<p class="mt-0.5" style="color: #f59e0b">Too small for this distance.</p>
 							{/if}
 							{#if openId === d.id}
 								<!-- Keyed on the registry row, so a just-registered tag's form
@@ -164,27 +159,27 @@
 											<input type="hidden" name="notes" value={reg.notes ?? ''} />
 										{/if}
 										<label class="block" style="color: var(--color-tron-text-secondary)">
-											Name (where it is)
+											Name
 											<input name="name" required maxlength="60" placeholder="e.g. Wrist" value={reg?.name ?? ''} class={input} style={inputStyle} />
 										</label>
 										<label class="block" style="color: var(--color-tron-text-secondary)">
 											On
 											<select name="role" required class={input} style={inputStyle}>
-												<option value="arm" selected={reg?.role !== 'fixed'}>the arm</option>
-												<option value="fixed" selected={reg?.role === 'fixed'}>something fixed (deck, Opentron…)</option>
+												<option value="arm" selected={reg?.role !== 'fixed'}>The Arm</option>
+												<option value="fixed" selected={reg?.role === 'fixed'}>Something Fixed</option>
 											</select>
 										</label>
 										<label class="block" style="color: var(--color-tron-text-secondary)">
-											Size mm (black square)
+											Size mm
 											<input name="sizeMm" type="number" step="0.1" min="1" max="500" value={reg?.sizeMm ?? sheetSizeMm(d.id) ?? ''} required class={input} style={inputStyle} />
 										</label>
 										<label class="block" style="color: var(--color-tron-text-secondary)">
-											Group (optional)
+											Group
 											<input name="group" list="arm-tag-groups" maxlength="40" value={reg?.group ?? ''} class={input} style={inputStyle} />
 										</label>
 										<div class="flex flex-wrap items-center gap-3 sm:col-span-2">
 											<button type="submit" class="min-h-[32px] rounded px-3 text-xs font-semibold" style="color: #4ade80; border: 1px solid #4ade80;">
-												{reg ? `Save tag ${d.id}` : `Register tag ${d.id}`}
+												{reg ? `Save Tag ${d.id}` : `Register Tag ${d.id}`}
 											</button>
 											{#if reg}
 												<!-- Same form, archive action: it only reads `id`. -->
@@ -196,10 +191,10 @@
 														if (!confirm(`Archive "${reg.name}" (#${d.id})? It can be restored from the Tag Registry.`)) e.preventDefault();
 													}}
 													class="text-xs underline"
-													style="color: var(--color-tron-text-secondary)">archive</button
+													style="color: var(--color-tron-text-secondary)">Archive</button
 												>
 											{/if}
-											<button type="button" onclick={() => (openId = null)} class="text-xs" style="color: var(--color-tron-text-secondary)">cancel</button>
+											<button type="button" onclick={() => (openId = null)} class="text-xs" style="color: var(--color-tron-text-secondary)">Cancel</button>
 										</div>
 									</form>
 								{/key}
@@ -231,16 +226,16 @@
 	>
 		<input type="hidden" name="camera" value={camera} />
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-			Position tolerance (mm)
+			Position Tolerance (mm)
 			<input name="positionMm" type="number" step="0.5" min="0.5" max="100" value={calibration?.tolerances.positionMm ?? DEFAULT_TOLERANCES.positionMm} class="{input} w-28" style={inputStyle} />
 		</label>
 		<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-			<span title="Rotation about the tag's own normal. Tilt is shown live but never judged (its direction is ambiguous for a small tag seen head-on).">Spin tolerance (°, 0 = off)</span>
+			<span title="Rotation about the tag's own normal. Tilt is shown live but never judged (its direction is ambiguous for a small tag seen head-on).">Spin Tolerance (°)</span>
 			<input name="angleDeg" type="number" step="0.5" min="0" max="90" value={calibration?.tolerances.angleDeg ?? DEFAULT_TOLERANCES.angleDeg} class="{input} w-28" style={inputStyle} />
 		</label>
 		<label class="block min-w-[12rem] flex-1 text-xs" style="color: var(--color-tron-text-secondary)">
-			Note (optional)
-			<input name="note" maxlength="200" placeholder="what changed" class={input} style={inputStyle} />
+			Note
+			<input name="note" maxlength="200" placeholder="What Changed" class={input} style={inputStyle} />
 		</label>
 		<button
 			type="submit"
@@ -249,7 +244,7 @@
 			style="background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid #4ade80;"
 			title={byTagId.size ? 'Read the servos, detect once more on the server, read the servos again, and save both as home' : 'Register tags first'}
 		>
-			{saving ? 'Saving…' : 'Save calibration (arm is at home)'}
+			{saving ? 'Saving…' : 'Save Calibration'}
 		</button>
 		{#if blocked}<span class="text-xs" style="color: #f59e0b">{blockReason}</span>{/if}
 	</form>
