@@ -1227,10 +1227,6 @@
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
 					<span>Withdraw and the next grab play as one arm path (one play per hand-over; the OT-2 is parked in the wax throughout).</span>
 				</label>
-				<label class="flex items-center gap-2" style="color: var(--color-tron-text-secondary)">
-					<input type="checkbox" name="testMode" checked={data.settings.testMode} />
-					Test mode — a barcode the system does not know becomes a synthetic backed cart (as in the wax wizard's test mode)
-				</label>
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
