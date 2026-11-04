@@ -2,9 +2,9 @@
 	/**
 	 * The Robot Arm page (2026-11 UI redesign).
 	 *
-	 * Four tabs in the order an operator needs them — Run the wax-fill line,
-	 * Teach the arm its moves, Calibrate (arm home by camera, the OT-2 stage),
-	 * History — plus a small Maintenance link for the leader-arm tools, the
+	 * Three tabs in the order an operator needs them — Run the wax-fill line,
+	 * Teach the arm its moves, Calibrate (arm home by camera, the OT-2 stage) —
+	 * History is its own page behind a button at the bottom of Run — plus a small Maintenance link for the leader-arm tools, the
 	 * Pi's recordings, jog, sync zero and the conveyor bench test, which the
 	 * line no longer needs day to day.
 	 *
@@ -60,12 +60,6 @@
 			label: 'Calibrate',
 			hint: 'Arm home by camera · the OT-2 stage',
 			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-3 0a6 6 0 11-12 0 6 6 0 0112 0z'
-		},
-		{
-			href: `${BASE}/history`,
-			label: 'History',
-			hint: 'Wax-fill runs and arm sessions',
-			icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z'
 		}
 	];
 	const maintenanceHref = `${BASE}/maintenance`;
@@ -73,7 +67,7 @@
 	let currentPath = $derived($page.url.pathname);
 	let maintActive = $derived(currentPath.startsWith(maintenanceHref));
 	let activeLabel = $derived(
-		tabs.find((t) => currentPath.startsWith(t.href))?.label ?? (maintActive ? 'Maintenance' : 'Run')
+		tabs.find((t) => currentPath.startsWith(t.href))?.label ?? (maintActive ? 'Maintenance' : currentPath.startsWith(`${BASE}/history`) ? 'History' : 'Run')
 	);
 
 	// dry_run.ok is always true — dry-run vs live is a config choice, not a
