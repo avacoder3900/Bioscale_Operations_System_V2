@@ -33,6 +33,7 @@ import {
 } from '$lib/server/robot-arm-animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { conveyorActions, loadConveyor } from '$lib/server/robot-arm-conveyor';
+import { getSettings as waxFillSettings } from '$lib/server/arm-wax-fill';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
 import { bulkPoseMessage, friendlyName } from '$lib/robot-arm/animation';
@@ -63,6 +64,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 	]);
 	// Home per camera (Vision tab calibration): the pose editor's default reference marker.
 	const homeSteps = await homeStepsByCamera().catch(() => ({}));
+	// The wax-fill run's chosen grab / withdraw / fail animations: the library marks what they use.
+	const wax = await waxFillSettings().catch(() => null);
 
 	return {
 		poses: JSON.parse(JSON.stringify(poses ?? [])),
@@ -77,7 +80,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 		verifiedRun: JSON.parse(JSON.stringify(verifiedRun ?? null)),
 		solenoids: JSON.parse(JSON.stringify(solenoids)),
 		conveyor: JSON.parse(JSON.stringify(conveyor)),
-		homeSteps
+		homeSteps,
+		waxFill: wax ? JSON.parse(JSON.stringify({ grab: wax.grabAnimation, withdraw: wax.withdrawAnimation, fail: wax.failAnimation })) : null
 	};
 };
 

@@ -1186,20 +1186,13 @@
 						{#each data.robots as r (r._id)}<option value={r._id} selected={r._id === data.settings.robotId}>{r.name}</option>{/each}
 					</select>
 				</label>
-				<div class="grid grid-cols-2 gap-3">
-					{#if !stage}
-						<label class="block">
-							<span style="color: var(--color-tron-text-secondary)">Deck Position (1–24)</span>
-							<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
-								class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-						</label>
-					{/if}
+				{#if !stage}
 					<label class="block">
-						<span style="color: var(--color-tron-text-secondary)">Wax Lot</span>
-						<input name="waxSourceLot" value={data.settings.waxSourceLot ?? ''} placeholder="Optional"
+						<span style="color: var(--color-tron-text-secondary)">Deck Position (1–24)</span>
+						<input name="cartPosition" type="number" min="1" max="24" value={data.settings.cartPosition} required
 							class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
 					</label>
-				</div>
+				{/if}
 				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
 					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels To Fill</legend>
 					<div class="flex flex-wrap gap-4">

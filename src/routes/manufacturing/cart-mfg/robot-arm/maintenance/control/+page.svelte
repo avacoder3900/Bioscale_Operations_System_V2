@@ -147,8 +147,8 @@
 			</div>
 		{/if}
 
-		<!-- Teleop / Record / Replay — the controls used most, so they lead -->
-		<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+		<!-- Teleop / Replay — Record lives on the Teach tab (under the conveyor belt) -->
+		<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 			<!-- Teleop -->
 			<form
 				method="POST"
@@ -186,57 +186,6 @@
 					disabled={!!active}
 					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
 					style="color: var(--color-tron-cyan)">Start Teleop</button
-				>
-			</form>
-
-			<!-- Record -->
-			<form
-				method="POST"
-				action="?/startRecord"
-				class="space-y-3 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4"
-			>
-				<div>
-					<h2 class="font-semibold" style="color: var(--color-tron-cyan)">Record</h2>
-				</div>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Name
-					<input
-						type="text"
-						name="name"
-						placeholder="e.g. movementtest1"
-						required
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Rate (Hz)
-					<input
-						type="number"
-						name="rate_hz"
-						value="30"
-						min="1"
-						max="60"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
-				<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-					Duration (s)
-					<input
-						type="number"
-						name="duration_s"
-						placeholder="Until Stopped"
-						min="1"
-						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-						style="color: var(--color-tron-text)"
-					/>
-				</label>
-				<button
-					type="submit"
-					disabled={!!active}
-					class="w-full rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
-					style="color: var(--color-tron-cyan)">Start Recording</button
 				>
 			</form>
 

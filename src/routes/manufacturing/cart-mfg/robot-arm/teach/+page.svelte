@@ -33,6 +33,7 @@
 	} from '$lib/robot-arm/animation';
 	import SolenoidPanel from '$lib/components/robot-arm/SolenoidPanel.svelte';
 	import ConveyorPanel from '$lib/components/robot-arm/ConveyorPanel.svelte';
+	import TeleopRecordPanel from '$lib/components/robot-arm/TeleopRecordPanel.svelte';
 	import { Playback } from '$lib/robot-arm/playback.svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
 	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
@@ -52,6 +53,7 @@
 	const activePoses = $derived(poses.filter((p) => !p.archived));
 	const poseById = $derived(new Map(poses.map((p) => [p._id, p])));
 	const moveSetById = $derived(new Map(moveSets.map((m) => [m._id, m])));
+	const sequenceById = $derived(new Map(sequences.map((q) => [q._id, q])));
 	const armNow = $derived(data.armNow as ArmRead | null);
 
 	const flash = $derived(form as { success?: string; warning?: string | null; error?: string; createdPoseId?: string } | null);
@@ -169,6 +171,42 @@
 		return n;
 	});
 	const pickedDeletable = $derived(pickedOld.filter((id) => !setsUsing.has(id)));
+
+	// Library marks. Link: used by a live move set (poses) or a live sequence (move sets).
+	// Drop: used by the wax-fill run's chosen animations — a chosen sequence, the move
+	// sets it holds (or a move set chosen directly), and every pose in those move sets.
+	const liveSetsUsing = $derived.by(() => {
+		const n = new Map<string, number>();
+		for (const ms of moveSets) if (!ms.archived) for (const id of new Set(ms.keyframes.filter((k) => !k.fire).map((k) => k.poseId))) n.set(id, (n.get(id) ?? 0) + 1);
+		return n;
+	});
+	const seqsUsing = $derived.by(() => {
+		const n = new Map<string, number>();
+		for (const sq of sequences) if (!sq.archived) for (const id of new Set(sq.items.map((it) => it.moveSetId))) n.set(id, (n.get(id) ?? 0) + 1);
+		return n;
+	});
+	type WaxRole = 'grab' | 'withdraw' | 'fail';
+	const waxRoles = $derived.by(() => {
+		const add = (m: Map<string, Set<WaxRole>>, id: string, role: WaxRole) => m.set(id, (m.get(id) ?? new Set<WaxRole>()).add(role));
+		const seqs = new Map<string, Set<WaxRole>>();
+		const sets = new Map<string, Set<WaxRole>>();
+		const poseIds = new Map<string, Set<WaxRole>>();
+		for (const role of ['grab', 'withdraw', 'fail'] as const) {
+			const ref = data.waxFill?.[role] ?? null;
+			if (!ref) continue;
+			const setIds: string[] = [];
+			if (ref.kind === 'sequence') {
+				add(seqs, ref.id, role);
+				for (const it of sequenceById.get(ref.id)?.items ?? []) setIds.push(it.moveSetId);
+			} else setIds.push(ref.id);
+			for (const sid of setIds) {
+				add(sets, sid, role);
+				for (const k of moveSetById.get(sid)?.keyframes ?? []) if (!k.fire) add(poseIds, k.poseId, role);
+			}
+		}
+		return { seqs, sets, poses: poseIds };
+	});
+	const waxTitle = (roles: Set<WaxRole>) => `Wax fill: ${[...roles].join(', ')}`;
 	function toggle(set: SvelteSet<string>, id: string) {
 		if (set.has(id)) set.delete(id);
 		else set.add(id);
@@ -256,14 +294,24 @@
 	const heatColor = (t: number | null) => ({ stop: '#ef4444', hot: '#f97316', warm: '#fbbf24', ok: '#4ade80' })[heatLevel(t)];
 </script>
 
+{#snippet useMarks(used: number, what: string, roles: Set<WaxRole> | undefined)}
+	{#if roles}
+		<span class="shrink-0" style="color: #fbbf24" title={waxTitle(roles)} aria-label={waxTitle(roles)}>
+			<svg class="h-3 w-3" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 2.7l5.66 5.66a8 8 0 11-11.32 0L12 2.7z" /></svg>
+		</span>
+	{/if}
+	{#if used}
+		<span class="shrink-0" style={muted} title="Used by {used} {what}{used === 1 ? '' : 's'}" aria-label="Used by {used} {what}{used === 1 ? '' : 's'}">
+			<svg class="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 007.54.54l3-3a5 5 0 00-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 00-7.54-.54l-3 3a5 5 0 007.07 7.07l1.71-1.71" /></svg>
+		</span>
+	{/if}
+{/snippet}
+
 <div class="mx-auto max-w-7xl space-y-3">
 	<!-- header + arm status -->
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<div class="flex flex-wrap items-baseline gap-3">
 			<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Teach</h1>
-			<p class="text-xs" style={muted}>
-				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import Teleop Recording</a>
-			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
 			{#if !armReachable}
@@ -366,9 +414,10 @@
 				{/if}
 			{/key}
 
-			<!-- The cartridge trapdoors, under the pose editor, then the conveyor belt. Fire steps go in a move set; these test the GPIO without the arm. -->
+			<!-- The cartridge trapdoors, under the pose editor, then the conveyor belt and teleop recording. Fire steps go in a move set; these test the GPIO without the arm. -->
 			<SolenoidPanel status={(data.solenoids ?? null) as SolenoidStatus | null} {armReachable} />
 			<ConveyorPanel initial={data.conveyor} />
+			<TeleopRecordPanel active={data.active} {armReachable} />
 		</div>
 
 		<!-- pose library -->
@@ -409,10 +458,12 @@
 						<label class="flex cursor-pointer items-center gap-2 px-1.5 py-1">
 							<input type="checkbox" checked={picked.has(p._id)} onchange={() => toggle(picked, p._id)} />
 							<span class="min-w-0 flex-1 truncate text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name}>{label}</span>
+							{@render useMarks(liveSetsUsing.get(p._id) ?? 0, 'move set', waxRoles.poses.get(p._id))}
 						</label>
 					{:else}
 						<div class="flex items-center gap-1 px-1.5 py-1">
 							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name} onclick={() => (editing = p._id)}>{label}</button>
+							{@render useMarks(liveSetsUsing.get(p._id) ?? 0, 'move set', waxRoles.poses.get(p._id))}
 							{#if calFor(p._id)}<span class="text-[10px]" style="color: {calFor(p._id)?.stale ? '#fbbf24' : '#4ade80'}" title={calFor(p._id)?.stale ? 'Camera reference is stale (pose edited since) — retake' : `Camera reference for ${camera}`}>◎</span>{/if}
 							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Go to this pose" disabled={blocked || !!heat?.tooHot.length} onclick={() => goTo(p)}>▶</button>
 							<details class="relative">
@@ -501,6 +552,7 @@
 						{@const covColor = cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
 						<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
 							<a href="/manufacturing/cart-mfg/robot-arm/teach/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
+							{@render useMarks(ms ? (seqsUsing.get(r._id) ?? 0) : 0, 'sequence', ms ? waxRoles.sets.get(r._id) : waxRoles.seqs.get(r._id))}
 							<span class="shrink-0 text-xs" style={muted}>
 								{ms ? stepCountLabel(ms.keyframes) : `${sq!.items.length} sets`}{(ms ? moveSetDuration(ms) : sequenceDuration(sq!)) ? ` · ${ms ? moveSetDuration(ms) : sequenceDuration(sq!)}` : ''}
 							</span>
