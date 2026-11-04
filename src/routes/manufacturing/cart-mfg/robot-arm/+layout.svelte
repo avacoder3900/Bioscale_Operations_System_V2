@@ -93,6 +93,12 @@
 			icon: 'M12 3v3m0 12v3M3 12h3m12 0h3m-9-3v6m-3-3h6M12 7a5 5 0 110 10 5 5 0 010-10z'
 		},
 		{
+			// Temporary: conveyor belt bench test (BCM 22); moves into Wax fill later.
+			href: `${BASE}/conveyor`,
+			label: 'Conveyor',
+			icon: 'M3 15h18M3 15a2 2 0 100 4 2 2 0 000-4zm18 0a2 2 0 110 4 2 2 0 010-4zM7 19h10M8 11h4v4H8v-4z'
+		},
+		{
 			href: `${BASE}/runs`,
 			label: 'Runs',
 			icon: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01'

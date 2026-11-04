@@ -373,6 +373,21 @@ export interface GpioStatus {
 	replay_fire?: boolean;
 }
 
+// Conveyor belt on BCM 22 (pin 15). A pulse is fire-and-forget on the Pi, so
+// every route answers with the current status rather than waiting it out.
+export interface ConveyorStatus {
+	pin: number;
+	state: number;
+	running: boolean;
+	phase: 'delay' | 'on' | null;
+	ms: number | null;
+	delay_ms: number | null;
+	ends_in_ms: number | null;
+	max_pulse_ms: number;
+	simulated: boolean;
+	stopped?: boolean;
+}
+
 export interface ArmTask {
 	name: string;
 	version?: string;
@@ -821,6 +836,14 @@ export const robotArm = {
 	sequenceGpio: (body: { pins: number[]; ms: number; gap_ms: number }) =>
 		robotArmFetch<GpioPulseResult>('/gpio/sequence', { method: 'POST', body, timeoutMs: 14000 }),
 	gpioStatus: () => robotArmFetch<GpioStatus>('/gpio/status'),
+
+	// Conveyor belt (BCM 22). The Pi schedules the pulse and returns at once, so
+	// pulses longer than the 30 s adapter budget still work; poll status.
+	conveyorStatus: () => robotArmFetch<ConveyorStatus>('/conveyor/status', { timeoutMs: 4000 }),
+	conveyorPulse: (body: { ms: number; delay_ms: number }) =>
+		robotArmFetch<ConveyorStatus>('/conveyor/pulse', { method: 'POST', body, timeoutMs: 6000 }),
+	conveyorStop: () =>
+		robotArmFetch<ConveyorStatus>('/conveyor/stop', { method: 'POST', timeoutMs: 6000 }),
 
 	// Task startup does hardware preflight on the Pi before returning, so it
 	// gets the same 15s allowance as the calibration calls above.

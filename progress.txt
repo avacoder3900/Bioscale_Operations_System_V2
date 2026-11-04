@@ -25127,7 +25127,7 @@ root@<robot>:/data/ot2-bridge/ot2-bridge.py && systemctl restart ot2-bridge (gat
 maintenance run). Until then the BIMS-side window (restart command within 4 min) covers them.
 
 2026-11-04 — feat/arm-loop-audit-fixes — Arm wax-fill audit fixes: channels default A only, dead bridge commands expire, stop during a withdraw/chain lets the play finish, replay after a miss only from the start pose
-================================================================================
+=========================================================================
 Alejandro asked for an audit of predicted bugs in the 2026-10-30 speed batch (no loop has run on it yet; B14 — the
 arm's OT-2 — got daemon 1.6.0 with scan_at_pause on 11-03). Eight findings; he asked for the top three fixed and the
 channel defaults changed to C and B off.
@@ -25164,3 +25164,25 @@ Retrieve this exact code: git checkout master at the commit titled "fix(robot-ar
 What this deployment is for: see the entry above. Robot side still to do: re-add both stage .py (now channel A only by
 default) to the library from the Wax fill tab and deploy the rehearsal — docs/HANDOFF-ARM-LOOP-SPEED-DEPLOY-2026-10-30.md
 (update of 2026-11-04). The daemon on B14 is already 1.6.0.
+=======
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Robot Arm "Conveyor" tab: pulse the belt on GPIO 22 (pin 15)
+================================================================================
+Tenth Robot Arm tab for bench-testing the wax-fill cooling belt. The tab is temporary (its controls
+move into Wax fill later); the Pi script stays.
+- services/robot-arm/src/server/conveyor.py (new, Pi): GET /conveyor/status, POST /conveyor/pulse
+  {ms, delay_ms}, POST /conveyor/stop. Owns BCM 22 only, separate from gpio.py (no 2 s solenoid cap,
+  no shared inrush lock). A pulse is fire-and-forget: /pulse schedules it and answers at once, a
+  background task switches the belt off in a finally, so pulses can outlast BIMS's 30 s budget. Cap
+  CONVEYOR_MAX_PULSE_MS 600000 (10 min), delay 0-600000; one pulse at a time (409); /stop always
+  works and cancels a pending delay; atexit turns the belt off. gpiozero/lgpio like gpio.py,
+  SIMULATED without them.
+- services/robot-arm/scripts/install_conveyor_router.py (new): imports pi_conveyor + include_router
+  under require_api_key at the end of app.py, backup app.py.bak-conveyor (thermal-installer pattern).
+- src/lib/server/robot-arm-client.ts: ConveyorStatus + conveyorStatus/conveyorPulse/conveyorStop.
+- src/routes/manufacturing/cart-mfg/robot-arm/conveyor/ (new): Pulse (ms) + Delay (ms) boxes, Pulse
+  and Stop buttons, On/Waiting/Off status; the load depends('robot-arm:conveyor') and the page
+  re-invalidates it every 500 ms while a pulse runs. Pulse/stop audited (robot_arm_gpio,
+  robot_arm.conveyor.pulse|stop). Tab added before Runs in +layout.svelte.
+Tests: conveyor router exercised in SIMULATED mode with FastAPI TestClient (pulse on, 409 overlap,
+delay -> on, stop, 422 over cap). npm run check 14 errors (baseline, none in touched files).
