@@ -115,8 +115,7 @@
 		{:else}
 			<label class="text-[11px]" style={muted}>Pulse (ms)
 				<span class="mt-1 flex items-center gap-2">
-					<input type="range" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={pulseMs} oninput={(e) => (pulseMs = clampMs(Number(e.currentTarget.value)))} class="w-28" aria-label="Pulse length" />
-					<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={pulseMs} onchange={(e) => (pulseMs = clampMs(Number(e.currentTarget.value)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
+					<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={pulseMs} onchange={(e) => (pulseMs = clampMs(Number(e.currentTarget.value)))} class="{input} w-28 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
 				</span>
 			</label>
 			{#each SOLENOIDS as s (s.id)}

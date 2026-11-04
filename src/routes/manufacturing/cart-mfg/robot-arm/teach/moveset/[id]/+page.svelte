@@ -69,13 +69,13 @@
 	const heat = $derived(armNow ? heatCheck(armNow.temps) : null);
 
 	function confirmArchive(e: SubmitEvent) {
-		if (!confirm('Archive this move set?')) {
+		if (!confirm('Delete this move set? You can restore it from Teach for 30 days.')) {
 			e.preventDefault();
 			return;
 		}
 		const n = new Set(moveSet.keyframes.filter((k) => !k.fire).map((k) => k.poseId)).size;
 		const poses = (e.currentTarget as HTMLFormElement).elements.namedItem('poses') as HTMLInputElement;
-		poses.value = n && confirm(`Also archive its ${n} pose${n === 1 ? '' : 's'}? Poses another move set uses will stay.`) ? '1' : '0';
+		poses.value = n && confirm(`Also delete its ${n} pose${n === 1 ? '' : 's'}? Poses another move set uses will stay.`) ? '1' : '0';
 	}
 
 	const playback = new Playback();
@@ -323,13 +323,11 @@
 									</label>
 									<label class="block">Pulse (ms)
 										<span class="mt-1 flex items-center gap-2">
-											<input type="range" min={MIN_PULSE_MS} max={maxPulseMs(f.solenoid)} step="10" value={f.pulseMs} oninput={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, maxPulseMs(f.solenoid))))} class="min-w-0 flex-1" aria-label="Pulse length" />
-											<input type="number" min={MIN_PULSE_MS} max={maxPulseMs(f.solenoid)} step="10" value={f.pulseMs} onchange={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, maxPulseMs(f.solenoid))))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
+											<input type="number" min={MIN_PULSE_MS} max={maxPulseMs(f.solenoid)} step="10" value={f.pulseMs} onchange={(e) => (f.pulseMs = Math.round(clamp(Number(e.currentTarget.value), MIN_PULSE_MS, maxPulseMs(f.solenoid))))} class="{input} w-28 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
 										</span>
 									</label>
 									<label class="block">Wait After (s)
 										<span class="mt-1 flex items-center gap-2">
-											<input type="range" min={MIN_FIRE_WAIT_S} max="10" step="0.1" value={Math.min(10, k.holdS)} oninput={(e) => (k.holdS = tenth(clamp(Number(e.currentTarget.value), MIN_FIRE_WAIT_S, MAX_HOLD_S)))} class="min-w-0 flex-1" aria-label="Wait after firing" />
 											<input type="number" min={MIN_FIRE_WAIT_S} max={MAX_HOLD_S} step="0.1" value={k.holdS} onchange={(e) => (k.holdS = tenth(clamp(Number(e.currentTarget.value), MIN_FIRE_WAIT_S, MAX_HOLD_S)))} class="{input} w-20 font-mono" style={inputStyle} aria-label="Wait after firing in seconds" />
 										</span>
 									</label>
@@ -439,7 +437,7 @@
 			{/if}
 
 			<details class="{card} text-sm" style={cardStyle}>
-				<summary class="cursor-pointer text-xs" style={muted}>Save To Pi / Archive</summary>
+				<summary class="cursor-pointer text-xs" style={muted}>Save To Pi / Delete</summary>
 				<div class="mt-3 flex flex-wrap items-end gap-2">
 					<form method="POST" action="?/saveToPi" use:enhance class="flex flex-wrap items-end gap-2">
 						<label class="block text-xs" style={muted}>Recording Name<input name="recordingName" required maxlength="100" value={friendlyName(moveSet.name)} class="{input} mt-1 block w-56" style={inputStyle} /></label>
@@ -449,7 +447,7 @@
 					<!-- Plain POST to Teach's action: the result (and any poses kept) shows on Teach. -->
 					<form method="POST" action="/manufacturing/cart-mfg/robot-arm/teach?/archiveMoveSet" onsubmit={confirmArchive}>
 						<input type="hidden" name="id" value={moveSet._id} /><input type="hidden" name="poses" value="0" />
-						<button type="submit" class="rounded px-3 py-1.5 text-sm font-semibold" style={red}>Archive Move Set</button>
+						<button type="submit" class="rounded px-3 py-1.5 text-sm font-semibold" style={red} title="Restorable for 30 days from Teach">Delete Move Set</button>
 					</form>
 				</div>
 			</details>

@@ -171,7 +171,7 @@
 				<line x1={LABEL_W} x2={W} y1={TOP + (l.s + 1) * LANE_H} y2={TOP + (l.s + 1) * LANE_H} stroke="var(--color-tron-border)" stroke-width="0.5" />
 				<text x="4" y={TOP + l.s * LANE_H + 14} font-size="10" fill="var(--color-tron-text-secondary)">{l.s + 1} {jointNames[l.s] ?? ''}</text>
 				<text x="4" y={TOP + l.s * LANE_H + 27} font-size="8" fill="var(--color-tron-text-secondary)">Δ {Math.round(l.range)}</text>
-				<path d={l.d} fill="none" stroke="#f59e0b" stroke-width="1.6" />
+				<path d={l.d} fill="none" stroke="#38bdf8" stroke-width="1.6" />
 			{/each}
 			{#each path.markers as m, i (i)}
 				{@const sel = selectedIndex != null && m.index === selectedIndex}
@@ -211,7 +211,7 @@
 						cy={yOf(s, v)}
 						r={sel ? 5 : 4}
 						fill={sel ? '#38bdf8' : '#0b1220'}
-						stroke={sel ? '#e0f2fe' : '#f59e0b'}
+						stroke={sel ? '#e0f2fe' : '#38bdf8'}
 						stroke-width="1.5"
 						style="cursor: ns-resize; touch-action: none"
 						role="slider"

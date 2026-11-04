@@ -3,7 +3,7 @@
 	 * ARM-06 — sequence editor: move sets in order with the join between
 	 * each pair (automatic length unless set), the whole path drawn live,
 	 * Play, Stop, Save to Pi. A move set's fire steps (trapdoor solenoids)
-	 * come along as amber lines; a move set of only fire steps works as a
+	 * come along as blue lines; a move set of only fire steps works as a
 	 * reusable "drop a cartridge" item between other sets.
 	 */
 	import { enhance } from '$app/forms';
@@ -141,7 +141,6 @@
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
 	const btn = 'min-h-[40px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40';
 	const cyan = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
-	const amber = 'background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid #f59e0b;';
 	const green = 'background: rgba(74,222,128,0.12); color: #4ade80; border: 1px solid #4ade80;';
 	const red = 'background: rgba(239,68,68,0.15); color: #fca5a5; border: 1px solid #ef4444;';
 </script>
@@ -245,7 +244,7 @@
 		{#if playback.running}
 			<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 		{:else}
-			<button type="button" class={btn} style={amber} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || playback.busy}
+			<button type="button" class={btn} style={cyan} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || playback.busy}
 				title={dirty ? 'Save first' : 'Tween from where the arm is to the first pose, then play the whole sequence'}
 				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(sequence.name)); }}>Play On The Arm</button>
 			<button type="button" class={btn} style={green} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || !camera || !anyVerified}
@@ -264,8 +263,10 @@
 		</form>
 		{#if sequence.savedAs.length}<span class="text-xs" style="color: var(--color-tron-text-secondary)">Saved On The Pi</span>{/if}
 		<span class="grow"></span>
-		<form method="POST" action="?/archive" use:enhance onsubmit={(e) => { if (!confirm('Archive this sequence?')) e.preventDefault(); }}>
-			<button type="submit" class="text-xs underline" style="color: var(--color-tron-text-secondary)">Archive</button>
+		<!-- Plain POST to Teach's action: the result shows on Teach. -->
+		<form method="POST" action="/manufacturing/cart-mfg/robot-arm/teach?/archiveSequence" onsubmit={(e) => { if (!confirm('Delete this sequence? You can restore it from Teach for 30 days.')) e.preventDefault(); }}>
+			<input type="hidden" name="id" value={sequence._id} />
+			<button type="submit" class="min-h-[34px] rounded px-3 text-sm font-semibold" style={red} title="Restorable for 30 days from Teach">Delete</button>
 		</form>
 	</div>
 </div>

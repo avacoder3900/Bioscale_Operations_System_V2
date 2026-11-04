@@ -2,7 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { getSequence, listMoveSets, listPoses, playSequence, playbackActive, afterPlay, saveToPi, setSequenceArchived, stopPlayback, updateSequence, AnimateError } from '$lib/server/robot-arm-animation';
+import { getSequence, listMoveSets, listPoses, playSequence, playbackActive, afterPlay, saveToPi, stopPlayback, updateSequence, AnimateError } from '$lib/server/robot-arm-animation';
 import { sharedAnimateActions } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import type { Actions, PageServerLoad } from './$types';
@@ -118,16 +118,5 @@ export const actions: Actions = {
 		} catch (err) {
 			return failFrom(err);
 		}
-	},
-
-	archive: async ({ locals, params }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		try {
-			await setSequenceArchived(who(locals), params.id, true);
-		} catch (err) {
-			return failFrom(err);
-		}
-		redirect(303, '/manufacturing/cart-mfg/robot-arm/teach');
 	}
 };

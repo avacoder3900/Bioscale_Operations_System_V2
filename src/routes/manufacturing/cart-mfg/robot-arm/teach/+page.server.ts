@@ -86,10 +86,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 	};
 };
 
-/** Move set archive / restore, with the poses that went along and the ones kept. */
+/** Move set delete (30-day trash) / restore, with the poses that went along and the ones kept. */
 function moveSetFlash(r: MoveSetArchiveResult, restore: boolean) {
 	const n = (k: number) => `${k} pose${k === 1 ? '' : 's'}`;
-	const head = restore ? `Restored "${friendlyName(r.name)}"${r.poses ? ` with ${n(r.poses)}` : ''}.` : `Archived "${friendlyName(r.name)}"${r.poses ? ` and ${n(r.poses)}` : ''}.`;
+	const head = restore ? `Restored "${friendlyName(r.name)}"${r.poses ? ` with ${n(r.poses)}` : ''}.` : `Deleted "${friendlyName(r.name)}"${r.poses ? ` and ${n(r.poses)}` : ''}.`;
 	if (!r.kept.length) return { success: head };
 	return { warning: `${head} Kept ${n(r.kept.length)} still in use: ${r.kept.map((k) => `"${friendlyName(k.name)}" (${k.usedBy.join(', ')})`).join('; ')}.` };
 }
@@ -222,8 +222,8 @@ export const actions: Actions = {
 		redirect(303, `/manufacturing/cart-mfg/robot-arm/teach/sequence/${id}`);
 	},
 
-	// `poses=1`: its poses go too (archive: those no other move set uses; restore: those in the trash).
-	// The move set's own page posts here as well (plain POST), so the result shows on Teach.
+	// Delete = the 30-day R2 trash. `poses=1`: its poses go too (delete: those no other move set
+	// uses; restore: those in the trash). The move set's own page posts here too (plain POST).
 	archiveMoveSet: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
@@ -238,6 +238,7 @@ export const actions: Actions = {
 		}
 	},
 
+	// Delete = the 30-day R2 trash; the sequence page posts here too (plain POST).
 	archiveSequence: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
@@ -246,7 +247,7 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'Sequence id missing.' });
 		try {
 			await setSequenceArchived(who(locals), id, field(d, 'restore') !== '1');
-			return { success: field(d, 'restore') === '1' ? 'Sequence restored.' : 'Sequence archived.' };
+			return { success: field(d, 'restore') === '1' ? 'Sequence restored.' : 'Sequence deleted.' };
 		} catch (err) {
 			return failFrom(err);
 		}
