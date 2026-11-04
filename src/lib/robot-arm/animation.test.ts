@@ -8,6 +8,7 @@ import {
 	cleanOffsets,
 	composeAnimationJsonl,
 	fireFrames,
+	fireOnlySchedule,
 	newFireStep,
 	stepCountLabel,
 	MIN_FIRE_WAIT_S,
@@ -441,6 +442,13 @@ describe('fire steps (cartridge trapdoor solenoids)', () => {
 		expect(fireFrames(p).map((f) => [f.solenoid, f.pin, f.ms])).toEqual([['conveyor', 22, 5000], ['A', 17, 100]]);
 		// The trapdoor fires after the belt's pulse + wait: 1 + 5 + 1 s.
 		expect(fireFrames(p)[1].t).toBeCloseTo(7);
+	});
+
+	it('fireOnlySchedule times a fires-only list like the replay; any pose means the arm plays it', () => {
+		const s = fireOnlySchedule([fire('conveyor', { holdS: 1 }), fire('A', { holdS: 0.5 })]);
+		expect(s).toEqual({ fires: [{ t: 0, pin: 22, ms: 600, solenoid: 'conveyor' }, { t: 1.6, pin: 17, ms: 100, solenoid: 'A' }], durationS: 2.2 });
+		expect(fireOnlySchedule([kf('a', A), fire('A')])).toBeNull();
+		expect(fireOnlySchedule([])).toBeNull();
 	});
 
 	it('cleanKeyframes keeps conveyor steps; only the belt may pulse past 2 s', () => {

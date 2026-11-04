@@ -825,6 +825,23 @@ export interface FireFlag {
 	solenoid: FireTarget;
 }
 
+/**
+ * A step list that is only fire steps (no pose), as the Pi's /fires/play
+ * schedule: each fire at the time the replay would fire it (the previous
+ * fire's pulse + wait later), and the whole run's length. Null when a step
+ * is a pose — that list plays on the arm.
+ */
+export function fireOnlySchedule(kfs: { holdS: number; fire?: FireSpec }[]): { fires: { t: number; pin: number; ms: number; solenoid: FireTarget }[]; durationS: number } | null {
+	if (!kfs.length || kfs.some((k) => !k.fire)) return null;
+	let t = 0;
+	const fires = kfs.map((k) => {
+		const f = { t: Math.round(t * 1000) / 1000, pin: solenoidPin(k.fire!.solenoid), ms: k.fire!.pulseMs, solenoid: k.fire!.solenoid };
+		t += fireStepS(k);
+		return f;
+	});
+	return { fires, durationS: Math.round(t * 1000) / 1000 };
+}
+
 /** The frames where fire steps fire (each marker's time, on the frame grid). */
 export function fireFrames(p: RenderedPath): FireFlag[] {
 	const last = p.goal.length - 1;

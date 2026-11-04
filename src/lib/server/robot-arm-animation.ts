@@ -47,6 +47,7 @@ import {
 	type PoseSkip,
 	composeAnimationJsonl,
 	fireFrames,
+	fireOnlySchedule,
 	flattenSequence,
 	heatCheck,
 	isEasing,
@@ -845,6 +846,8 @@ export interface AfterPlayResult extends SettleResult {
 export async function afterPlay(user: User, runId: string, opts: { droop?: boolean } = {}): Promise<AfterPlayResult> {
 	await connectDB();
 	const base = { torqueRestored: false, torqueError: null as string | null, arm: null as ArmNow | null };
+	// A fires-only run never moved the arm (and may have played with it unpowered).
+	if (runId.startsWith(FIRES_RUN_PREFIX)) return { ...base, poseName: '', droop: null, pi: null, skipped: 'nothing to settle for this play' };
 	// Torque first, whatever else happens: a limp arm is the worst end state.
 	try {
 		await requireIdle();
@@ -1236,6 +1239,8 @@ export async function writeAndPlay(
 ): Promise<PlayResult> {
 	if (!o.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
 	await requireIdle();
+	const firesOnly = fireOnlySchedule(o.keyframes);
+	if (firesOnly) return playFiresOnly(user, o, firesOnly);
 	const fireSteps = o.keyframes.filter((k) => k.fire);
 	const coilSteps = fireSteps.filter((k) => k.fire!.solenoid !== 'conveyor');
 	const gpio = coilSteps.length ? await requireReplayFire() : null;
@@ -1299,6 +1304,40 @@ export async function writeAndPlay(
 		...(out.fires ? { fires: fireFrames(path).map((f) => ({ t: f.t, solenoid: f.solenoid, pin: f.pin, ms: f.ms })), gpioSimulated: !!gpio?.simulated } : {})
 	});
 	return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
+}
+
+/** Fires-only runs from playFiresOnly carry this run-id prefix (the Pi's fires.py makes them). */
+export const FIRES_RUN_PREFIX = 'fires-';
+
+/**
+ * Only fire steps, no pose: play the schedule on the Pi's /fires route, which
+ * drives the pins without the servo bus, so it works with the arm's power off
+ * (2026-11-04: a fires-only move set did nothing with the arm unplugged). The
+ * page follows it like any play — playbackActive and stopPlayback know the
+ * `fires-` run ids, and afterPlay has nothing to settle.
+ */
+async function playFiresOnly(
+	user: User,
+	o: { title: string; kind: PlayKind; id: string; auditAction?: string; auditExtra?: Record<string, unknown> },
+	s: NonNullable<ReturnType<typeof fireOnlySchedule>>
+): Promise<PlayResult> {
+	let started;
+	try {
+		started = await robotArm.firesPlay({ fires: s.fires, title: o.title });
+	} catch (err) {
+		const msg = (err as Error).message ?? String(err);
+		if (/robot-arm 404/.test(msg)) throw new AnimateError('The arm Pi cannot play fire steps without the arm yet. Install fires.py on the Pi and restart robot-arm.', 409);
+		if (/robot-arm 409/.test(msg)) throw new AnimateError('Fire steps are already playing on the Pi. Stop them first.', 409);
+		throw new AnimateError(`The fire steps did not start: ${msg}`, 502);
+	}
+	await audit(user, o.auditAction ?? `robot_arm.animate.play_${o.kind}`, PLAY_TABLE[o.kind], o.id, {
+		...(o.auditExtra ?? {}),
+		runId: started.run_id,
+		durationS: s.durationS,
+		firesOnly: true,
+		fires: s.fires
+	});
+	return { runId: started.run_id, durationS: s.durationS, leadInS: 0, frames: 0, warnings: [] };
 }
 
 /**
@@ -1433,11 +1472,32 @@ export interface StopResult {
 	stoppedRunId: string | null;
 	torqueOn: boolean;
 	error: string | null;
+	/** A fires-only run (no arm) was stopped; torque was not touched. */
+	firesOnly?: boolean;
 }
 
 /** Stop whatever is playing and leave the arm holding where it is (torque on, one retry). */
 export async function stopPlayback(user: User): Promise<StopResult> {
 	await connectDB();
+	// Fires-only runs (no arm): stop those first; with no arm session as well, there is no torque to restore.
+	let firesRunId: string | null = null;
+	try {
+		firesRunId = (await robotArm.firesStop()).stopped_run_id ?? null;
+	} catch {
+		/* an older Pi without /fires: nothing of that kind can be playing */
+	}
+	if (firesRunId) {
+		let armActive = true;
+		try {
+			armActive = !!(await robotArm.getActive()).active;
+		} catch {
+			armActive = false;
+		}
+		if (!armActive) {
+			await audit(user, 'robot_arm.animate.stop', 'robot_arm_runs', firesRunId, { firesOnly: true });
+			return { stoppedRunId: firesRunId, torqueOn: true, error: null, firesOnly: true };
+		}
+	}
 	let stoppedRunId: string | null = null;
 	try {
 		stoppedRunId = (await robotArm.stop()).stopped_run_id ?? null;
@@ -1466,6 +1526,10 @@ export async function stopPlayback(user: User): Promise<StopResult> {
  * end-of-play poll hung for a minute on the arm wax-fill line).
  */
 export async function playbackActive(runId?: string | null): Promise<{ runId: string; kind: string } | null> {
+	if (runId?.startsWith(FIRES_RUN_PREFIX)) {
+		const active = (await robotArm.firesStatus()).active;
+		return active === runId ? { runId, kind: 'fires' } : null;
+	}
 	if (runId) {
 		await connectDB();
 		const run = (await RobotArmRun.findOne({ runId }).select('events').lean()) as any;

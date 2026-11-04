@@ -135,8 +135,8 @@ export class Playback {
 			const r = await this.action('stop', {});
 			if (r.type === 'failure') this.error = String((r.data as { error?: string } | undefined)?.error ?? 'Stop failed.');
 			else if (r.type === 'success' && r.data?.stop) {
-				const s = r.data.stop as { torqueOn: boolean; error: string | null };
-				this.finish(s.torqueOn ? 'stopped — the arm is holding its position' : `stopped, but torque could NOT be re-enabled (${s.error}) — the arm may be limp`);
+				const s = r.data.stop as { torqueOn: boolean; error: string | null; firesOnly?: boolean };
+				this.finish(s.firesOnly ? 'stopped' : s.torqueOn ? 'stopped — the arm is holding its position' : `stopped, but torque could NOT be re-enabled (${s.error}) — the arm may be limp`);
 			} else this.finish('stopped');
 			this.onend?.();
 		} catch (e) {

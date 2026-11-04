@@ -141,6 +141,8 @@
 	// A move set with fire steps plays only on a Pi whose replay fires them (unknown status: let the server decide).
 	const hasFires = $derived(kfs.some((k) => k.fire));
 	const firesBlocked = $derived(hasFires && !!solenoids && !solenoids.replayFire);
+	// Only fire steps: plays on the Pi's pins alone (fires.py), the arm does not move and may be unpowered.
+	const firesOnly = $derived(kfs.length > 0 && kfs.every((k) => !!k.fire));
 	// The first pose has no "move in": the play leads in to it from wherever the arm is.
 	const firstPoseIndex = $derived(kfs.findIndex((k) => !k.fire));
 
@@ -253,7 +255,7 @@
 			{:else}
 				<button type="button" class={btn} style={amber} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || firesBlocked}
 					title={dirty ? 'Save first' : firesBlocked ? "The Pi's replay cannot fire steps yet" : 'From where the arm is, through every step'}
-					onclick={() => { if (confirm(`The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
+					onclick={() => { if (confirm(firesOnly ? `Fire the steps of "${friendlyName(moveSet.name)}"? The arm does not move; the solenoids and conveyor belt run. Are the trapdoors and the belt clear?` : `The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
 				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}
 					title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No step has a camera reference — capture one below' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
 					onclick={playVerified}>◎ Play Verified</button>
