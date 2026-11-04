@@ -17,6 +17,7 @@
 	import type { SubmitFunction } from '@sveltejs/kit';
 	import { onDestroy, onMount, tick } from 'svelte';
 	import { SvelteSet } from 'svelte/reactivity';
+	import { HideToggle } from '$lib/robot-arm/hide-toggle.svelte';
 	import {
 		flattenSequence,
 		friendlyName,
@@ -157,6 +158,7 @@
 	});
 	let renaming = $state<string | null>(null);
 	let showArchived = $state(false);
+	const listToggles = { moveSets: new HideToggle('robot-arm:teach-move-sets-hidden'), sequences: new HideToggle('robot-arm:teach-sequences-hidden') };
 	// Poses card Hide/Show (2026-11-04); shown by default, an explicit Hide is remembered.
 	const POSES_HIDDEN_KEY = 'robot-arm:teach-poses-hidden';
 	let posesHidden = $state(false);
@@ -610,50 +612,53 @@
 					<form method="POST" action={isSets ? '?/createMoveSet' : '?/createSequence'} use:enhance class="flex items-center gap-1">
 						<input name="name" required maxlength="80" placeholder={isSets ? 'New Move Set' : 'New Sequence'} class="{input} w-36 py-0.5 text-xs" style={inputStyle} aria-label="Name" />
 						<button type="submit" class="rounded px-2 py-0.5 text-xs font-semibold" style={cyan}>+</button>
+						<button type="button" onclick={() => listToggles[col.kind].toggle()} class="rounded border px-2 py-0.5 text-xs" style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)" aria-expanded={!listToggles[col.kind].hidden}>{listToggles[col.kind].hidden ? 'Show' : 'Hide'}</button>
 					</form>
 				</div>
-				<ul class="mt-2 space-y-0.5">
-					{#each rows as r (r._id)}
-						{@const ms = isSets ? (r as MoveSetSummary) : null}
-						{@const sq = isSets ? null : (r as SequenceSummary)}
-						{@const cov = coverage(ms, sq)}
-						{@const covColor = isSets ? 'var(--color-tron-cyan)' : cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
-						<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
-							<a href="/manufacturing/cart-mfg/robot-arm/teach/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
-							{@render useMarks(ms ? (seqsUsing.get(r._id) ?? 0) : 0, 'sequence', ms ? waxRoles.sets.get(r._id) : waxRoles.seqs.get(r._id))}
-							<span class="shrink-0 text-xs" style={muted}>
-								{ms ? stepCountLabel(ms.keyframes) : `${sq!.items.length} sets`}{(ms ? moveSetDuration(ms) : sequenceDuration(sq!)) ? ` · ${ms ? moveSetDuration(ms) : sequenceDuration(sq!)}` : ''}
-							</span>
-							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Play on the arm"
-								disabled={blocked || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
-								onclick={() => play(isSets ? 'playMoveSet' : 'playSequence', r._id, r.name)}>▶</button>
-							<button type="button" class="px-1 font-mono text-xs disabled:opacity-30" style="color: {covColor}"
-								title={cov.ok + cov.stale === 0
-									? `No pose in this ${isSets ? 'set' : 'sequence'} has a camera reference for ${camera || 'the camera'} — open a pose and capture one (camera card → Capture) before a verified run`
-									: `Verified run with ${camera}: ${cov.ok} of ${cov.total} poses have a reference${cov.stale ? `, ${cov.stale} stale (pose edited since; retake)` : ''}. Steps without one are played unchecked.`}
-								disabled={blocked || !camera || !!heat?.tooHot.length || cov.ok + cov.stale === 0}
-								onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎ {cov.ok}/{cov.total}</button>
-							<button type="button" class="rounded px-2 py-0.5 text-xs font-semibold" style={red} title="Restorable for 30 days"
-								onclick={() => void (ms ? archiveMoveSet(ms) : deleteSequence(sq!))}>Delete</button>
-						</li>
-					{/each}
-				</ul>
-				{#if !rows.length}<p class="mt-2 text-xs" style={muted}>None Yet</p>{/if}
-				{#if deletedRows[col.kind].length}
-					<button type="button" onclick={() => (showDeleted[col.kind] = !showDeleted[col.kind])} class="mt-3 text-xs underline" style={muted}>{showDeleted[col.kind] ? 'Hide' : 'Show'} Deleted · {deletedRows[col.kind].length}</button>
-					{#if showDeleted[col.kind]}
-						<ul class="mt-1 space-y-0.5">
-							{#each deletedRows[col.kind] as r (r._id)}
-								<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
-									<span class="min-w-0 flex-1 truncate" style={muted} title={r.name}>{friendlyName(r.name)}</span>
-									{#if r.deletesAt}<span class="shrink-0 text-xs" style={muted}>{daysLeftLabel(r.deletesAt)}</span>{/if}
-									<form method="POST" action={isSets ? '?/archiveMoveSet' : '?/archiveSequence'} use:enhance>
-										<input type="hidden" name="id" value={r._id} /><input type="hidden" name="restore" value="1" /><input type="hidden" name="poses" value="1" />
-										<button type="submit" class="text-xs underline" style="color: var(--color-tron-cyan)" title={isSets ? 'Restore this move set and its deleted poses' : 'Restore this sequence'}>Restore</button>
-									</form>
-								</li>
-							{/each}
-						</ul>
+				{#if !listToggles[col.kind].hidden}
+					<ul class="mt-2 space-y-0.5">
+						{#each rows as r (r._id)}
+							{@const ms = isSets ? (r as MoveSetSummary) : null}
+							{@const sq = isSets ? null : (r as SequenceSummary)}
+							{@const cov = coverage(ms, sq)}
+							{@const covColor = isSets ? 'var(--color-tron-cyan)' : cov.total && cov.ok === cov.total ? '#4ade80' : cov.ok + cov.stale > 0 ? '#fbbf24' : 'var(--color-tron-text-secondary)'}
+							<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
+								<a href="/manufacturing/cart-mfg/robot-arm/teach/{isSets ? 'moveset' : 'sequence'}/{r._id}" class="min-w-0 flex-1 truncate" style="color: var(--color-tron-cyan)" title={r.name}>{friendlyName(r.name)}</a>
+								{@render useMarks(ms ? (seqsUsing.get(r._id) ?? 0) : 0, 'sequence', ms ? waxRoles.sets.get(r._id) : waxRoles.seqs.get(r._id))}
+								<span class="shrink-0 text-xs" style={muted}>
+									{ms ? stepCountLabel(ms.keyframes) : `${sq!.items.length} sets`}{(ms ? moveSetDuration(ms) : sequenceDuration(sq!)) ? ` · ${ms ? moveSetDuration(ms) : sequenceDuration(sq!)}` : ''}
+								</span>
+								<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Play on the arm"
+									disabled={blocked || !!heat?.tooHot.length || (ms ? !ms.keyframes.length : !sq!.items.length)}
+									onclick={() => play(isSets ? 'playMoveSet' : 'playSequence', r._id, r.name)}>▶</button>
+								<button type="button" class="px-1 font-mono text-xs disabled:opacity-30" style="color: {covColor}"
+									title={cov.ok + cov.stale === 0
+										? `No pose in this ${isSets ? 'set' : 'sequence'} has a camera reference for ${camera || 'the camera'} — open a pose and capture one (camera card → Capture) before a verified run`
+										: `Verified run with ${camera}: ${cov.ok} of ${cov.total} poses have a reference${cov.stale ? `, ${cov.stale} stale (pose edited since; retake)` : ''}. Steps without one are played unchecked.`}
+									disabled={blocked || !camera || !!heat?.tooHot.length || cov.ok + cov.stale === 0}
+									onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎ {cov.ok}/{cov.total}</button>
+								<button type="button" class="rounded px-2 py-0.5 text-xs font-semibold" style={red} title="Restorable for 30 days"
+									onclick={() => void (ms ? archiveMoveSet(ms) : deleteSequence(sq!))}>Delete</button>
+							</li>
+						{/each}
+					</ul>
+					{#if !rows.length}<p class="mt-2 text-xs" style={muted}>None Yet</p>{/if}
+					{#if deletedRows[col.kind].length}
+						<button type="button" onclick={() => (showDeleted[col.kind] = !showDeleted[col.kind])} class="mt-3 text-xs underline" style={muted}>{showDeleted[col.kind] ? 'Hide' : 'Show'} Deleted · {deletedRows[col.kind].length}</button>
+						{#if showDeleted[col.kind]}
+							<ul class="mt-1 space-y-0.5">
+								{#each deletedRows[col.kind] as r (r._id)}
+									<li class="flex items-center gap-2 rounded px-1.5 py-1 text-sm">
+										<span class="min-w-0 flex-1 truncate" style={muted} title={r.name}>{friendlyName(r.name)}</span>
+										{#if r.deletesAt}<span class="shrink-0 text-xs" style={muted}>{daysLeftLabel(r.deletesAt)}</span>{/if}
+										<form method="POST" action={isSets ? '?/archiveMoveSet' : '?/archiveSequence'} use:enhance>
+											<input type="hidden" name="id" value={r._id} /><input type="hidden" name="restore" value="1" /><input type="hidden" name="poses" value="1" />
+											<button type="submit" class="text-xs underline" style="color: var(--color-tron-cyan)" title={isSets ? 'Restore this move set and its deleted poses' : 'Restore this sequence'}>Restore</button>
+										</form>
+									</li>
+								{/each}
+							</ul>
+						{/if}
 					{/if}
 				{/if}
 			</section>

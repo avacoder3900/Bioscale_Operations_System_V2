@@ -12,6 +12,7 @@
 	 * that solenoid and pulse; without it, both solenoids with a pulse box.
 	 */
 	import { deserialize } from '$app/forms';
+	import { HideToggle } from '$lib/robot-arm/hide-toggle.svelte';
 	import { onMount } from 'svelte';
 	import { DEFAULT_PULSE_MS, MAX_PULSE_MS, MIN_PULSE_MS, SOLENOIDS, solenoidLabel, type FireSpec, type FireTarget, type SolenoidStatus } from '$lib/robot-arm/animation';
 
@@ -74,6 +75,7 @@
 	const blue = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
 	const input = 'rounded border bg-black/40 px-2 py-1 text-sm';
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
+	const panel = new HideToggle('robot-arm:solenoid-panel-hidden');
 </script>
 
 <section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
@@ -86,46 +88,49 @@
 					{s.id} · GPIO {s.pin}
 				</span>
 			{/each}
+			<button type="button" onclick={() => panel.toggle()} class="rounded border px-2 py-0.5 text-xs" style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)" aria-expanded={!panel.hidden}>{panel.hidden ? 'Show' : 'Hide'}</button>
 		</div>
 	</div>
+	{#if !panel.hidden}
 
-	<p class="mt-1 text-[11px]" style={muted}>
-		{#if !armReachable}
-			Arm Pi Unreachable
-		{:else if !status}
-			No Solenoid Status
-		{:else}
-			{status.simulated ? 'Simulated: No GPIO' : 'Pins Live'}
-			{status.replayFire ? ' · Fire Steps Supported' : ''}
-		{/if}
-	</p>
-	{#if armReachable && status && !status.replayFire}
-		<p class="mt-1 text-[11px]" style="color: #fbbf24">
-			Pi replay cannot fire steps; move sets with fire steps will not play.
+		<p class="mt-1 text-[11px]" style={muted}>
+			{#if !armReachable}
+				Arm Pi Unreachable
+			{:else if !status}
+				No Solenoid Status
+			{:else}
+				{status.simulated ? 'Simulated: No GPIO' : 'Pins Live'}
+				{status.replayFire ? ' · Fire Steps Supported' : ''}
+			{/if}
 		</p>
-	{/if}
-
-	<div class="mt-3 flex flex-wrap items-end gap-2">
-		{#if step}
-			<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
-				disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(step.solenoid, step.pulseMs)}
-				title="Pulse this step's solenoid now. The arm does not move.">
-				{firing ? 'Firing…' : `Test Fire ${step.solenoid === 'conveyor' ? solenoidLabel(step.solenoid) : step.solenoid} · ${step.pulseMs} ms`}
-			</button>
-		{:else}
-			<label class="text-[11px]" style={muted}>Pulse (ms)
-				<span class="mt-1 flex items-center gap-2">
-					<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={pulseMs} onchange={(e) => (pulseMs = clampMs(Number(e.currentTarget.value)))} class="{input} w-28 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
-				</span>
-			</label>
-			{#each SOLENOIDS as s (s.id)}
-				<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
-					disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(s.id, pulseMs)}
-					title="Pulse {s.label} (GPIO {s.pin}) now. The arm does not move.">
-					{firing === s.id ? 'Firing…' : `Test Fire ${s.id}`}
-				</button>
-			{/each}
+		{#if armReachable && status && !status.replayFire}
+			<p class="mt-1 text-[11px]" style="color: #fbbf24">
+				Pi replay cannot fire steps; move sets with fire steps will not play.
+			</p>
 		{/if}
-	</div>
-	{#if note}<p class="mt-2 text-xs" style="color: {note.ok ? '#4ade80' : '#fca5a5'}">{note.text}</p>{/if}
+
+		<div class="mt-3 flex flex-wrap items-end gap-2">
+			{#if step}
+				<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
+					disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(step.solenoid, step.pulseMs)}
+					title="Pulse this step's solenoid now. The arm does not move.">
+					{firing ? 'Firing…' : `Test Fire ${step.solenoid === 'conveyor' ? solenoidLabel(step.solenoid) : step.solenoid} · ${step.pulseMs} ms`}
+				</button>
+			{:else}
+				<label class="text-[11px]" style={muted}>Pulse (ms)
+					<span class="mt-1 flex items-center gap-2">
+						<input type="number" min={MIN_PULSE_MS} max={MAX_PULSE_MS} step="10" value={pulseMs} onchange={(e) => (pulseMs = clampMs(Number(e.currentTarget.value)))} class="{input} w-28 font-mono" style={inputStyle} aria-label="Pulse length in ms" />
+					</span>
+				</label>
+				{#each SOLENOIDS as s (s.id)}
+					<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
+						disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(s.id, pulseMs)}
+						title="Pulse {s.label} (GPIO {s.pin}) now. The arm does not move.">
+						{firing === s.id ? 'Firing…' : `Test Fire ${s.id}`}
+					</button>
+				{/each}
+			{/if}
+		</div>
+		{#if note}<p class="mt-2 text-xs" style="color: {note.ok ? '#4ade80' : '#fca5a5'}">{note.text}</p>{/if}
+	{/if}
 </section>
