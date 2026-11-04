@@ -25329,3 +25329,7 @@ Deployment: preview - via Vercel GitHub integration (GitHub status: success)
   https://bioscale-operations-system-mongodb-gtdwrb69r-brevitest.vercel.app
 Source: branch feat/arm-ui-redesign @ commit 0825f261 (NOT on master)
 What this deployment is for: descriptive text pared down on Run, Teach, History, Maintenance, Arm home and the status card.
+Deployment: preview - via Vercel GitHub integration (GitHub status: success)
+  https://bioscale-operations-system-mongodb-ra405s24b-brevitest.vercel.app
+Source: branch feat/arm-ui-redesign @ commit d7e56e5c (NOT on master)
+What this deployment is for: ARM status card details hidden by default; only an explicit Show is remembered.
