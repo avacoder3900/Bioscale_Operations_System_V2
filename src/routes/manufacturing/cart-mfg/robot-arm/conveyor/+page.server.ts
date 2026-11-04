@@ -11,6 +11,7 @@
 import { fail, redirect } from '@sveltejs/kit';
 import { connectDB } from '$lib/server/db/connection';
 import { AuditLog, generateId } from '$lib/server/db';
+import { ArmWaxFillSettings } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm, type ConveyorStatus } from '$lib/server/robot-arm-client';
 import type { Actions, PageServerLoad } from './$types';
@@ -20,6 +21,8 @@ const ARM_DEVICE_ID = 'robot-arm-pi';
 const PULSE_MIN_MS = 10;
 const PULSE_MAX_MS = 600000;
 const DELAY_MAX_MS = 600000;
+// Used until someone saves a default (stored on ArmWaxFillSettings).
+const DEFAULT_PULSE_MS = 600;
 
 function parseMs(raw: FormDataEntryValue | null, min: number, max: number): number | null {
 	const txt = raw?.toString().trim();
@@ -60,12 +63,24 @@ export const load: PageServerLoad = async ({ locals, depends }) => {
 
 	let status: ConveyorStatus | null = null;
 	let statusError: string | null = null;
-	try {
-		status = await robotArm.conveyorStatus();
-	} catch (err) {
-		statusError = conveyorMessage(err);
-	}
-	return { status, statusError, pulseMaxMs: PULSE_MAX_MS, delayMaxMs: DELAY_MAX_MS };
+	const [statusResult, settings] = await Promise.all([
+		robotArm.conveyorStatus().catch((err) => err as Error),
+		connectDB().then(
+			() =>
+				ArmWaxFillSettings.findById('default').select('conveyorPulseMs').lean() as Promise<{
+					conveyorPulseMs?: number;
+				} | null>
+		)
+	]);
+	if (statusResult instanceof Error) statusError = conveyorMessage(statusResult);
+	else status = statusResult;
+	return {
+		status,
+		statusError,
+		defaultPulseMs: settings?.conveyorPulseMs ?? DEFAULT_PULSE_MS,
+		pulseMaxMs: PULSE_MAX_MS,
+		delayMaxMs: DELAY_MAX_MS
+	};
 };
 
 export const actions: Actions = {
@@ -106,6 +121,39 @@ export const actions: Actions = {
 		} catch (err) {
 			return fail(502, { error: conveyorMessage(err) });
 		}
+	},
+
+	// Shared default pulse, for everyone: only written when Save is pressed.
+	saveDefault: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const data = await request.formData();
+		const ms = parseMs(data.get('default_ms'), PULSE_MIN_MS, PULSE_MAX_MS);
+		if (ms === null) return fail(400, { error: `Default must be ${PULSE_MIN_MS}-${PULSE_MAX_MS} ms` });
+		await connectDB();
+		const before = (await ArmWaxFillSettings.findById('default').select('conveyorPulseMs').lean()) as {
+			conveyorPulseMs?: number;
+		} | null;
+		await ArmWaxFillSettings.updateOne(
+			{ _id: 'default' },
+			{
+				$set: {
+					conveyorPulseMs: ms,
+					conveyorPulseChangedBy: { _id: locals.user._id, username: locals.user.username }
+				}
+			},
+			{ upsert: true }
+		);
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: 'arm_wax_fill_settings',
+			recordId: 'default',
+			action: 'robot_arm.conveyor.default',
+			oldData: { conveyorPulseMs: before?.conveyorPulseMs ?? DEFAULT_PULSE_MS },
+			newData: { conveyorPulseMs: ms, userId: locals.user._id },
+			changedBy: locals.user.username
+		});
+		return { savedDefaultMs: ms };
 	},
 
 	// One write: drive BCM 22 low. Touches no pulse state on the Pi.

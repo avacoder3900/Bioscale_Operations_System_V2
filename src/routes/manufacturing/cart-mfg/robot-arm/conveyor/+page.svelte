@@ -1,34 +1,33 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { invalidate } from '$app/navigation';
-	import { onMount } from 'svelte';
+	import { untrack } from 'svelte';
 
 	let { data, form } = $props();
 
-	// The default pulse is a per-browser setting, remembered across reloads.
-	const DEFAULT_KEY = 'robot-arm:conveyor-default-ms';
-	let defaultMs = $state(600);
-	let pulseMs = $state(600);
-	onMount(() => {
-		try {
-			const saved = Number(localStorage.getItem(DEFAULT_KEY));
-			if (Number.isInteger(saved) && saved >= 10 && saved <= data.pulseMaxMs) {
-				defaultMs = saved;
-				pulseMs = saved;
+	// The default pulse is stored in BIMS (shared by everyone) and only changes
+	// when Save is pressed. Read once: the 500 ms status polls must not reset
+	// either box while someone is typing.
+	let defaultMs = $state(untrack(() => data.defaultPulseMs));
+	let pulseMs = $state(untrack(() => data.defaultPulseMs));
+	const defaultDirty = $derived(defaultMs !== data.defaultPulseMs);
+
+	const saveEnhance = () => {
+		busy = true;
+		return async ({
+			result,
+			update
+		}: {
+			result: { type: string; data?: Record<string, unknown> };
+			update: (opts?: { reset?: boolean }) => Promise<void>;
+		}) => {
+			await update({ reset: false });
+			if (result.type === 'success' && typeof result.data?.savedDefaultMs === 'number') {
+				pulseMs = result.data.savedDefaultMs;
 			}
-		} catch {
-			/* storage unavailable — keep 600 */
-		}
-	});
-	function setDefault() {
-		if (!Number.isInteger(defaultMs) || defaultMs < 10 || defaultMs > data.pulseMaxMs) return;
-		pulseMs = defaultMs;
-		try {
-			localStorage.setItem(DEFAULT_KEY, String(defaultMs));
-		} catch {
-			/* ignore */
-		}
-	}
+			busy = false;
+		};
+	};
 	let delayMs = $state(0);
 	let busy = $state(false);
 
@@ -102,19 +101,32 @@
 					style="color: var(--color-tron-text)"
 				/>
 			</label>
-			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
-				Default (ms)
-				<input
-					type="number"
-					bind:value={defaultMs}
-					onchange={setDefault}
-					min="10"
-					max={data.pulseMaxMs}
-					step="10"
-					class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
-					style="color: var(--color-tron-text)"
-				/>
-			</label>
+			<form method="POST" action="?/saveDefault" use:enhance={saveEnhance}>
+				<label class="block text-xs" style="color: var(--color-tron-text-secondary)" for="conveyor-default-ms">
+					Default (ms)
+				</label>
+				<div class="mt-1 flex gap-2">
+					<input
+						id="conveyor-default-ms"
+						type="number"
+						name="default_ms"
+						bind:value={defaultMs}
+						min="10"
+						max={data.pulseMaxMs}
+						step="10"
+						class="w-full min-w-0 rounded border border-[var(--color-tron-border)] bg-black/40 px-2 py-1 text-sm"
+						style="color: var(--color-tron-text)"
+					/>
+					<button
+						type="submit"
+						disabled={busy || !defaultDirty}
+						class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1 text-xs font-medium transition-colors hover:bg-[var(--color-tron-cyan)]/20 disabled:cursor-not-allowed disabled:opacity-40"
+						style="color: var(--color-tron-cyan)"
+					>
+						Save
+					</button>
+				</div>
+			</form>
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">
 				Delay (ms)
 				<input

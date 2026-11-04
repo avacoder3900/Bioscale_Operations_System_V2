@@ -25223,3 +25223,17 @@ Deployment: production - via Vercel GitHub integration on the push to master (Gi
 Source: branch feat/arm-conveyor-page @ commit bb865c25 (fast-forwarded onto master)
 Retrieve this exact code: git checkout master at commit bb865c25
 What this deployment is for: Conveyor tab Default (ms) box.
+================================================================================
+2026-11-04 — feat/arm-conveyor-page — Conveyor default stored in BIMS, saved with a button
+================================================================================
+Correction to bb865c25: the user wanted the default stored in BIMS and confirmed by a button, not
+saved per browser on change.
+- src/lib/server/db/models/arm-wax-fill-settings.ts: conveyorPulseMs (default 600) +
+  conveyorPulseChangedBy on the existing 'default' doc (arm_wax_fill_settings), so the value survives
+  when the temporary Conveyor tab moves into Wax fill. No new index or collection.
+- conveyor/+page.server.ts: load returns defaultPulseMs; new ?/saveDefault action ($set + upsert on
+  _id 'default', audited robot_arm.conveyor.default with old/new value).
+- conveyor/+page.svelte: localStorage removed. Default (ms) box + Save button (enabled only when the
+  value differs from the stored one); both boxes seeded once from BIMS (untrack, so status polls
+  never reset them); a successful Save also puts the value in Pulse (ms).
+npm run check 14 errors (baseline, none in touched files).
