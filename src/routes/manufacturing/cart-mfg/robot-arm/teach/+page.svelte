@@ -157,6 +157,24 @@
 	});
 	let renaming = $state<string | null>(null);
 	let showArchived = $state(false);
+	// Poses card Hide/Show (2026-11-04); shown by default, an explicit Hide is remembered.
+	const POSES_HIDDEN_KEY = 'robot-arm:teach-poses-hidden';
+	let posesHidden = $state(false);
+	$effect(() => {
+		try {
+			posesHidden = localStorage.getItem(POSES_HIDDEN_KEY) === '1';
+		} catch {
+			/* storage unavailable — default to shown */
+		}
+	});
+	function setPosesHidden(value: boolean) {
+		posesHidden = value;
+		try {
+			localStorage.setItem(POSES_HIDDEN_KEY, value ? '1' : '0');
+		} catch {
+			/* ignore */
+		}
+	}
 
 	// Select mode: tick live poses to archive them; archived ones are ticked to restore or delete for good.
 	let selecting = $state(false);
@@ -463,113 +481,116 @@
 			<div class="flex items-center justify-between">
 				<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">Poses</h2>
 				<div class="flex items-center gap-3">
-					{#if activePoses.length || selecting}
+					{#if !posesHidden && (activePoses.length || selecting)}
 						<button type="button" class="text-xs underline" style={selecting ? 'color: var(--color-tron-cyan)' : muted} onclick={() => setSelecting(!selecting)}>{selecting ? 'Done' : 'Select'}</button>
 					{/if}
 					<button type="button" class="text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (editing = 'new')}>+ New</button>
+					<button type="button" onclick={() => setPosesHidden(!posesHidden)} class="rounded border px-2 py-0.5 text-xs" style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)" aria-expanded={!posesHidden}>{posesHidden ? 'Show' : 'Hide'}</button>
 				</div>
 			</div>
-			{#if !activePoses.length}<p class="mt-2 text-xs" style={muted}>No Poses Yet</p>{/if}
-			{#if selecting && activePoses.length}
-				<div class="mt-2 flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 text-xs" style="border-color: var(--color-tron-border)">
-					<span style="color: var(--color-tron-text)">{pickedLive.length} Selected</span>
-					<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(picked, activePoses.map((p) => p._id))}>{pickedLive.length === activePoses.length ? 'None' : 'All'}</button>
-					<span class="grow"></span>
-					<form method="POST" action="?/archivePoses" use:enhance={clearAfter(picked)} onsubmit={(e) => { if (!confirm(`Delete ${pickedLive.length} pose${pickedLive.length === 1 ? '' : 's'}? You can restore them for 30 days.`)) e.preventDefault(); }}>
-						{#each pickedLive as id (id)}<input type="hidden" name="id" value={id} />{/each}
-						<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedLive.length} title="Restorable for 30 days">Delete{pickedLive.length ? ` ${pickedLive.length}` : ''}</button>
-					</form>
-				</div>
-			{/if}
-
-			{#snippet poseRow(p: PoseSummary, label: string)}
-				<li class="group rounded" style="background: {editing === p._id ? 'rgba(56,189,248,0.12)' : 'transparent'}">
-					{#if renaming === p._id}
-						<form method="POST" action="?/renamePose" use:enhance={() => async ({ update }) => { await update({ reset: false }); renaming = null; }} class="flex items-center gap-1 p-1">
-							<input type="hidden" name="id" value={p._id} />
-							<input type="hidden" name="notes" value={p.notes ?? ''} />
-							<input name="name" required maxlength="80" value={p.name} class="{input} min-w-0 flex-1 py-0.5 text-xs" style={inputStyle} aria-label="Name" />
-							<button type="submit" class="text-xs" style="color: #4ade80">Save</button>
-							<button type="button" class="text-xs" style={muted} onclick={() => (renaming = null)}>✕</button>
-						</form>
-					{:else if selecting}
-						<label class="flex cursor-pointer items-center gap-2 px-1.5 py-1">
-							<input type="checkbox" checked={picked.has(p._id)} onchange={() => toggle(picked, p._id)} />
-							<span class="min-w-0 flex-1 truncate text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name}>{label}</span>
-							{@render useMarks(liveSetsUsing.get(p._id) ?? 0, 'move set', waxRoles.poses.get(p._id))}
-						</label>
-					{:else}
-						<div class="flex items-center gap-1 px-1.5 py-1">
-							<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name} onclick={() => (editing = p._id)}>{label}</button>
-							{@render useMarks(liveSetsUsing.get(p._id) ?? 0, 'move set', waxRoles.poses.get(p._id))}
-							{#if calFor(p._id)}<span class="text-[10px]" style="color: {calFor(p._id)?.stale ? '#fbbf24' : '#4ade80'}" title={calFor(p._id)?.stale ? 'Camera reference is stale (pose edited since) — retake' : `Camera reference for ${camera}`}>◎</span>{/if}
-							<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Go to this pose" disabled={blocked || !!heat?.tooHot.length} onclick={() => goTo(p)}>▶</button>
-							<details class="relative">
-								<summary class="cursor-pointer list-none px-1 text-xs" style={muted} title="More">⋯</summary>
-								<div class="absolute right-0 z-10 mt-1 w-28 space-y-1 rounded border p-2 text-xs" style="border-color: var(--color-tron-border); background: var(--color-tron-surface)">
-									<button type="button" class="block underline" style="color: var(--color-tron-cyan)" onclick={() => (renaming = p._id)}>Rename</button>
-									<form method="POST" action="?/archivePose" use:enhance>
-										<input type="hidden" name="id" value={p._id} />
-										<button type="submit" class="underline" style={muted}>Archive</button>
-									</form>
-								</div>
-							</details>
-						</div>
-					{/if}
-				</li>
-			{/snippet}
-
-			<ul class="mt-2 space-y-0.5">
-				{#each grouped.loose as p (p._id)}{@render poseRow(p, friendlyName(p.name))}{/each}
-			</ul>
-			{#each grouped.groups as [g, list] (g)}
-				<details class="mt-2" open={list.some((p) => p._id === editing)}>
-					<summary class="cursor-pointer text-xs font-semibold" style={muted}>
-						{g} <span class="font-normal">· {list.length}</span>
-						{#if selecting}
-							<button type="button" class="ml-2 font-normal underline" style="color: var(--color-tron-cyan)" onclick={(e) => { e.preventDefault(); toggleAll(picked, list.map((p) => p._id)); }}>{list.every((p) => picked.has(p._id)) ? 'None' : 'All'}</button>
-						{/if}
-					</summary>
-					<ul class="mt-1 space-y-0.5 pl-2">
-						{#each list as p (p._id)}{@render poseRow(p, poseGroup(p.name).label)}{/each}
-					</ul>
-				</details>
-			{/each}
-
-			{#if archivedPoses.length}
-				<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} Deleted · {archivedPoses.length}</button>
-				{#if showArchived}
-					<div class="mt-1 flex flex-wrap items-center gap-2 text-xs" style={muted}>
-						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, deletedMatches.map((p) => p._id))}>{deletedMatches.length && deletedMatches.every((p) => pickedArchived.has(p._id)) ? 'None' : 'All'}</button>
-						<input type="search" bind:value={deletedQuery} oninput={() => (deletedLimit = DELETED_PAGE)} placeholder="Search Deleted" class="{input} w-36 py-0.5 text-xs" style={inputStyle} aria-label="Search Deleted" />
+			{#if !posesHidden}
+				{#if !activePoses.length}<p class="mt-2 text-xs" style={muted}>No Poses Yet</p>{/if}
+				{#if selecting && activePoses.length}
+					<div class="mt-2 flex flex-wrap items-center gap-2 rounded border px-2 py-1.5 text-xs" style="border-color: var(--color-tron-border)">
+						<span style="color: var(--color-tron-text)">{pickedLive.length} Selected</span>
+						<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(picked, activePoses.map((p) => p._id))}>{pickedLive.length === activePoses.length ? 'None' : 'All'}</button>
 						<span class="grow"></span>
-						<form method="POST" action="?/archivePoses" use:enhance={clearAfter(pickedArchived)}>
-							<input type="hidden" name="restore" value="1" />
-							{#each pickedOld as id (id)}<input type="hidden" name="id" value={id} />{/each}
-							<button type="submit" class="underline disabled:cursor-not-allowed disabled:opacity-40" style="color: var(--color-tron-cyan)" disabled={!pickedOld.length}>Restore{pickedOld.length ? ` ${pickedOld.length}` : ''}</button>
-						</form>
-						<form method="POST" action="?/deletePoses" use:enhance={clearAfter(pickedArchived)} onsubmit={confirmDelete}>
-							{#each pickedDeletable as id (id)}<input type="hidden" name="id" value={id} />{/each}
-							<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedDeletable.length}
-								title={pickedOld.length && !pickedDeletable.length ? 'Every selected pose is used by a move set — remove it from the move set first' : 'Delete the selected archived poses for good'}>Delete{pickedDeletable.length ? ` ${pickedDeletable.length}` : ''} For Good</button>
+						<form method="POST" action="?/archivePoses" use:enhance={clearAfter(picked)} onsubmit={(e) => { if (!confirm(`Delete ${pickedLive.length} pose${pickedLive.length === 1 ? '' : 's'}? You can restore them for 30 days.`)) e.preventDefault(); }}>
+							{#each pickedLive as id (id)}<input type="hidden" name="id" value={id} />{/each}
+							<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedLive.length} title="Restorable for 30 days">Delete{pickedLive.length ? ` ${pickedLive.length}` : ''}</button>
 						</form>
 					</div>
-					<ul class="mt-1 space-y-1 text-xs" style={muted}>
-						{#each deletedShown as p (p._id)}
-							{@const sets = setsUsing.get(p._id) ?? 0}
-							<li class="flex items-center gap-2">
-								<input type="checkbox" checked={pickedArchived.has(p._id)} onchange={() => toggle(pickedArchived, p._id)} aria-label="Select {friendlyName(p.name)}" />
-								<span class="min-w-0 flex-1 truncate">{friendlyName(p.name)}</span>
-								{#if sets}<span class="shrink-0 text-[10px]" title="Used by {sets} move set{sets === 1 ? '' : 's'}: it can be restored, not deleted">In {sets} Set{sets === 1 ? '' : 's'}</span>{/if}
-								{#if p.deletesAt}<span class="shrink-0 text-[10px]">{daysLeftLabel(p.deletesAt)}</span>{/if}
-								<form method="POST" action="?/archivePose" use:enhance><input type="hidden" name="id" value={p._id} /><input type="hidden" name="restore" value="1" /><button type="submit" class="underline" style="color: var(--color-tron-cyan)">Restore</button></form>
-							</li>
-						{/each}
-					</ul>
-					{#if deletedMatches.length > deletedShown.length}
-						<button type="button" class="mt-1 text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (deletedLimit += DELETED_PAGE)}>Show More · {deletedMatches.length - deletedShown.length}</button>
-					{:else if deletedQuery && !deletedMatches.length}
-						<p class="mt-1 text-xs" style={muted}>No Match</p>
+				{/if}
+
+				{#snippet poseRow(p: PoseSummary, label: string)}
+					<li class="group rounded" style="background: {editing === p._id ? 'rgba(56,189,248,0.12)' : 'transparent'}">
+						{#if renaming === p._id}
+							<form method="POST" action="?/renamePose" use:enhance={() => async ({ update }) => { await update({ reset: false }); renaming = null; }} class="flex items-center gap-1 p-1">
+								<input type="hidden" name="id" value={p._id} />
+								<input type="hidden" name="notes" value={p.notes ?? ''} />
+								<input name="name" required maxlength="80" value={p.name} class="{input} min-w-0 flex-1 py-0.5 text-xs" style={inputStyle} aria-label="Name" />
+								<button type="submit" class="text-xs" style="color: #4ade80">Save</button>
+								<button type="button" class="text-xs" style={muted} onclick={() => (renaming = null)}>✕</button>
+							</form>
+						{:else if selecting}
+							<label class="flex cursor-pointer items-center gap-2 px-1.5 py-1">
+								<input type="checkbox" checked={picked.has(p._id)} onchange={() => toggle(picked, p._id)} />
+								<span class="min-w-0 flex-1 truncate text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name}>{label}</span>
+								{@render useMarks(liveSetsUsing.get(p._id) ?? 0, 'move set', waxRoles.poses.get(p._id))}
+							</label>
+						{:else}
+							<div class="flex items-center gap-1 px-1.5 py-1">
+								<button type="button" class="min-w-0 flex-1 truncate text-left text-sm" style="color: var(--color-tron-text)" title={p.notes ?? p.name} onclick={() => (editing = p._id)}>{label}</button>
+								{@render useMarks(liveSetsUsing.get(p._id) ?? 0, 'move set', waxRoles.poses.get(p._id))}
+								{#if calFor(p._id)}<span class="text-[10px]" style="color: {calFor(p._id)?.stale ? '#fbbf24' : '#4ade80'}" title={calFor(p._id)?.stale ? 'Camera reference is stale (pose edited since) — retake' : `Camera reference for ${camera}`}>◎</span>{/if}
+								<button type="button" class="px-1 text-xs disabled:opacity-30" style="color: #fbbf24" title="Go to this pose" disabled={blocked || !!heat?.tooHot.length} onclick={() => goTo(p)}>▶</button>
+								<details class="relative">
+									<summary class="cursor-pointer list-none px-1 text-xs" style={muted} title="More">⋯</summary>
+									<div class="absolute right-0 z-10 mt-1 w-28 space-y-1 rounded border p-2 text-xs" style="border-color: var(--color-tron-border); background: var(--color-tron-surface)">
+										<button type="button" class="block underline" style="color: var(--color-tron-cyan)" onclick={() => (renaming = p._id)}>Rename</button>
+										<form method="POST" action="?/archivePose" use:enhance>
+											<input type="hidden" name="id" value={p._id} />
+											<button type="submit" class="underline" style={muted}>Archive</button>
+										</form>
+									</div>
+								</details>
+							</div>
+						{/if}
+					</li>
+				{/snippet}
+
+				<ul class="mt-2 space-y-0.5">
+					{#each grouped.loose as p (p._id)}{@render poseRow(p, friendlyName(p.name))}{/each}
+				</ul>
+				{#each grouped.groups as [g, list] (g)}
+					<details class="mt-2" open={list.some((p) => p._id === editing)}>
+						<summary class="cursor-pointer text-xs font-semibold" style={muted}>
+							{g} <span class="font-normal">· {list.length}</span>
+							{#if selecting}
+								<button type="button" class="ml-2 font-normal underline" style="color: var(--color-tron-cyan)" onclick={(e) => { e.preventDefault(); toggleAll(picked, list.map((p) => p._id)); }}>{list.every((p) => picked.has(p._id)) ? 'None' : 'All'}</button>
+							{/if}
+						</summary>
+						<ul class="mt-1 space-y-0.5 pl-2">
+							{#each list as p (p._id)}{@render poseRow(p, poseGroup(p.name).label)}{/each}
+						</ul>
+					</details>
+				{/each}
+
+				{#if archivedPoses.length}
+					<button type="button" onclick={() => (showArchived = !showArchived)} class="mt-3 text-xs underline" style={muted}>{showArchived ? 'Hide' : 'Show'} Deleted · {archivedPoses.length}</button>
+					{#if showArchived}
+						<div class="mt-1 flex flex-wrap items-center gap-2 text-xs" style={muted}>
+							<button type="button" class="underline" style="color: var(--color-tron-cyan)" onclick={() => toggleAll(pickedArchived, deletedMatches.map((p) => p._id))}>{deletedMatches.length && deletedMatches.every((p) => pickedArchived.has(p._id)) ? 'None' : 'All'}</button>
+							<input type="search" bind:value={deletedQuery} oninput={() => (deletedLimit = DELETED_PAGE)} placeholder="Search Deleted" class="{input} w-36 py-0.5 text-xs" style={inputStyle} aria-label="Search Deleted" />
+							<span class="grow"></span>
+							<form method="POST" action="?/archivePoses" use:enhance={clearAfter(pickedArchived)}>
+								<input type="hidden" name="restore" value="1" />
+								{#each pickedOld as id (id)}<input type="hidden" name="id" value={id} />{/each}
+								<button type="submit" class="underline disabled:cursor-not-allowed disabled:opacity-40" style="color: var(--color-tron-cyan)" disabled={!pickedOld.length}>Restore{pickedOld.length ? ` ${pickedOld.length}` : ''}</button>
+							</form>
+							<form method="POST" action="?/deletePoses" use:enhance={clearAfter(pickedArchived)} onsubmit={confirmDelete}>
+								{#each pickedDeletable as id (id)}<input type="hidden" name="id" value={id} />{/each}
+								<button type="submit" class="rounded px-2 py-0.5 font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={red} disabled={!pickedDeletable.length}
+									title={pickedOld.length && !pickedDeletable.length ? 'Every selected pose is used by a move set — remove it from the move set first' : 'Delete the selected archived poses for good'}>Delete{pickedDeletable.length ? ` ${pickedDeletable.length}` : ''} For Good</button>
+							</form>
+						</div>
+						<ul class="mt-1 space-y-1 text-xs" style={muted}>
+							{#each deletedShown as p (p._id)}
+								{@const sets = setsUsing.get(p._id) ?? 0}
+								<li class="flex items-center gap-2">
+									<input type="checkbox" checked={pickedArchived.has(p._id)} onchange={() => toggle(pickedArchived, p._id)} aria-label="Select {friendlyName(p.name)}" />
+									<span class="min-w-0 flex-1 truncate">{friendlyName(p.name)}</span>
+									{#if sets}<span class="shrink-0 text-[10px]" title="Used by {sets} move set{sets === 1 ? '' : 's'}: it can be restored, not deleted">In {sets} Set{sets === 1 ? '' : 's'}</span>{/if}
+									{#if p.deletesAt}<span class="shrink-0 text-[10px]">{daysLeftLabel(p.deletesAt)}</span>{/if}
+									<form method="POST" action="?/archivePose" use:enhance><input type="hidden" name="id" value={p._id} /><input type="hidden" name="restore" value="1" /><button type="submit" class="underline" style="color: var(--color-tron-cyan)">Restore</button></form>
+								</li>
+							{/each}
+						</ul>
+						{#if deletedMatches.length > deletedShown.length}
+							<button type="button" class="mt-1 text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (deletedLimit += DELETED_PAGE)}>Show More · {deletedMatches.length - deletedShown.length}</button>
+						{:else if deletedQuery && !deletedMatches.length}
+							<p class="mt-1 text-xs" style={muted}>No Match</p>
+						{/if}
 					{/if}
 				{/if}
 			{/if}
