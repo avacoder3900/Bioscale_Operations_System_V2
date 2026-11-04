@@ -911,12 +911,8 @@
 	};
 </script>
 
-<div class="space-y-4">
-	<div>
-		<div class="flex flex-wrap items-baseline justify-between gap-2">
-			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Wax Fill</h2>
-		</div>
-	</div>
+<div class="space-y-3">
+	<h2 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Wax Fill</h2>
 
 	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
 	{#if form?.success}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{form.success}</div>{/if}

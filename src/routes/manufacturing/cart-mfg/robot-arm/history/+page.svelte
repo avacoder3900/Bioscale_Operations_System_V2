@@ -60,14 +60,12 @@
 	let totalPages = $derived(Math.max(1, Math.ceil(data.total / data.pageSize)));
 </script>
 
-<div class="space-y-4">
-	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div>
-			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">History</h2>
-		</div>
+<div class="space-y-3">
+	<div class="flex flex-wrap items-center justify-between gap-2">
+		<h2 class="text-base font-semibold" style="color: var(--color-tron-cyan)">History</h2>
 		<div class="flex gap-1 text-xs">
-			<a href="?" class="rounded-full border px-3 py-1 transition-colors {data.view === 'runs' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Wax-Fill Runs</a>
-			<a href="?view=sessions" class="rounded-full border px-3 py-1 transition-colors {data.view === 'sessions' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}" title="Every arm session the Pi reported: each play lands here as a replay">Arm Sessions</a>
+			<a href="?" class="rounded-full border px-2.5 py-0.5 transition-colors {data.view === 'runs' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}">Wax-Fill Runs</a>
+			<a href="?view=sessions" class="rounded-full border px-2.5 py-0.5 transition-colors {data.view === 'sessions' ? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)]'}" title="Every arm session the Pi reported: each play lands here as a replay">Arm Sessions</a>
 		</div>
 	</div>
 

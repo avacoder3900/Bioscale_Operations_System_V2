@@ -97,8 +97,8 @@
 
 <div class="mx-auto max-w-7xl space-y-6">
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Leader Arm &amp; Recordings
+		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">
+			Leader Arm
 		</h1>
 		<a
 			href="/manufacturing/cart-mfg/robot-arm/maintenance"

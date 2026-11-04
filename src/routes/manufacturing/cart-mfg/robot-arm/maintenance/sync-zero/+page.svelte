@@ -119,8 +119,8 @@
 
 <div class="mx-auto max-w-5xl space-y-6 p-4">
 	<div class="flex items-center justify-between">
-		<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">
-			Sync Zero &amp; Joint Map
+		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">
+			Sync Zero
 		</h1>
 		<a
 			href="/manufacturing/cart-mfg/robot-arm/maintenance"

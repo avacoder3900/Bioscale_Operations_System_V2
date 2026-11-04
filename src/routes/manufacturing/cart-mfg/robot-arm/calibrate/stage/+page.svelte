@@ -1024,11 +1024,9 @@
 <svelte:window onkeydown={onWindowKeydown} />
 
 <div class="mx-auto max-w-[1400px] space-y-3 overflow-x-clip">
-	<div class="flex flex-wrap items-center justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Stage Calibration Studio</h1>
-		</div>
-		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax Fill Tab →</a>
+	<div class="flex flex-wrap items-center justify-between gap-2">
+		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Stage</h1>
+		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax Fill →</a>
 	</div>
 
 	<!-- Pickers -->

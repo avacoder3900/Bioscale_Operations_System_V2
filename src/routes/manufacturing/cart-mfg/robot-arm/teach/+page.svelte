@@ -256,11 +256,11 @@
 	const heatColor = (t: number | null) => ({ stop: '#ef4444', hot: '#f97316', warm: '#fbbf24', ok: '#4ade80' })[heatLevel(t)];
 </script>
 
-<div class="mx-auto max-w-7xl space-y-4">
+<div class="mx-auto max-w-7xl space-y-3">
 	<!-- header + arm status -->
-	<div class="flex flex-wrap items-end justify-between gap-3">
-		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Teach</h1>
+	<div class="flex flex-wrap items-center justify-between gap-2">
+		<div class="flex flex-wrap items-baseline gap-3">
+			<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Teach</h1>
 			<p class="text-xs" style={muted}>
 				<a href="/manufacturing/cart-mfg/robot-arm/maintenance/cleanup" class="underline" style="color: var(--color-tron-cyan)">Import Teleop Recording</a>
 			</p>

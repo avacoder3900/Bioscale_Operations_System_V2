@@ -17,14 +17,14 @@
 	let currentPath = $derived($page.url.pathname);
 </script>
 
-<div class="space-y-4">
+<div class="space-y-3">
 	<div class="flex flex-wrap items-center gap-2 text-sm">
 		{#each subtabs as t (t.href)}
 			{@const active = currentPath.startsWith(t.href)}
 			<a
 				href={t.href}
 				title={t.hint}
-				class="rounded-full border px-3 py-1 text-xs font-medium transition-colors
+				class="rounded-full border px-2.5 py-0.5 text-xs font-medium transition-colors
 					{active
 					? 'border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 text-[var(--color-tron-cyan)]'
 					: 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]'}"
