@@ -896,7 +896,6 @@
 	<div>
 		<div class="flex flex-wrap items-baseline justify-between gap-2">
 			<h2 class="text-lg font-bold" style="color: var(--color-tron-cyan)">Run — wax fill{#if rehearsal} <span class="text-sm font-semibold text-amber-300">(rehearsal protocol on the robot)</span>{/if}</h2>
-			<a href="/manufacturing/cart-mfg/robot-arm/history" class="text-xs underline" style="color: var(--color-tron-text-secondary)">Full history</a>
 		</div>
 		<details class="mt-1 text-xs" style="color: var(--color-tron-text-secondary)">
 		<summary class="cursor-pointer">How a run works</summary>
@@ -1033,9 +1032,6 @@
 					{#each data.readiness.blocking as b (b)}<li>· {b}</li>{/each}
 				</ul>
 			{/if}
-			{#each data.readiness.notes as n (n)}
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">{n}</p>
-			{/each}
 		{/if}
 
 		{#if loop}
@@ -1415,7 +1411,6 @@
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<div class="flex items-center justify-between gap-2">
 				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent runs</h3>
-				<a href="/manufacturing/cart-mfg/robot-arm/history" class="text-xs underline" style="color: var(--color-tron-cyan)">Full history</a>
 			</div>
 			<table class="mt-2 w-full text-left text-xs">
 				<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
@@ -1441,4 +1436,8 @@
 			</table>
 		</section>
 	{/if}
+	<!-- History is its own page, one button away rather than a tab. -->
+	<div class="flex justify-center pt-2">
+		<a href="/manufacturing/cart-mfg/robot-arm/history" class="rounded-lg border border-[var(--color-tron-border)] px-5 py-2 text-sm font-semibold transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Open history</a>
+	</div>
 </div>
