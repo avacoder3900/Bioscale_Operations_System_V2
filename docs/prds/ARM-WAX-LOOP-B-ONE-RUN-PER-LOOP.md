@@ -173,11 +173,16 @@ keeps going. A marker is the LAST ARM pause or announcement in the log; a later 
 - `ARM CALIBRATED` — after the once-per-loop probe. Until `ARM PARKED 1` the OT-2 only visits the tube. **Grab of
   cart 1 starts here.**
 - `ARM CLEAR <i>` — after `lift()` and the planned move to the tube top have completed (never over the stage), before
-  the re-aspirate/park (fill, skip) or tip-to-trash + home (end). **Withdraw / fail animation of cart i start here;
-  the next grab follows the withdraw at once.**
+  the re-aspirate/park (fill, skip) or tip-to-trash + home (end). **Fail animation of cart i starts here; the
+  withdraw too on a protocol without `ARM FILLED`; the next grab follows the withdraw at once.**
+- `ARM FILLED <i>` (added 2026-11-05, Alejandro) — in `fill_cart`, right after the LAST batch's `dispense_batch`
+  returned (the tip is out of the last hole, over the cart) and before the blow-out at the tube. **The withdraw of
+  cart i starts here**, while the gantry goes to the tube, lifts and parks. Only the withdraw: a grab or the fail
+  animation never moves on it.
 - Gates (BIMS `armMayMove`): grab(1) = PARKED 1 | running after CALIBRATED; grab(i) = PARKED i | running after
-  CLEAR i−1; withdraw/fail(i) = PARKED i+1 | running after CLEAR i; scan start = PARKED i only. `end` needs a paused
-  run (it is an instruction + resume), so the last cart's withdraw waits for the park, sends `end`, then plays.
+  CLEAR i−1; withdraw(i) = PARKED i+1 | running after FILLED i | running after CLEAR i; fail(i) = PARKED i+1 |
+  running after CLEAR i; scan start = PARKED i only. `end` needs a paused run (it is an instruction + resume), so
+  the last cart's withdraw waits for the park, sends `end`, then plays.
 - The scan position RTP `arm_scan_z` is the NOZZLE height taught with no tip; the protocol moves the tip end to
   `arm_scan_z − tiprack.tip_length` when a tip is on. `arm_cart_z` / `arm_scan_z` maxima are 250.
 - Timed (open-loop) choreography was considered and rejected: the rule stays enforced by state.

@@ -1235,6 +1235,14 @@ def run(protocol: protocol_api.ProtocolContext):
                 protocol.comment(f'Processing wells {targets.index(batch[0]) + 1} to {targets.index(batch[-1]) + 1} of {len(targets)}')
                 dispensed_volume, swap_at = dispense_batch(batch, well_volumes, dispense_rates, adjust)
                 source_volume -= dispensed_volume
+                if swap_at is None and bi + 1 == len(batches):
+                    # The cart's FINAL row is filled and the tip is out of its last
+                    # hole (dispense_batch ends with leave). Alejandro, 2026-11-05:
+                    # the arm may begin the WITHDRAW here, while the OT-2 goes to
+                    # the tube (blow-out), lifts and parks. BIMS reads this like
+                    # 'ARM CLEAR <i>' for the withdraw only (never for a grab or
+                    # the fail animation: those still wait for CLEAR / PARKED).
+                    protocol.comment(f'ARM FILLED {cart_index}')
                 if wax:
                     pipette.blow_out(location=source_well.top())
                 if swap_at is not None:

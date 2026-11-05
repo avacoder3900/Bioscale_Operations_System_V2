@@ -207,6 +207,17 @@ def check_surface(m, src, label):
         i_tube = body.index('pipette.move_to(source_well.top())')
         i_clear = body.index("protocol.comment(f'ARM CLEAR {clear_of}')")
         assert i_tube < i_clear, fn + ': CLEAR must follow the move to the tube'
+    # 'ARM FILLED <i>' (2026-11-05): once per cart in fill_cart, right after the
+    # LAST batch's dispense_batch returned (the tip is out of the last hole) and
+    # BEFORE the blow-out at the tube — the withdraw may start from it.
+    assert src.count("protocol.comment(f'ARM FILLED {cart_index}')") == 1
+    body = src[src.index('def fill_cart('):]
+    body = body[:body.index('\n        # ── Volumes')]
+    i_batch = body.index('dispensed_volume, swap_at = dispense_batch(')
+    i_filled = body.index("protocol.comment(f'ARM FILLED {cart_index}')")
+    i_blow = body.index('pipette.blow_out(location=source_well.top())')
+    assert i_batch < i_filled < i_blow, 'ARM FILLED: after the last batch, before the blow-out at the tube'
+    assert 'if swap_at is None and bi + 1 == len(batches):' in body, 'ARM FILLED only after the final batch'
     assert 'holding = park_for(cart, source_volume, 0, clear_of=filled)' in src
     assert 'holding = park_for(cart, source_volume, holding, clear_of=skipped)' in src
     assert 'finish(holding, clear_of)' in src

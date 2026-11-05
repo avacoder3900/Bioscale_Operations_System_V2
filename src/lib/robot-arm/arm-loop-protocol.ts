@@ -70,23 +70,30 @@ export function isParkedFor(pause: ArmPause | null, cart: number): boolean {
  *   'ARM CLEAR <i>'   — cart i's fill (or skip / end) has left the stage and
  *                       arrived at the tube; the OT-2 now only re-aspirates and
  *                       parks (or trashes the tip and homes) until the next pause.
+ *   'ARM FILLED <i>'  — cart i's FINAL row is filled and the tip is out of its
+ *                       last hole; the gantry is still over the stage, about to
+ *                       go to the tube. The WITHDRAW of cart i may start here
+ *                       (Alejandro, 2026-11-05) — only the withdraw: the next
+ *                       grab and the fail animation still wait for CLEAR / PARKED.
+ *                       A protocol that predates it never emits it; CLEAR follows
+ *                       a few seconds later either way.
  * A marker is the LAST ARM pause or announcement in the run's command log; a
  * later marker (a resumed pause on the way to the scan, say) retires it.
  */
-export type ArmAnnouncementKind = 'PROBING' | 'CALIBRATED' | 'CLEAR';
+export type ArmAnnouncementKind = 'PROBING' | 'CALIBRATED' | 'CLEAR' | 'FILLED';
 export type ArmMarkerKind = ArmPauseKind | ArmAnnouncementKind;
 
 export interface ArmMarker {
 	kind: ArmMarkerKind;
-	/** The cart for PARKED / AT_SCAN / NO_INSTRUCTION / CLEAR; 0 for PROBING and CALIBRATED. */
+	/** The cart for PARKED / AT_SCAN / NO_INSTRUCTION / CLEAR / FILLED; 0 for PROBING and CALIBRATED. */
 	cart: number;
 	/** True for a waitForResume the run is paused at right now. */
 	paused: boolean;
 }
 
-const COMMENT_RE = /^\s*ARM\s+(PROBING|CALIBRATED|CLEAR)(?:\s+(\d+))?\b/;
+const COMMENT_RE = /^\s*ARM\s+(PROBING|CALIBRATED|CLEAR|FILLED)(?:\s+(\d+))?\b/;
 
-/** 'ARM CLEAR 2' → { kind: 'CLEAR', cart: 2 }; 'ARM CALIBRATED' / 'ARM PROBING' → cart 0; other comments → null. */
+/** 'ARM CLEAR 2' / 'ARM FILLED 2' → { kind, cart: 2 }; 'ARM CALIBRATED' / 'ARM PROBING' → cart 0; other comments ('ARM CART 2 FILLED …' included) → null. */
 export function parseArmComment(message: unknown): { kind: ArmAnnouncementKind; cart: number } | null {
 	if (typeof message !== 'string') return null;
 	const m = COMMENT_RE.exec(message);
@@ -99,6 +106,8 @@ export interface ArmMoveWant {
 	parked: number;
 	/** Also allowed while the run is RUNNING after 'ARM CLEAR <orClear>' (nothing later in the log). */
 	orClear?: number;
+	/** Also allowed while the run is RUNNING after 'ARM FILLED <orFilled>' — the withdraw of that cart only (2026-11-05). */
+	orFilled?: number;
 	/** Also allowed while the run is RUNNING after 'ARM CALIBRATED' (nothing later in the log). */
 	orCalibrated?: boolean;
 	/** Also allowed while the run is RUNNING after 'ARM PROBING' — the first grab, when Setup says so. */
@@ -130,6 +139,7 @@ export function armMayMove(status: string, last: ArmMarker | null, want: ArmMove
 	if (want.orProbing && want.parked === 1 && last.kind === 'PROBING') return true; // start-up only: the first grab
 	if (want.orCalibrated && last.kind === 'CALIBRATED') return true;
 	if (want.orClear != null && last.kind === 'CLEAR' && last.cart === want.orClear) return true;
+	if (want.orFilled != null && last.kind === 'FILLED' && last.cart === want.orFilled) return true;
 	return false;
 }
 

@@ -422,7 +422,7 @@
 					const after = loop!.cycles[loop!.cycles.length - 1];
 					if (after?.step === 'fail') note(`${tag}: ${after.error ?? 'the cart cannot be filled.'} Taking the fail route.`, 'warn');
 				} else if (cycle.step === 'fill') {
-					note(`${tag}: the OT-2 is filling ${cycle.barcode ?? 'the cart'}${rehearsal ? ' (rehearsal: air)' : ''} — waiting for it to park in the wax again.`);
+					note(`${tag}: the OT-2 is filling ${cycle.barcode ?? 'the cart'}${rehearsal ? ' (rehearsal: air)' : ''} — waiting for its final row.`);
 					let pending = true;
 					let broke = false;
 					while (pending) {
@@ -436,7 +436,7 @@
 						pending = !!r.data.pending;
 					}
 					if (broke || loop!.status !== 'running') break;
-					note(`${tag}: filled — the OT-2 is parked in the wax.`);
+					note(`${tag}: filled — the OT-2 is on its way back to the wax.`);
 				} else if (cycle.step === 'withdraw') {
 					if (cycle.index === 1 && loop.startStep === 'withdraw') {
 						// Started at the withdraw (a filled cart on the stage): once the OT-2 has parked, its first

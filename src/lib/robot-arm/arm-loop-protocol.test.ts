@@ -70,3 +70,23 @@ describe('armMayMove — a park resumed from outside the loop (2026-10-30)', asy
 		expect(atScanFor('paused', noInstr(1), parked(1, false), 1)).toBe(false);
 	});
 });
+
+describe('ARM FILLED — the withdraw may start once the final row is filled (2026-11-05)', async () => {
+	const { armMayMove, parseArmComment } = await import('./arm-loop-protocol');
+	const filled = (cart: number) => ({ kind: 'FILLED' as const, cart, paused: false });
+	it('parses the announcement with its cart; the older ARM CART comment is not it', () => {
+		expect(parseArmComment('ARM FILLED 3')).toEqual({ kind: 'FILLED', cart: 3 });
+		expect(parseArmComment('ARM CART 3 FILLED 0123456789')).toBeNull();
+	});
+	it('lets the withdraw of that cart start while the run is running, nothing else', () => {
+		// withdraw(2): parked for 3, or running after CLEAR 2, or (new) after FILLED 2.
+		const withdraw2 = { parked: 3, orClear: 2, orFilled: 2 };
+		expect(armMayMove('running', filled(2), withdraw2)).toBe(true);
+		expect(armMayMove('running', { kind: 'CLEAR', cart: 2, paused: false }, withdraw2)).toBe(true);
+		expect(armMayMove('running', filled(1), withdraw2)).toBe(false); // the previous cart's
+		expect(armMayMove('paused', filled(2), withdraw2)).toBe(false); // a paused run is on a pause marker
+		// The fail animation and the next grab do not ask for it: they still wait for CLEAR / PARKED.
+		expect(armMayMove('running', filled(2), { parked: 3, orClear: 2 })).toBe(false);
+		expect(armMayMove('running', filled(2), { parked: 3, orClear: 2, orProbing: true })).toBe(false);
+	});
+});

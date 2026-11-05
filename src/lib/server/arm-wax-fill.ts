@@ -44,7 +44,11 @@
  * run is paused `ARM PARKED <i>` — the robot itself reports it (assertRunParked)
  * — and never at AT_SCAN; the run leaves the tube only on a BIMS resume, sent
  * after the arm's play has settled. The last cart's `end` goes out before its
- * withdraw, so the tip-to-trash and the home overlap the arm. The OT-2 pipette
+ * withdraw, so the tip-to-trash and the home overlap the arm. Amendment
+ * (Alejandro, 2026-11-05): the WITHDRAW of a cart may begin as soon as the
+ * protocol announces `ARM FILLED <i>` — its final row filled, the tip out of
+ * the last hole — while the gantry is still leaving the stage for the tube;
+ * the next grab and the fail animation keep waiting for CLEAR / PARKED. The OT-2 pipette
  * still goes ALL THE WAY UP before every move that leaves the tube or the
  * stage (the lift rule, in the protocol and the Stage Calibration Studio).
  *
@@ -1291,7 +1295,8 @@ export function readiness(
 	if (settings.robotId) {
 		notes.push(
 			'One OT-2 run and ONE tip serve the whole loop: the protocol takes the tip, probes it once, and between carts parks it in the wax tube (the wax stays warm) and pauses. ' +
-				'The arm plays only while the robot reports that pause (ARM PARKED) or an announcement that it is clear; the run leaves the tube only after the arm has settled and arrived, and never goes over the stage while the arm moves.'
+				'The arm plays only while the robot reports that pause (ARM PARKED) or an announcement that it is clear; the run leaves the tube only after the arm has settled and arrived, and never goes over the stage while the arm moves. ' +
+				'The withdraw starts as soon as the protocol announces the cart\'s final row filled (ARM FILLED, stage protocols of 2026-11-05 or later), while the OT-2 is still on its way to the tube.'
 		);
 		const on = CHANNELS.filter((c) => settings.channels[c.key]);
 		if (!on.length) blocking.push('Setup: tick at least one channel (C, B or A) to fill.');
@@ -1961,9 +1966,18 @@ function grabWant(cart: number, grabDuringProbe = false): ArmMoveWant {
 	return cart === 1 ? { parked: 1, orCalibrated: true, orProbing: grabDuringProbe } : { parked: cart, orClear: cart - 1 };
 }
 
-/** What the withdraw / fail animation of `cart` needs: parked for the next cart, or running after CLEAR of this one. */
+/** What the fail animation of `cart` needs: parked for the next cart, or running after CLEAR of this one. */
 function afterCartWant(cart: number): ArmMoveWant {
 	return { parked: cart + 1, orClear: cart };
+}
+
+/**
+ * What the withdraw of `cart` needs: the same, or — Alejandro, 2026-11-05 —
+ * the run still RUNNING right after 'ARM FILLED <cart>': its final row filled,
+ * the tip out of the last hole, the gantry on its way off the stage to the tube.
+ */
+function withdrawWant(cart: number): ArmMoveWant {
+	return { parked: cart + 1, orClear: cart, orFilled: cart };
 }
 
 /** The arm moves only while the run is paused at `ARM PARKED <cart>`: the tip in the wax tube, nothing over the stage. */
@@ -1993,7 +2007,7 @@ async function awaitPause(
 	user: User,
 	loop: any,
 	robot: any,
-	expect: ArmPause & { orClear?: number; orCalibrated?: boolean; orProbing?: boolean; uninstructed?: boolean },
+	expect: ArmPause & { orClear?: number; orFilled?: number; orCalibrated?: boolean; orProbing?: boolean; uninstructed?: boolean },
 	maxWaitMs = AWAIT_BUDGET_MS
 ): Promise<AwaitResult> {
 	const runId = String(loop.opentronsRunId ?? '');
@@ -2004,7 +2018,7 @@ async function awaitPause(
 		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
 		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
 		// The announcements, and a park resumed from outside the loop that never moved.
-		if (expect.kind === 'PARKED' && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orCalibrated: expect.orCalibrated, orProbing: expect.orProbing }, { prev: r.prev, uninstructed: expect.uninstructed })) {
+		if (expect.kind === 'PARKED' && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orFilled: expect.orFilled, orCalibrated: expect.orCalibrated, orProbing: expect.orProbing }, { prev: r.prev, uninstructed: expect.uninstructed })) {
 			return { done: true, read: r };
 		}
 		if (expect.kind === 'AT_SCAN' && atScanFor(r.status, r.last, r.prev, expect.cart)) return { done: true, read: r };
@@ -2301,20 +2315,22 @@ export async function cycleDecide(user: User, loopId: string): Promise<LoopView>
 }
 
 /**
- * Step 3b: the fill is the protocol's — wait for `ARM PARKED <i+1>` (12 holes,
- * back to the tube, re-aspirate, park). The run ending instead means the fill
- * did not finish: the end is recorded, the wax run cancelled, the loop fails.
+ * Step 3b: the fill is the protocol's — wait for `ARM FILLED <i>` (the final
+ * row filled, 2026-11-05), or `ARM CLEAR <i>` / `ARM PARKED <i+1>` on a protocol
+ * that does not announce it (back to the tube, re-aspirate, park). The run
+ * ending instead means the fill did not finish: the end is recorded, the wax
+ * run cancelled, the loop fails.
  */
 export async function cycleFillWait(user: User, loopId: string): Promise<{ pending: boolean; loop: LoopView }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fill');
 	const robot = await loopRobot(loop);
-	// Done as soon as the run announces 'ARM CLEAR <i>' (left the stage, at the tube); PARKED <i+1> also counts.
-	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1, orClear: cycle.index, uninstructed: true });
+	// Done as soon as the run announces 'ARM FILLED <i>' (final row filled) or 'ARM CLEAR <i>' (left the stage, at the tube); PARKED <i+1> also counts.
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index + 1, orClear: cycle.index, orFilled: cycle.index, uninstructed: true });
 	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'fill', r.terminal) };
 	if (!r.done) return { pending: true, loop: (await getLoop(loopId))! };
 	await patchCycle(loopId, cycle.index, { step: 'withdraw', filledAt: new Date() });
-	await audit(user, 'arm_wax_fill.cycle_filled', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId: loop.waxRunId ?? null, barcode: cycle.barcode ?? null, message: r.read.message });
+	await audit(user, 'arm_wax_fill.cycle_filled', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId: loop.waxRunId ?? null, barcode: cycle.barcode ?? null, message: r.read.message, marker: r.read.last ? `${r.read.last.kind}${r.read.last.cart ? ` ${r.read.last.cart}` : ''}` : null });
 	await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: 'withdraw', message: r.read.message });
 	return { pending: false, loop: (await getLoop(loopId))! };
 }
@@ -2528,10 +2544,12 @@ function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: Cali
 }
 
 /**
- * Step 4: the arm MOVES through the withdraw animation — only while the run is
- * parked for the next cart. On the loop's last cart `end` goes out first, so
- * the protocol's tip-to-trash and home overlap the withdraw (the trash and
- * home are neither the calibrator nor the stage).
+ * Step 4: the arm MOVES through the withdraw animation — as soon as the run has
+ * announced 'ARM FILLED <i>' (the final row filled; 2026-11-05) or 'ARM CLEAR
+ * <i>', or once it is parked for the next cart. On the loop's last cart `end`
+ * goes out first (it needs the park: an instruction + resume), so the
+ * protocol's tip-to-trash and home overlap the withdraw (the trash and home
+ * are neither the calibrator nor the stage).
  */
 export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number; endSent: boolean; endNote: string | null; chainedGrab: boolean }> {
 	const { loop, cycle } = await runningLoop(loopId);
@@ -2547,11 +2565,13 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 		if (!w.done && w.terminal) throw new ArmWaxFillError(`The OT-2 run ended ${w.terminal} before the last cart's park — the arm will not withdraw. Press STOP RUN.`, 409);
 		endNote = await sendEnd(user, loop, robot, cycle.index);
 	} else {
-		await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'withdraw', { uninstructed: true });
+		await assertArmMayMove(robot, loop, withdrawWant(cycle.index), 'withdraw', { uninstructed: true });
 	}
 	// Another cart follows: play the withdraw AND the next grab as ONE path (one
 	// play, one end-of-play tail). The gate is the same for both — parked for the
-	// next cart, or CLEAR of this one — and the OT-2 stays in the tube throughout.
+	// next cart, CLEAR of this one, or FILLED (2026-11-05) — the grab half plays a
+	// whole withdraw later, by which time the gantry has long been at the tube
+	// (CLEAR follows FILLED within seconds); the OT-2 stays in the tube throughout.
 	const withdrawRef = animRef(loop.withdrawAnimation);
 	const grabRef = animRef(loop.grabAnimation);
 	// A replay after a miss: only from the withdraw's start pose, and never chained.
