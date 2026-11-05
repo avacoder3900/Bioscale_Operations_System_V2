@@ -25566,3 +25566,24 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ c08e2c6a
 Retrieve this exact code: git checkout c08e2c6a
 What this deployment is for: Alejandro's second screenshot — the gap under the canvas.
+
+================================================================================
+2026-11-05 — master — Run tab: robot menu on the OT-2 card switches which Opentron the arm feeds; Setup's OT-2 select removed
+================================================================================
+Alejandro: switch between the three OT-2s from the Run card itself (the row with the health dot, Stage
+Calibration, Identify, Lights, Home, Conveyor, Recover), not from a select buried in Setup.
+- run/+page.svelte: the robot name on the card is now a menu button (caret); it lists every active robot,
+  the current one marked, and a click posts ?/switchRobot. Disabled while a run is on. After the switch the
+  page data reloads and the health reading follows the new robot. The "OT-2" select in Setup is gone.
+- arm-wax-fill.ts: switchRobot(user, robotId) changes only robotId (every other Setup value stays), refuses
+  while a loop is running (409) or for an inactive robot, audits arm_wax_fill.switch_robot. saveSetup keeps
+  the stored robotId when the form no longer posts one.
+- run/+page.server.ts: switchRobot action.
+svelte-check 13 errors (baseline). vitest arm-loop-protocol 35/35; robot-arm-url-invariant fails as before
+(pre-existing since dab4cf35).
+Dev server for review: port 5190 from the Bioscale_V2-wt-ui-redesign worktree (on master); the two old
+servers on 5191/5192 were closed.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Run card robot menu switches the OT-2 the arm feeds"
+What this deployment is for: pick the Opentron from the Run card's robot menu.

@@ -51,6 +51,9 @@
 
 	// ── page state ───────────────────────────────────────────────────────
 	let loop = $state<LoopView | null>(data.activeLoop);
+	// The Run card's robot menu (2026-11-05).
+	let robotMenuOpen = $state(false);
+	let switchingRobot = $state(false);
 
 	// Recent Runs is hidden by default (2026-11-04); only an explicit Show is remembered as open.
 	const RECENT_HIDDEN_KEY = 'robot-arm:run-recent-hidden';
@@ -925,13 +928,33 @@
 			<div class="flex flex-wrap items-center justify-between gap-2">
 				<div class="flex min-w-0 items-center gap-2">
 					<span class="h-2.5 w-2.5 shrink-0 rounded-full {healthDot(health?.status)}" title={health ? `${health.label}: ${health.detail}` : 'No health data'}></span>
+					<!-- Robot menu (2026-11-05): the OT-2 the arm feeds, switchable here; not while a run is on. -->
+					<div class="relative" onfocusout={(e) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) robotMenuOpen = false; }}>
+						<button type="button" onclick={() => (robotMenuOpen = !robotMenuOpen)} disabled={loop?.status === 'running' || switchingRobot}
+							title={loop?.status === 'running' ? 'Not while a run is on' : 'Switch Robot'} aria-haspopup="menu" aria-expanded={robotMenuOpen}
+							class="flex items-center gap-1 rounded border border-transparent px-1 py-0.5 font-semibold hover:border-[var(--color-tron-border)] disabled:opacity-100 disabled:hover:border-transparent"
+							style="color: var(--color-tron-text)">
+							<span class="truncate">{robotId ? (data.robotName ?? robotId) : 'No OT-2 Chosen'}</span>
+							<svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: var(--color-tron-text-secondary)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+						</button>
+						{#if robotMenuOpen}
+							<form method="POST" action="?/switchRobot" role="menu" use:enhance={() => { switchingRobot = true; return async ({ result, update }) => { switchingRobot = false; robotMenuOpen = false; if (result.type === 'failure') say(String((result.data as any)?.error ?? 'Switch failed.'), 'error'); else if (result.type === 'success') { await update(); health = data.health ?? null; say(`Robot: ${data.robotName ?? robotId}.`); } else await update(); }; }}
+								class="absolute left-0 top-full z-20 mt-1 min-w-40 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-1 shadow-lg">
+								{#each data.robots as r (r._id)}
+									<button type="submit" name="robotId" value={r._id} role="menuitem" disabled={switchingRobot}
+										class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-[var(--color-tron-bg-tertiary)] {r._id === robotId ? 'text-[var(--color-tron-cyan)]' : ''}"
+										style={r._id === robotId ? '' : 'color: var(--color-tron-text)'}>
+										<span class="w-3 shrink-0">{r._id === robotId ? '•' : ''}</span>
+										<span class="truncate">{r.name}</span>
+									</button>
+								{/each}
+							</form>
+						{/if}
+					</div>
 					{#if robotId}
-						<span class="truncate font-semibold" style="color: var(--color-tron-text)">{data.robotName ?? robotId}</span>
 						<span class="truncate {healthText(health?.status)}" title={health?.detail ?? ''}>
 							{health?.label ?? 'No Health Data'}
 						</span>
-					{:else}
-						<span style="color: var(--color-tron-text-secondary)">No OT-2 Chosen</span>
 					{/if}
 				</div>
 				<div class="flex flex-wrap items-center gap-1">
@@ -1179,13 +1202,6 @@
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Setup</h3>
 			<form method="POST" action="?/saveSetup" use:enhance class="mt-3 space-y-3 text-xs">
-				<label class="block">
-					<span style="color: var(--color-tron-text-secondary)">OT-2</span>
-					<select name="robotId" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
-						<option value="">— Pick A Robot —</option>
-						{#each data.robots as r (r._id)}<option value={r._id} selected={r._id === data.settings.robotId}>{r.name}</option>{/each}
-					</select>
-				</label>
 				{#if !stage}
 					<label class="block">
 						<span style="color: var(--color-tron-text-secondary)">Deck Position (1–24)</span>

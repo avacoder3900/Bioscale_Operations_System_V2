@@ -277,8 +277,10 @@ export async function saveSetup(
 	}
 ): Promise<SettingsView> {
 	await connectDB();
-	const robotId = String(input.robotId ?? '').trim();
-	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds.');
+	// The robot is chosen from the Run card's menu (switchRobot, 2026-11-05); Setup keeps the current one.
+	const current = settingsView(await ArmWaxFillSettings.findById('default').lean());
+	const robotId = String(input.robotId ?? '').trim() || current.robotId || '';
+	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds from the robot menu on the Run card.');
 	const channels: Record<ChannelKey, boolean> = { c: input.channels?.c === true, b: input.channels?.b === true, a: input.channels?.a !== false };
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
 	const grabDuringProbe = input.grabDuringProbe !== false;
@@ -304,6 +306,30 @@ export async function saveSetup(
 		grabDuringProbe,
 		chainGrab,
 		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, grabDuringProbe: before.grabDuringProbe, chainGrab: before.chainGrab }
+	});
+	return settingsView(await ArmWaxFillSettings.findById('default').lean());
+}
+
+/**
+ * Switch the OT-2 the arm feeds (the Run tab's robot menu, 2026-11-05). Only
+ * `robotId` changes; every other Setup value is kept. Refused while a loop is
+ * running: the loop's run lives on the robot it started on.
+ */
+export async function switchRobot(user: User, rawRobotId: unknown): Promise<SettingsView> {
+	await connectDB();
+	const robotId = String(rawRobotId ?? '').trim();
+	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds.');
+	const active = await activeLoop();
+	if (active) throw new ArmWaxFillError('Not while a run is on: stop it first, then switch robots.', 409);
+	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
+	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
+	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
+	if (before.robotId === robotId) return before;
+	await ArmWaxFillSettings.updateOne({ _id: 'default' }, { $set: { robotId, updatedBy: opRef(user) } }, { upsert: true });
+	await audit(user, 'arm_wax_fill.switch_robot', 'arm_wax_fill_settings', 'default', {
+		robotId,
+		robotName: robot.name,
+		before: { robotId: before.robotId }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }

@@ -47,7 +47,8 @@ import {
 	saveAnimations,
 	saveSetup,
 	startLoop,
-	stopLoop
+	stopLoop,
+	switchRobot
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -107,6 +108,17 @@ export const actions: Actions = {
 				chainGrab: checked(d, 'chainGrab')
 			});
 			return { success: 'Setup saved.' };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The robot menu on the Run card: only the robot changes, the rest of Setup stays.
+	switchRobot: async (ev) => {
+		const { d, user } = await writer(ev);
+		try {
+			const settings = await switchRobot(user, field(d, 'robotId'));
+			return { success: 'Robot switched.', settings: json(settings) };
 		} catch (err) {
 			return failFrom(err);
 		}
