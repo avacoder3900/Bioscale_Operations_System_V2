@@ -25787,3 +25787,19 @@ Voltage 12.2-12.3 V throughout; temperatures 45-46 C. A few settle times of 2-3 
 Limits: no reads possible mid-move (Pi refuses them during a session); gripper empty, no cart.
 BIMS refuses these today: MAX_STEPS_PER_S = 2000 at the easing's peak makes the big move's minimum ~1.1 s (ease).
 Using faster times needs that cap raised or dropped — Alejandro's decision.
+
+================================================================================
+2026-11-05 — master — Stage: the two calibrate buttons do different things; Pick Up Another Tip drops first
+================================================================================
+- calibrate/stage/+page.svelte, fix to 293c3aa8: with a tip on, the original button turned into "Calibrate
+  Tip" and probed the tip already on, the same thing as the new "Calibrate Without Picking Up Tip" right
+  under it. Now "Pick Up A p20 Tip And Calibrate" always reads so and always probes a FRESH tip (a tip
+  already on is dropped in the trash first); "Calibrate Without Picking Up Tip" never picks up. Each shows
+  "Calibrating Tip…" only on the button that was pressed.
+- Pick Up Another Tip went down into the tip rack with the tip still on (the OT-2 refused with
+  TIP_ALREADY_ATTACHED), then dropped, then picked. It now drops the tip first, then picks.
+svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "fix(robot-arm): Stage — Pick Up And Calibrate always takes a fresh tip; Pick Up Another Tip drops first"
+What this deployment is for: the two fixes above.
