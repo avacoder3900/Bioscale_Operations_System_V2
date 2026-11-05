@@ -19,6 +19,13 @@
 	 * that does nothing confused operators, who then pressed Live and had the
 	 * arm start moving under them. Live first reads the arm and puts every
 	 * slider where the arm really is, so turning it on never moves the arm.
+	 *
+	 * Edit Values (2026-11-05): an explicit second way in. It unlocks the
+	 * sliders and number boxes WITHOUT the arm (unreachable, torque off, a
+	 * session on it — no matter), nothing moves, and Save Pose writes the
+	 * numbers. Asked for from the Move Set page: edit and save a step's pose
+	 * there. Live and Edit Values never run together; Live takes the arm's
+	 * position, so it asks before throwing unsaved values away.
 	 */
 	import type { Snippet } from 'svelte';
 	import { enhance } from '$app/forms';
@@ -100,6 +107,9 @@
 	let torqueOn = $state<boolean | null>(arm?.torqueOn ?? null);
 	let activeKind = $state<string | null>(null);
 	let live = $state(false);
+	/** Edit Values: the controls are open and the arm is left alone. */
+	let editing = $state(false);
+	const unlocked = $derived(live || editing);
 	let sending = $state(false);
 	let note = $state<{ text: string; kind: 'ok' | 'warn' | 'error' } | null>(null);
 	let newName = $state('');
@@ -178,8 +188,8 @@
 			activeKind = body.active?.kind ?? null;
 			if (Array.isArray(body.positions)) {
 				armPos = body.positions;
-				// New Pose with Live off: the sliders show where the arm is right now.
-				if (!pose && !live && !sending) values = [...body.positions];
+				// New Pose with Live off: the sliders show where the arm is right now (unless the numbers are being edited).
+				if (!pose && !live && !editing && !sending) values = [...body.positions];
 				if (!opened) opened = [...body.positions];
 				temps = body.temps ?? temps;
 				torqueOn = typeof body.torqueOn === 'boolean' ? body.torqueOn : null;
@@ -246,8 +256,8 @@
 	}
 
 	function setValue(s: number, v: number) {
-		// Sliders only move the arm: nothing changes them until Live is on.
-		if (!live || !Number.isFinite(v)) return;
+		// Sliders only move the arm: nothing changes them until Live or Edit Values is on.
+		if (!unlocked || !Number.isFinite(v)) return;
 		// The slider's range follows the value (sliderRange includes it), so only the encoder bounds apply.
 		values[s] = Math.round(Math.max(0, Math.min(ENCODER_MAX, v)));
 		if (live) void pump();
@@ -259,6 +269,8 @@
 	 * and nothing jumps. From then on the sliders drive the arm.
 	 */
 	async function startLive() {
+		if (editing && dirty && !confirm('Live sets the sliders to where the arm is. Discard the unsaved values?')) return;
+		editing = false;
 		await readArmNow();
 		if (!armPos || !canLive) {
 			if (!armPos) note = { text: 'Could not read the arm.', kind: 'warn' };
@@ -272,7 +284,7 @@
 	}
 
 	function reset() {
-		if (pose && live) {
+		if (pose && unlocked) {
 			values = [...pose.positions];
 			if (live) void pump();
 		}
@@ -302,7 +314,8 @@
 		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">
 			{pose ? friendlyName(pose.name) : 'New Pose'}
 		</h2>
-		{#if live}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(74,222,128,0.15); color: #4ade80">LIVE</span>{/if}
+		{#if live}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(74,222,128,0.15); color: #4ade80">LIVE</span>
+		{:else if editing}<span class="rounded px-2 py-0.5 text-[11px] font-semibold" style="background: rgba(245,158,11,0.15); color: #fbbf24" title="The numbers are open; the arm does not move">EDITING VALUES</span>{/if}
 		{#if dirty}<span class="text-[11px]" style="color: #fbbf24">Unsaved Changes</span>{/if}
 		<span class="grow"></span>
 		{#if live}
@@ -312,6 +325,7 @@
 				<button type="button" class={btn} style={amber} disabled={!canLive} onclick={() => ongoto?.(pose!)}>Go To Pose</button>
 			{/if}
 			{@render beforeLive?.()}
+			<button type="button" class={btn} style={editing ? amber : cyan} onclick={() => (editing = !editing)} title={editing ? 'Lock the numbers again' : 'Change the numbers without moving the arm; Save Pose keeps them'}>{editing ? 'Stop Editing' : 'Edit Values'}</button>
 			<button type="button" class={btn} style={green} disabled={!canLive} onclick={startLive} title="Set the sliders to where the arm is, then let them drive the arm">Live</button>
 		{/if}
 		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>Close</button>{/if}
@@ -357,7 +371,7 @@
 						max={r.max}
 						step="1"
 						value={values[s]}
-						disabled={!live}
+						disabled={!unlocked}
 						oninput={(e) => setValue(s, Number(e.currentTarget.value))}
 						class="w-full accent-cyan-400 disabled:cursor-not-allowed disabled:opacity-40"
 						aria-label="{JOINT_LABELS[s]} (servo {s + 1})"
@@ -371,8 +385,8 @@
 					</div>
 				</div>
 				<div class="col-start-2 flex flex-wrap items-center gap-1">
-					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] - 10)} aria-label="minus 10">−10</button>
-					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] - 1)} aria-label="minus 1">−1</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, values[s] - 10)} aria-label="minus 10">−10</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, values[s] - 1)} aria-label="minus 1">−1</button>
 					<!-- Exact entry: type a step value and press Enter (or leave the box) to apply it; the slider follows. -->
 					<input
 						type="number"
@@ -380,7 +394,7 @@
 						max={ENCODER_MAX}
 						step="1"
 						value={values[s]}
-						disabled={!live}
+						disabled={!unlocked}
 						onchange={(e) => { setValue(s, Math.round(Number(e.currentTarget.value))); e.currentTarget.value = String(values[s]); }}
 						onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
 						class="{input} w-24 text-center font-mono tabular-nums disabled:cursor-not-allowed disabled:opacity-40"
@@ -388,14 +402,14 @@
 						aria-label="{JOINT_LABELS[s]} value (steps)"
 						title="Absolute encoder goal, 0–{ENCODER_MAX}. Enter applies it."
 					/>
-					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
-					<button type="button" class={nudge} style={nudgeStyle} disabled={!live} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
+					<button type="button" class={nudge} style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>
 					<span class="ml-1 w-14 text-right font-mono text-[10px]" style="color: var(--color-tron-text-secondary)" title="Angle from the servo's centre">{deg(values[s])}°</span>
 					{#if refValue(s) != null}
 						<!-- the reference marker's value in words, and a way back to it -->
 						<span class="ml-2 font-mono text-[10px]" style="color: {values[s] === refValue(s) ? 'var(--color-tron-text-secondary)' : '#4ade80'}" title="{ref.label}: {refValue(s)}{armPos ? ` · arm now: ${armPos[s]}` : ''}">● {refValue(s)}</span>
 						{#if values[s] !== refValue(s)}
-							<button type="button" class="{nudge} w-7" style={nudgeStyle} disabled={!live} onclick={() => setValue(s, refValue(s)!)} title="Back to {refValue(s)} ({ref.label})" aria-label="back to the reference value">↺</button>
+							<button type="button" class="{nudge} w-7" style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, refValue(s)!)} title="Back to {refValue(s)} ({ref.label})" aria-label="back to the reference value">↺</button>
 						{/if}
 					{/if}
 				</div>
@@ -410,7 +424,7 @@
 				<input type="hidden" name="positions" value={JSON.stringify(values)} />
 				<button type="submit" class={btn} style={green} disabled={!dirty}>Save Pose</button>
 			</form>
-			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!dirty || !live} onclick={reset} title={live ? 'Sliders (and the arm) back to the saved pose' : 'Press Live first: the sliders only move with the arm'}>Reset To Saved</button>
+			<button type="button" class="text-xs underline disabled:opacity-40" style="color: var(--color-tron-text-secondary)" disabled={!dirty || !unlocked} onclick={reset} title={live ? 'Sliders (and the arm) back to the saved pose' : editing ? 'The numbers back to the saved pose' : 'Press Live or Edit Values first'}>Reset To Saved</button>
 		{/if}
 		<form method="POST" action="?/createPose" use:enhance={() => async ({ result, update }) => { await update({ reset: false }); if (result.type === 'success') newName = ''; }} class="flex flex-wrap items-end gap-2">
 			<input type="hidden" name="positions" value={JSON.stringify(values)} />

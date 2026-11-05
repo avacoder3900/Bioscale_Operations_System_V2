@@ -25587,3 +25587,22 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Run card robot menu switches the OT-2 the arm feeds"
 What this deployment is for: pick the Opentron from the Run card's robot menu.
+
+================================================================================
+2026-11-05 — master — Pose editor: Edit Values unlocks the numbers without the arm, so a Move Set's poses can be edited and saved on the Move Set page
+================================================================================
+Alejandro: edit and save the values of a move set's poses while in that move set's page. The page already
+shows the pose editor for the selected step, but every slider, nudge and number box was locked until Live
+(2026-10-28 rule), and Live needs a reachable arm with torque on and no session on it.
+- PoseEditor.svelte: an Edit Values button (cyan; amber "Stop Editing" while on) beside Live opens the
+  sliders, −10/−1/+1/+10, the number boxes, ↺ and Reset To Saved with the arm left alone — nothing moves,
+  no Pi call. Save Pose writes the numbers (savePosePositions, unchanged). An EDITING VALUES chip shows the
+  mode. Live and Edit Values never run together: Live sets the sliders to the arm, so with unsaved edited
+  values it asks before discarding them. New Pose with Edit Values on no longer tracks the arm's position.
+  The Live-only lock otherwise stays as it was.
+- Applies wherever PoseEditor is used (Move Set page, Teach).
+svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build watched this time)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Edit Values on the pose editor"
+What this deployment is for: edit and save a move set's pose values from the Move Set page without the arm.
