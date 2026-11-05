@@ -1254,6 +1254,9 @@
 			{#if rim && liveZ !== null}
 				<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">tip end {Math.abs(liveDepth ?? 0).toFixed(2)} mm {(liveDepth ?? 0) >= 0 ? 'below' : 'above'} the taught rim</p>
 			{/if}
+			{#if runId && !hasTip}
+				<p class="mt-2 rounded border border-amber-400/40 bg-amber-900/15 px-1.5 py-1 text-[10px] leading-tight text-amber-200">⚠ No Tip In This Run: Move To Hole Sends The Bare Pipette To The Hole Height, So A Tip On The Pipette Goes A Full Tip Length Lower Into The Cart.</p>
+			{/if}
 			<div class="mt-2 grid grid-cols-2 gap-2">
 				<button type="button" onclick={moveToSelectedHole} disabled={!pipetteId || busy || selCount !== 1 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Select exactly one hole — parks the tip 2 mm above its rim, this tip's adjust applied">Move To Hole</button>
 				<button type="button" onclick={captureOffset} disabled={!pipetteId || busy || !nominal} class="rounded border border-green-500/50 bg-green-900/20 px-2 py-2 text-xs font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Capture Offset</button>

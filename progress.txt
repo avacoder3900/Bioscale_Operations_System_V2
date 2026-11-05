@@ -25830,3 +25830,19 @@ Deployment: production — via Vercel GitHub integration (GitHub status success 
 Source: branch master @ commit d5728b62
 Retrieve this exact code: git checkout d5728b62
 What this deployment is for: fast moves play from BIMS; too-fast steps are amber warnings, not refusals.
+
+================================================================================
+2026-11-05 — master — Stage: No Tip warning over Move To Hole; why Move To Hole's X/Y differs from the hole's
+================================================================================
+- calibrate/stage/+page.svelte: amber note above Move To Hole while a run is open with no tip in it — the
+  move sends the bare pipette to the hole height, so a tip on the pipette that the run does not know about
+  goes a whole tip length lower (a tip broke this way on B07 today). Display only; no motion changed.
+- Investigated (no change): Move To Hole on V2 went to (206.48, 227.65, 88.90) while V2 is saved at
+  (212.381, 229.247, 86.9). Z = rim + 2 mm as designed; X/Y = saved tip-neutral hole + the current tip's
+  probe adjust, which the 20:08 UTC calibrate_tip on B07 returned as (-5.9, -1.6). 212.381-5.9 = 206.481,
+  229.247-1.6 = 227.647. Working as designed (same convention as the Deck Calibration Studio).
+svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Stage — No Tip warning above Move To Hole"
+What this deployment is for: the warning above.
