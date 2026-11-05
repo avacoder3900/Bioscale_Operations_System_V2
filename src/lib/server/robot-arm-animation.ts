@@ -759,7 +759,7 @@ export async function goToPose(user: User, poseId: string): Promise<PlayResult> 
 /** The settle pass only nudges the arm; it must already be at (or near) the target. */
 const DROOP_NEAR_STEPS = 150;
 const DROOP_SETTLE_MS = 1200;
-const DROOP_MAX_ROUNDS = 4;
+const DROOP_MAX_ROUNDS = 6;
 
 export interface DroopResult {
 	trim: number[];

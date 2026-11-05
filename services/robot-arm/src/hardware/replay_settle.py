@@ -89,8 +89,9 @@ SERVO_COUNT = 6
 SETTLE_SERVOS = (1, 2, 3, 4, 5)
 #: Done when every settled servo is within this many steps of the goal.
 SETTLE_TOL = 2
-#: The offset may not grow past this; more is a stalled or blocked joint, not droop.
-MAX_OFFSET = 50
+#: The offset may not grow past this (was 50 until 2026-11-05: the shoulder sat 108 and the
+#: elbow ~80 steps short of their goals at extended poses); more is a stalled or blocked joint.
+MAX_OFFSET = 300
 #: How long a servo is given to stop after a goal write before it is read.
 SETTLE_WAIT_S = 0.25
 #: A settle window ends this long before the next moving frame, so that frame is on time.

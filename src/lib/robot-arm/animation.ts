@@ -69,12 +69,16 @@ export const MAX_PATH_S = 600;
 /** A timeline edit may move one joint at most this far from its pose. */
 export const MAX_OFFSET_STEPS = 1000;
 /**
- * Droop trim (pose.trim) is capped here. Under gravity an STS3215 settles a
- * few to a few tens of steps short of its goal; much more than this is not
- * droop but a stalled or blocked joint, and a large trim would also push the
- * first frame of a saved recording past Control's ±50-step replay preflight.
+ * Droop trim (pose.trim) is capped here. Under gravity an STS3215 settles
+ * short of its goal by however far it takes its proportional loop to push back
+ * the load: a few steps near home, but 108 (shoulder) and ~80 (elbow) at
+ * extended poses (measured 2026-11-05), so the cap went 50 → 300 together with
+ * the Pi's replay_settle.py MAX_OFFSET. Past it the joint is stalled or
+ * blocked. A trim over 50 can push the first frame of a Save To Pi recording
+ * past Control's ±50-step replay preflight; Animate plays lead in from where
+ * the arm is and are not affected.
  */
-export const MAX_TRIM_STEPS = 50;
+export const MAX_TRIM_STEPS = 300;
 
 // ── solenoids (cartridge trapdoors) ──────────────────────────────────────
 

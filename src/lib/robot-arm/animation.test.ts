@@ -214,7 +214,7 @@ describe('settle flags for the closed-loop replay', () => {
 	});
 	it('trimFromSettle: written − target on servos 1–5, capped, gripper ignored', () => {
 		expect(trimFromSettle([2048, 1514, 2591, 2051, 2100, 1900], A)).toEqual([0, 14, -9, 3, 0, 0]);
-		expect(trimFromSettle([2048, 1700, 2600, 2048, 2100, 1800], A)![1]).toBe(MAX_TRIM_STEPS);
+		expect(trimFromSettle([2048, 2000, 2600, 2048, 2100, 1800], A)![1]).toBe(MAX_TRIM_STEPS);
 		expect(trimFromSettle([1, 2], A)).toBeNull();
 		expect(trimFromSettle(undefined, A)).toBeNull();
 	});
@@ -260,7 +260,7 @@ describe('droop trim', () => {
 		expect(r.trim).toEqual([0, 12, -9, 3, 0, 0]);
 	});
 	it('is capped, so a blocked joint cannot run away', () => {
-		const r = nextTrim(pose, [2000, 2300, 2400, 1200, 540, 2250], [0, 40, 0, 0, 0, 0]);
+		const r = nextTrim(pose, [2000, 2100, 2400, 1200, 540, 2250], [0, 250, 0, 0, 0, 0]);
 		expect(r.trim[1]).toBe(MAX_TRIM_STEPS);
 	});
 	it('a simulated sagging servo lands on the pose once trimmed', () => {
