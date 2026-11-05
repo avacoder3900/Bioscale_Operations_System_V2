@@ -33,6 +33,7 @@
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
 import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
+import { forgetPreviewPath, lookUpPath, PreviewWriteError, writePreviewRecording } from './robot-arm-preview';
 import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2, whoUses } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -167,6 +168,10 @@ export async function readArm(): Promise<ArmNow> {
 	try {
 		servos = await robotArm.listServosRetry();
 	} catch (err) {
+		// The Pi refuses a servo read while a session owns the bus: that is "busy", not a fault (2026-11-05,
+		// it also stands in for the separate session check a play used to make first).
+		const msg = (err as Error)?.message ?? '';
+		if (/robot-arm 409/.test(msg) && /session/i.test(msg)) throw new AnimateError('A session is using the arm. Stop it first.', 409);
 		throw new AnimateError(`Could not read the follower: ${servoMessage(err)}`, 502);
 	}
 	if (!Array.isArray(servos) || !servos.length) throw new AnimateError('The follower reported no servos.', 502);
@@ -1332,9 +1337,13 @@ export async function writeAndPlay(
 	o: { title: string; keyframes: ResolvedKeyframe[]; rateHz: number; kind: PlayKind; id: string; lastPlay?: boolean; auditAction?: string; auditExtra?: Record<string, unknown> }
 ): Promise<PlayResult> {
 	if (!o.keyframes.length) throw new AnimateError('Nothing to play — add poses first.');
-	await requireIdle();
 	const firesOnly = fireOnlySchedule(o.keyframes);
-	if (firesOnly) return playFiresOnly(user, o, firesOnly);
+	// A fires-only play never reads the servos, so it checks for a session itself. Every other play
+	// skips that call (2026-11-05): readArm below is refused (409) while a session owns the arm.
+	if (firesOnly) {
+		await requireIdle();
+		return playFiresOnly(user, o, firesOnly);
+	}
 	const fireSteps = o.keyframes.filter((k) => k.fire);
 	const coilSteps = fireSteps.filter((k) => k.fire!.solenoid !== 'conveyor');
 	const gpio = coilSteps.length ? await requireReplayFire() : null;
@@ -1357,27 +1366,38 @@ export async function writeAndPlay(
 		rate_hz: o.rateHz,
 		animated: o.title
 	};
-	// Overwrite the scratch recording: the Pi refuses a restore onto an existing name.
+	// Write the scratch recording (one replacing upload on an updated Pi; see robot-arm-preview.ts) and
+	// replay it by the path the Pi lists, exactly as the Control tab does: the live Pi's replay does not
+	// find a restored recording by bare name (seen 2026-10-21: "400: recording not found: animate-preview").
+	let source: string;
 	try {
-		await robotArm.deleteRecording(PREVIEW_RECORDING);
+		source = await writePreviewRecording(robotArm, PREVIEW_RECORDING, out.jsonl, meta);
 	} catch (err) {
-		if (!/robot-arm 404/.test((err as Error).message ?? '')) throw new AnimateError(`Could not clear the preview recording on the Pi: ${(err as Error).message}`, 502);
+		if (err instanceof PreviewWriteError) throw new AnimateError(err.message, /session is active/i.test(err.message) ? 409 : 502);
+		throw err;
 	}
-	try {
-		await robotArm.restoreRecording({ name: PREVIEW_RECORDING, jsonl: out.jsonl, meta });
-	} catch (err) {
-		throw new AnimateError(`The Pi did not take the path: ${(err as Error).message}`, 502);
-	}
-	// Replay by the absolute path the Pi lists, exactly as the Control tab does:
-	// the live Pi's replay does not find a restored recording by bare name
-	// (seen 2026-10-21: "400: recording not found: animate-preview").
-	const source = await recordingPath(PREVIEW_RECORDING);
+	const replay = (src: string) =>
+		// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
+		robotArm.startReplay({ source: src, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
 	let runId: string;
 	try {
-		// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
-		const started = await robotArm.startReplay({ source, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
+		let started;
+		try {
+			started = await replay(source);
+		} catch (err) {
+			// A remembered path the Pi no longer knows: look it up once and retry.
+			if (!/recording not found/i.test((err as Error).message ?? '')) throw err;
+			forgetPreviewPath(PREVIEW_RECORDING);
+			try {
+				source = await lookUpPath(robotArm, PREVIEW_RECORDING);
+			} catch (lookErr) {
+				throw new AnimateError((lookErr as Error).message, 502);
+			}
+			started = await replay(source);
+		}
 		runId = started.run_id;
 	} catch (err) {
+		if (err instanceof AnimateError) throw err;
 		const msg = (err as Error).message ?? String(err);
 		throw new AnimateError(msg.includes('409') ? `The Pi refused to start: ${msg}` : `Replay did not start: ${msg}`, 502);
 	}
@@ -1530,24 +1550,6 @@ export async function testFire(user: User, solenoid: FireTarget, pulseMs: number
 		changedBy: user.username
 	});
 	return { simulated: !!r.simulated, elapsedMs: r.elapsed_ms ?? Math.round(pulseMs) };
-}
-
-/** The Pi's absolute path for a recording it just accepted; a clear error when it cannot see it. */
-async function recordingPath(name: string): Promise<string> {
-	let recordings;
-	try {
-		recordings = (await robotArm.listRecordings()).recordings ?? [];
-	} catch (err) {
-		throw new AnimateError(`Could not list the Pi's recordings after writing the path: ${(err as Error).message}`, 502);
-	}
-	const rec = recordings.find((r) => recordingStem(r.name) === name);
-	if (!rec?.path) {
-		throw new AnimateError(
-			`The Pi accepted "${name}" but does not list it among its recordings — its restore route is saving to a different folder than replay reads. On arm-pi, check BIMS_ARM_RECORDINGS_DIR for the service and recordings_admin.py.`,
-			502
-		);
-	}
-	return rec.path;
 }
 
 /** Play a move set from wherever the arm is now. The arm MOVES. */

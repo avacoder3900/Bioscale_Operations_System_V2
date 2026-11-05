@@ -9,15 +9,22 @@ card cannot take the recovery copies with it.
 Endpoints (auth is applied by app.py when the router is included):
     GET    /recordings/{name}/export   {name, jsonl, meta}
     DELETE /recordings/{name}          {deleted: name}
-    POST   /recordings/restore         {name, jsonl, meta} -> {restored: name}
+    POST   /recordings/restore         {name, jsonl, meta, replace?} -> {restored, replaced, path}
 
 Rules:
   * Names must resolve to a file directly inside RECORDINGS_DIR; anything with a
     path separator or a leading dot is rejected.
   * DELETE refuses (409) while any session is active, since a replay may be
-    reading the file. The session probe is wired by bind(state) from app.py; if
-    it was never bound the check is skipped rather than blocking every delete.
-  * RESTORE refuses (409) to overwrite an existing recording.
+    reading the file. The session probe is wired from app.py by bind(state)
+    (an object with .active_session) or bind_sessions(sessions) (the live Pi's
+    SessionManager, whose .active() is a dict or None); if neither was bound
+    the check is skipped rather than blocking every delete.
+  * RESTORE refuses (409) to overwrite an existing recording, unless the body
+    says replace: true (2026-11-05, BIMS's Animate scratch path: one call
+    instead of DELETE + restore). A replace is refused (409) while a session is
+    active, like DELETE. The file is written to a temp name and renamed, so a
+    reader never sees half a file. The reply carries the recording's path the
+    way GET /recordings lists it, so BIMS can start the replay without listing.
 """
 
 from __future__ import annotations
@@ -40,6 +47,7 @@ except Exception:  # pragma: no cover - mirrors arm/recordings.py's default
 router = APIRouter()
 
 _state: Any = None
+_sessions: Any = None
 
 
 def bind(state: Any) -> None:
@@ -48,7 +56,20 @@ def bind(state: Any) -> None:
     _state = state
 
 
+def bind_sessions(sessions: Any) -> None:
+    """Give the router the live Pi's SessionManager (`sessions = SessionManager(...)` in app.py)."""
+    global _sessions
+    _sessions = sessions
+
+
 def _session_active() -> Optional[str]:
+    if _sessions is not None:
+        try:
+            active = _sessions.active()
+        except Exception:
+            active = None
+        if active:
+            return str(active.get("kind", "unknown")) if isinstance(active, dict) else "unknown"
     sess = getattr(_state, "active_session", None) if _state is not None else None
     try:
         if sess is not None and sess.is_active():
@@ -56,6 +77,14 @@ def _session_active() -> Optional[str]:
     except Exception:
         return None
     return None
+
+
+def _listed_path(jsonl: Path) -> str:
+    """The path as GET /recordings lists it (relative to the service's working dir, e.g. datasets/x.jsonl)."""
+    try:
+        return str(jsonl.relative_to(Path.cwd().resolve()))
+    except ValueError:
+        return str(jsonl)
 
 
 def _paths(name: str) -> tuple[Path, Path]:
@@ -109,15 +138,31 @@ class RestoreRequest(BaseModel):
     name: str
     jsonl: str
     meta: Optional[dict] = None
+    replace: bool = False
+
+
+def _write_atomic(target: Path, text: str) -> None:
+    tmp = target.with_name(f".{target.name}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, target)
 
 
 @router.post("/recordings/restore")
 async def restore_recording(req: RestoreRequest) -> dict:
     jsonl, meta = _paths(req.name)
-    if jsonl.exists():
+    existed = jsonl.exists()
+    if existed and not req.replace:
         raise HTTPException(status_code=409, detail=f"a recording named '{req.name}' already exists")
+    if existed:
+        kind = _session_active()
+        if kind is not None:
+            raise HTTPException(
+                status_code=409, detail=f"a {kind} session is active — stop it before replacing recordings"
+            )
     RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
-    jsonl.write_text(req.jsonl)
+    _write_atomic(jsonl, req.jsonl)
     if req.meta is not None:
-        meta.write_text(json.dumps(req.meta, indent=2))
-    return {"restored": req.name}
+        _write_atomic(meta, json.dumps(req.meta, indent=2))
+    elif existed and meta.exists():
+        meta.unlink()
+    return {"restored": jsonl.stem, "replaced": existed, "path": _listed_path(jsonl)}

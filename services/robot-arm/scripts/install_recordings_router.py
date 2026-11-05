@@ -16,6 +16,10 @@ It makes up to two idempotent edits to src/server/app.py:
        app.include_router(recordings_admin.router, dependencies=[_fastapi.Depends(require_api_key)])
      Refuses if `require_api_key` does not exist: recordings are never exposed
      unauthenticated.
+  3. (2026-11-05) Right after that include_router line:
+       recordings_admin.bind_sessions(sessions)   # only if `sessions = SessionManager(` exists
+     The live Pi keeps its sessions in `sessions`, not `state`, so without this
+     DELETE and restore-with-replace cannot see an active session.
 
 Always `sudo systemctl restart robot-arm` after.
 """
@@ -39,6 +43,8 @@ INCLUDE_LINE = (
 FASTAPI_IMPORT_RE = re.compile(r"^from fastapi import \([^)]*\)\n|^from fastapi import [^\n]*\n", re.M)
 APP_CTOR_RE = re.compile(r"^app\s*=\s*FastAPI\(", re.M)
 STATE_RE = re.compile(r"^state\s*[:=]", re.M)
+SESSIONS_RE = re.compile(r"^sessions\s*=\s*SessionManager\(", re.M)
+BIND_SESSIONS_LINE = "recordings_admin.bind_sessions(sessions)\n"
 
 
 def main() -> int:
@@ -84,6 +90,17 @@ def main() -> int:
         else:
             src = src.rstrip("\n") + "\n\n" + block
         print("[2/2] include_router: added at end of module")
+
+    # 3) bind the live SessionManager (after include_router, so `sessions` exists)
+    if "recordings_admin.bind_sessions(" in src:
+        print("[3/3] bind_sessions: already present")
+    elif not SESSIONS_RE.search(src):
+        print("[3/3] bind_sessions: no `sessions = SessionManager(`; skipped")
+    else:
+        i = src.find("include_router(recordings_admin.router")
+        j = src.find("\n", i) + 1
+        src = src[:j] + BIND_SESSIONS_LINE + src[j:]
+        print("[3/3] bind_sessions: added after include_router")
 
     if src == original:
         print("\nno changes needed")

@@ -25670,3 +25670,37 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Stage — Calibrate Without Picking Up Tip button"
 What this deployment is for: the button above.
+
+================================================================================
+2026-11-05 — master — Go To / Play start faster: 6 Pi calls before the arm moves become 3 (BIMS + recordings_admin.py on the Pi)
+================================================================================
+Alejandro: long delay between Go To Pose and the arm moving. Every Play (Go To, move sets, sequences, the
+wax-fill loop's grab/withdraw) made six one-at-a-time Pi calls through the Cloudflare tunnel before the
+replay started: session check, servo read, DELETE scratch recording, restore it, list all 42 recordings to
+find its path, start replay. Tunnel timings measured today: 0.25-0.5 s per call, one first call 3.0 s.
+BIMS:
+- writeAndPlay no longer calls GET /sessions/active first (fires-only plays still do: they never read the
+  servos). readArm maps the Pi's 409 "session is currently active" to "A session is using the arm. Stop it
+  first." (409) instead of "Could not read the follower" (502).
+- New src/lib/server/robot-arm-preview.ts writePreviewRecording: restore with replace:true (one call,
+  answers with the path); an older Pi's 409 "already exists" falls back to DELETE + restore; with no path
+  in the answer, the path found last time is reused and GET /recordings is read once per server instance.
+  A replay that says "recording not found" forgets the path, looks it up once and retries. A session
+  refusal is never mistaken for "already exists". Old recordingPath() removed (moved there).
+- 5 unit tests (robot-arm-preview.test.ts): updated Pi = 1 call; old Pi = delete+restore, list only once;
+  first upload; forgotten path; session refusal.
+Pi (services/robot-arm/src/server/recordings_admin.py):
+- POST /recordings/restore takes replace (default false; old behaviour without it), writes via temp file +
+  rename, answers {restored, replaced, path} with the path as GET /recordings lists it
+  (datasets/animate-preview.jsonl). A replace is refused (409) while a session is active.
+- bind_sessions(sessions): the live Pi keeps its SessionManager in `sessions`, never `state`, so until now
+  DELETE's session guard was a silent no-op on the Pi. install_recordings_router.py gains step 3, which adds
+  recordings_admin.bind_sessions(sessions) after the include_router line.
+- Tested on the Pi's own Python (uv project) against a throwaway folder: 9/9 (new file, 409 without
+  replace, replace, meta, no temp left, replace/delete refused during a session, bad name, delete idle).
+Expected: about 2-3 s of Pi calls before the arm moves become about 1-1.5 s (read servos, upload, start).
+Tests: vitest robot-arm dir + arm server tests 240/240. svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "perf(robot-arm): a play starts after 3 Pi calls instead of 6"
+What this deployment is for: shorter wait between pressing Go To / Play and the arm moving.

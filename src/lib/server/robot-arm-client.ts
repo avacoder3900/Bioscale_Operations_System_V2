@@ -810,8 +810,10 @@ export const robotArm = {
 			method: 'DELETE',
 			timeoutMs: 10000
 		}),
-	restoreRecording: (body: RecordingExport) =>
-		robotArmFetch<{ restored: string }>('/recordings/restore', {
+	// `replace: true` (recordings_admin.py 2026-11-05) overwrites in one call and answers with the
+	// replay path; an older Pi ignores the flag and answers 409 "already exists" for an existing file.
+	restoreRecording: (body: RecordingExport & { replace?: boolean }) =>
+		robotArmFetch<{ restored: string; replaced?: boolean; path?: string }>('/recordings/restore', {
 			method: 'POST',
 			body: { ...body, name: recordingStem(body.name) },
 			timeoutMs: 20000
