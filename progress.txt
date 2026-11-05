@@ -25986,3 +25986,23 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ 530a24d5
 Retrieve this exact code: git checkout 530a24d5
 What this deployment is for: Live no longer drops the arm; poses land on their numbers (up to the 50-step cap).
+================================================================================
+2026-11-05 — master — Live keeps correcting until the arm lands on the number; droop cap 50 -> 300 (d6ebd84f)
+================================================================================
+Alejandro: typed 2300 into Shoulder, Arm Now stayed 2408 (GET /servos: shoulder load -159, torque on, no session).
+Proportional STS3215 loop: at an extended pose gravity balances the push 108 steps short, so re-sending 2300 does
+nothing. PoseEditor.svelte: after a moved slider's servo rests, liveTrim[s] += (number - Arm Now), re-send,
+re-check (8 rounds x 500 ms) until within TRIM_DONE_STEPS (2), the trim reaches MAX_TRIM_STEPS, or the joint moved
+<= 1 step twice after a raise (blocked/capped). Touched servos only, never the gripper; a new move restarts it;
+"<Joint> Still N Steps Off" when it gives up. animation.ts MAX_TRIM_STEPS 50 -> 300; robot-arm-animation.ts
+DROOP_MAX_ROUNDS 4 -> 6; services/robot-arm/src/hardware/replay_settle.py MAX_OFFSET 50 -> 300 (repo copy; Pi copy
+identical before, md5 c598380f). Caveat: a trim over 50 can push a Save To Pi recording's first frame past Control's
++/-50-step replay preflight. Fix 2 prep (no writes): services/robot-arm/src/server/servo_config.py GET /servos/config
+(P/D/I_Coefficient, Max_Torque_Limit, Torque_Limit, Protection_Current, Overload_Torque, dead zones, by address under
+BUS_LOCK) + scripts/install_servo_config_router.py. Pi deploy (replay_settle.py, servo_config.py, installer, one
+robot-arm restart) waits for Alejandro's OK. svelte-check 13 (baseline). vitest robot-arm 273 pass (url-invariant
+pre-existing fail); simulate_replay_settle.py all checks passed.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ d6ebd84f
+Retrieve this exact code: git checkout d6ebd84f
+What this deployment is for: Live lands the arm on the typed number; Go To / Play correct droop up to 300 steps.
