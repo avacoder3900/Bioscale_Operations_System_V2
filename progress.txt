@@ -25919,3 +25919,18 @@ Source: branch master @ 5ab0782d
 Retrieve this exact code: git checkout 5ab0782d
 What this deployment is for: fire steps (conveyor / solenoids) with a 0 s Wait After.
 ================================================================================
+================================================================================
+2026-11-05 — master — Move Set page: Duplicate Pose button on each pose step (246e238e)
+================================================================================
+Alejandro: "add a Duplicate Pose button within the Move Set page", two-overlapping-squares icon (approved from
+a preview). robot-arm-animation.ts duplicatePose copies positions, basis, droop trim and notes into a new pose
+named the first free "<name> Copy" / "<name> Copy N" (80-char cap); camera references are not copied; audit
+robot_arm.animate.pose_duplicate records the source pose. Move Set +page.server.ts action duplicatePose;
++page.svelte posts a hidden duplicatePoseForm from the row icon and inserts the copy right after the clicked
+step (same move-in, easing, hold, offsets), selected, unsaved until Save Move Set. Disabled while a copy is in
+flight (no double copies); hidden on fire steps and archived poses.
+svelte-check 13 errors (baseline 14), none in touched files.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 246e238e
+Retrieve this exact code: git checkout 246e238e
+What this deployment is for: Duplicate Pose on Move Set steps.
