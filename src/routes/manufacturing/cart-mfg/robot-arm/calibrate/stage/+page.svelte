@@ -766,6 +766,12 @@
 	const CAL_Z_MIN = 5,
 		CAL_Z_MAX = 200;
 	const CAL_AT_TOLERANCE_MM = 3;
+	// The daemon ALWAYS probes at Probe Z (the fill's z_cal), never at the jogged Z: a tip
+	// sitting lower than Probe Z is lifted to it first and then walks in the air above
+	// the prongs (2026-11-05). Hence: From Live sets Probe Z from the jogged depth,
+	// Approach Z this much above it, and Calibrate Tip refuses a tip below Probe Z.
+	const CAL_APPROACH_CLEARANCE_MM = 5;
+	const CAL_PROBE_Z_SLACK_MM = 0.3;
 	let calX = $state(data.teach?.calibrator?.x ?? 125.181);
 	let calY = $state(data.teach?.calibrator?.y ?? 173.247);
 	let calZ = $state(data.teach?.calibrator?.approachZ ?? 38.5);
@@ -828,6 +834,10 @@
 		if (approachZNow === null) return;
 		const probeZNow = checkedZ(probeZ, 'Probe Z');
 		if (probeZNow === null) return;
+		if (probeZNow > approachZNow) {
+			errMsg = `Probe Z (${probeZNow}) is above Approach Z (${approachZNow}) — the tip parks at Approach Z and descends to Probe Z.`;
+			return;
+		}
 		if (pipetteMount !== 'left' && pipetteMount !== 'right') {
 			errMsg = 'The run reported no pipette mount — reopen it.';
 			return;
@@ -842,8 +852,13 @@
 				pickedUpNow = true;
 			}
 			await refreshPosition();
-			if (!pickedUpNow && atCalibratorNow()) msg = 'Already on the calibrator — probing from the jogged position…';
-			else {
+			if (!pickedUpNow && atCalibratorNow()) {
+				if (liveZ !== null && liveZ < probeZNow - CAL_PROBE_Z_SLACK_MM)
+					throw new Error(
+						`The tip is ${(probeZNow - liveZ).toFixed(2)} mm BELOW Probe Z (${probeZNow}). The probe always runs at Probe Z, so it would lift off the prongs and miss them. Press From Live to make this depth the Probe Z, or jog up to Probe Z first.`
+					);
+				msg = `Already on the calibrator — probing at Probe Z ${probeZNow} from the jogged X/Y…`;
+			} else {
 				msg = `Moving to the tip calibrator (${calX}, ${calY}, ${approachZNow})…`;
 				await doGoToCalibrator(approachZNow);
 			}
@@ -903,11 +918,18 @@
 		}
 		calX = +liveX.toFixed(3);
 		calY = +liveY.toFixed(3);
-		calZ = +liveZ.toFixed(3);
-		msg = `Calibrator fields set from live (${calX}, ${calY}, ${calZ}); not saved yet.`;
+		// The depth you jogged the tip to between the prongs IS the touch-off depth the
+		// probe (and the fill) will use; the approach point parks a clearance above it.
+		probeZ = +liveZ.toFixed(3);
+		calZ = +(liveZ + CAL_APPROACH_CLEARANCE_MM).toFixed(3);
+		msg = `Calibrator set from live: probe at (${calX}, ${calY}) Z ${probeZ}, approach Z ${calZ} (+${CAL_APPROACH_CLEARANCE_MM} mm); not saved yet.`;
 	}
 	async function saveCalibratorPosition() {
 		if (checkedZ(calZ, 'Approach Z') === null || checkedZ(probeZ, 'Probe Z') === null) return;
+		if (probeZ > calZ) {
+			errMsg = `Probe Z (${probeZ}) is above Approach Z (${calZ}) — the tip parks at Approach Z and descends to Probe Z.`;
+			return;
+		}
 		const r = await postAction('saveCalibrator', { x: String(calX), y: String(calY), z: String(calZ), probeZ: String(probeZ), tipProfile, maxTipAdjust: maxAdjust === '' ? '' : String(maxAdjust) });
 		if (r) msg = r.success;
 	}
@@ -1333,7 +1355,7 @@
 			</div>
 			<button type="button" onclick={goToCalibrator} disabled={!pipetteId || busy} class="mt-2 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Park at the approach point so you can jog onto the fixture — no probe">Go To Calibrator</button>
 			<div class="mt-1 grid grid-cols-2 gap-2">
-				<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Copy the live jogged position into the calX / calY / Approach Z fields">From Live ↧</button>
+				<button type="button" onclick={captureCalibratorFromLive} disabled={busy || liveX === null} class="rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)" title="Jog the tip between the prongs at the depth the probe should touch them, then press: calX / calY and Probe Z come from the live position, Approach Z 5 mm above it">From Live ↧</button>
 				<button type="button" onclick={saveCalibratorPosition} disabled={busy || !robotId} class="rounded border border-green-500/40 bg-green-900/15 px-2 py-1.5 text-[11px] font-semibold text-green-300 hover:bg-green-900/25 disabled:opacity-40">Save → {robotName}</button>
 			</div>
 		</section>

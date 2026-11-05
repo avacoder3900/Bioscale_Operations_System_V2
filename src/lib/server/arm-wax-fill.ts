@@ -785,6 +785,9 @@ export async function saveStageCalibrator(
 	} else {
 		probeZ = plausibleZ(Number(prev?.[spec.zCalKey])) ?? spec.defaultZ;
 	}
+	// The daemon parks at the approach point and descends to Probe Z; a Probe Z above it
+	// means the probe would run in the air above the prongs (2026-11-05).
+	if (probeZ > z) throw new ArmWaxFillError(`Probe Z (${probeZ}) must be at or below Approach Z (${z}).`);
 	let maxTipAdjust: number | null = prev?.maxTipAdjust ?? null;
 	if (input.maxTipAdjust !== null && input.maxTipAdjust !== undefined && String(input.maxTipAdjust).trim() !== '') {
 		const v = Number(input.maxTipAdjust);
