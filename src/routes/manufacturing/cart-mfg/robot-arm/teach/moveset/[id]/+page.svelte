@@ -11,6 +11,7 @@
 	 * the list shows where each fire lands in the animation.
 	 */
 	import { enhance } from '$app/forms';
+	import type { SubmitFunction } from '@sveltejs/kit';
 	import { invalidateAll } from '$app/navigation';
 	import { onDestroy, onMount } from 'svelte';
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
@@ -65,7 +66,7 @@
 	const armNow = $derived((data.armNow ?? null) as ArmRead | null);
 	const solenoids = $derived((data.solenoids ?? null) as SolenoidStatus | null);
 
-	const flash = $derived(form as { success?: string; error?: string; createdPoseId?: string } | null);
+	const flash = $derived(form as { success?: string; error?: string; createdPoseId?: string; duplicatedPoseId?: string } | null);
 	const armReachable = $derived(!!data.arm?.reachable);
 	const heat = $derived(armNow ? heatCheck(armNow.temps) : null);
 
@@ -167,6 +168,33 @@
 			delete kfs[selected].offsets;
 		}
 	});
+
+	/**
+	 * Duplicate Pose (2026-11-05): the server makes a new pose with the step's
+	 * values; it lands as a new step right after the one clicked, with the same
+	 * move-in, easing and hold. Unsaved until Save Move Set, like any added step.
+	 */
+	let dupStep = $state<number | null>(null);
+	let duplicating = $state(false);
+	let lastDuplicated = '';
+	$effect(() => {
+		const id = flash?.duplicatedPoseId;
+		if (!id || id === lastDuplicated || dupStep == null || !poseById.has(id)) return;
+		lastDuplicated = id;
+		const src = kfs[dupStep];
+		const at = Math.min(dupStep + 1, kfs.length);
+		const copy: Keyframe = { poseId: id, holdS: src?.holdS ?? 0.5, durationS: src?.durationS ?? 1.5, easing: src?.easing ?? 'ease', ...(src?.offsets ? { offsets: [...src.offsets] } : {}) };
+		kfs = [...kfs.slice(0, at), copy, ...kfs.slice(at)];
+		selected = at;
+		dupStep = null;
+	});
+	const duplicateEnhance: SubmitFunction = () => {
+		duplicating = true;
+		return async ({ update }) => {
+			await update({ reset: false });
+			duplicating = false;
+		};
+	};
 
 	const resolved = $derived.by((): ResolvedKeyframe[] => {
 		const out: ResolvedKeyframe[] = [];
@@ -367,6 +395,15 @@
 							{#if verifyWanted(k.verify, hasRef(k.poseId))}
 								<span class="text-[10px]" style="color: {hasRef(k.poseId) ? '#4ade80' : '#ef4444'}" title={hasRef(k.poseId) ? `Checked with the camera in a verified run (${camera})` : calFor(k.poseId)?.stale ? 'Verification on, but the reference is stale — retake it' : 'Verification on, but this pose has no camera reference — capture one or set the check to off'}>◎</span>
 							{/if}
+							{#if p && !p.archived}
+								<!-- Posts the hidden duplicatePoseForm (outside the move-set form); the copy lands right after this step. -->
+								<button type="submit" form="duplicatePoseForm" name="id" value={p._id} onclick={() => (dupStep = i)} disabled={duplicating} class="inline-flex items-center px-1 disabled:opacity-40" style="color: var(--color-tron-cyan)" title="Duplicate Pose" aria-label="Duplicate Pose">
+									<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+										<rect x="9" y="9" width="12" height="12" rx="2" />
+										<path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+									</svg>
+								</button>
+							{/if}
 							<button type="button" onclick={() => move(i, -1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Earlier">▲</button>
 							<button type="button" onclick={() => move(i, 1)} class="px-1 text-xs" style="color: var(--color-tron-cyan)" title="Later">▼</button>
 							<button type="button" onclick={() => remove(i)} class="px-1 text-xs text-red-300" title="Remove">✕</button>
@@ -447,6 +484,7 @@
 
 		<!-- The step list's Rename fields post here: a form cannot sit inside the move-set form. -->
 		<form id="renamePoseForm" method="POST" action="?/renamePose" use:enhance={() => async ({ update }) => { await update({ reset: false }); }} class="hidden"></form>
+		<form id="duplicatePoseForm" method="POST" action="?/duplicatePose" use:enhance={duplicateEnhance} class="hidden"></form>
 
 		<!-- pose editor for the selected keyframe (or, for a fire step, the solenoids) -->
 		<div class="space-y-3">

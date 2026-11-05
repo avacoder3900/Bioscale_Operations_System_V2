@@ -602,6 +602,44 @@ export async function updatePose(user: User, id: string, input: { name: unknown;
 }
 
 /**
+ * Duplicate Pose (Move Set page, 2026-11-05): a new pose with the same values
+ * (positions, basis, droop trim, notes) under the first free "<name> Copy",
+ * "<name> Copy 2", … The copy is its own pose, so editing it leaves the
+ * original and every move set using it alone. Camera references are not
+ * copied: they belong to the original pose.
+ */
+export async function duplicatePose(user: User, id: string): Promise<PoseSummary> {
+	await connectDB();
+	const src = (await RobotArmPose.findById(id).lean()) as any;
+	if (!src) throw new AnimateError('Pose not found.', 404);
+	if (src.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
+	const name = await freeCopyName(String(src.name));
+	const _id = generateId();
+	const trim = Array.isArray(src.trim) && src.trim.length ? src.trim.map(Number) : undefined;
+	await RobotArmPose.create({
+		_id,
+		name,
+		positions: (src.positions ?? []).map(Number),
+		basis: src.basis ?? 'reading',
+		...(trim ? { trim, trimMeasuredAt: src.trimMeasuredAt ?? null, trimMeasuredBy: src.trimMeasuredBy ?? null } : {}),
+		notes: src.notes ?? null,
+		createdBy: opRef(user)
+	});
+	await audit(user, 'robot_arm.animate.pose_duplicate', 'robot_arm_poses', _id, { name, from: { _id: id, name: src.name }, positions: src.positions, basis: src.basis ?? 'reading' });
+	return poseSummary(await RobotArmPose.findById(_id).lean());
+}
+
+async function freeCopyName(name: string): Promise<string> {
+	const taken = new Set(((await RobotArmPose.find({ archivedAt: null }).select('name').lean()) as any[]).map((p) => String(p.name).toLowerCase()));
+	for (let n = 1; n < 1000; n++) {
+		const suffix = n === 1 ? ' Copy' : ` Copy ${n}`;
+		const candidate = name.slice(0, 80 - suffix.length).trimEnd() + suffix;
+		if (!taken.has(candidate.toLowerCase())) return candidate;
+	}
+	throw new AnimateError(`Too many copies of "${name}" already.`);
+}
+
+/**
  * Archive = to the R2 trash with its camera references, refused while a move
  * set uses it; restore = back from R2 (refused if its name is taken now).
  */
