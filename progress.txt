@@ -25704,3 +25704,10 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "perf(robot-arm): a play starts after 3 Pi calls instead of 6"
 What this deployment is for: shorter wait between pressing Go To / Play and the arm moving.
+Pi install (2026-11-05 ~12:23 CST, arm-pi over Tailscale): backups src/server/recordings_admin.py.bak-pre-replace-20261105-122312
+and src/server/app.py.bak-pre-bind-sessions-20261105-122312 (the old app.py.bak-recordings kept as
+app.py.bak-recordings.orig-20261105, since the installer reuses that name). install_recordings_router.py applied
+(only step 3: app.py line 1093 recordings_admin.bind_sessions(sessions)); recordings_admin.py copied (md5
+4f6d5a19d683d2ca03c5a0a0ce2809a8 = repo). Restarted robot-arm with /sessions/active null; active again. Live check
+with a throwaway name: new -> replaced false + path datasets/zz-replace-check.jsonl; no flag -> 409 already
+exists; replace -> replaced true; delete -> gone from the listing.
