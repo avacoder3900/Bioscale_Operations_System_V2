@@ -25805,3 +25805,22 @@ Retrieve this exact code: git log master --oneline, the commit titled "fix(robot
 What this deployment is for: the two fixes above.
 Deployed 2026-11-05 19:14 UTC: brevitest @ 5a60548b — https://vercel.com/brevitest/bioscale-operations-system-mongodb/GK1SMgfqXbUqdZXkNsEbScB389dd
   alejandro-valdezs-projects @ 5a60548b (building at 19:14) — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/BdNu8mBtH5UqEN77J2MyjodcB63U
+
+================================================================================
+2026-11-05 — master — Arm speed cap 2000 -> 7000 steps/s, and a too-fast move is a warning, never a refusal
+================================================================================
+Alejandro, after speed experiment 2: "Raise the cap and drop the check."
+- animation.ts MAX_STEPS_PER_S 2000 -> 7000 (a 1131-step shoulder move now allows 0.5 s with Out; was 1.1 s
+  with ease). tooFast() messages: "<pose>: faster than the servo can go, it will take about N s."
+- robot-arm-animation.ts: writeAndPlay and saveToPi no longer throw when pathStats finds a servo over the cap;
+  the play carries tooFast's warnings instead.
+- Move Set page: Play / Play Verified are no longer disabled by too-fast steps; the Move In box border and
+  the note under it are amber with ⚠ (yellow = warning). Sequence page: same for Play / Play Verified and its
+  list of too-fast steps.
+- The Clean-Up -> Animate conversion still lengthens a step only past the (now 7000) cap.
+- Tests rewritten to compute from the cap (animation.test.ts durations + tooFast, recording-cleanup lengthen
+  test); arm tests 240/240. svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): speed cap 7000 steps/s as a warning"
+What this deployment is for: fast moves (e.g. the big shoulder move at 0.5 s) can be played from BIMS.

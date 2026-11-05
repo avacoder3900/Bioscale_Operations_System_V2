@@ -290,10 +290,10 @@
 			{#if playback.running}
 				<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 			{:else}
-				<button type="button" class={btn} style={cyan} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || firesBlocked}
+				<button type="button" class={btn} style={cyan} disabled={blocked || dirty || !kfs.length || !!heat?.tooHot.length || firesBlocked}
 					title={dirty ? 'Save first' : firesBlocked ? "The Pi's replay cannot fire steps yet" : 'From where the arm is, through every step'}
 					onclick={() => { if (confirm(firesOnly ? `Fire the steps of "${friendlyName(moveSet.name)}"? The arm does not move; the solenoids and conveyor belt run. Are the trapdoors and the belt clear?` : `The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) { goToStep = null; playback.play('play', {}, friendlyName(moveSet.name)); } }}>▶ Play</button>
-				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}
+				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}
 					title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No step has a camera reference — capture one below' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
 					onclick={playVerified}>◎ Play Verified</button>
 			{/if}
@@ -392,7 +392,7 @@
 							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
 								<label>Move In (s)
 									{#if i === firstPoseIndex}<span class="mt-1 block py-1">Start</span>
-									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style="{inputStyle}; {k.durationS < min ? 'border-color: #ef4444' : ''}" />{/if}
+									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style="{inputStyle}; {k.durationS < min ? 'border-color: #f59e0b' : ''}" />{/if}
 								</label>
 								<label>Easing
 									{#if i === firstPoseIndex}<span class="mt-1 block py-1">—</span>
@@ -400,7 +400,7 @@
 								</label>
 								<label>Hold (s)<input type="number" step="0.1" min="0" max={MAX_HOLD_S} value={k.holdS} oninput={(e) => (k.holdS = clamp(Number(e.currentTarget.value), 0, MAX_HOLD_S))} class="{input} mt-1 w-full" style={inputStyle} /></label>
 							</div>
-							{#if i !== firstPoseIndex && k.durationS < min}<p class="mt-1 text-[11px] text-red-300">Too fast for this move — at least {min} s.</p>{/if}
+							{#if i !== firstPoseIndex && k.durationS < min}<p class="mt-1 text-[11px]" style="color: #fbbf24">⚠ Faster than the servo can go, it will take about {min} s.</p>{/if}
 							<!-- ARM-09: this step's camera check and its own tolerances (blank = the pose reference's) -->
 							<div class="mt-2 grid grid-cols-4 gap-2 text-[11px]" style={muted}>
 								<label>Camera Check

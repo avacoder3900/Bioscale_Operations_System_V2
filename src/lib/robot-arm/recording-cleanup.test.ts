@@ -185,9 +185,10 @@ describe('draftToAnimation', () => {
 			const min = minDurationS(a.poses[0].positions, a.poses[1].positions, MAX_STEPS_PER_S, easing);
 			expect(min).toBeGreaterThan(0.1);
 			expect(a.keyframes[1].durationS).toBe(min);
-			// Step 2 then brings servo 1 back 1300 steps in 0.5 s, which is also too fast.
-			expect(a.lengthened).toEqual([1, 2]);
-			expect(a.keyframes[2].durationS).toBe(minDurationS(a.poses[1].positions, a.poses[2].positions, MAX_STEPS_PER_S, easing));
+			// Step 2 then brings servo 1 back 1300 steps in 0.5 s: too fast only where the easing's peak needs more.
+			const min2 = minDurationS(a.poses[1].positions, a.poses[2].positions, MAX_STEPS_PER_S, easing);
+			expect(a.lengthened).toEqual(min2 > 0.5 ? [1, 2] : [1]);
+			expect(a.keyframes[2].durationS).toBe(Math.max(0.5, min2));
 			const resolved: ResolvedKeyframe[] = a.keyframes.map((k) => ({ ...k, poseId: `p${k.pose}`, name: a.poses[k.pose].label, positions: a.poses[k.pose].positions }));
 			expect(pathStats(buildPath(resolved)).tooFast).toEqual([]);
 			expect(tooFast(resolved)).toEqual([]);

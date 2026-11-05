@@ -1354,7 +1354,7 @@ export async function writeAndPlay(
 	if (gpio?.simulated) warnings.push('The Pi has no GPIO right now (simulated): the fire steps are timed but nothing is driven.');
 	const path = render(o.keyframes, now.positions, o.rateHz);
 	const stats = pathStats(path);
-	if (stats.tooFast.length) throw new AnimateError(`Servo(s) ${stats.tooFast.join(', ')} would move faster than the arm can — lengthen the transitions marked too fast.`);
+	// A warning, not a refusal (2026-11-05): the servo limits its own speed and still lands where it should.
 	for (const p of tooFast(o.keyframes)) warnings.push(p.message);
 	const leadInS = path.markers[0]?.kind === 'lead-in' ? (path.markers[1]?.t ?? 0) : 0;
 	const out = composeAnimationJsonl(path, { jointNames: DEFAULT_JOINT_NAMES, title: o.title, extras: { animate_kind: o.kind, animate_id: o.id, operator: user.username } });
@@ -1733,8 +1733,6 @@ export async function saveToPi(user: User, kind: 'move_set' | 'sequence', id: st
 	if (!r.keyframes.length) throw new AnimateError('Nothing to save — add poses first.');
 	const rateHz = kind === 'move_set' ? (r.summary as MoveSetSummary).rateHz : DEFAULT_RATE_HZ;
 	const path = render(r.keyframes, null, rateHz);
-	const stats = pathStats(path);
-	if (stats.tooFast.length) throw new AnimateError(`Servo(s) ${stats.tooFast.join(', ')} would move faster than the arm can — lengthen the transitions marked too fast.`);
 	const out = composeAnimationJsonl(path, { jointNames: DEFAULT_JOINT_NAMES, title: r.summary.name, extras: { animate_kind: kind, animate_id: id, operator: user.username } });
 	const now = new Date();
 	const meta: RecordingSidecar & Record<string, unknown> = { schema_version: 1, frame_count: out.frames, operator: user.username, started_at_iso: now.toISOString(), rate_hz: rateHz, animated: r.summary.name };

@@ -47,11 +47,16 @@ export const EASINGS: { id: Easing; label: string; hint: string }[] = [
 ];
 
 /**
- * A transition is refused when any servo would have to exceed this at any
- * frame (pathStats). STS3215 no-load is ~4000. minDurationS turns it into a
- * duration via the easing's peak-speed factor, so the two checks agree.
+ * Above this, a transition asks for more than the servo can do (pathStats,
+ * minDurationS via the easing's peak-speed factor, so the two agree). It is a
+ * WARNING, never a refusal (2026-11-05, Alejandro): the STS3215 limits its own
+ * speed, and the speed experiment (progress.txt 2026-11-05) landed every move
+ * within 3 steps of a slow baseline even when asked for ~10,600 steps/s; asking
+ * for more only makes it land harder (shoulder load near its maximum at 0.2 s),
+ * not sooner. Was 2000 (a guess at half the no-load speed), which made a
+ * 1131-step shoulder move need 1.1 s; at 7000 that move may take 0.5 s with Out.
  */
-export const MAX_STEPS_PER_S = 2000;
+export const MAX_STEPS_PER_S = 7000;
 /** Speed used when BIMS picks a duration itself (lead-in, joins between move sets). */
 export const AUTO_STEPS_PER_S = 600;
 export const MIN_TRANSITION_S = 0.2;
@@ -521,7 +526,7 @@ export interface KeyframeProblem {
 	message: string;
 }
 
-/** Transitions that are faster than the arm can go. */
+/** Transitions that ask for more than the servo's top speed: warnings, the arm still plays them. */
 export function tooFast(kfs: ResolvedKeyframe[]): KeyframeProblem[] {
 	const out: KeyframeProblem[] = [];
 	// Fire steps do not move the arm: each pose is compared with the pose before it.
@@ -530,7 +535,7 @@ export function tooFast(kfs: ResolvedKeyframe[]): KeyframeProblem[] {
 		if (k.fire) return;
 		if (prev) {
 			const min = minDurationS(prev.positions, k.positions, MAX_STEPS_PER_S, k.easing);
-			if (k.durationS < min) out.push({ index: i, message: `${k.name}: ${k.durationS} s is too fast for this move — at least ${min} s.` });
+			if (k.durationS < min) out.push({ index: i, message: `${k.name}: faster than the servo can go, it will take about ${min} s.` });
 		}
 		prev = k;
 	});

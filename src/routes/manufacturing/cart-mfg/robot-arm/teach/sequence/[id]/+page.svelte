@@ -222,7 +222,7 @@
 			</tbody>
 		</table>
 		{#if !items.length}<p class="text-xs" style="color: var(--color-tron-text-secondary)">No Move Sets Yet</p>{/if}
-		{#if problems.length}<ul class="list-disc pl-5 text-xs text-red-300">{#each problems as pr}<li>{pr.message}</li>{/each}</ul>{/if}
+		{#if problems.length}<ul class="list-disc pl-5 text-xs" style="color: #fbbf24">{#each problems as pr}<li>⚠ {pr.message}</li>{/each}</ul>{/if}
 
 		<div class="flex flex-wrap items-end gap-2">
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Add Move Set
@@ -241,10 +241,10 @@
 		{#if playback.running}
 			<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
 		{:else}
-			<button type="button" class={btn} style={cyan} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || playback.busy}
+			<button type="button" class={btn} style={cyan} disabled={blockedAll || dirty || !flat.length || playback.busy}
 				title={dirty ? 'Save first' : 'Tween from where the arm is to the first pose, then play the whole sequence'}
 				onclick={() => { if (confirm(`The arm will MOVE through "${sequence.name}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(sequence.name)); }}>Play On The Arm</button>
-			<button type="button" class={btn} style={green} disabled={blockedAll || dirty || !flat.length || problems.length > 0 || !camera || !anyVerified}
+			<button type="button" class={btn} style={green} disabled={blockedAll || dirty || !flat.length || !camera || !anyVerified}
 				title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No pose in this sequence has a camera reference' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
 				onclick={playVerified}>◎ Play Verified</button>
 			<label class="flex items-center gap-1 text-xs" style="color: var(--color-tron-text-secondary)">Camera

@@ -64,12 +64,16 @@ describe('easing', () => {
 
 describe('durations', () => {
 	it('minimum duration comes from the fastest servo at the easing\'s peak speed', () => {
+		// steps × the easing's peak factor / the cap, up to the next tenth, never under 0.2 s.
+		const want = (steps: number, factor: number) => Math.max(0.2, Math.ceil(Math.round(((steps * factor) / MAX_STEPS_PER_S) * 1e6) / 1e5) / 10);
 		expect(minDurationS(A, A)).toBe(0);
-		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'linear')).toBe(0.2); // 300 steps / 2000 → 0.15 → floor 0.2
-		expect(minDurationS(A, B)).toBe(0.3); // easy ease peaks at 1.875× average: 0.28 → 0.3
-		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'in')).toBe(0.5); // cubic peaks at 3×: 0.45 → 0.5
-		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], MAX_STEPS_PER_S, 'linear')).toBe(2);
-		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)])).toBe(3.8);
+		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'linear')).toBe(want(300, 1)); // 300 steps, linear
+		expect(minDurationS(A, B)).toBe(want(300, 1.875)); // easy ease peaks at 1.875× average
+		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'in')).toBe(want(300, 3)); // cubic peaks at 3×
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], MAX_STEPS_PER_S, 'linear')).toBe(want(4000, 1));
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)])).toBe(want(4000, 1.875));
+		// The same rule with an explicit cap (the old 2000 steps/s): 4000 steps, easy ease → 3.8 s.
+		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], 2000)).toBe(3.8);
 	});
 	it('a path rendered at the minimum duration is not refused by pathStats', () => {
 		const far = [A[0] + 1500, ...A.slice(1)];
@@ -135,10 +139,10 @@ describe('buildPath', () => {
 		expect(p.markers[0]).toMatchObject({ kind: 'pose', label: 'A', t: 0 });
 	});
 
-	it('tooFast flags a transition the arm cannot make', () => {
+	it('tooFast warns about a transition faster than the servo can go', () => {
 		const far = [A[0] + 3000, ...A.slice(1)];
-		// 3000 steps at easy ease: 3000 × 1.875 / 2000 = 2.81 → 2.9 s.
-		expect(tooFast([kf('A', A), kf('far', far, { durationS: 0.5 })])).toEqual([{ index: 1, message: expect.stringContaining('at least 2.9 s') }]);
+		// 3000 steps at easy ease: 3000 × 1.875 / 7000 = 0.80 → 0.9 s.
+		expect(tooFast([kf('A', A), kf('far', far, { durationS: 0.5 })])).toEqual([{ index: 1, message: expect.stringContaining('about 0.9 s') }]);
 		expect(tooFast([kf('A', A), kf('far', far, { durationS: 2, easing: 'linear' })])).toEqual([]);
 		expect(tooFast([kf('A', A), kf('far', far, { durationS: 3 })])).toEqual([]);
 		const p = buildPath([kf('A', A), kf('far', far, { durationS: 0.5 })]);
