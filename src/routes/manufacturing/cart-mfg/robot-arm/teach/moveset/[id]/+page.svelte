@@ -208,8 +208,17 @@
 		}
 		return 'wherever the arm is when the play starts';
 	}
-	// The editor's path has no lead-in; the play's does.
-	const playheadS = $derived(playback.running ? Math.max(0, playback.elapsedS - playback.leadInS) : null);
+	// The editor's path has no lead-in; the play's does. A Move To runs inside its step's block.
+	const playheadS = $derived.by(() => {
+		if (!playback.running) return null;
+		if (goToStep != null && goToStep >= 0) {
+			const w = stepWindow(goToStep);
+			if (!w) return null;
+			const u = playback.durationS > 0 ? Math.min(1, playback.elapsedS / playback.durationS) : 1;
+			return w.from + u * (w.to - w.from);
+		}
+		return Math.max(0, playback.elapsedS - playback.leadInS);
+	});
 
 	function add() {
 		if (!addPoseId) return;
@@ -235,8 +244,26 @@
 		kfs = kfs.filter((_, k) => k !== i);
 		selected = kfs.length ? Math.min(i, kfs.length - 1) : null;
 	}
+	/**
+	 * Move To Pose plays a short path to ONE step, not the whole move set. The
+	 * step bar then shows it inside that step's own move block (2026-11-05), so
+	 * the playhead runs where the step sits on the bar instead of from 0.
+	 */
+	let goToStep = $state<number | null>(null);
 	function goTo(p: PoseSummary) {
-		if (confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) void playback.play('goToPose', { id: p._id }, `Move to ${friendlyName(p.name)}`);
+		if (!confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) return;
+		goToStep = selected != null && kfs[selected] && !kfs[selected].fire && kfs[selected].poseId === p._id ? selected : (kfs.findIndex((k) => !k.fire && k.poseId === p._id) ?? -1);
+		void playback.play('goToPose', { id: p._id }, `Move to ${friendlyName(p.name)}`).then(() => {
+			if (!playback.running) goToStep = null;
+		});
+	}
+	/** The step's move block on the bar: from the end of the step before it to its arrival. */
+	function stepWindow(index: number): { from: number; to: number } | null {
+		const ms = render.path?.markers ?? [];
+		const i = ms.findIndex((m) => m.index === index);
+		if (i < 0) return null;
+		const from = i > 0 ? ms[i - 1].t + ms[i - 1].holdS : 0;
+		return { from, to: ms[i].t };
 	}
 	const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
 	const tenth = (v: number) => Math.round(v * 10) / 10;
@@ -265,7 +292,7 @@
 			{:else}
 				<button type="button" class={btn} style={cyan} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || firesBlocked}
 					title={dirty ? 'Save first' : firesBlocked ? "The Pi's replay cannot fire steps yet" : 'From where the arm is, through every step'}
-					onclick={() => { if (confirm(firesOnly ? `Fire the steps of "${friendlyName(moveSet.name)}"? The arm does not move; the solenoids and conveyor belt run. Are the trapdoors and the belt clear?` : `The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) playback.play('play', {}, friendlyName(moveSet.name)); }}>▶ Play</button>
+					onclick={() => { if (confirm(firesOnly ? `Fire the steps of "${friendlyName(moveSet.name)}"? The arm does not move; the solenoids and conveyor belt run. Are the trapdoors and the belt clear?` : `The arm will MOVE through "${friendlyName(moveSet.name)}" from where it is. Is the path clear?`)) { goToStep = null; playback.play('play', {}, friendlyName(moveSet.name)); } }}>▶ Play</button>
 				<button type="button" class={btn} style={green} disabled={blocked || dirty || !kfs.length || problems.length > 0 || !!heat?.tooHot.length || !camera || !anyVerified || firesBlocked}
 					title={dirty ? 'Save first' : !camera ? 'No camera' : !anyVerified ? 'No step has a camera reference — capture one below' : `Step by step; each verified pose checked with ${camera}. A failed check stops the run.`}
 					onclick={playVerified}>◎ Play Verified</button>

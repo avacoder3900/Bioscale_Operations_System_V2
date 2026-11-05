@@ -176,16 +176,21 @@
 	/** The poll's request in flight, if any — a move must wait for it (the Pi's servo read has no bus lock). */
 	let reading: Promise<void> | null = null;
 	function readArmNow(): Promise<void> {
-		if (!armReachable || sending) return Promise.resolve();
+		// Not while the page is playing (or anything else owns the arm): the Pi's bus belongs to that session.
+		if (!armReachable || sending || blocked) return Promise.resolve();
 		if (!reading) reading = doRead().finally(() => (reading = null));
 		return reading;
 	}
+	const READ_FAILED = 'Could not read the arm:';
 	async function doRead() {
 		try {
 			const res = await fetch('/api/robot-arm/animate/live', { cache: 'no-store' });
 			const body = await res.json().catch(() => ({}));
+			// A session took the bus between BIMS's check and the read (a Move To just started): busy, not a fault.
+			if (res.status === 409 && /session is currently active|single-owner/i.test(String(body?.error ?? ''))) return;
 			if (!res.ok) throw new Error(body?.error ?? `${res.status}`);
 			activeKind = body.active?.kind ?? null;
+			if (note?.text.startsWith(READ_FAILED)) note = null;
 			if (Array.isArray(body.positions)) {
 				armPos = body.positions;
 				// New Pose with Live off: the sliders show where the arm is right now (unless the numbers are being edited).
@@ -195,7 +200,7 @@
 				torqueOn = typeof body.torqueOn === 'boolean' ? body.torqueOn : null;
 			}
 		} catch (e) {
-			note = { text: `Could not read the arm: ${e instanceof Error ? e.message : String(e)}`, kind: 'warn' };
+			note = { text: `${READ_FAILED} ${e instanceof Error ? e.message : String(e)}`, kind: 'warn' };
 		}
 	}
 

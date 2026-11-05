@@ -25640,3 +25640,20 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Move Set page renames poses; play status chip; solid step bar on move sets and sequences"
 What this deployment is for: the three requests above.
+
+================================================================================
+2026-11-05 — master — Pose editor: no "Could not read the arm … 409 session active" during a Move To; Move Set step bar keeps a Move To inside its own step
+================================================================================
+- PoseEditor.svelte: the 300 ms arm poll skips while the page is blocked (a play, a verified run, a session),
+  and a 409 "A session is currently active … single-owner" from a read racing the start of a Move To is
+  treated as busy, not shown. A later good read clears an old "Could not read the arm" note. Cause: the
+  live GET checks playbackActive() then reads /servos; a Move To started between the two, the Pi refused
+  the read, and the note stayed up after the move had finished fine.
+- teach/moveset/[id]: Move To Pose plays one step, but the bar's playhead ran from 0 as if the whole move
+  set had started. It now runs inside that step's move block (end of the step before it to its arrival).
+  The whole-set Play is unchanged.
+svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "fix(robot-arm): no arm-read warning during a Move To; Move To playhead stays in its step"
+What this deployment is for: the two fixes above.
