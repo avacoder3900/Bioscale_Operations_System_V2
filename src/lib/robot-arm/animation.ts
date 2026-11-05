@@ -136,12 +136,21 @@ export function isFireTarget(v: unknown): v is FireTarget {
 }
 
 /** The target's GPIO (BCM) number, not the physical header pin. */
+/**
+ * A fire step whose target is none of A, B or the conveyor (a stale or
+ * hand-edited record) used to crash the play with "Cannot read properties of
+ * undefined (reading 'label')" (the fail animation, 2026-11-05). The pin
+ * lookup says which target is wrong; the label never throws, so the Teach
+ * pages still render the step for the operator to fix.
+ */
 export function solenoidPin(s: FireTarget): number {
-	return FIRE_TARGETS.find((x) => x.id === s)!.pin;
+	const t = FIRE_TARGETS.find((x) => x.id === s);
+	if (!t) throw new Error(`a fire step targets "${String(s)}", which is not a solenoid (A, B) or the conveyor — open the move set and fix or delete that step`);
+	return t.pin;
 }
 
 export function solenoidLabel(s: FireTarget): string {
-	return FIRE_TARGETS.find((x) => x.id === s)!.label;
+	return FIRE_TARGETS.find((x) => x.id === s)?.label ?? `Unknown Target "${String(s)}"`;
 }
 
 /** Longest pulse a fire step may ask of this target. */

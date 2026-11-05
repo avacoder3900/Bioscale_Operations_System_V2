@@ -169,6 +169,16 @@ const REHEARSAL_MARKER = `variable_name="${REHEARSAL_RTP}"`;
  */
 export const FAIL_ROUTE_STEPS = ['scan', 'decide'] as const;
 export type FailRouteStep = (typeof FAIL_ROUTE_STEPS)[number];
+/**
+ * Where a loop may start its first cart (Alejandro, 2026-11-05): grab (the
+ * default), or with a cart ALREADY on the stage — scan, fill ('decide', the
+ * cart's barcode typed since nothing scanned it) or withdraw (a filled cart).
+ * The OT-2 run starts the same way regardless (home, tip, probe, park →
+ * PARKED 1); only the arm's and BIMS's first moves change. A withdraw start
+ * skips the protocol's cart 1 so its count and the loop's stay in step.
+ */
+export const START_STEPS = ['grab', 'scan', 'decide', 'withdraw'] as const;
+export type StartStep = (typeof START_STEPS)[number];
 
 export type AnimationKind = 'move_set' | 'sequence';
 export interface AnimationRef {
@@ -909,6 +919,8 @@ export interface LoopView {
 	/** Loops skipped by the fail route (the run continued). */
 	skippedRuns: number;
 	status: 'running' | 'completed' | 'stopped' | 'failed';
+	/** The step the first cart started at (grab unless the operator chose otherwise). */
+	startStep: StartStep;
 	stopRequested: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
@@ -933,6 +945,7 @@ const iso = (d: unknown) => (d ? new Date(d as string).toISOString() : null);
 export function loopView(d: any): LoopView {
 	return {
 		_id: String(d._id),
+		startStep: ((START_STEPS as readonly string[]).includes(d.startStep) ? d.startStep : 'grab') as StartStep,
 		robot: { _id: String(d.robot?._id ?? ''), name: d.robot?.name ?? '' },
 		cartPosition: Number(d.cartPosition) || 1,
 		requestedRuns: Number(d.requestedRuns) || 0,
@@ -1482,11 +1495,21 @@ export async function loadArmWaxFill() {
 
 // ── the loop ─────────────────────────────────────────────────────────────
 
-export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView> {
+export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: unknown; barcode?: unknown } = {}): Promise<LoopView> {
 	await connectDB();
 	const requestedRuns = Math.round(num(rawRuns, 'Number of runs'));
+	const startAtRaw = String(opts.startAt ?? 'grab').trim() || 'grab';
+	if (!(START_STEPS as readonly string[]).includes(startAtRaw)) throw new ArmWaxFillError(`Start at must be one of ${START_STEPS.join(', ')}.`);
+	const startAt = startAtRaw as StartStep;
+	const startBarcode = String(opts.barcode ?? '').trim();
+	if (startAt === 'decide' && !startBarcode) throw new ArmWaxFillError('Enter the barcode of the cart on the stage to start at the fill.');
 	if (requestedRuns < 1 || requestedRuns > 24) throw new ArmWaxFillError('Number of runs must be 1–24: one OT-2 run serves the whole loop and the protocol serves at most 24 carts.');
 	const settings = await getSettings();
+	if (startAt === 'decide') {
+		// The same checks the scan applies, before the OT-2 run is created.
+		const problem = await cartScanProblem(startBarcode, settings.testMode);
+		if (problem) throw new ArmWaxFillError(problem, 409);
+	}
 	const [calibration, protocol, active, robotConflict] = await Promise.all([
 		getCalibration(settings.robotId),
 		protocolFor(settings.robotId),
@@ -1513,7 +1536,8 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 		grabAnimation: settings.grabAnimation,
 		withdrawAnimation: settings.withdrawAnimation,
 		failAnimation: settings.failAnimation,
-		cycles: [{ index: 1, step: 'grab', startedAt: now }],
+		startStep: startAt,
+		cycles: [{ index: 1, step: startAt, startedAt: now, ...(startAt === 'decide' ? { barcode: startBarcode } : {}) }],
 		instructionSeq: 0,
 		startedBy: opRef(user),
 		startedAt: now
@@ -1576,6 +1600,7 @@ export async function startLoop(user: User, rawRuns: unknown): Promise<LoopView>
 	await ArmWaxFillRun.updateOne({ _id }, { $set: { opentronsRunId: started.opentronsRunId } });
 	await patchCycle(_id, 1, { waxRunId, opentronsRunId: started.opentronsRunId });
 	await audit(user, 'arm_wax_fill.loop_start', 'arm_wax_fill_runs', _id, {
+		startAt,
 		requestedRuns,
 		robotId: String(robot._id),
 		cartPosition: settings.cartPosition,
@@ -2085,7 +2110,8 @@ export async function cycleAwaitParked(user: User, loopId: string): Promise<{ do
 	// Before the grab (cycles after the first) or before the scan (every cycle:
 	// on cycle 1 the grab overlapped the OT-2's start-up, so the run may still
 	// be homing / taking its tip / parking when the scan is due).
-	if (cycle.step !== 'grab' && cycle.step !== 'scan') expectStep(cycle, 'grab');
+	// A loop started at the fill or the withdraw also waits for PARKED 1 before its first instruction.
+	if (!['grab', 'scan', 'decide', 'withdraw'].includes(String(cycle.step))) expectStep(cycle, 'grab', 'scan', 'decide', 'withdraw');
 	const robot = await loopRobot(loop);
 	const want: ArmMoveWant = cycle.step === 'grab' ? grabWant(cycle.index, (await getSettings()).grabDuringProbe) : { parked: cycle.index };
 	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index, orClear: want.orClear, orCalibrated: want.orCalibrated, orProbing: want.orProbing, uninstructed: !cycle.scanSeq });
@@ -2128,24 +2154,26 @@ export async function cycleScanStart(user: User, loopId: string): Promise<LoopVi
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, { parked: cycle.index }, 'send the scan instruction', { uninstructed: true });
 	const seq = await writeInstruction(user, loop, robot, 'scan', cycle.index, null);
-	await resumeRun(robot, String(loop.opentronsRunId));
 	// The daemon watches the run LOCALLY for `ARM AT_SCAN <i>` and reads the scanner
 	// the moment it lands (one queue command, answered from its own thread), so
 	// cycleScanRead only waits for that answer — no relayed polling of the run and
 	// no second command. A daemon that predates scan_at_pause fails the command
 	// ("unknown command kind") and cycleScanRead falls back to polling the run.
-	let scanCommandId: string | null = null;
-	try {
-		scanCommandId = await enqueueBridgeCommand(
+	// Queued ALONGSIDE the resume (2026-11-05): the watcher waits for AT_SCAN and
+	// waits out a run still parked, so the resume's round trip no longer precedes it.
+	const [, scanCommandId] = await Promise.all([
+		resumeRun(robot, String(loop.opentronsRunId)),
+		enqueueBridgeCommand(
 			robot,
 			user,
 			'scan_at_pause',
 			{ runId: String(loop.opentronsRunId), cart: cycle.index, pauseTimeoutS: SCAN_PAUSE_TIMEOUT_S, scanTimeoutS: SCAN_READ_WINDOW_S },
 			SCAN_PAUSE_TIMEOUT_S * 1000 + 60_000
-		);
-	} catch (e) {
-		await audit(user, 'arm_wax_fill.scan_command_not_queued', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, error: e instanceof Error ? e.message : String(e) });
-	}
+		).catch(async (e): Promise<string | null> => {
+			await audit(user, 'arm_wax_fill.scan_command_not_queued', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, error: e instanceof Error ? e.message : String(e) });
+			return null;
+		})
+	]);
 	await patchCycle(loopId, cycle.index, { scanSeq: seq, scanCommandId });
 	await audit(user, 'arm_wax_fill.cycle_scan_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq, scanCommandId });
 	return (await getLoop(loopId))!;
@@ -2546,6 +2574,32 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 	return { play: p, cycle: cycle.index, endSent: last && !endNote, endNote, chainedGrab };
 }
 
+/**
+ * A loop started at the WITHDRAW (a filled cart already on the stage): once the
+ * run is parked (PARKED 1), the protocol's cart 1 is skipped — it goes back to
+ * the tube and parks `ARM PARKED 2` — so its cart count and the loop's cycle
+ * index stay in step, and the arm withdraws under the same gate as any other
+ * cart (parked for the next one, or CLEAR of this one). Bounded; `pending`
+ * until the run is parked again. Idempotent after a reload (skipSeq).
+ */
+export async function cycleSkipAhead(user: User, loopId: string): Promise<{ pending: boolean; loop: LoopView }> {
+	const { loop, cycle } = await runningLoop(loopId);
+	expectStep(cycle, 'withdraw');
+	if (Number(cycle.index) !== 1 || loop.startStep !== 'withdraw') throw new ArmWaxFillError('Only the first cart of a loop started at the withdraw is skipped ahead.', 409);
+	const robot = await loopRobot(loop);
+	if (!cycle.skipSeq) {
+		await assertArmMayMove(robot, loop, { parked: 1 }, 'skip the first cart', { uninstructed: true });
+		const seq = await writeInstruction(user, loop, robot, 'skip', 1, null);
+		await resumeRun(robot, String(loop.opentronsRunId));
+		await patchCycle(loopId, 1, { skipSeq: seq });
+		await audit(user, 'arm_wax_fill.cycle_skip_sent', 'arm_wax_fill_runs', loopId, { cycle: 1, seq, startStep: 'withdraw' });
+	}
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: 2, orClear: 1, uninstructed: true });
+	if (!r.done && r.terminal) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'withdraw', r.terminal) };
+	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: 1, before: 'withdraw', message: r.read.message });
+	return { pending: !r.done, loop: (await getLoop(loopId))! };
+}
+
 /** The withdraw play ended: the cycle is done; the next one starts, or the loop ends and the run is finishing. */
 export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ loop: LoopView; next: boolean }> {
 	const { loop, cycle } = await runningLoop(loopId);
@@ -2553,7 +2607,8 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 	const chained = !!cycle.chainedGrab;
 	await assertArrived(user, loopId, cycle, animRef(chained ? loop.grabAnimation : loop.withdrawAnimation), chained ? 'withdraw + grab' : 'withdraw', cycle.withdrawArmRunId ?? null);
 	const now = new Date();
-	const completedRuns = Number(loop.completedRuns ?? 0) + 1;
+	// A loop started at the withdraw: its first cart was filled before the loop, so it is not counted here.
+	const completedRuns = Number(loop.completedRuns ?? 0) + (Number(cycle.index) === 1 && loop.startStep === 'withdraw' ? 0 : 1);
 	await patchCycle(loopId, cycle.index, { step: 'done', endedAt: now });
 	const finished = Number(cycle.index) >= Number(loop.requestedRuns);
 	// A stop asked during a chained play: the next cart is already on the stage, so

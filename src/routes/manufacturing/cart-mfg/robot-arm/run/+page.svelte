@@ -82,6 +82,15 @@
 	});
 
 	let runs = $state(1);
+	// Where the first cart starts (Start At): grab, or with a cart already on the stage.
+	let startAt = $state<'grab' | 'scan' | 'decide' | 'withdraw'>('grab');
+	let startBarcode = $state('');
+	const START_AT_LABEL: Record<string, string> = {
+		grab: 'Grab',
+		scan: 'Scan (Cart On The Stage)',
+		decide: 'Fill (Cart On The Stage, Barcode Typed)',
+		withdraw: 'Withdraw (Filled Cart On The Stage)'
+	};
 	let driving = $state(false);
 	let busy = $state(false);
 	let pageError = $state<string | null>(null);
@@ -382,6 +391,27 @@
 					if (after?.step === 'fail') note(`${tag}: ${after.error ?? 'the scan failed.'} Taking the fail route.`, 'warn');
 					else if (after?.barcode) note(`${tag}: read ${after.barcode}.`);
 				} else if (cycle.step === 'decide') {
+					if (cycle.index === 1 && loop.startStep === 'decide' && !cycle.fillSeq) {
+						// Started at the fill: the OT-2's start-up (home, tip, probe, park) must finish before the fill instruction.
+						let parkedForFill = false;
+						let fillBroke = false;
+						while (!parkedForFill) {
+							const w = await post('awaitParked', { loopId: loopId });
+							if (!w.ok) {
+								await fail('decide', `the OT-2 did not report parked: ${w.error}`);
+								fillBroke = true;
+								break;
+							}
+							loop = w.data.loop;
+							if (loop!.status !== 'running') {
+								fillBroke = true;
+								break;
+							}
+							parkedForFill = !!w.data.done;
+							if (!parkedForFill) note(`${tag}: waiting for the OT-2 to finish its start-up and park before the fill…`);
+						}
+						if (fillBroke) break;
+					}
 					note(`${tag}: ${rehearsal ? 'cart checked' : `cart ${cycle.barcode} goes on the wax run`} — telling the OT-2 to fill.`);
 					const r = await post('cycleDecide', { loopId: loopId });
 					if (!r.ok) {
@@ -408,6 +438,44 @@
 					if (broke || loop!.status !== 'running') break;
 					note(`${tag}: filled — the OT-2 is parked in the wax.`);
 				} else if (cycle.step === 'withdraw') {
+					if (cycle.index === 1 && loop.startStep === 'withdraw') {
+						// Started at the withdraw (a filled cart on the stage): once the OT-2 has parked, its first
+						// cart is skipped so the protocol's count and the loop's stay in step; the arm withdraws
+						// once the OT-2 is parked for cart 2.
+						let skipBroke = false;
+						if (!cycle.skipSeq) {
+							let parkedFirst = false;
+							while (!parkedFirst) {
+								const w = await post('awaitParked', { loopId: loopId });
+								if (!w.ok) {
+									await fail('withdraw', `the OT-2 did not report parked: ${w.error}`);
+									skipBroke = true;
+									break;
+								}
+								loop = w.data.loop;
+								if (loop!.status !== 'running') {
+									skipBroke = true;
+									break;
+								}
+								parkedFirst = !!w.data.done;
+								if (!parkedFirst) note(`${tag}: waiting for the OT-2 to finish its start-up and park…`);
+							}
+						}
+						let pendingSkip = !skipBroke;
+						while (pendingSkip) {
+							const r = await post('cycleSkipAhead', { loopId: loopId });
+							if (!r.ok) {
+								await fail('withdraw', r.error);
+								skipBroke = true;
+								break;
+							}
+							loop = r.data.loop;
+							pendingSkip = !!r.data.pending;
+							if (pendingSkip) note(`${tag}: the OT-2 skips its first cart and parks again…`);
+						}
+						if (skipBroke || loop!.status !== 'running') break;
+					}
+					if (!loop) break;
 					const last = cycle.index >= loop.requestedRuns || loop.stopRequested;
 					const chained = !last && data.settings.chainGrab && !!loop.grabAnimation;
 					note(
@@ -504,13 +572,13 @@
 		pageError = null;
 		log = [];
 		try {
-			const r = await post('startLoop', { runs: String(runs) });
+			const r = await post('startLoop', { runs: String(runs), startAt, barcode: startAt === 'decide' ? startBarcode : '' });
 			if (!r.ok) {
 				pageError = r.error;
 				return;
 			}
 			loop = r.data.loop;
-			note(`Run started: ${loop!.requestedRuns} loop${loop!.requestedRuns === 1 ? '' : 's'} (carts) on ${loop!.robot.name}.`);
+			note(`Run started: ${loop!.requestedRuns} loop${loop!.requestedRuns === 1 ? '' : 's'} (carts) on ${loop!.robot.name}${loop!.startStep && loop!.startStep !== 'grab' ? ` — starting at the ${STEP_LABEL[loop!.startStep] ?? loop!.startStep}` : ''}.`);
 		} finally {
 			busy = false;
 		}
@@ -1012,12 +1080,24 @@
 			{:else if haltBusy}
 				<span class="text-xs font-semibold text-amber-300">Stop Run In Progress…</span>
 			{:else}
-				<form class="flex items-center gap-2" onsubmit={(e) => { e.preventDefault(); void start(); }}>
+				<form class="flex flex-wrap items-center gap-2" onsubmit={(e) => { e.preventDefault(); void start(); }}>
 					<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
 						Runs
 						<input type="number" min="1" max="500" bind:value={runs}
 							class="w-20 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)" />
 					</label>
+					<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)" title="Where the first cart starts. Scan / Fill / Withdraw: a cart is already on the stage; the OT-2 still homes, takes and probes its tip and parks first.">
+						Start At
+						<select bind:value={startAt} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-sm" style="color: var(--color-tron-text)">
+							{#each Object.entries(START_AT_LABEL) as [v, l] (v)}<option value={v}>{l}</option>{/each}
+						</select>
+					</label>
+					{#if startAt === 'decide'}
+						<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+							Barcode
+							<input bind:value={startBarcode} required placeholder="Cart On The Stage" class="w-56 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)" />
+						</label>
+					{/if}
 					<button type="submit" disabled={busy || haltBusy || data.readiness.blocking.length > 0}
 						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-sm font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
 						{busy ? 'Starting…' : `Start A ${rehearsal ? 'Rehearsal ' : ''}Run Of ${runs} Loop${runs === 1 ? '' : 's'}`}

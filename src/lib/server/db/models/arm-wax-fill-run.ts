@@ -79,6 +79,8 @@ const armWaxFillRunSchema = new Schema(
 		skippedRuns: { type: Number, default: 0 },
 		status: { type: String, enum: ['running', 'completed', 'stopped', 'failed'], default: 'running', index: true },
 		stopRequested: { type: Boolean, default: false },
+		/** 2026-11-05: the step the first cart started at — grab, or scan / decide (fill, barcode typed) / withdraw with a cart already on the stage. */
+		startStep: { type: String, enum: ['grab', 'scan', 'decide', 'withdraw'], default: 'grab' },
 		grabAnimation: animationRefSchema,
 		withdrawAnimation: animationRefSchema,
 		failAnimation: animationRefSchema,

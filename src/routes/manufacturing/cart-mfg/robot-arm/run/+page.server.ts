@@ -28,6 +28,7 @@ import {
 	cycleFail,
 	cycleFailDone,
 	cycleFailPrepare,
+	cycleSkipAhead,
 	cycleFillWait,
 	cycleGrab,
 	cycleGrabDone,
@@ -172,7 +173,7 @@ export const actions: Actions = {
 	startLoop: async (ev) => {
 		const { d, user } = await writer(ev, true);
 		try {
-			return { loop: json(await startLoop(user, field(d, 'runs'))) };
+			return { loop: json(await startLoop(user, field(d, 'runs'), { startAt: field(d, 'startAt'), barcode: field(d, 'barcode') })) };
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -278,6 +279,18 @@ export const actions: Actions = {
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
 			return json(await cycleFailPrepare(user, id));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// A loop started at the withdraw: the protocol skips its first cart (its count and the loop's stay in step); pending until parked again.
+	cycleSkipAhead: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		try {
+			return json(await cycleSkipAhead(user, id));
 		} catch (err) {
 			return failFrom(err);
 		}
