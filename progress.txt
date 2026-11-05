@@ -25824,3 +25824,9 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): speed cap 7000 steps/s as a warning"
 What this deployment is for: fast moves (e.g. the big shoulder move at 0.5 s) can be played from BIMS.
+
+2026-11-05 — master — deploy log: d5728b62 (speed cap 7000 steps/s as a warning)
+Deployment: production — via Vercel GitHub integration (GitHub status success 19:18:55Z)
+Source: branch master @ commit d5728b62
+Retrieve this exact code: git checkout d5728b62
+What this deployment is for: fast moves play from BIMS; too-fast steps are amber warnings, not refusals.
