@@ -25735,3 +25735,13 @@ Speed experiment (Tilt to Cart <-> Elbow only, Alejandro's go-ahead), 24 of 48 m
 - Move 24 ended in 0.37 s with servos 1-2 left torque off (the replay turns torque off then on at its start;
   the on-write did not take on those two). Arm did not move; left as is for Alejandro.
 Deployment: none needed for BIMS (Pi-only change; repo copy committed so it matches the Pi).
+
+================================================================================
+2026-11-05 — master — deploy log: 83573b35 (a play starts after 3 Pi calls instead of 6)
+================================================================================
+Deployment: production — via Vercel GitHub integration (GitHub status success 18:44:51Z, after Vercel's
+"Build delays" incident held every push from 18:07Z to ~18:35Z)
+Source: branch master @ commit 83573b35 (contains a360526a, whose own status stayed pending: superseded)
+Retrieve this exact code: git checkout 83573b35
+What this deployment is for: BIMS side of the faster Go To / Play (no session pre-check, replacing upload,
+remembered replay path). The Pi side (recordings_admin.py replace, replay_settle.py ramp) is installed.
