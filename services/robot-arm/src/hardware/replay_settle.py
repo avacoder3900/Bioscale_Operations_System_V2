@@ -60,6 +60,16 @@ arm was already there, so every Go To / Play sat still for 3 s before moving.
 Now the ramp time follows the distance: no ramp when every servo is within
 RAMP_SKIP_STEPS of the start, else max distance / RAMP_STEPS_PER_S, between
 RAMP_MIN_S and the old 3.0 s. A failed position read keeps the old 3.0 s ramp.
+
+Bus lock (2026-11-05): a replay holds src.server.bus_lock.BUS_LOCK for its
+whole run. Sessions were kept apart from the one-shot routes (GET /servos,
+jog, move, ...) only by app.py's _require_bus_free check when a request
+arrives, so a GET /servos that arrived a moment before the replay started
+still ran while the replay wrote: seen twice in the speed experiment, the
+read opened the port 1.7 ms into replay.start, the replay died between its
+torque-off and torque-on writes and left servos 1-2 (shoulder) limp. Now the
+replay waits for an in-flight one-shot to finish before its first write, and
+a one-shot that slipped past the check waits for the replay to end.
 """
 
 from __future__ import annotations
@@ -286,7 +296,29 @@ def _bus_io(bus: Any) -> tuple[Callable[[], dict[int, int]], Callable[[dict[int,
     return read, write
 
 
+def _bus_lock() -> Any:
+    try:
+        from src.server.bus_lock import BUS_LOCK
+
+        return BUS_LOCK
+    except Exception:  # no bus_lock.py (tests, older Pi): nothing to share
+        import contextlib
+
+        return contextlib.nullcontext()
+
+
 def replay_session_settling(
+    arms: Any,
+    source_path: Path,
+    loops: int = 1,
+    stop_event: Any = None,
+) -> None:
+    """The settling replay, run under the servo bus lock (see the module notes)."""
+    with _bus_lock():
+        _replay_session_settling_unlocked(arms, source_path, loops, stop_event)
+
+
+def _replay_session_settling_unlocked(
     arms: Any,
     source_path: Path,
     loops: int = 1,

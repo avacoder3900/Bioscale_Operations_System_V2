@@ -25748,3 +25748,22 @@ Source: branch master @ commit 83573b35 (contains a360526a, whose own status sta
 Retrieve this exact code: git checkout 83573b35
 What this deployment is for: BIMS side of the faster Go To / Play (no session pre-check, replacing upload,
 remembered replay path). The Pi side (recordings_admin.py replace, replay_settle.py ramp) is installed.
+
+================================================================================
+2026-11-05 — master — Pi replay holds the servo bus lock: a GET /servos racing a replay start no longer leaves the shoulder limp
+================================================================================
+Found in speed experiment 2 (twice, also the "torque off on servos 1-2" of experiment 1): the replay ended
+0.09-0.37 s after start without moving, servos 1-2 torque OFF, 3-6 on. The Pi log (logs/2026-11-05.jsonl,
+run U1U7B8M5F75sCu7O) shows a one-shot GET /servos opening the port 1.7 ms into replay.start. Sessions were
+kept apart from the one-shot routes only by app.py's _require_bus_free at request arrival; a read that arrived
+just before the session started still ran while the replay wrote, and the replay died between its torque-off
+writes (servos 1, 2 done) and its torque-on writes. Any BIMS Play racing the pose editor's 300 ms poll could
+do the same — a limp shoulder can drop the arm.
+- replay_settle.py: replay_session_settling now runs the replay under src.server.bus_lock.BUS_LOCK (the RLock
+  the one-shot routes already share; nullcontext where bus_lock.py is absent). An in-flight one-shot finishes
+  before the replay's first write; a one-shot that slipped past the check waits for the replay to end.
+- Tests: simulate_replay_settle.py all checks; on the Pi's Python with the real BUS_LOCK: the replay waited for
+  an in-flight read, and a late read waited for the replay.
+- Installed on arm-pi: backup src/hardware/replay_settle.py.bak-pre-buslock-*, md5
+  c598380f1c4c5a3f740ad3f957edcec7 = repo, restarted with /sessions/active null; wrapper confirmed live.
+Deployment: none needed for BIMS (Pi-only; repo copy matches the Pi).
