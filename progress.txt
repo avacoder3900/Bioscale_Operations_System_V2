@@ -25606,3 +25606,16 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Edit Values on the pose editor"
 What this deployment is for: edit and save a move set's pose values from the Move Set page without the arm.
+================================================================================
+2026-11-05 — master — tip calibrator: From Live captures Probe Z; probe refused below Probe Z (f3b1410c)
+================================================================================
+Root cause of the tip rising off the prongs: ot2-bridge calibrate_tip always probes at Probe Z (z_cal),
+never the jogged Z, and From Live wrote only calX / calY / Approach Z — Probe Z stayed stale and higher,
+so Calibrate Tip lifted the tip to it and both 5 mm probe walks ran out in the air.
+Fix: From Live sets Probe Z = jogged depth, Approach Z = +5 mm; Calibrate Tip refuses a tip > 0.3 mm
+below Probe Z; Probe Z above Approach Z rejected on the page and in saveStageCalibrator. Daemon unchanged.
+svelte-check 14 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ f3b1410c
+Retrieve this exact code: git checkout f3b1410c
+What this deployment is for: Alejandro's report that the tip hovered above both calibration prongs.
