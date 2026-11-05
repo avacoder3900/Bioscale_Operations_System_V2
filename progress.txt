@@ -25905,3 +25905,17 @@ Source: branch master @ 76f4612a
 Retrieve this exact code: git checkout 76f4612a
 What this deployment is for: the withdraw and the fail animation play again without the stale fire step.
 ================================================================================
+2026-11-05 — master — Move sets: Wait After on a fire step can be 0 s (5ab0782d)
+================================================================================
+Alejandro: a Fire Conveyor Belt step in a move set does not need a wait after it; allow 0, and the same for the
+solenoid fire steps. src/lib/robot-arm/animation.ts MIN_FIRE_WAIT_S 0.5 -> 0 (cleanKeyframes' check and the Teach
+move-set editor's number box both read it). The 0.5 s floor existed so two trapdoors were never open together;
+that still holds: a fire step lasts its whole pulse before the next step starts (fireStepS = pulse + wait), and
+the Pi's pulse_blocking never starts a pulse while another is on. animation.test.ts: 0 s accepted for conveyor
+and solenoid A, negative refused.
+svelte-check 14 errors (baseline). vitest animation.test.ts: 58 pass.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ 5ab0782d
+Retrieve this exact code: git checkout 5ab0782d
+What this deployment is for: fire steps (conveyor / solenoids) with a 0 s Wait After.
+================================================================================
