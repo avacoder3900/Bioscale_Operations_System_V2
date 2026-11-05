@@ -502,10 +502,13 @@ describe('fire steps (cartridge trapdoor solenoids)', () => {
 		expect(flat[3]).toMatchObject({ durationS: 3, easing: 'linear', kind: 'join' });
 	});
 
-	it('cleanKeyframes keeps a fire step and refuses one that would put two pulses too close', () => {
+	it('cleanKeyframes keeps a fire step, allows a 0 s wait and refuses a negative one', () => {
 		const [k] = cleanKeyframes([{ fire: { solenoid: 'B', pulseMs: 300 }, holdS: 0.8 }]);
 		expect(k).toEqual({ poseId: '', holdS: 0.8, durationS: 0, easing: 'linear', fire: { solenoid: 'B', pulseMs: 300 } });
-		expect(() => cleanKeyframes([{ fire: { solenoid: 'B', pulseMs: 300 }, holdS: MIN_FIRE_WAIT_S - 0.1 }])).toThrow(/wait/);
+		expect(MIN_FIRE_WAIT_S).toBe(0);
+		expect(cleanKeyframes([{ fire: { solenoid: 'conveyor', pulseMs: 600 }, holdS: 0 }])[0].holdS).toBe(0);
+		expect(cleanKeyframes([{ fire: { solenoid: 'A', pulseMs: 100 }, holdS: 0 }])[0].holdS).toBe(0);
+		expect(() => cleanKeyframes([{ fire: { solenoid: 'B', pulseMs: 300 }, holdS: -0.1 }])).toThrow(/wait/);
 		expect(() => cleanKeyframes([{ fire: { solenoid: 'C', pulseMs: 300 }, holdS: 1 }])).toThrow(/solenoid/);
 		expect(() => cleanKeyframes([{ fire: { solenoid: 'A', pulseMs: 5000 }, holdS: 1 }])).toThrow(/pulse/);
 	});

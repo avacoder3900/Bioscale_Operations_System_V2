@@ -105,11 +105,12 @@ export const MAX_PULSE_MS = 2000;
 export const CONVEYOR_DEFAULT_PULSE_MS = 600;
 export const CONVEYOR_MAX_PULSE_MS = 600000;
 /**
- * The wait after a pulse before the next step. Never shorter than this, so two
- * fire steps in a row are always apart (both trapdoors open at once would drop
- * the whole stack) — the same 0.5 s gap as the Control tab's sequence button.
+ * The wait after a pulse before the next step. 0 is allowed (user, 2026-11-05):
+ * the step already lasts the whole pulse, and the Pi never starts a pulse
+ * while another is on (gpio.py pulse_blocking), so two trapdoors are never
+ * open at once.
  */
-export const MIN_FIRE_WAIT_S = 0.5;
+export const MIN_FIRE_WAIT_S = 0;
 export const DEFAULT_FIRE_WAIT_S = 1;
 
 /** The Pi's solenoid state as the Animate pages show it (GET /gpio/status). */
