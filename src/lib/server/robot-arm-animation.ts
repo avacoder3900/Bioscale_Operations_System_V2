@@ -57,6 +57,7 @@ import {
 	keyframePositions,
 	nextTrim,
 	pathStats,
+	isFireTarget,
 	solenoidLabel,
 	solenoidPin,
 	tooFast,
@@ -1002,9 +1003,17 @@ function moveSetSummary(d: any): MoveSetSummary {
 		_id: String(d._id),
 		name: d.name,
 		notes: d.notes ?? null,
-		keyframes: (d.keyframes ?? []).map((k: any): Keyframe => {
-			if (k.fire?.solenoid) {
-				return { poseId: '', holdS: Number(k.holdS ?? 0), durationS: 0, easing: 'linear', fire: { solenoid: k.fire.solenoid, pulseMs: Number(k.fire.pulseMs) } };
+		// A fire step whose target is none of A, B or the conveyor (a stale record: it
+		// crashed the withdraw / fail play on 2026-11-05 and the editor could not show
+		// it) is DROPPED here (Alejandro: "just remove those fire steps"): the play
+		// skips it and the next save of the move set writes it out for good.
+		keyframes: (d.keyframes ?? []).flatMap((k: any, i: number): Keyframe[] => {
+			if (k.fire) {
+				if (!isFireTarget(k.fire.solenoid)) {
+					console.warn(`robot-arm move set "${d.name}" (${d._id}): step ${i + 1} fires unknown target ${JSON.stringify(k.fire.solenoid ?? null)} — dropped`);
+					return [];
+				}
+				return [{ poseId: '', holdS: Number(k.holdS ?? 0), durationS: 0, easing: 'linear', fire: { solenoid: k.fire.solenoid, pulseMs: Number(k.fire.pulseMs) } }];
 			}
 			const out: Keyframe = { poseId: String(k.poseId), holdS: Number(k.holdS ?? 0), durationS: Number(k.durationS ?? 1), easing: isEasing(k.easing) ? k.easing : 'ease' };
 			const offsets = cleanOffsets(k.offsets, MAX_OFFSET_STEPS);
@@ -1016,7 +1025,7 @@ function moveSetSummary(d: any): MoveSetSummary {
 				const t = { positionMm: k.tolerances.positionMm ?? null, angleDeg: k.tolerances.angleDeg ?? null, steps: k.tolerances.steps ?? null };
 				if (t.positionMm != null || t.angleDeg != null || t.steps != null) out.tolerances = t;
 			}
-			return out;
+			return [out];
 		}),
 		rateHz: Number(d.rateHz) || DEFAULT_RATE_HZ,
 		archived: !!d.archivedAt,
