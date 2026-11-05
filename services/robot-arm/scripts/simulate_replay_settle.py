@@ -137,7 +137,7 @@ def main() -> None:
     arms = FakeArms(bus)
     rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
     kinds = [e for e, _ in arms.logger.events]
-    check(kinds == ["replay.start", "replay.loop", "replay.stop"], f"plain: events {kinds}")
+    check(kinds == ["replay.start", "replay.loop", "replay.ramp", "replay.stop"], f"plain: events {kinds}")
     check(bus.reads == 0, "plain: no bus reads")
     torque = [(s, v) for s, n, v in bus.writes if n == "Torque_Enable"]
     check(torque[:6] == [(s, 0) for s in range(1, 7)] and torque[6:12] == [(s, 1) for s in range(1, 7)] and torque[-6:] == [(s, 0) for s in range(1, 7)], "plain: torque off, on, ..., off")
@@ -155,7 +155,7 @@ def main() -> None:
     t0 = time.time()
     rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
     kinds = [e for e, _ in arms.logger.events]
-    check(kinds == ["replay.start", "replay.loop", "replay.settle", "replay.stop"], f"settle: events {kinds}")
+    check(kinds == ["replay.start", "replay.loop", "replay.ramp", "replay.settle", "replay.stop"], f"settle: events {kinds}")
     ev = dict(arms.logger.events)["replay.settle"]
     check(len(ev["settle"]) == 2 and [e["pose"] for e in ev["settle"]] == ["poseA", "poseB"], "settle: one entry per flagged pose, in order")
     for e in ev["settle"]:

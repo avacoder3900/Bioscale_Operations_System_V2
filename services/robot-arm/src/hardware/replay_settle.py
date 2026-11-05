@@ -53,6 +53,13 @@ servo per frame, no reads.
 
 Simulated against a sagging fake bus (services/robot-arm/scripts/
 simulate_replay_settle.py); not yet run on the arm.
+
+Ramp to the start (2026-11-05, Alejandro: "fix the 3 second delay"): the
+original always ramped to follower_neutral over a fixed 3.0 s, even when the
+arm was already there, so every Go To / Play sat still for 3 s before moving.
+Now the ramp time follows the distance: no ramp when every servo is within
+RAMP_SKIP_STEPS of the start, else max distance / RAMP_STEPS_PER_S, between
+RAMP_MIN_S and the old 3.0 s. A failed position read keeps the old 3.0 s ramp.
 """
 
 from __future__ import annotations
@@ -83,6 +90,24 @@ END_WINDOW_S = 2.5
 MAX_ROUNDS = 8
 #: After the frames end, how long the fire timer may take to finish a pulse.
 FIRE_JOIN_S = 3.0
+#: Ramp to the replay's start pose (ramp_duration_s).
+RAMP_SKIP_STEPS = 20
+RAMP_STEPS_PER_S = 600
+RAMP_MIN_S = 0.3
+RAMP_MAX_S = 3.0
+
+
+def ramp_duration_s(present: list, target: list) -> float:
+    """How long the ramp to the start pose takes: 0 when the arm is already there."""
+    if len(present) != len(target) or any(p is None for p in present):
+        return RAMP_MAX_S
+    pairs = [(int(p), int(t)) for p, t in zip(present, target) if t is not None]
+    if not pairs:
+        return 0.0
+    far = max(abs(t - p) for p, t in pairs)
+    if far <= RAMP_SKIP_STEPS:
+        return 0.0
+    return max(RAMP_MIN_S, min(RAMP_MAX_S, far / RAMP_STEPS_PER_S))
 
 
 def _clamp(v: int, lo: int, hi: int) -> int:
@@ -363,7 +388,14 @@ def replay_session_settling(
             if stopped():
                 break
             arms.logger.log_event("replay.loop", {"index": loop_idx + 1, "of": loops})
-            arms._ramp_follower_to(follower_neutral)
+            try:
+                present = arms._read_all(arms.follower, "Present_Position")
+            except Exception:
+                present = [None]
+            ramp_s = ramp_duration_s(present, follower_neutral)
+            arms.logger.log_event("replay.ramp", {"seconds": round(ramp_s, 2), "loop": loop_idx + 1})
+            if ramp_s > 0:
+                arms._ramp_follower_to(follower_neutral, duration_s=ramp_s)
             t_loop_start = time.perf_counter()
             if coil_fires and pulse is not None or belt_fires and belt_pulse is not None:
                 halt.clear()

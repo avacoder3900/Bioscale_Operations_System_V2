@@ -25711,3 +25711,27 @@ app.py.bak-recordings.orig-20261105, since the installer reuses that name). inst
 4f6d5a19d683d2ca03c5a0a0ce2809a8 = repo). Restarted robot-arm with /sessions/active null; active again. Live check
 with a throwaway name: new -> replaced false + path datasets/zz-replace-check.jsonl; no flag -> 409 already
 exists; replace -> replaced true; delete -> gone from the listing.
+
+================================================================================
+2026-11-05 — master — Pi replay: no fixed 3 s ramp before every Go To / Play (replay_settle.py, installed on arm-pi)
+================================================================================
+Found while measuring the Go To delay: replay_session_settling ramped the follower to the recording's
+follower_neutral with dual_arm._ramp_follower_to's default 3.0 s on every replay, even with the arm already at
+that pose (BIMS always starts its path where the arm is), so every Go To / Play stood still ~3 s. Alejandro:
+"Absolutely fix the 3 second delay."
+- replay_settle.py ramp_duration_s(present, target): 0 (no ramp) when every servo is within 20 steps of the
+  start, else max distance / 600 steps/s, clamped 0.3-3.0 s; a failed position read keeps the old 3.0 s. The
+  replay reads the follower before each loop's ramp and logs a replay.ramp event with the seconds used.
+- simulate_replay_settle.py expects the new replay.ramp event; all checks pass. Ramp rule 7/7 cases.
+- Installed on arm-pi 12:35 CST: backup src/hardware/replay_settle.py.bak-pre-ramp-20261105-123551, md5
+  42f2b8b8319dbffbee6d204e6db06913 = repo, restarted with /sessions/active null. Checked inside the service's
+  Python: at start 0.0 s, 600 steps away 1.0 s, bad read 3.0 s. Not exercised with a replay (Alejandro asked
+  to stop testing while he edits poses).
+Speed experiment (Tilt to Cart <-> Elbow only, Alejandro's go-ahead), 24 of 48 moves before it stopped:
+- The gripper cannot reach 4073: in 167 logged plays it never read above 2580; with a 4073 goal it pushes
+  against its stop (load 500). "2. Tilt to Cart", "15. open", "r.8 remove 2", "r.9 drop" ask for 4073-4095.
+  The 1.5 s minimum on "3. Elbow" came from those 1497 phantom gripper steps; the real move is ~156 shoulder
+  steps. Alejandro is correcting the gripper values.
+- Move 24 ended in 0.37 s with servos 1-2 left torque off (the replay turns torque off then on at its start;
+  the on-write did not take on those two). Arm did not move; left as is for Alejandro.
+Deployment: none needed for BIMS (Pi-only change; repo copy committed so it matches the Pi).
