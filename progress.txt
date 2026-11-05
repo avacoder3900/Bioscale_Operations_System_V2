@@ -25847,7 +25847,7 @@ Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Stage — No Tip warning above Move To Hole"
 What this deployment is for: the warning above.
 ================================================================================
-2026-11-05 — master — Start At any step; scan watcher with the resume; fire-step crash named (bcc9d605)
+2026-11-05 — master — Start At any step; scan watcher with the resume; fire-step crash named (c9c3b8f8)
 ================================================================================
 Alejandro: "getting the robot to scan takes a long time" + "start the process at any stage".
 Measured from today's loop KWJmqUqjmL0hbH8UUxeYT (audit_log): start→loop_start 22 s; OT-2 start-up until the
@@ -25864,6 +25864,6 @@ parallel with the resume; solenoidPin throws a named error, solenoidLabel never 
 svelte-check 14 errors (baseline). Pre-existing: robot-arm-url-invariant.test.ts.
 TODO on the robot: update ot2-bridge.py to 1.6.0 on the arm's OT-2 (scan_at_pause unknown there today).
 Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
-Source: branch master @ bcc9d605
-Retrieve this exact code: git checkout bcc9d605
+Source: branch master @ c9c3b8f8
+Retrieve this exact code: git checkout c9c3b8f8
 What this deployment is for: start-at-step on the Run card, a faster scan hand-off, and the fail-route crash.
