@@ -25948,3 +25948,18 @@ Source: branch master @ ec0f6fef
 Retrieve this exact code: git checkout ec0f6fef
 What this deployment is for: conveyor fire step card wording.
 ================================================================================
+================================================================================
+2026-11-05 — master — Duplicate Pose saves its step into the move set at once (19fd936f)
+================================================================================
+Alejandro lost the steps he had duplicated into move set "remove": my uncommitted sag-fix edits sat in the
+worktree his localhost dev server served (Bioscale_V2-wt-ui-redesign), Vite hot-reloaded his open Move Set page
+at 16:12-16:13 local, and the unsaved steps were gone. Every pose survived (8/8 in robot_arm_poses, none archived;
+"remove" last saved 21:18 UTC). He re-added the steps and saved (22:18 UTC, 16 steps). Fix: the duplicatePose
+action takes the page's keyframes + name + notes and a step index, duplicates that step's pose, inserts the copy
+right after it and calls updateMoveSet in the same request; the page selects the new step after the reload. Other
+unsaved edits on the page are saved with it. The sag work moved to its own worktree (fix/arm-live-sag, WIP, not
+pushed). svelte-check 13 errors (baseline), none in touched files.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 19fd936f
+Retrieve this exact code: git checkout 19fd936f
+What this deployment is for: a duplicated pose's step can no longer vanish before a save.
