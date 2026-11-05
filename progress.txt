@@ -25963,3 +25963,26 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ 19fd936f
 Retrieve this exact code: git checkout 19fd936f
 What this deployment is for: a duplicated pose's step can no longer vanish before a save.
+================================================================================
+2026-11-05 — master — Live no longer drops the arm; every pose droop-corrected; Arm Now readout (530a24d5)
+================================================================================
+Alejandro: Go To Pose then Live made the arm sag. Measured on Rr.0.5 home (goal pose, no trim): Go To Pose sent
+elbow 2377, the arm sat at 2456 under gravity, and Live wrote that reading back as the goal, so it dropped again
+(2458, 2464; shoulder 2233 -> 2239). The "torque off for a second" he felt is the servo letting go of the push it
+was holding: the Pi's /servos/{id}/move only opens/closes the port, it never writes Torque_Enable (read on the Pi).
+- PoseEditor.svelte: startLive sends nothing. At the pose (every servo within 150 steps) the sliders take the pose's
+  numbers and liveTrim = pose.trim; elsewhere they take the reading and trim 0. pump sends slider + liveTrim, only
+  for sliders that changed. "Arm Now ####" next to each slider's degrees.
+- robot-arm-animation.ts: the basis === 'goal' exclusions removed from poseSummary (trim), trimSamples,
+  learnFromPiSettle, afterPlay and resolvePoseKeyframe (no settle: false any more), so goal poses get the droop
+  trim and the Pi's settle like reading poses. animation.ts comments only.
+- Verified on the arm on a second dev server (5174): "I pressed Live and it stayed."
+OPEN: MAX_TRIM_STEPS 50 (BIMS) and MAX_OFFSET 50 (Pi replay_settle.py) are below the elbow's ~80-step sag; the
+settle warns "still N steps off ... at its 50-step limit". Loop (wax-fill) poses are goal poses too: they now land
+up to 50 steps nearer their numbers than when they were taught by eye on a sagging arm; re-check them with Go To Pose
+before the next loop.
+svelte-check 13 errors (baseline). vitest robot-arm: 273 pass, robot-arm-url-invariant.test.ts pre-existing fail.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 530a24d5
+Retrieve this exact code: git checkout 530a24d5
+What this deployment is for: Live no longer drops the arm; poses land on their numbers (up to the 50-step cap).
