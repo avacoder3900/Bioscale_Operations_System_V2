@@ -3,7 +3,7 @@ import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import { clearPoseDroop, duplicatePose, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, solenoidStatus, updateMoveSet, updatePose } from '$lib/server/robot-arm-animation';
-import { friendlyName, stepCountLabel } from '$lib/robot-arm/animation';
+import { friendlyName, stepCountLabel, type Keyframe } from '$lib/robot-arm/animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
@@ -86,16 +86,35 @@ export const actions: Actions = {
 		}
 	},
 
-	// Duplicate Pose (2026-11-05): a new pose with the step's values; the page puts it in a new step right after.
-	duplicatePose: async ({ request, locals }) => {
+	/**
+	 * Duplicate Pose (2026-11-05): a new pose with the step's values, and a new
+	 * step for it right after the clicked one (same move-in, easing, hold),
+	 * SAVED into the move set in the same request — a duplicate must exist for
+	 * real, never as an unsaved step a reload can drop. The page posts its
+	 * current steps, so any other unsaved edits are saved with it.
+	 */
+	duplicatePose: async ({ request, locals, params }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
 		const d = await request.formData();
-		const id = field(d, 'id');
-		if (!id) return fail(400, { error: 'Pose id missing.' });
+		let keyframes: Keyframe[];
 		try {
-			const p = await duplicatePose(who(locals), id);
-			return { success: `Duplicated as "${friendlyName(p.name)}". Save the move set to keep the new step.`, duplicatedPoseId: p._id };
+			keyframes = JSON.parse(field(d, 'keyframes') ?? '[]');
+		} catch {
+			return fail(400, { error: 'Keyframes could not be read.' });
+		}
+		const step = Number(field(d, 'step'));
+		const src = Array.isArray(keyframes) && Number.isInteger(step) ? keyframes[step] : undefined;
+		if (!src || src.fire || !src.poseId) return fail(400, { error: 'That step has no pose to duplicate.' });
+		try {
+			const p = await duplicatePose(who(locals), src.poseId);
+			const copy: Keyframe = { poseId: p._id, holdS: src.holdS, durationS: src.durationS, easing: src.easing, ...(src.offsets ? { offsets: [...src.offsets] } : {}) };
+			const m = await updateMoveSet(who(locals), params.id, {
+				name: field(d, 'name'),
+				notes: field(d, 'notes'),
+				keyframes: [...keyframes.slice(0, step + 1), copy, ...keyframes.slice(step + 1)]
+			});
+			return { success: `Duplicated as "${friendlyName(p.name)}" and saved: "${m.name}" has ${stepCountLabel(m.keyframes)}.`, duplicatedStep: step + 1 };
 		} catch (err) {
 			return failFrom(err);
 		}
