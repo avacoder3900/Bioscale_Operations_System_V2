@@ -26006,3 +26006,17 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ d6ebd84f
 Retrieve this exact code: git checkout d6ebd84f
 What this deployment is for: Live lands the arm on the typed number; Go To / Play correct droop up to 300 steps.
+================================================================================
+2026-11-05 — master — arm Pi deploy: droop cap 300 + GET /servos/config (read-only); servo stiffness read
+================================================================================
+Alejandro OK'd ("Restart the pi"). On arm-pi: src/hardware/replay_settle.py from master d6ebd84f (MAX_OFFSET 300; backup
+replay_settle.py.bak-pre-cap300; md5 8d5ae25c = repo), src/server/servo_config.py + scripts/install_servo_config_router.py
+(app.py backup app.py.bak-servo-config), imports checked in the service venv first, then with /sessions/active null
+`sudo systemctl restart robot-arm`: active, startup complete, the arm held [2027,876,2997,901,555,2141] with torque on
+on all six before and after. 5173 dev server (Bioscale_V2-wt-ui-redesign) updated to 532cf8b5 and restarted --force;
+the plain PoseEditor URL serves the Live loop and animation.ts MAX_TRIM_STEPS = 300.
+GET /servos/config (servo 1..6): P_Coefficient 6,6,6,10,15,10 (STS3215 factory default 32; lerobot's SO-101 setup
+writes 16), D 30,15,15,30,30,32, I 0, Max_Torque_Limit/Torque_Limit 1000 x5 + 500 gripper, Protection_Current 3000 x5
++ 250, Overload_Torque 80 x5 + 25, Protective_Torque 20, Protection_Time 200, dead zones 1/1, Min startup force 16.
+P = 6 on base/shoulder/elbow is why the joints sag 80-108 steps under load. Nothing written; raising P is fix 2,
+waiting for Alejandro's go-ahead.
