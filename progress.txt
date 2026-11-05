@@ -25767,3 +25767,23 @@ do the same — a limp shoulder can drop the arm.
 - Installed on arm-pi: backup src/hardware/replay_settle.py.bak-pre-buslock-*, md5
   c598380f1c4c5a3f740ad3f957edcec7 = repo, restarted with /sessions/active null; wrapper confirmed live.
 Deployment: none needed for BIMS (Pi-only; repo copy matches the Pi).
+
+================================================================================
+2026-11-05 — (no code) — Arm speed experiment 2: Rotate Base <-> Tilt to Cart (big) and Tilt to Cart <-> Elbow (small)
+================================================================================
+Alejandro: "see how tight we can get the timing ... as fast as possible, while retaining their repeatability
+in the values ... go nuts". Only those two moves and their reverses; 362 moves driven straight on the Pi (same
+replay BIMS uses), 3 reps each direction per (duration, easing). Repeatable = every rep's settled position
+within 10 steps of a slow 2.0 s ease baseline. The one torque loss was the bus race fixed in 02b814e1; none after.
+Poses: 1. Rotate Base [1018,861,3008,915,566,2142]; 2. Tilt to Cart [1018,1992,3008,916,562,2391];
+3. Elbow [1019,1995,2800,941,562,2383]. Big = shoulder lift (servo 2) 1131 steps; small = elbow (servo 3) 208.
+Result: every duration passed for both moves and all three easings (ease, out, linear), worst deviation 1-3 steps,
+down to 0.2 s (big) and 0.15 s (small). The servo limits its own speed: below ~0.5 s the move does not get
+shorter, it only lands harder. Total (move + settle, from post-move reads every ~0.1 s):
+  big  ease 0.8 s ~1.5 s | out 0.5 s ~1.23 s, 0.3 s ~1.18 s | linear 0.4 s ~1.35 s | 0.2 s any ~1.2-1.3 s
+  small ease 0.25 s ~0.65 s | out 0.2 s ~0.63 s, 0.4 s ~0.66 s | linear 0.3 s ~0.8 s
+Peak shoulder load (of ~1000) on the big move: 1.5 s 168, 1.0 s 239, 0.5 s 528, 0.4 s 575, 0.3 s 791, 0.2 s 978.
+Voltage 12.2-12.3 V throughout; temperatures 45-46 C. A few settle times of 2-3 s are slow reads, not the arm.
+Limits: no reads possible mid-move (Pi refuses them during a session); gripper empty, no cart.
+BIMS refuses these today: MAX_STEPS_PER_S = 2000 at the easing's peak makes the big move's minimum ~1.1 s (ease).
+Using faster times needs that cap raised or dropped — Alejandro's decision.
