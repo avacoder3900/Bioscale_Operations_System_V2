@@ -26020,3 +26020,35 @@ writes 16), D 30,15,15,30,30,32, I 0, Max_Torque_Limit/Torque_Limit 1000 x5 + 50
 + 250, Overload_Torque 80 x5 + 25, Protective_Torque 20, Protection_Time 200, dead zones 1/1, Min startup force 16.
 P = 6 on base/shoulder/elbow is why the joints sag 80-108 steps under load. Nothing written; raising P is fix 2,
 waiting for Alejandro's go-ahead.
+
+================================================================================
+2026-11-05 — feat/cleanup-send-to-animate-sync — Clean-Up's Send To Animate brought up to date with Teach (goal poses, Teach links, trash-aware, recordings by kind)
+================================================================================
+Alejandro: "update the Clean-Up feature which translates Teleop recordings into our animations of poses ... make
+sure it is up to date with all our stuff." The Clean-Up -> Animate bridge (sendToAnimate, 2026-10-21) predates the
+Animate redo (goal vs reading poses), the 11-04 Run/Teach/Calibrate redesign and the R2 trash. What changed:
+- src/lib/server/robot-arm-cleanup.ts sendToAnimate: the poses it makes are now basis 'goal' (a recording's frames
+  are the commanded goals, the same thing Teach stores from the sliders); before they fell to the schema default
+  'reading'. The keyframes go through Teach's own cleanKeyframes before the move set is written, so what is stored
+  is exactly what Teach would have saved (a refusal reads "Teach would not accept these steps: ..."). The pose-name
+  suffixing moved to recording-cleanup.ts uniqueName (tested). Audit of the poses records basis + source: 'cleanup'.
+  getCleanup marks each move set made from the draft `deleted` when it is no longer in Mongo (Delete = 30-day R2
+  trash), and the page shows the name without a link instead of a link to a 404. archiveCleanup passed `doc.name`
+  to the trash, but a clean-up has `title`, so the trash listed it by id; now title (or sourceName).
+- maintenance/cleanup/[id]/+page.svelte: the "made before" move-set links went to /animate/moveset (a 301 since the
+  redesign) and now go to /teach/moveset; the lengthened-step note uses Teach's wording ("faster than the servo can
+  go") instead of "slowed to the arm's speed limit".
+- maintenance/cleanup/+page.server.ts + +page.svelte: the recording picker uses listRecordingChoices
+  (robot-arm-overlay.ts), so each recording is labelled Teleop / Animated / Clean-Up / Overlay with what made it,
+  teleop first, like the Overlay page's pickers. robot-arm-overlay.ts classifyRecording: a recording whose sidecar
+  has none of the generated markers (animated / cleaned_from / overlaid_from / lot or step provenance) is a Pi
+  record session's file, i.e. teleop (Teach's Teleop Recording writes those); before it was "other".
+- Not changed on purpose: the step split, the operator's targets and times, the speed-limit lengthening (cap is
+  Teach's MAX_STEPS_PER_S = 7000 now, so it almost never triggers), smoothing stays opt-in.
+Checked: vitest recording-cleanup / animation / recording-overlay 108 pass (2 new uniqueName tests); npm run check
+14 errors (baseline 13-14, none in touched files). Worked in a fresh worktree ../Bioscale_V2-wt-cleanup-sync off
+origin/master (the main checkout sat 271 commits behind on fix/arm-servo-row-reason). Not yet driven on the arm.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ (this commit, fast-forwarded from feat/cleanup-send-to-animate-sync)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Clean-Up's Send To Animate up to date with Teach"
+What this deployment is for: Send To Animate makes goal poses Teach treats like slider poses; clean-up pages link to Teach and label recordings by kind.

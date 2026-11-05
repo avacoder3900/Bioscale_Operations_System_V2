@@ -7,8 +7,8 @@
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
-import { robotArm } from '$lib/server/robot-arm-client';
 import { CleanupError, archiveCleanup, createCleanup, listCleanups } from '$lib/server/robot-arm-cleanup';
+import { listRecordingChoices } from '$lib/server/robot-arm-overlay';
 import { DEFAULT_PAUSE_S } from '$lib/robot-arm/recording-steps';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -16,16 +16,11 @@ export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	requirePermission(locals.user, 'manufacturing:read');
 
-	const [recordings, cleanups] = await Promise.all([
-		robotArm
-			.listRecordings()
-			.then((r) => ({ list: r.recordings, error: null as string | null }))
-			.catch((err: Error) => ({ list: [], error: err.message })),
-		listCleanups()
-	]);
-	const list = [...recordings.list].sort((a, b) => b.modified.localeCompare(a.modified));
+	// Recordings come labelled by what made them (teleop, Teach's Save To Pi, a
+	// clean-up, an overlay), newest first; the page lists the teleop ones first.
+	const [recordings, cleanups] = await Promise.all([listRecordingChoices(), listCleanups()]);
 	return {
-		recordings: list,
+		recordings: recordings.recordings,
 		recordingsError: recordings.error,
 		cleanups,
 		defaults: { thresholdSteps: 10, pauseS: DEFAULT_PAUSE_S }

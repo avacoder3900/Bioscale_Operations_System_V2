@@ -11,7 +11,7 @@
  * For a smooth version, `draftToAnimation` hands the same steps to the Animate
  * engine (animation.ts): each step's end pose becomes a saved pose and the
  * step's time and wait become a keyframe's duration and hold, so the operator
- * can finish it in the Animate tab with easings and the rendered path.
+ * can finish it on the Teach tab with easings and the rendered path.
  */
 import {
 	type RecordingHeader,
@@ -177,6 +177,25 @@ export interface AnimationDraft {
 
 export const DEFAULT_ANIMATION_EASING: Easing = 'ease';
 
+/** Teach's limit for pose and move-set names (robot-arm-animation.ts cleanName). */
+export const ANIMATE_NAME_MAX = 80;
+
+/**
+ * `base`, or `base (2)`, `base (3)`, … — the first not in `taken` (compared
+ * lower-case, as Teach compares pose names), cut to `max` characters with the
+ * suffix kept whole. The result is added to `taken`, so a batch of names made
+ * with one set never clashes with itself.
+ */
+export function uniqueName(base: string, taken: Set<string>, max = ANIMATE_NAME_MAX): string {
+	let n = base.slice(0, max);
+	for (let i = 2; taken.has(n.toLowerCase()); i++) {
+		const suffix = ` (${i})`;
+		n = base.slice(0, max - suffix.length) + suffix;
+	}
+	taken.add(n.toLowerCase());
+	return n;
+}
+
 /**
  * The steps as Animate poses + keyframes. Pose 0 is the start pose, then one
  * pose per step that moves something, at the step's end position for every
@@ -184,7 +203,10 @@ export const DEFAULT_ANIMATION_EASING: Easing = 'ease';
  * than the arm can physically do; hold = the step's pause. A step that ends
  * where it started is not a pose: its time and pause extend the previous
  * hold. Positions are the draft's; nothing is smoothed here — the Animate
- * engine renders the easing between poses at play time.
+ * engine renders the easing between poses at play time. The speed limit is
+ * Teach's MAX_STEPS_PER_S: a step quicker than that is lengthened to the
+ * least the servo can do, which is also what Teach's "faster than the servo
+ * can go" warning would say the move takes.
  */
 export function draftToAnimation(draft: CleanDraft, o: { easing?: unknown } = {}): AnimationDraft {
 	const easing: Easing = isEasing(o.easing) ? o.easing : DEFAULT_ANIMATION_EASING;

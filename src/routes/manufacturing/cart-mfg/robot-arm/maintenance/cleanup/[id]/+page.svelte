@@ -928,7 +928,7 @@
 				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					{animatePreview.draft.poses.length} poses · about {fmtS(animateDurationS)} before easing.
 					{#if animatePreview.draft.lengthened.length}
-						{listSteps(animatePreview.draft.lengthened)} will be slowed to the arm's speed limit.
+						{listSteps(animatePreview.draft.lengthened)} will take longer than recorded: faster than the servo can go.
 					{/if}
 					{#if animatePreview.draft.folded.length}
 						{listSteps(animatePreview.draft.folded)} move nothing and become hold time.
@@ -939,7 +939,11 @@
 				<ul class="mt-3 space-y-0.5 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					{#each [...data.cleanup.moveSets].reverse() as m (m.moveSetId)}
 						<li>
-							<a href="{BASE}/animate/moveset/{m.moveSetId}" class="underline decoration-dotted hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">{m.name}</a>
+							{#if m.deleted}
+								<span style="color: var(--color-tron-text)">{m.name}</span> · Deleted
+							{:else}
+								<a href="{BASE}/teach/moveset/{m.moveSetId}" class="underline decoration-dotted hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">{m.name}</a>
+							{/if}
 							· {new Date(m.at).toLocaleString()}{#if m.by} · {m.by.username}{/if}{#if m.poses} · {m.poses} poses{/if}
 						</li>
 					{/each}

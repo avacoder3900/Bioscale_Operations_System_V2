@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
+	ANIMATE_NAME_MAX,
 	cleanRecordingName,
 	composeRecording,
 	draftFromSteps,
 	draftToAnimation,
 	resolveSteps,
+	uniqueName,
 	validateDraft,
 	type CleanDraft
 } from './recording-cleanup';
@@ -147,6 +149,27 @@ describe('draftFromSteps timing', () => {
 		expect(d.steps[0].pauseAfterS).toBeCloseTo(d.steps[1].raw!.tStart - d.steps[0].raw!.tEnd, 1);
 		expect(d.steps[0].pauseAfterS).toBeGreaterThan(0.5);
 		expect(d.steps[1].pauseAfterS).toBe(0);
+	});
+});
+
+describe('uniqueName', () => {
+	it('keeps a free name and suffixes a taken one, case-insensitively', () => {
+		const taken = new Set(['grab · start']);
+		expect(uniqueName('Grab · step 1', taken)).toBe('Grab · step 1');
+		expect(uniqueName('Grab · start', taken)).toBe('Grab · start (2)');
+		expect(uniqueName('grab · START', taken)).toBe('grab · START (3)');
+		// Everything handed out is now taken too.
+		expect([...taken].sort()).toEqual(['grab · start', 'grab · start (2)', 'grab · start (3)', 'grab · step 1']);
+	});
+
+	it('stays within the Teach name limit with the suffix kept whole', () => {
+		const long = 'x'.repeat(ANIMATE_NAME_MAX + 20);
+		const taken = new Set<string>();
+		const first = uniqueName(long, taken);
+		expect(first).toHaveLength(ANIMATE_NAME_MAX);
+		const second = uniqueName(long, taken);
+		expect(second).toHaveLength(ANIMATE_NAME_MAX);
+		expect(second.endsWith(' (2)')).toBe(true);
 	});
 });
 

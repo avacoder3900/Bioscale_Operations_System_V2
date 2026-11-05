@@ -71,6 +71,10 @@ export function classifyRecording(r: RecordingMeta): RecordingChoice {
 	} else if (m.manufacturing_step || m.recorded_during_run_id || m.run_id || m.lot_id) {
 		kind = 'teleop';
 		from = typeof m.manufacturing_step === 'string' ? m.manufacturing_step : null;
+	} else if (r.meta) {
+		// A sidecar with none of the markers above: the Pi's own record session
+		// (Teach's Teleop Recording, Maintenance › Control) wrote it.
+		kind = 'teleop';
 	}
 	return { name: r.name, kind, modified: r.modified, sizeBytes: r.size_bytes, from };
 }

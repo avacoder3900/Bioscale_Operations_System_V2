@@ -9,32 +9,35 @@
  *      position into a target, or sends the follower to a step's pose to
  *      check it on the real arm.
  *   3. Save to Pi: the draft becomes a NEW recording on the Pi (via the
- *      recording-restore route), replayable from the Control tab. The source
+ *      recording-restore route), replayable from Maintenance › Control. The source
  *      recording is never modified. With smoothing on (recording-smooth.ts,
  *      the clean-up's `smoothing` settings), the file is the smoothed path of
  *      the recording or of the steps; otherwise the steps as straight lines.
  *      Re-saving under a name this clean-up saved before can replace that file.
- *   3b. Send to Animate: the draft becomes poses + a move set in the Animate
+ *   3b. Send to Animate: the draft becomes poses + a move set on the Teach
  *      tab (robot_arm_poses / robot_arm_move_sets), where the Animate engine
  *      eases between the poses and the operator can keep adjusting. The
- *      draft is not changed either.
+ *      poses are goal poses (the recording's commanded goals), the same as
+ *      poses set with Teach's sliders. The draft is not changed either.
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmRecordingCleanup } from '$lib/server/db/models';
 import { robotArm, type RecordingSidecar, type ServoState } from '$lib/server/robot-arm-client';
 import { parseRecording, recordingToSteps, DEFAULT_PAUSE_S } from '$lib/robot-arm/recording-steps';
 import {
+	ANIMATE_NAME_MAX,
 	SERVO_IDS,
 	cleanRecordingName,
 	composeRecording,
 	draftFromSteps,
 	draftToAnimation,
 	joints,
+	uniqueName,
 	validateDraft,
 	type AnimationDraft,
 	type CleanDraft
 } from '$lib/robot-arm/recording-cleanup';
-import { DEFAULT_RATE_HZ } from '$lib/robot-arm/animation';
+import { DEFAULT_RATE_HZ, cleanKeyframes, type Keyframe } from '$lib/robot-arm/animation';
 import { archiveToR2, ArchiveError } from '$lib/server/robot-arm-archive';
 import { seriesFromFrames, type OverlayOptions } from '$lib/robot-arm/recording-overlay';
 import {
@@ -254,8 +257,12 @@ export interface CleanupDoc extends CleanDraft {
 	thresholdSteps: number;
 	pauseS: number;
 	savedAs: { name: string; at: string; by?: User; frames?: number; durationS?: number; smoothing?: SmoothOptions | null; replaced?: boolean }[];
-	/** Move sets made from this draft (Send to Animate), newest last. */
-	moveSets: { moveSetId: string; name: string; at: string; by?: User; poses?: number; keyframes?: number }[];
+	/**
+	 * Move sets made from this draft (Send to Animate), newest last. `deleted`
+	 * = no longer on the Teach tab (Delete moves it to the 30-day trash and out
+	 * of Mongo), so the page shows the name without a link.
+	 */
+	moveSets: { moveSetId: string; name: string; at: string; by?: User; poses?: number; keyframes?: number; deleted: boolean }[];
 	/** Set when the frames are an overlay: the pilot's positions on the animated sourceName (robot-arm-overlay.ts). */
 	overlay: CleanupOverlayInfo | null;
 	/** Smoothing settings (off for clean-ups made before smoothing existed). */
@@ -272,6 +279,12 @@ export async function getCleanup(id: string): Promise<CleanupDoc | null> {
 	await connectDB();
 	const doc = (await RobotArmRecordingCleanup.findOne({ _id: id, status: 'draft' }).lean()) as Record<string, any> | null;
 	if (!doc) return null;
+	const madeSets: { moveSetId: string }[] = doc.moveSets ?? [];
+	const stillInTeach = new Set<string>(
+		madeSets.length
+			? ((await RobotArmMoveSet.find({ _id: { $in: madeSets.map((m) => m.moveSetId) } }).select('_id').lean()) as { _id: string }[]).map((m) => String(m._id))
+			: []
+	);
 	const rawT: number[] = doc.rawT ?? [];
 	const rawGoal: number[][] = doc.rawGoal ?? [];
 	const every = Math.max(1, Math.ceil(rawT.length / MAX_TRACE_POINTS));
@@ -296,7 +309,7 @@ export async function getCleanup(id: string): Promise<CleanupDoc | null> {
 			start: doc.start ?? {},
 			steps: doc.steps ?? [],
 			savedAs: doc.savedAs ?? [],
-			moveSets: doc.moveSets ?? [],
+			moveSets: madeSets.map((m) => ({ ...m, deleted: !stillInTeach.has(String(m.moveSetId)) })),
 			overlay: doc.overlay ?? null,
 			smoothing: validateSmoothOptions(doc.smoothing ?? undefined, SMOOTHING_OFF),
 			updatedAt: doc.updatedAt,
@@ -379,10 +392,11 @@ export async function resplitCleanup(user: User, id: string, o: { thresholdSteps
 /** Archive = move to the R2 trash for 30 days (robot-arm-archive), then gone. */
 export async function archiveCleanup(user: User, id: string) {
 	await connectDB();
-	const doc = (await RobotArmRecordingCleanup.findOne({ _id: id, status: 'draft' }).select('name').lean()) as any;
+	const doc = (await RobotArmRecordingCleanup.findOne({ _id: id, status: 'draft' }).select('title sourceName').lean()) as any;
 	if (!doc) throw new CleanupError('This clean-up no longer exists.', 404);
 	try {
-		await archiveToR2(user, 'cleanup', id, { name: doc.name });
+		// A clean-up has a title, not a name; without this the trash would list it by id.
+		await archiveToR2(user, 'cleanup', id, { name: String(doc.title || doc.sourceName || id) });
 	} catch (err) {
 		if (err instanceof ArchiveError) throw new CleanupError(err.message, err.status);
 		throw err;
@@ -616,16 +630,20 @@ export interface SendToAnimateResult {
 	lengthened: number[];
 }
 
-/** Move-set names are free text in the Animate tab; pose names must be unique among live poses. */
-const ANIMATE_NAME_MAX = 80;
-
 /**
- * Turn the saved draft into a move set in the Animate tab: one saved pose for
+ * Turn the saved draft into a move set on the Teach tab: one saved pose for
  * the start and for the end of every step that moves something, and a move
  * set whose keyframes copy each step's time (lengthened to the arm's speed
  * limit where needed) and pause. The Animate engine renders the easing
  * between the poses; the operator adjusts the rest there. The draft is left
  * as it is.
+ *
+ * The poses are GOAL poses (basis 'goal'): a recording's frames carry the
+ * goals that were commanded, exactly what Teach stores when a pose is set
+ * with the sliders. Move-set names are free text on Teach; pose names must
+ * be unique among live poses (case-insensitive), so clashes get a suffix.
+ * The keyframes go through Teach's own cleanKeyframes, so what is stored is
+ * what Teach would have saved itself.
  */
 export async function sendToAnimate(user: User, id: string, o: { name: unknown; easing: unknown }): Promise<SendToAnimateResult> {
 	await connectDB();
@@ -643,39 +661,33 @@ export async function sendToAnimate(user: User, id: string, o: { name: unknown; 
 	const name = (String(o.name ?? '').trim() || fallback).slice(0, ANIMATE_NAME_MAX);
 	if (!name) throw new CleanupError('Give the move set a name.');
 
-	// The Animate tab refuses a second live pose with the same name (case-insensitive); suffix clashes.
+	// Teach refuses a second live pose with the same name (case-insensitive); suffix clashes.
 	const live = (await RobotArmPose.find({ archivedAt: null }).select('name').lean()) as { name: string }[];
 	const taken = new Set(live.map((p) => String(p.name).toLowerCase()));
-	const unique = (base: string) => {
-		let n = base.slice(0, ANIMATE_NAME_MAX);
-		for (let i = 2; taken.has(n.toLowerCase()); i++) {
-			const suffix = ` (${i})`;
-			n = base.slice(0, ANIMATE_NAME_MAX - suffix.length) + suffix;
-		}
-		taken.add(n.toLowerCase());
-		return n;
-	};
 
 	const now = new Date();
 	const source = String(doc.sourceName);
 	const poseDocs = anim.poses.map((p) => ({
 		_id: generateId(),
-		name: unique(`${name} · ${p.label}`),
+		name: uniqueName(`${name} · ${p.label}`, taken),
 		positions: p.positions,
+		basis: 'goal' as const,
 		notes: p.step === 0 ? `Start pose of clean-up "${source}".` : `End of step ${p.step} of clean-up "${source}".`,
 		createdBy: opRef(user),
 		archivedAt: null
 	}));
+	let keyframes: Keyframe[];
+	try {
+		keyframes = cleanKeyframes(
+			anim.keyframes.map((k) => ({ poseId: poseDocs[k.pose]._id, holdS: k.holdS, durationS: k.durationS, easing: k.easing }))
+		);
+	} catch (err) {
+		throw new CleanupError(`Teach would not accept these steps: ${(err as Error).message}`);
+	}
 	await RobotArmPose.insertMany(poseDocs);
-	const keyframes = anim.keyframes.map((k) => ({
-		poseId: poseDocs[k.pose]._id,
-		holdS: k.holdS,
-		durationS: k.durationS,
-		easing: k.easing
-	}));
 	const moveSetId = generateId();
 	const notes = [
-		`From clean-up "${source}" (${draft.steps.length} steps). Each step's time and pause became the move into its pose and the hold; adjust them and the easing here.`,
+		`From clean-up "${source}" (${draft.steps.length} steps). Each step's time and pause became the move into its pose and the hold; adjust them, the easing and the pose values here.`,
 		anim.lengthened.length ? `Step${anim.lengthened.length > 1 ? 's' : ''} ${anim.lengthened.join(', ')} lengthened to the arm's speed limit.` : '',
 		anim.folded.length ? `Step${anim.folded.length > 1 ? 's' : ''} ${anim.folded.join(', ')} moved nothing and became hold time.` : ''
 	]
@@ -699,7 +711,12 @@ export async function sendToAnimate(user: User, id: string, o: { name: unknown; 
 		}
 	);
 	const details = { cleanupId: id, sourceName: source, moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded, lengthened: anim.lengthened };
-	await auditRow(user, 'robot_arm_poses', 'robot_arm.animate.pose_save_from_cleanup', moveSetId, { ...details, poseIds: poseDocs.map((p) => p._id) });
+	await auditRow(user, 'robot_arm_poses', 'robot_arm.animate.pose_save_from_cleanup', moveSetId, {
+		...details,
+		basis: 'goal',
+		source: 'cleanup',
+		poseIds: poseDocs.map((p) => p._id)
+	});
 	await auditRow(user, 'robot_arm_move_sets', 'robot_arm.animate.move_set_create', moveSetId, details);
 	await audit(user, 'robot_arm.cleanup.send_to_animate', id, details);
 	return { moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded, lengthened: anim.lengthened };

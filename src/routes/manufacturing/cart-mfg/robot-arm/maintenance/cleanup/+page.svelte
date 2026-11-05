@@ -31,6 +31,16 @@
 	function fmtDate(iso: string) {
 		return new Date(iso).toLocaleString();
 	}
+
+	// Same labels as the Overlay page's pickers. Teleop recordings (what a
+	// clean-up is for) first, then the ones Teach, a clean-up or an overlay wrote.
+	const KIND_LABEL: Record<string, string> = { animated: 'Animated', teleop: 'Teleop', cleaned: 'Clean-Up', overlay: 'Overlay', other: '' };
+	const rank = (kind: string) => (kind === 'teleop' ? 0 : kind === 'other' ? 1 : 2);
+	const recordings = $derived([...data.recordings].sort((a, b) => rank(a.kind) - rank(b.kind)));
+	function recordingLabel(r: (typeof data.recordings)[number]) {
+		const kind = KIND_LABEL[r.kind];
+		return `${r.name}${kind ? ` · ${kind}` : ''}${r.from ? ` (${r.from})` : ''} · ${(r.sizeBytes / 1024).toFixed(0)} KB · ${fmtDate(r.modified)}`;
+	}
 </script>
 
 <div class="space-y-5">
@@ -62,8 +72,8 @@
 					style="color: var(--color-tron-text)"
 				>
 					<option value="" disabled>Pick A Recording…</option>
-					{#each data.recordings as r (r.path)}
-						<option value={r.name}>{r.name} · {(r.size_bytes / 1024).toFixed(0)} KB · {fmtDate(r.modified)}</option>
+					{#each recordings as r (r.name)}
+						<option value={r.name}>{recordingLabel(r)}</option>
 					{/each}
 				</select>
 			</label>
