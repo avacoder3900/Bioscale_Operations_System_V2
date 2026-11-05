@@ -25846,3 +25846,24 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Stage — No Tip warning above Move To Hole"
 What this deployment is for: the warning above.
+================================================================================
+2026-11-05 — master — Start At any step; scan watcher with the resume; fire-step crash named (bcc9d605)
+================================================================================
+Alejandro: "getting the robot to scan takes a long time" + "start the process at any stage".
+Measured from today's loop KWJmqUqjmL0hbH8UUxeYT (audit_log): start→loop_start 22 s; OT-2 start-up until the
+arm may grab 59 s; grab 31 s; PARKED 1 → scan instruction sent 6.7 s (write_file 3.6 s + resume/queue 3 s);
+sent → barcode read 9.3 s. The daemon on that OT-2 answered "unknown command kind" to scan_at_pause
+(arm_wax_fill.scan_command_unknown) — it is older than 1.5.0, so the scan falls back to 750 ms run polling
+plus a second read_scanner queue hop. The loop then died in the fail route: "Cannot read properties of
+undefined (reading 'label')" = a fire step in move set "remove" (fail/withdraw animation) with a target
+that is not A / B / conveyor.
+Changes: Start At select on the Run card (grab / scan / fill+barcode / withdraw); startLoop(opts), startStep
+on ArmWaxFillRun, cycleAwaitParked for decide/withdraw, cycleSkipAhead (withdraw start skips protocol cart 1),
+page driver waits for the park before a fill/withdraw start; cycleScanStart enqueues scan_at_pause in
+parallel with the resume; solenoidPin throws a named error, solenoidLabel never throws.
+svelte-check 14 errors (baseline). Pre-existing: robot-arm-url-invariant.test.ts.
+TODO on the robot: update ot2-bridge.py to 1.6.0 on the arm's OT-2 (scan_at_pause unknown there today).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ bcc9d605
+Retrieve this exact code: git checkout bcc9d605
+What this deployment is for: start-at-step on the Run card, a faster scan hand-off, and the fail-route crash.
