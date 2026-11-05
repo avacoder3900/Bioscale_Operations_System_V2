@@ -25934,3 +25934,17 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ 246e238e
 Retrieve this exact code: git checkout 246e238e
 What this deployment is for: Duplicate Pose on Move Set steps.
+2026-11-05 — master — Move sets: a conveyor fire step's card talks about the belt (ec0f6fef)
+================================================================================
+Alejandro: selecting "Step 10: Fire Conveyor Belt" showed the solenoid card unchanged ("Trapdoor Solenoids",
+A · GPIO 17 / B · GPIO 27 chips, "Pins Live"). src/lib/components/robot-arm/SolenoidPanel.svelte: when the step
+is the conveyor the card title is Conveyor Belt, one GPIO 22 · Pin 15 chip replaces the A/B chips (gpio/status
+has no belt pin state, so no dot), the status line is only the replay support, the button says Starting…
+while it runs, and the solenoid coil lock (status.busy) no longer disables the belt's Test Fire. Solenoid
+steps and the Teach page's card are unchanged.
+svelte-check 14 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ ec0f6fef
+Retrieve this exact code: git checkout ec0f6fef
+What this deployment is for: conveyor fire step card wording.
+================================================================================
