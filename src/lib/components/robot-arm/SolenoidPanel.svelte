@@ -10,11 +10,13 @@
 	 *
 	 * `step` (the editor's selected fire step) shows one button for exactly
 	 * that solenoid and pulse; without it, both solenoids with a pulse box.
+	 * A conveyor step turns the card into the belt's (2026-11-05): its title,
+	 * its GPIO 22 · Pin 15 chip, no solenoid pin status.
 	 */
 	import { deserialize } from '$app/forms';
 	import { HideToggle } from '$lib/robot-arm/hide-toggle.svelte';
 	import { onMount } from 'svelte';
-	import { DEFAULT_PULSE_MS, MAX_PULSE_MS, MIN_PULSE_MS, SOLENOIDS, solenoidLabel, type FireSpec, type FireTarget, type SolenoidStatus } from '$lib/robot-arm/animation';
+	import { CONVEYOR_FIRE, DEFAULT_PULSE_MS, MAX_PULSE_MS, MIN_PULSE_MS, SOLENOIDS, solenoidLabel, type FireSpec, type FireTarget, type SolenoidStatus } from '$lib/robot-arm/animation';
 
 	interface Props {
 		status: SolenoidStatus | null;
@@ -76,18 +78,23 @@
 	const input = 'rounded border bg-black/40 px-2 py-1 text-sm';
 	const inputStyle = 'border-color: var(--color-tron-border); color: var(--color-tron-text)';
 	const panel = new HideToggle('robot-arm:solenoid-panel-hidden');
+	const belt = $derived(step?.solenoid === 'conveyor');
 </script>
 
 <section class="rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
 	<div class="flex flex-wrap items-center justify-between gap-2">
-		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">Trapdoor Solenoids</h2>
+		<h2 class="text-sm font-semibold tracking-wide" style="color: var(--color-tron-text)">{belt ? CONVEYOR_FIRE.label : 'Trapdoor Solenoids'}</h2>
 		<div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+			{#if belt}
+				<span class="inline-flex items-center rounded border px-1.5 py-0.5 font-mono" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">GPIO {CONVEYOR_FIRE.pin} · Pin 15</span>
+			{:else}
 			{#each SOLENOIDS as s (s.id)}
 				<span class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 font-mono" style="border-color: var(--color-tron-border); color: {pinOn(s.pin) ? '#fbbf24' : 'var(--color-tron-text-secondary)'}" title="{s.label} on GPIO {s.pin}">
 					<span class="inline-block h-1.5 w-1.5 rounded-full" style="background: {pinOn(s.pin) ? '#f59e0b' : 'var(--color-tron-border)'}"></span>
 					{s.id} · GPIO {s.pin}
 				</span>
 			{/each}
+			{/if}
 			<button type="button" onclick={() => panel.toggle()} class="rounded border px-2 py-0.5 text-xs" style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)" aria-expanded={!panel.hidden}>{panel.hidden ? 'Show' : 'Hide'}</button>
 		</div>
 	</div>
@@ -97,7 +104,9 @@
 			{#if !armReachable}
 				Arm Pi Unreachable
 			{:else if !status}
-				No Solenoid Status
+				{belt ? 'No Replay Status' : 'No Solenoid Status'}
+			{:else if belt}
+				{status.replayFire ? 'Fire Steps Supported' : ''}
 			{:else}
 				{status.simulated ? 'Simulated: No GPIO' : 'Pins Live'}
 				{status.replayFire ? ' · Fire Steps Supported' : ''}
@@ -112,9 +121,9 @@
 		<div class="mt-3 flex flex-wrap items-end gap-2">
 			{#if step}
 				<button type="button" class="min-h-[38px] rounded px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40" style={blue}
-					disabled={!armReachable || !!firing || !!status?.busy} onclick={() => fire(step.solenoid, step.pulseMs)}
-					title="Pulse this step's solenoid now. The arm does not move.">
-					{firing ? 'Firing…' : `Test Fire ${step.solenoid === 'conveyor' ? solenoidLabel(step.solenoid) : step.solenoid} · ${step.pulseMs} ms`}
+					disabled={!armReachable || !!firing || (!belt && !!status?.busy)} onclick={() => fire(step.solenoid, step.pulseMs)}
+					title={belt ? "Run the belt for this step's pulse now. The arm does not move." : "Pulse this step's solenoid now. The arm does not move."}>
+					{firing ? (belt ? 'Starting…' : 'Firing…') : `Test Fire ${belt ? solenoidLabel(step.solenoid) : step.solenoid} · ${step.pulseMs} ms`}
 				</button>
 			{:else}
 				<label class="text-[11px]" style={muted}>Pulse (ms)
