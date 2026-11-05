@@ -813,13 +813,22 @@ async function settleAtPose(user: User, pose: any, target: number[], now: ArmNow
 		rounds++;
 		const goal = keyframePositions(target, null, trim);
 		for (const sid of TRIM_SERVOS) {
-			// A jog sets goal = present + delta, so this writes goal exactly — even a
-			// zero jog, which replaces whatever goal the servo had with "here".
-			const delta = goal[sid - 1] - now.positions[sid - 1];
+			// The absolute move route writes the goal exactly. An older Pi has only the
+			// jog (goal = present + delta), whose route refuses a zero delta (400
+			// "delta_steps must be non-zero", which aborted every settle on a joint
+			// already on target, 2026-11-05) — that servo already sits on its goal.
 			try {
-				await robotArm.jogJoint(sid, delta);
+				if (moveRouteMissing) throw new Error('robot-arm 404');
+				await robotArm.moveJoint(sid, goal[sid - 1]);
 			} catch (err) {
-				throw new AnimateError(`servo ${sid} did not take the correction: ${(err as Error).message}`, 502);
+				if (!/robot-arm 404/.test((err as Error).message ?? '')) throw new AnimateError(`servo ${sid} did not take the correction: ${(err as Error).message}`, 502);
+				moveRouteMissing = true;
+				const delta = goal[sid - 1] - now.positions[sid - 1];
+				try {
+					if (delta !== 0) await robotArm.jogJoint(sid, delta);
+				} catch (jogErr) {
+					throw new AnimateError(`servo ${sid} did not take the correction: ${(jogErr as Error).message}`, 502);
+				}
 			}
 		}
 		await new Promise((r) => setTimeout(r, DROOP_SETTLE_MS));

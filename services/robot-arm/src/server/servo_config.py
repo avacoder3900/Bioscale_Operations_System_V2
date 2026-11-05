@@ -1,12 +1,13 @@
 """
-GET /servos/config — READ-ONLY: each follower servo's stiffness and torque settings.
+GET  /servos/config — READ-ONLY: each follower servo's stiffness and torque settings.
+POST /servos/gains  — write P/D/I gains only; temporary (lost at power-off) unless persist.
 
 Why (2026-11-05): a loaded joint sits short of its goal because the STS3215's
 position loop is proportional — it pushes harder only as the error grows. On
 the SO-ARM101 the shoulder stalled 108 steps short of a typed 2300 (load -159)
 and the elbow ~80 short. Before deciding whether to make the joints stiffer
-(raise P_Coefficient), this route reads what the servos are set to now. It
-writes nothing; a write route comes later and only on the operator's go-ahead.
+(raise P_Coefficient), GET reads what the servos are set to now; POST
+/servos/gains (added on Alejandro's go-ahead, 2026-11-05) writes only the gains.
 
 Registers (STS3215 / SMS_STS memory map; the same addresses lerobot uses):
     16  Max_Torque_Limit     2  EEPROM, 0..1000 (0.1 %)
@@ -37,6 +38,7 @@ from __future__ import annotations
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
 from scservo_sdk import COMM_SUCCESS  # type: ignore[import-untyped]
 
 from src.hardware.dual_arm import JOINT_NAMES, NUM_MOTORS
@@ -62,7 +64,16 @@ CONFIG_REGISTERS: dict[str, tuple[int, int]] = {
     "Protection_Time": (35, 1),
     "Overload_Torque": (36, 1),
     "Torque_Limit": (48, 2),
+    "Lock": (55, 1),
 }
+
+#: The only registers POST /servos/gains may write, with their allowed range.
+GAIN_LIMITS: dict[str, tuple[int, int]] = {
+    "P_Coefficient": (1, 64),
+    "D_Coefficient": (0, 254),
+    "I_Coefficient": (0, 254),
+}
+LOCK_ADDRESS = 55
 
 
 def _read_raw(bus: Any, servo_id: int, address: int, length: int, retries: int = 2) -> int | None:
@@ -91,6 +102,80 @@ def read_config() -> list[dict[str, Any]]:
         return out
     finally:
         arms.disconnect()
+
+
+def _write_byte(bus: Any, servo_id: int, address: int, value: int, retries: int = 2) -> bool:
+    ph, port = bus._packet_handler, bus._port_handler
+    for _ in range(retries + 1):
+        comm, _err = ph.write1ByteTxRx(port, servo_id, address, value)
+        if comm == COMM_SUCCESS:
+            return True
+    return False
+
+
+class GainWrite(BaseModel):
+    id: int = Field(ge=1, le=NUM_MOTORS)
+    P_Coefficient: int | None = None
+    D_Coefficient: int | None = None
+    I_Coefficient: int | None = None
+
+
+class GainsRequest(BaseModel):
+    writes: list[GainWrite]
+    persist: bool = Field(
+        default=False,
+        description="False (default): Lock stays 1, the new gains act now and are lost at power-off. True: saved to EEPROM.",
+    )
+
+
+def write_gains(req: GainsRequest) -> list[dict[str, Any]]:
+    """
+    Write P/D/I gains on follower servos. Torque is never touched (the arm
+    keeps holding). Temporary by default: with Lock = 1 an EEPROM-area write
+    takes effect but is not saved, so a power cycle restores the old gains.
+    persist=True unlocks (Lock 0), writes, and locks again. Every servo ends
+    with Lock = 1. Returns each servo's gains and Lock before and after.
+    """
+    for w in req.writes:
+        for name, (lo, hi) in GAIN_LIMITS.items():
+            v = getattr(w, name)
+            if v is not None and not lo <= v <= hi:
+                raise ValueError(f"servo {w.id}: {name} must be {lo}..{hi}, got {v}")
+    arms = _connected_arms(require_leader=False)
+    out: list[dict[str, Any]] = []
+    try:
+        bus = arms.follower
+        assert bus is not None
+        for w in req.writes:
+            names = [n for n in GAIN_LIMITS if getattr(w, n) is not None]
+            before = {n: _read_raw(bus, w.id, CONFIG_REGISTERS[n][0], 1) for n in [*GAIN_LIMITS, "Lock"]}
+            if not _write_byte(bus, w.id, LOCK_ADDRESS, 0 if req.persist else 1):
+                raise RuntimeError(f"servo {w.id}: Lock write failed")
+            try:
+                for n in names:
+                    if not _write_byte(bus, w.id, CONFIG_REGISTERS[n][0], int(getattr(w, n))):
+                        raise RuntimeError(f"servo {w.id}: {n} write failed")
+            finally:
+                _write_byte(bus, w.id, LOCK_ADDRESS, 1)
+            after = {n: _read_raw(bus, w.id, CONFIG_REGISTERS[n][0], 1) for n in [*GAIN_LIMITS, "Lock"]}
+            out.append({"id": w.id, "joint": JOINT_NAMES[w.id - 1], "persist": req.persist, "before": before, "after": after})
+    finally:
+        arms.disconnect()
+    return out
+
+
+@router.post("/servos/gains")
+def servos_gains(body: GainsRequest) -> dict[str, Any]:
+    """Write P/D/I gains (temporary unless persist). Never touches torque or goals."""
+    if bus_free is not None:
+        bus_free()
+    try:
+        with BUS_LOCK:
+            return {"servos": write_gains(body)}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/servos/config")
