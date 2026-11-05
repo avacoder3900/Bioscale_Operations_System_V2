@@ -25867,3 +25867,27 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ b9d996d4
 Retrieve this exact code: git checkout b9d996d4
 What this deployment is for: start-at-step on the Run card, a faster scan hand-off, and the fail-route crash.
+2026-11-05 — master — Run tab: the withdraw starts once the cart's final row is filled (ARM FILLED, 455a4ba4)
+================================================================================
+Alejandro: "the robot can begin the withdraw once the OT-2 has filled the final row." (His second note, the
+withdraw's "Cannot read properties of undefined (reading 'label')", is the fire-step crash the Start At
+session named — move set "remove" has a fire step whose target is not A / B / conveyor — and is left to it.)
+- protocols/Wax_Filling_GEN7_ArmStage.py + _Rehearsal_p300.py: fill_cart emits protocol.comment('ARM FILLED <i>')
+  right after the LAST batch's dispense_batch returns (tip out of the last hole, gantry still over the cart),
+  before the blow-out at the tube. Nothing else in the protocols moved; CLEAR follows a few seconds later as before.
+- arm-loop-protocol.ts: announcement kind FILLED; ArmMoveWant.orFilled; armMayMove lets a RUNNING run after
+  'ARM FILLED <i>' move only when orFilled === i. Tests +2 (11 pass).
+- arm-wax-fill.ts: withdrawWant(cart) = PARKED i+1 | CLEAR i | FILLED i, used by cycleWithdraw only; the fail
+  animation keeps afterCartWant (CLEAR / PARKED); cycleFillWait completes on FILLED too (audit cycle_filled now
+  records the marker it saw); the last cart still waits for the park and sends end first. A chained withdraw +
+  grab starts on the same gate: the grab half plays a whole withdraw later, the gantry long at the tube.
+- Run page log lines; PRD §5.7 lists the new announcement and gates; protocols/tests/test_arm_stage_loop.py
+  asserts FILLED once per protocol, after the last batch and before the blow-out (passes).
+svelte-check 14 errors (baseline). vitest robot-arm: 273 pass, robot-arm-url-invariant.test.ts pre-existing fail.
+TODO on the robot: re-add + deploy BOTH stage .py from the Wax fill tab — until then the robot's protocol never
+announces FILLED and the withdraw waits for CLEAR exactly as before (nothing breaks).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 455a4ba4
+Retrieve this exact code: git checkout 455a4ba4
+What this deployment is for: the arm withdraws a cart as soon as its last row is filled.
+================================================================================
