@@ -17,8 +17,15 @@
 	 *
 	 * The sliders are locked until Live is on (2026-10-28): moving a slider
 	 * that does nothing confused operators, who then pressed Live and had the
-	 * arm start moving under them. Live first reads the arm and puts every
-	 * slider where the arm really is, so turning it on never moves the arm.
+	 * arm start moving under them.
+	 *
+	 * Turning Live on sends NOTHING (2026-11-05). It used to write the arm's
+	 * encoder reading back as every servo's goal; a loaded joint sits short of
+	 * its goal, so the new, lower goal dropped the arm again (elbow 2377 →
+	 * 2456 → 2464 on Rr.0.5 home). Now, at the pose, the sliders start on the
+	 * pose's numbers and each servo keeps the goal it holds (pose + droop trim);
+	 * only a slider that moves sends its servo a goal, slider + the same trim.
+	 * Away from the pose they start at the reading, still sending nothing.
 	 *
 	 * Edit Values (2026-11-05): an explicit second way in. It unlocks the
 	 * sliders and number boxes WITHOUT the arm (unreachable, torque off, a
@@ -73,6 +80,8 @@
 
 	/** "The arm is at these values" — loaded joints sit a few tens of steps short of their goal. */
 	const AT_POSE_STEPS = 80;
+	/** Live starts on the pose's numbers when every servo is this close (the server's droop "near" band). */
+	const LIVE_FROM_POSE_STEPS = 150;
 	// Fast enough that the New Pose sliders track an arm moved by hand (2026-11-04, was 1500).
 	// One read at a time (readArmNow), so a slow route just lowers the rate.
 	const POLL_MS = 300;
@@ -115,6 +124,8 @@
 	let newName = $state('');
 	/** Goals last sent to the arm, per servo (null = never sent this session). */
 	let sent: (number | null)[] = new Array(SERVO_COUNT).fill(null);
+	/** Added to each slider when Live sends it: the pose's droop trim when Live started at the pose, else 0. */
+	let liveTrim: number[] = new Array(SERVO_COUNT).fill(0);
 
 	// Take the page's fresh read after its own actions (Go to, Torque on) re-ran the load —
 	// only when that prop actually changes, never on our own state changes.
@@ -228,8 +239,9 @@
 			while (live) {
 				const goals: Record<number, number> = {};
 				SERVOS.forEach((s) => {
-					if (sent[s] === values[s]) return;
-					goals[s + 1] = values[s];
+					const g = Math.max(0, Math.min(ENCODER_MAX, values[s] + liveTrim[s]));
+					if (sent[s] === g) return;
+					goals[s + 1] = g;
 				});
 				if (!Object.keys(goals).length) break;
 				const res = await fetch('/api/robot-arm/animate/live', {
@@ -269,23 +281,26 @@
 	}
 
 	/**
-	 * Live on. Safety first: read the arm, set every slider to where it really
-	 * is and make that the arm's goal too, so the sliders and the arm agree
-	 * and nothing jumps. From then on the sliders drive the arm.
+	 * Live on. Nothing is sent: each servo keeps the goal it holds, so the arm
+	 * does not move. At the pose the sliders start on the pose's numbers (the
+	 * goals are pose + trim); elsewhere on the reading. From then on a slider
+	 * that moves sends only its own servo.
 	 */
 	async function startLive() {
-		if (editing && dirty && !confirm('Live sets the sliders to where the arm is. Discard the unsaved values?')) return;
+		if (editing && dirty && !confirm('Live sets the sliders to the pose (or where the arm is). Discard the unsaved values?')) return;
 		editing = false;
 		await readArmNow();
 		if (!armPos || !canLive) {
 			if (!armPos) note = { text: 'Could not read the arm.', kind: 'warn' };
 			return;
 		}
-		values = [...armPos];
-		sent = new Array(SERVO_COUNT).fill(null);
+		const now = armPos;
+		const atPose = !!pose && pose.positions.every((v, i) => Math.abs(v - now[i]) <= LIVE_FROM_POSE_STEPS);
+		values = atPose ? [...pose!.positions] : [...now];
+		liveTrim = atPose && pose!.trim ? pose!.trim.map((t, i) => (i < SERVO_COUNT ? t : 0)) : new Array(SERVO_COUNT).fill(0);
+		sent = values.map((v, i) => Math.max(0, Math.min(ENCODER_MAX, v + liveTrim[i])));
 		live = true;
-		await pump();
-		note = { text: 'Sliders set to arm position.', kind: 'ok' };
+		note = { text: atPose ? 'Sliders At The Pose' : 'Sliders At The Arm', kind: 'ok' };
 	}
 
 	function reset() {
@@ -331,7 +346,7 @@
 			{/if}
 			{@render beforeLive?.()}
 			<button type="button" class={btn} style={editing ? amber : cyan} onclick={() => (editing = !editing)} title={editing ? 'Lock the numbers again' : 'Change the numbers without moving the arm; Save Pose keeps them'}>{editing ? 'Stop Editing' : 'Edit Values'}</button>
-			<button type="button" class={btn} style={green} disabled={!canLive} onclick={startLive} title="Set the sliders to where the arm is, then let them drive the arm">Live</button>
+			<button type="button" class={btn} style={green} disabled={!canLive} onclick={startLive} title="The arm does not move until a slider does; then only that servo moves">Live</button>
 		{/if}
 		{#if onclose}<button type="button" class="text-xs underline" style="color: var(--color-tron-text-secondary)" onclick={() => { live = false; onclose?.(); }}>Close</button>{/if}
 		<label class="flex w-full items-center gap-1 text-[11px] sm:w-auto" style="color: var(--color-tron-text-secondary)" title="The green dot above each slider stays on this reference; hover a dot for its number and where the arm really is">
@@ -410,6 +425,9 @@
 					<button type="button" class={nudge} style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, values[s] + 1)} aria-label="plus 1">+1</button>
 					<button type="button" class={nudge} style={nudgeStyle} disabled={!unlocked} onclick={() => setValue(s, values[s] + 10)} aria-label="plus 10">+10</button>
 					<span class="ml-1 w-14 text-right font-mono text-[10px]" style="color: var(--color-tron-text-secondary)" title="Angle from the servo's centre">{deg(values[s])}°</span>
+					{#if armPos}
+						<span class="ml-2 font-mono text-[10px] tabular-nums" style="color: var(--color-tron-text-secondary)" title="Where this servo's encoder reads right now">Arm Now {armPos[s]}</span>
+					{/if}
 					{#if refValue(s) != null}
 						<!-- the reference marker's value in words, and a way back to it -->
 						<span class="ml-2 font-mono text-[10px]" style="color: {values[s] === refValue(s) ? 'var(--color-tron-text-secondary)' : '#4ade80'}" title="{ref.label}: {refValue(s)}{armPos ? ` · arm now: ${armPos[s]}` : ''}">● {refValue(s)}</span>

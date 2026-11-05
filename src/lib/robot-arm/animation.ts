@@ -283,9 +283,10 @@ export interface ResolvedKeyframe extends Keyframe {
 	 */
 	target?: number[];
 	/**
-	 * false = the pose is a set of commanded goals (made with the sliders), so
-	 * the Pi plays it exactly and never "settles" it; anything else = the pose
-	 * is an encoder reading and the Pi may settle onto it (settleFrames).
+	 * false = the Pi plays this pose exactly and never "settles" it; anything
+	 * else = the Pi may settle onto it (settleFrames). Since 2026-11-05 every
+	 * pose settles (goal poses sagged short of their numbers), so nothing sets
+	 * false today.
 	 */
 	settle?: boolean;
 }
@@ -306,7 +307,7 @@ export interface PathMarker {
 	poseId?: string;
 	/** Where the arm should end up here without any droop trim (pose + offsets); see ResolvedKeyframe.target. */
 	target?: number[];
-	/** false = a goal pose; the Pi must not settle here (ResolvedKeyframe.settle). */
+	/** false = the Pi must not settle here (ResolvedKeyframe.settle). */
 	settle?: boolean;
 	/** kind 'fire': the solenoid fired at `t` (holdS is pulse + wait). */
 	fire?: FireSpec & { pin: number };

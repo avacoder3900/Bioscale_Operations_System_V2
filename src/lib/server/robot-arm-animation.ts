@@ -480,9 +480,14 @@ export interface PoseSummary {
 	_id: string;
 	name: string;
 	positions: number[];
-	/** goal = set with the sliders, played exactly; reading = encoder capture, droop-corrected. */
+	/**
+	 * goal = set with the sliders or typed in; reading = encoder capture. Kept as
+	 * history only: since 2026-11-05 every pose is droop-corrected, so the arm
+	 * lands ON its numbers (a goal pose used to be played exactly and sat a few
+	 * tens of steps short under gravity — 79 on the elbow of Rr.0.5 home).
+	 */
 	basis: PoseBasis;
-	/** Droop trim added to the goal when played (six entries), or null if never measured. Reading poses only. */
+	/** Droop trim added to the goal when played (six entries), or null if never measured. */
 	trim: number[] | null;
 	trimMeasuredAt: string | null;
 	notes: string | null;
@@ -496,7 +501,7 @@ export interface PoseSummary {
 
 export function poseSummary(d: any): PoseSummary {
 	const basis: PoseBasis = d.basis === 'goal' ? 'goal' : 'reading';
-	const trim = basis === 'reading' && Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
+	const trim = Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
 	return {
 		_id: String(d._id),
 		name: d.name,
@@ -567,9 +572,10 @@ export async function createPose(user: User, input: { name: unknown; notes?: unk
 }
 
 /**
- * Save the sliders into an existing pose. It becomes a goal pose: played
- * exactly as set, so any droop trim (which only made sense for a reading) is
- * dropped. Every move set using the pose follows.
+ * Save the sliders into an existing pose (it becomes a goal pose). Its old
+ * droop trim was learned at the old numbers, so it is dropped; the next Go To
+ * / Play starts from an estimate and learns the new one. Every move set using
+ * the pose follows.
  */
 export async function setPosePositions(user: User, id: string, raw: unknown): Promise<{ pose: PoseSummary; moved: number[] }> {
 	await connectDB();
@@ -736,8 +742,8 @@ export async function deleteArchivedPoses(user: User, rawIds: unknown[]): Promis
  * Go to a pose: played like a one-pose move set — a smooth path of absolute
  * goals from where the arm is, ending held on the pose — so it lands in the
  * same place whatever the arm did before. Returns the play for the page's
- * playback poll; the page's afterPlay puts torque back on (older Pi) and,
- * for a reading pose, learns its droop. The arm MOVES.
+ * playback poll; the page's afterPlay puts torque back on (older Pi) and
+ * learns the pose's droop. The arm MOVES.
  */
 export async function goToPose(user: User, poseId: string): Promise<PlayResult> {
 	await connectDB();
@@ -768,7 +774,7 @@ export interface DroopResult {
 
 /** Every live pose with a learned trim, as samples for estimateTrim. */
 async function trimSamples(exceptId?: string): Promise<TrimSample[]> {
-	const rows = (await RobotArmPose.find({ 'trim.5': { $exists: true }, archivedAt: null, basis: { $ne: 'goal' } }).select('_id positions trim').lean()) as any[];
+	const rows = (await RobotArmPose.find({ 'trim.5': { $exists: true }, archivedAt: null }).select('_id positions trim').lean()) as any[];
 	return rows.filter((d) => String(d._id) !== exceptId).map((d) => ({ positions: d.positions.map(Number), trim: d.trim.map(Number) }));
 }
 
@@ -886,8 +892,7 @@ async function learnFromPiSettle(user: User, runId: string): Promise<PiSettledPo
 		const trim = trimFromSettle(e?.written, e?.target);
 		if (!poseId || !trim) continue;
 		const pose = (await RobotArmPose.findById(poseId).lean()) as any;
-		// Goal poses are never flagged; one edited into a goal pose since the play learns nothing.
-		if (!pose || pose.basis === 'goal') continue;
+		if (!pose) continue;
 		const stored = trim.some((v) => v !== 0) ? trim : [];
 		await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: stored, trimMeasuredAt: new Date(), trimMeasuredBy: opRef(user) } });
 		await audit(user, 'robot_arm.animate.pose_droop_from_replay', 'robot_arm_poses', poseId, { name: pose.name, runId, before: pose.trim ?? [], trim: stored, residual: e.residual, rounds: e.rounds, ok: !!e.ok, t: e.t });
@@ -909,10 +914,9 @@ export interface AfterPlayResult extends SettleResult {
  * First, torque: a Pi replay without `hold_at_end` support writes torque OFF
  * at the end and the arm sags off the last pose — put it straight back on
  * (the last goal is the last frame, so it lifts back onto the pose). Then,
- * for a READING pose at the end only: if the Pi settled poses during the
- * replay, learn their trims from its report; else settle the arm onto the
- * target here and learn it. Goal poses need neither — they were played
- * exactly as set. Runs once per play.
+ * for the pose at the end: if the Pi settled poses during the replay, learn
+ * their trims from its report; else settle the arm onto the target here and
+ * learn it. Runs once per play.
  */
 export async function afterPlay(user: User, runId: string, opts: { droop?: boolean } = {}): Promise<AfterPlayResult> {
 	await connectDB();
@@ -958,7 +962,6 @@ export async function afterPlay(user: User, runId: string, opts: { droop?: boole
 	if (fromPi) return { ...base, poseName: fromPi[fromPi.length - 1].poseName, droop: null, pi: { poses: fromPi }, skipped: null };
 	const pose = (await RobotArmPose.findById(end.poseId).select('-lastPlay').lean()) as any;
 	if (!pose) return { ...base, poseName: '', droop: null, pi: null, skipped: 'the last pose no longer exists' };
-	if (pose.basis === 'goal') return { ...base, poseName: pose.name, droop: null, pi: null, skipped: null };
 	try {
 		await requireIdle();
 		const now = base.arm ?? (await readArm());
@@ -1203,8 +1206,6 @@ export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseS
 function resolvePoseKeyframe(k: Keyframe, i: number, poses: Map<string, PoseSummary>, samples: TrimSample[], estimates: Map<string, number[] | null>): ResolvedKeyframe {
 	const p = poses.get(k.poseId);
 	if (!p) throw new AnimateError(`Keyframe ${i + 1} refers to a pose that no longer exists.`);
-	// A goal pose is played exactly as set: no trim, and the Pi must not settle it.
-	if (p.basis === 'goal') return { ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets), settle: false };
 	let trim = p.trim;
 	if (!trim) {
 		if (!estimates.has(p._id)) estimates.set(p._id, estimateTrim(p.positions, samples));
