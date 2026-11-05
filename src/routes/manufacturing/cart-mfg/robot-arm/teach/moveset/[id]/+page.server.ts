@@ -2,7 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, solenoidStatus, updateMoveSet } from '$lib/server/robot-arm-animation';
+import { clearPoseDroop, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, solenoidStatus, updateMoveSet, updatePose } from '$lib/server/robot-arm-animation';
 import { stepCountLabel } from '$lib/robot-arm/animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
@@ -66,6 +66,21 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'manufacturing:write');
 		try {
 			return { play: await playMoveSet(who(locals), params.id) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// Rename a step's pose from this page (2026-11-05). The pose is shared: the new name shows wherever it is used.
+	renamePose: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const d = await request.formData();
+		const id = field(d, 'id');
+		if (!id) return fail(400, { error: 'Pose id missing.' });
+		try {
+			const p = await updatePose(who(locals), id, { name: field(d, 'name'), notes: field(d, 'notes') });
+			return { success: `Renamed to "${p.name}".` };
 		} catch (err) {
 			return failFrom(err);
 		}

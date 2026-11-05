@@ -18,6 +18,7 @@
 	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
 	import SolenoidPanel from '$lib/components/robot-arm/SolenoidPanel.svelte';
 	import StepStrip from '$lib/components/robot-arm/StepStrip.svelte';
+	import PlayStatus from '$lib/components/robot-arm/PlayStatus.svelte';
 	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
 	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
 	import { verifyWanted, MAX_ANGLE_DEG, MAX_POSITION_MM, MAX_TOLERANCE_STEPS } from '$lib/robot-arm/verified-poses';
@@ -235,7 +236,7 @@
 		selected = kfs.length ? Math.min(i, kfs.length - 1) : null;
 	}
 	function goTo(p: PoseSummary) {
-		if (confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) void playback.play('goToPose', { id: p._id }, `Go to ${friendlyName(p.name)}`);
+		if (confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) void playback.play('goToPose', { id: p._id }, `Move to ${friendlyName(p.name)}`);
 	}
 	const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, Number.isFinite(v) ? v : lo));
 	const tenth = (v: number) => Math.round(v * 10) / 10;
@@ -275,20 +276,12 @@
 	{#if flash?.error}<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm text-red-300">{flash.error}</div>
 	{:else if flash?.success}<div class="rounded border border-green-500/40 bg-green-900/10 p-3 text-sm text-green-300">{flash.success}</div>{/if}
 	{#if render.error}<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm text-red-300">{render.error}</div>{/if}
-	{#if playback.running || playback.outcome || playback.error}
-		<p class="text-sm" style="color: {playback.error ? '#fca5a5' : playback.running ? '#4ade80' : 'var(--color-tron-text-secondary)'}">
-			{#if playback.running}▶ {playback.title} · {playback.elapsedS.toFixed(0)} / {playback.durationS.toFixed(1)} s
-			{:else if playback.error}{playback.error}
-			{:else}{playback.title} — {playback.outcome}.{/if}
-		</p>
-		{#if playback.settled}<p class="text-xs" style={muted}>{playback.settled}</p>{/if}
-		{#if playback.warnings.length}<p class="text-xs" style="color: #f59e0b">{playback.warnings.join(' ')}</p>{/if}
-	{/if}
+	<PlayStatus {playback} />
 	<VerifiedRunPanel {vr} />
 	{#if firesBlocked}
 		<p class="text-xs" style="color: #fbbf24">The Pi's replay cannot fire steps yet.</p>
 	{/if}
-	{#if render.path && (hasFires || kfs.length > 1)}
+	{#if render.path}
 		<StepStrip path={render.path} selectedIndex={selected} {playheadS} onselect={(i) => (selected = i)} />
 	{/if}
 
@@ -358,6 +351,17 @@
 							</div>
 						{/if}
 						{#if selected === i}
+							{#if p}
+								<!-- Rename this step's pose (its own form, outside the move-set form: see renamePoseForm). -->
+								<div class="mt-2 flex items-end gap-2 text-[11px]" style={muted}>
+									<input type="hidden" name="id" value={p._id} form="renamePoseForm" />
+									<input type="hidden" name="notes" value={p.notes ?? ''} form="renamePoseForm" />
+									<label class="min-w-0 flex-1">Pose Name
+										{#key p.name}<input name="name" required maxlength="80" value={p.name} form="renamePoseForm" class="{input} mt-1 w-full" style={inputStyle} />{/key}
+									</label>
+									<button type="submit" form="renamePoseForm" class="rounded px-3 py-1 text-sm font-semibold" style={cyan} title="Renames the pose everywhere it is used">Rename</button>
+								</div>
+							{/if}
 							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
 								<label>Move In (s)
 									{#if i === firstPoseIndex}<span class="mt-1 block py-1">Start</span>
@@ -413,6 +417,9 @@
 			</div>
 			<button type="submit" class="{btn} w-full" style={green} disabled={!dirty}>{dirty ? 'Save Move Set' : 'Saved'}</button>
 		</form>
+
+		<!-- The step list's Rename fields post here: a form cannot sit inside the move-set form. -->
+		<form id="renamePoseForm" method="POST" action="?/renamePose" use:enhance={() => async ({ update }) => { await update({ reset: false }); }} class="hidden"></form>
 
 		<!-- pose editor for the selected keyframe (or, for a fire step, the solenoids) -->
 		<div class="space-y-3">

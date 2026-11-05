@@ -38,11 +38,12 @@
 	});
 	const total = $derived(Math.max(path.durationS, 0.001));
 	const pct = (t: number) => `${(Math.max(0, Math.min(total, t)) / total) * 100}%`;
+	// Solid enough to read at a glance (2026-11-05): green = move, grey = hold, blue = fire.
 	const fill: Record<Block['kind'], string> = {
-		lead: 'rgba(74,222,128,0.18)',
-		move: 'rgba(74,222,128,0.4)',
-		hold: 'rgba(148,163,184,0.35)',
-		fire: 'rgba(56,189,248,0.55)'
+		lead: 'rgba(74,222,128,0.35)',
+		move: 'rgba(74,222,128,0.8)',
+		hold: 'rgba(148,163,184,0.7)',
+		fire: 'rgba(56,189,248,0.85)'
 	};
 </script>
 
@@ -61,7 +62,9 @@
 			</button>
 		{/each}
 		{#if playheadS != null}
-			<div class="pointer-events-none absolute top-0 h-full w-0.5" style="left: {pct(playheadS)}; background: #4ade80"></div>
+			<!-- The part already played is dimmed; the line is where the arm is now. -->
+			<div class="pointer-events-none absolute top-0 left-0 h-full" style="width: {pct(playheadS)}; background: rgba(0,0,0,0.45)"></div>
+			<div class="pointer-events-none absolute top-0 h-full w-0.5" style="left: {pct(playheadS)}; background: #ffffff"></div>
 		{/if}
 	</div>
 	<div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px]" style="color: var(--color-tron-text-secondary)">

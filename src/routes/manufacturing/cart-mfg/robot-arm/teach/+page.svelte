@@ -40,6 +40,7 @@
 	import PoseEditor from '$lib/components/robot-arm/PoseEditor.svelte';
 	import PoseCameraCard from '$lib/components/robot-arm/PoseCameraCard.svelte';
 	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
+	import PlayStatus from '$lib/components/robot-arm/PlayStatus.svelte';
 	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
 	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
 	import type { MoveSetSummary, PoseSummary, SequenceSummary } from '$lib/server/robot-arm-animation';
@@ -298,7 +299,7 @@
 	function goTo(p: PoseSummary) {
 		if (confirm(`The arm will MOVE to "${friendlyName(p.name)}". Is the path clear?`)) {
 			editing = p._id;
-			void playback.play('goToPose', { id: p._id }, `Go to ${friendlyName(p.name)}`);
+			void playback.play('goToPose', { id: p._id }, `Move to ${friendlyName(p.name)}`);
 		}
 	}
 
@@ -408,24 +409,7 @@
 	<VerifiedRunPanel {vr} />
 
 	<!-- playback -->
-	{#if playback.running || playback.busy || playback.outcome || playback.error}
-		<div class="{card} flex flex-wrap items-center gap-3 text-sm" style="border-color: {playback.running ? '#4ade80' : 'var(--color-tron-border)'}; background: var(--color-tron-surface);">
-			{#if playback.running}
-				<span class="font-semibold" style="color: #4ade80">▶ {playback.title}</span>
-				<span class="font-mono text-xs" style={muted}>{playback.elapsedS.toFixed(0)} / {playback.durationS.toFixed(1)} s</span>
-				<span class="grow"></span>
-				<button type="button" class={btn} style={red} onclick={() => playback.stop()} disabled={playback.busy}>Stop</button>
-			{:else if playback.busy}
-				<span style={muted}>Starting…</span>
-			{:else if playback.error}
-				<span class="text-red-300">{playback.error}</span>
-			{:else}
-				<span style={muted}>{playback.title} — {playback.outcome}.</span>
-			{/if}
-			{#if playback.settled}<p class="w-full text-xs" style={muted}>{playback.settled}</p>{/if}
-			{#if playback.warnings.length}<p class="w-full text-xs" style="color: #f59e0b">{playback.warnings.join(' ')}</p>{/if}
-		</div>
-	{/if}
+	<PlayStatus {playback} onstop={() => playback.stop()} />
 
 	<div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
 		<!-- editor column -->

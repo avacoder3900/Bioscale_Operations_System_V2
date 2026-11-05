@@ -25619,3 +25619,24 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ f3b1410c
 Retrieve this exact code: git checkout f3b1410c
 What this deployment is for: Alejandro's report that the tip hovered above both calibration prongs.
+
+================================================================================
+2026-11-05 — master — Move Set page: rename a step's pose; play status chip "Move to <pose>: In Progress / Complete"; step bar solid green/grey, on Sequences too
+================================================================================
+Three asks from Alejandro on the Move Set page.
+- Rename a pose from the Move Set page: the selected pose step shows a Pose Name box and a Rename button
+  (teach/moveset/[id] gains a renamePose action, the same updatePose the Teach page uses; the name
+  changes wherever the pose is used). The fields belong to a hidden form outside the move-set form.
+- The play line "Go to 1. rotate base — finished." is gone. New PlayStatus.svelte: a bordered chip, grey
+  "<title>: In Progress" with the elapsed time while the arm moves, blue "<title>: Complete" when done;
+  amber "<title>: Stopped" / "Not Confirmed" with the detail under it; red for an error. Go-to titles
+  now read "Move to <pose>", so the chip says "Move to Rotate Base: In Progress". Used on Teach (with
+  its Stop button), the Move Set page and the Sequence page.
+- Step bar (StepStrip): solid colours — green move, grey hold, blue fire — the played part dims behind a
+  white playhead; drawn for every move set (not only with 2+ steps) and now on the Sequence page above
+  the curves.
+svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master (build watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Move Set page renames poses; play status chip; solid step bar on move sets and sequences"
+What this deployment is for: the three requests above.

@@ -10,6 +10,8 @@
 	import { invalidateAll } from '$app/navigation';
 	import { onDestroy, onMount } from 'svelte';
 	import AnimationCurves from '$lib/components/robot-arm/AnimationCurves.svelte';
+	import StepStrip from '$lib/components/robot-arm/StepStrip.svelte';
+	import PlayStatus from '$lib/components/robot-arm/PlayStatus.svelte';
 	import VerifiedRunPanel from '$lib/components/robot-arm/VerifiedRunPanel.svelte';
 	import { VerifiedRun } from '$lib/robot-arm/verified-run.svelte';
 	import { loadChosenCamera, pickCamera, saveChosenCamera } from '$lib/robot-arm/arm-camera';
@@ -160,17 +162,12 @@
 	{:else if flash?.success}<div class="rounded border border-green-500/40 bg-green-900/10 p-3 text-sm text-green-300">{flash.success}</div>{/if}
 	{#if render.error}<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm text-red-300">{render.error}</div>{/if}
 
-	<AnimationCurves path={render.path} jointNames={DEFAULT_JOINT_NAMES} playheadS={playback.running ? Math.max(0, playback.elapsedS - playback.leadInS) : null} />
-
-	{#if playback.running || playback.outcome || playback.error}
-		<p class="text-sm" style="color: {playback.error ? '#fca5a5' : playback.running ? '#4ade80' : 'var(--color-tron-text-secondary)'}">
-			{#if playback.running}PLAYING · {playback.elapsedS.toFixed(0)} / {playback.durationS.toFixed(1)} s{playback.leadInS ? ` (lead-in ${playback.leadInS} s first)` : ''}
-			{:else if playback.error}{playback.error}
-			{:else}Playback {playback.outcome}.{/if}
-		</p>
-		{#if playback.settled}<p class="text-xs" style="color: var(--color-tron-text-secondary)">{playback.settled}</p>{/if}
-		{#if playback.warnings.length}<ul class="list-disc pl-5 text-xs" style="color: #f59e0b">{#each playback.warnings as w}<li>{w}</li>{/each}</ul>{/if}
+	<PlayStatus {playback} />
+	{#if render.path}
+		<!-- The same step bar as a move set: green moves, grey holds, blue fires; the playhead follows a play. -->
+		<StepStrip path={render.path} playheadS={playback.running ? Math.max(0, playback.elapsedS - playback.leadInS) : null} />
 	{/if}
+	<AnimationCurves path={render.path} jointNames={DEFAULT_JOINT_NAMES} playheadS={playback.running ? Math.max(0, playback.elapsedS - playback.leadInS) : null} />
 	<VerifiedRunPanel {vr} />
 
 	<form method="POST" action="?/save" use:enhance class="space-y-3 rounded border p-3 sm:p-4" style="border-color: var(--color-tron-border); background: var(--color-tron-surface);">
