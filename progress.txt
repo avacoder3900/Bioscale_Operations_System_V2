@@ -25891,3 +25891,17 @@ Source: branch master @ 455a4ba4
 Retrieve this exact code: git checkout 455a4ba4
 What this deployment is for: the arm withdraws a cart as soon as its last row is filled.
 ================================================================================
+2026-11-05 — master — Move sets: a fire step with an unknown target is dropped on load (76f4612a)
+================================================================================
+Alejandro: "can you just remove those fire steps from the run, they dont appear to me." The move set "remove"
+(fail / withdraw animation) has a fire step whose target is none of A / B / conveyor (see the Start At entry,
+b9d996d4). No database access from here, so the record is not edited; instead robot-arm-animation.ts
+moveSetSummary DROPS any fire step whose target fails isFireTarget (console.warn names the move set and the
+step). Every play and the Teach editor read through it, so the withdraw / fail play skips the step now, and
+the next Save of "remove" on the Teach page writes it out of the record for good.
+svelte-check 14 errors (baseline). vitest robot-arm server: 106 pass, robot-arm-url-invariant.test.ts pre-existing fail.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 76f4612a
+Retrieve this exact code: git checkout 76f4612a
+What this deployment is for: the withdraw and the fail animation play again without the stale fire step.
+================================================================================
