@@ -26052,3 +26052,23 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch master @ (this commit, fast-forwarded from feat/cleanup-send-to-animate-sync)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Clean-Up's Send To Animate up to date with Teach"
 What this deployment is for: Send To Animate makes goal poses Teach treats like slider poses; clean-up pages link to Teach and label recordings by kind.
+================================================================================
+2026-11-05 — master — Fix 2: shoulder + elbow stiffness 6 -> 16 on arm-pi; Go To settle zero-jog crash (f6b65087)
+================================================================================
+Alejandro: "Do fix 2. I give you permission to go from 0. Remove Home to 1. Shoulder Down and test it from there."
+- Pi: servo_config.py gains route (POST /servos/gains, P/D/I only, Lock 1 = temporary, persist=true = EEPROM; ends
+  Lock 1), deployed with backup servo_config.py.bak-readonly, robot-arm restarted with no session; the arm held.
+  Servos 2 and 3 read Lock 0 before (unlocked: any earlier EEPROM write was being saved).
+- Test via BIMS's own goToPose/afterPlay from a tsx runner (user "claude-fix2-test"), each Go To with the pose's
+  trim cleared first. P 6: Remove Home elbow -9, Shoulder Down shoulder +3 elbow +3. P 16 (temporary): Remove Home
+  elbow -2 then -1, Shoulder Down elbow 0; jitter 0-1 step over 3 s; temps 40-43 C unchanged. Saved P 16 on 2 and 3
+  (persist). GET /servos/config now P [6,16,16,10,15,10], Lock [0,1,1,0,0,0].
+- Found: BIMS settle aborted on every pose with a joint already on target: "servo N did not take the correction:
+  robot-arm 400: delta_steps must be non-zero". settleAtPose now writes absolute goals via /servos/{id}/move (jog only
+  on an older Pi, never a zero one). After the fix: settle rounds 1-2, residual within 2 on every joint.
+- Not tested: extended poses (the shoulder that stalled 108 short of 2300) — outside the two poses I was cleared for.
+svelte-check 13 (baseline). vitest robot-arm 273 pass (url-invariant pre-existing fail).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ f6b65087
+Retrieve this exact code: git checkout f6b65087
+What this deployment is for: Go To Pose / Play settle works again; Pi gains route in the repo.
