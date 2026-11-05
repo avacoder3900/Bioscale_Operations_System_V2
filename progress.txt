@@ -25657,3 +25657,16 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "fix(robot-arm): no arm-read warning during a Move To; Move To playhead stays in its step"
 What this deployment is for: the two fixes above.
+
+================================================================================
+2026-11-05 — master — Stage: Calibrate Without Picking Up Tip button under Pick Up A p20 Tip And Calibrate
+================================================================================
+- calibrate/stage/+page.svelte: new "Calibrate Without Picking Up Tip" button under the main calibrate
+  button. calibrateTip(pickUp = false) skips the pick-up and probes the tip already on the pipette inside
+  the page's maintenance run (the daemon's ATTACHED mode never picks up); the travel to the calibrator,
+  the Probe Z guard and the probe are the same as the main button. On success the page marks a tip on.
+svelte-check 13 errors (baseline).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): Stage — Calibrate Without Picking Up Tip button"
+What this deployment is for: the button above.

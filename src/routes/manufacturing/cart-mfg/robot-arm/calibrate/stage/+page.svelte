@@ -829,7 +829,8 @@
 		await moveAbs({ x: calX, y: calY, z }, { lift: true });
 		await refreshPosition();
 	}
-	async function calibrateTip() {
+	/** `pickUp` false: probe the tip already on the pipette, never picking one up first. */
+	async function calibrateTip(pickUp = true) {
 		const approachZNow = checkedZ(calZ, 'Approach Z');
 		if (approachZNow === null) return;
 		const probeZNow = checkedZ(probeZ, 'Probe Z');
@@ -846,7 +847,7 @@
 		await act(async () => {
 			let pickedUpNow = false;
 			if (pipetteMismatch) throw new Error(`The run's pipette is ${pipetteName}, not the ${pip}.`);
-			if (!hasTip) {
+			if (!hasTip && pickUp) {
 				msg = `Picking up a ${pip} tip (${tiprack} ${tipWell})…`;
 				await doPickUpTip();
 				pickedUpNow = true;
@@ -869,6 +870,7 @@
 			});
 			if (res?.adjust && typeof res.adjust.x === 'number') {
 				tipAdjust = { x: res.adjust.x, y: res.adjust.y };
+				hasTip = true; // the probe only trips on a tip, so one is on
 				nominal = null;
 				refWell = null;
 				await refreshPosition();
@@ -1259,9 +1261,10 @@
 				{#if pipetteMismatch}
 					<p class="mb-1 rounded border border-red-400/50 bg-red-900/20 px-1.5 py-1 text-[10px] leading-tight text-red-200">The run's pipette is <span class="font-mono">{pipetteName}</span>, not the <strong>{pip}</strong>. Close the run and open the other mount.</p>
 				{/if}
-				<button type="button" onclick={calibrateTip} disabled={busy || calibrating || !pipetteId || pipetteMismatch} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a {pip} tip, travels to the tip calibrator, then runs the slow limit-switch probe ({tipProfile} profile, probe Z = {zCalKey}). Keeps the tip on for tuning.">
+				<button type="button" onclick={() => calibrateTip()} disabled={busy || calibrating || !pipetteId || pipetteMismatch} class="w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-2 text-xs font-bold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Picks up a {pip} tip, travels to the tip calibrator, then runs the slow limit-switch probe ({tipProfile} profile, probe Z = {zCalKey}). Keeps the tip on for tuning.">
 					{calibrating ? 'Calibrating Tip…' : hasTip ? 'Calibrate Tip' : `Pick Up A ${pip} Tip And Calibrate`}
 				</button>
+				<button type="button" onclick={() => calibrateTip(false)} disabled={busy || calibrating || !pipetteId || pipetteMismatch} class="mt-1 w-full rounded border border-purple-400/50 bg-purple-900/20 px-2 py-1.5 text-[11px] font-semibold text-purple-200 hover:bg-purple-900/30 disabled:opacity-40" title="Probes the tip already on the pipette ({tipProfile} profile, probe Z = {zCalKey}). No pick-up.">Calibrate Without Picking Up Tip</button>
 				<button type="button" onclick={swapTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-amber-400/50 bg-amber-900/15 px-2 py-1.5 text-[11px] font-semibold text-amber-200 hover:bg-amber-900/25 disabled:opacity-40" title="Drops the current tip in the trash, then picks the next fresh one from slot 11. Clears the probe adjust — Calibrate tip again before capturing.">Swap Tip</button>
 				<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip from slot 11 — no travel to the calibrator, no probe.">{hasTip ? 'Pick Up Another Tip' : 'Pick Up Tip Without Probing'}</button>
 				<button type="button" onclick={dropTipAction} disabled={!pipetteId || busy || !hasTip} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60 disabled:opacity-40" style="color: var(--color-tron-text-secondary)">Drop Tip</button>
