@@ -48,6 +48,11 @@ describe('changesFromAudit', () => {
 			lines({ _id: 'a', action: 'arm_wax_fill.stage_edit', tableName: 't', recordId: 'r7', newData: { mode: 'offsets', edits: [{ wellName: 'C3', dx: 0.2, dy: 0, dz: -0.1 }] } })
 		).toEqual(['stage.hole_offset robot:B07 hole:C3 dx 0.2 dy 0 dz -0.1 mm']);
 	});
+	it('a cleared scan position, an empty droop trim, an unset tip adjust', () => {
+		expect(lines({ _id: 'a', action: 'arm_wax_fill.scan_position', tableName: 't', recordId: 'r7', newData: { before: { x: 1, y: 2, z: 3 } } })).toEqual(['stage.scan_position robot:B07 1, 2, 3 -> Cleared']);
+		expect(lines({ _id: 'a', action: 'robot_arm.animate.pose_droop_settle', tableName: 't', recordId: 'p', newData: { name: '9. home', trim: [], before: [] } })).toEqual(['pose.droop_trim pose:9. home None']);
+		expect(lines({ _id: 'a', action: 'arm_wax_fill.calibrator', tableName: 't', recordId: 'r7', newData: { position: { x: 1, y: 2, z: 3 }, maxTipAdjust: null, before: null } })).toEqual(['calibrator.position robot:B07 1, 2, 3 mm']);
+	});
 	it('tip calibrator: only what changed', () => {
 		expect(
 			lines({

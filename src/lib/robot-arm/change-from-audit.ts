@@ -123,7 +123,7 @@ export function changesFromAudit(a: AuditRowLike, names: AuditNames): AuditChang
 		case 'arm_wax_fill.switch_robot':
 			return [{ page: 'run', hardware: 'ot2', key: 'setup.robot', oldValue: before?.robotId ? robotSlot(before.robotId, names) : null, newValue: robotSlot(d.robotId, names), source: 'ui' }];
 		case 'arm_wax_fill.scan_position':
-			return [{ page: 'calibrate.stage', hardware: 'stage', key: 'stage.scan_position', target: `robot:${robot}`, oldValue: pointText(d.before), newValue: pointText(d), unit: 'mm', source: 'ui' }];
+			return [{ page: 'calibrate.stage', hardware: 'stage', key: 'stage.scan_position', target: `robot:${robot}`, oldValue: pointText(d.before), newValue: pointText(d) ?? 'Cleared', unit: pointText(d) ? 'mm' : null, source: 'ui' }];
 		case 'arm_wax_fill.dispense_depth':
 			return [{ page: 'calibrate.stage', hardware: 'stage', key: 'stage.dispense_depth', target: `robot:${robot}`, oldValue: r2(d.before), newValue: r2(d.mm), unit: 'mm', source: 'ui' }];
 		case 'arm_wax_fill.stage_edit': {
@@ -155,7 +155,7 @@ export function changesFromAudit(a: AuditRowLike, names: AuditNames): AuditChang
 				if (before && same(r2(before[field]), r2(d[field]))) continue;
 				out.push({ page, hardware: 'stage', key: 'calibrator.probe_z', target: `${target} tip:${profile}`, oldValue: before ? r2(before[field]) : null, newValue: r2(d[field]), unit: 'mm', source: 'ui' });
 			}
-			if ('maxTipAdjust' in d && (!before || !same(r2(before.maxTipAdjust), r2(d.maxTipAdjust)))) {
+			if ('maxTipAdjust' in d && !same(before ? r2(before.maxTipAdjust) : null, r2(d.maxTipAdjust))) {
 				out.push({ page, hardware: 'stage', key: 'calibrator.max_tip_adjust', target, oldValue: before ? r2(before.maxTipAdjust) : null, newValue: r2(d.maxTipAdjust), unit: 'mm', source: 'ui' });
 			}
 			return out;
@@ -177,7 +177,9 @@ export function changesFromAudit(a: AuditRowLike, names: AuditNames): AuditChang
 		case 'robot_arm.conveyor.default':
 			return [{ page: 'teach', hardware: 'conveyor', key: 'conveyor.default_ms', oldValue: obj(a.oldData)?.conveyorPulseMs ?? null, newValue: d.conveyorPulseMs ?? null, unit: 'ms', source: 'ui' }];
 		case 'robot_arm.animate.pose_droop_settle':
-			return Array.isArray(d.trim) ? [{ page: 'teach', hardware: 'servo', key: 'pose.droop_trim', target: `pose:${String(d.name ?? a.recordId)}`, oldValue: Array.isArray(d.before) && d.before.length ? d.before : null, newValue: d.trim, unit: 'steps', source: 'ui' }] : [];
+			return Array.isArray(d.trim)
+				? [{ page: 'teach', hardware: 'servo', key: 'pose.droop_trim', target: `pose:${String(d.name ?? a.recordId)}`, oldValue: Array.isArray(d.before) && d.before.length ? d.before : null, newValue: d.trim.length ? d.trim : 'None', unit: d.trim.length ? 'steps' : null, source: 'ui' }]
+				: [];
 		case 'robot_arm.animate.pose_droop_clear':
 			return [{ page: 'teach', hardware: 'servo', key: 'pose.droop_trim', target: `pose:${String(d.name ?? a.recordId)}`, oldValue: Array.isArray(d.before) ? d.before : null, newValue: 'Cleared', unit: null, source: 'ui', note: typeof d.note === 'string' ? d.note : null }];
 		case 'robot_arm.animate.pose_droop_clear_all': {
