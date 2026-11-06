@@ -26514,3 +26514,16 @@ own row says Temporary because the persist call changed no value). P now [6,16,3
 Seen, not changed: servo 4 (wrist) ends each Short Move ~6 steps further out (915 -> 921 -> 927);
 servo 1 at P 6 misses 12-15 (passes). Camera Home Check fails: the arm is not parked at home, and camera
 'external' gave no frame ("no colour capture node found matching 'RealSense'"). No code changed.
+
+================================================================================
+2026-11-06 — feat/arm-motion-log — Shoulder, wrist and base stiffness to 32, each tested and saved
+================================================================================
+After the elbow fix, the user agreed to raise shoulder (2), wrist (4) and base (1) to P 32, one at a time;
+wrist roll (5) and gripper (6) stay at 16 (roll already lands within 4 steps; a stiffer gripper squeezes
+harder and runs warm). Per servo: miss at the old P, P 32 temporary, miss again, then Short Move, Hold
+Without Jump, Droop, Repeatability, Thermals; saved with persist only if all passed (otherwise put back).
+All passed, 0 wobble, servos 38-44 C throughout. Miss at 50 / 100 steps: shoulder 13/12 -> 3/4, wrist
+10/8 -> 3/1 (its return creep 7-8 -> 1-2), base (P 6) 11/34 -> 1/1. P now [32,32,32,32,16,16], Lock
+[1,1,1,1,0,0]. Change Log: per servo the Pi's own "Temporary" row plus a "Saved to EEPROM" row.
+31 test runs and 219 moves as "Claude (Servo Diagnosis)" in the Test and Movement Logs; motion lease
+held during each probe. Not verified across a power cycle. No code changed.
