@@ -966,14 +966,16 @@ export const robotArm = {
 	 * Set one servo's goal to an ABSOLUTE position (Animate's live sliders).
 	 * Unlike jogJoint (goal = wherever the servo is right now + delta) the
 	 * result does not depend on where the arm happened to be, so the same
-	 * value always sends the servo to the same place. No speed is sent: the
-	 * Goal_Speed register persists on the servo and would slow later replays.
-	 * 409 when that servo's torque is off.
+	 * value always sends the servo to the same place. Normally no speed is
+	 * sent: the Goal_Speed register persists on the servo and would slow later
+	 * replays. The one caller that passes `speed` is Return Home putting full
+	 * speed (0) back after its capped jogs — re-sending the servo's own goal,
+	 * so nothing moves. 409 when that servo's torque is off.
 	 */
-	moveJoint: (sid: number, position: number) =>
+	moveJoint: (sid: number, position: number, speed?: number) =>
 		robotArmFetch<{ id: number; goal: number }>(`/servos/${sid}/move`, {
 			method: 'POST',
-			body: { position: Math.round(position) }
+			body: { position: Math.round(position), ...(speed !== undefined ? { speed } : {}) }
 		}),
 	listRecordings: () => robotArmFetch<{ recordings: RecordingMeta[] }>('/recordings'),
 	// Recording trash (recordings_admin.py on the Pi). BIMS exports a recording

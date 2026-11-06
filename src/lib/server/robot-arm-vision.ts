@@ -63,7 +63,10 @@ import {
 	LIFT_SERVO_ID,
 	CLAW_CLOSE_TOLERANCE,
 	CLAW_STALL_STEPS,
+	FULL_SPEED,
+	HOME_JOG_SPEED,
 	MAX_JOG_STEPS,
+	jogTravelMs,
 	type BaseOutOfRange,
 	type HomeAssessment,
 	type HomingSettings,
@@ -1018,14 +1021,20 @@ async function returnToHomeAttempt(
 	let current = before.steps;
 	let budgetHit = false;
 
+	// Servos jogged at HOME_JOG_SPEED → the goal each was last sent, for restoreFullSpeed.
+	const capped = new Map<number, number>();
 	const jog = async (sid: number, delta: number) => {
+		let goal: number;
 		try {
-			await robotArm.jogJoint(sid, delta);
+			goal = Number((await robotArm.jogJoint(sid, delta, HOME_JOG_SPEED))?.goal);
 		} catch (e) {
 			throw new Error(`servo ${sid} jog failed after ${jogs} jog(s): ${e instanceof Error ? e.message : String(e)}`);
 		}
 		jogs++;
 		sent.set(sid, (sent.get(sid) ?? 0) + delta);
+		capped.set(sid, goal);
+		// Let this jog arrive before the next one is aimed (the Pi jogs from the present position).
+		await new Promise((res) => setTimeout(res, jogTravelMs(delta)));
 	};
 	const settle = async () => {
 		await new Promise((res) => setTimeout(res, SETTLE_MS));
@@ -1076,19 +1085,24 @@ async function returnToHomeAttempt(
 		}
 	};
 
-	// 1. Open the mouth (first attempt only).
 	const g = String(GRIPPER_SERVO_ID);
-	if (attempt === 1 && homing.gripperOpenSteps > 0 && !(await stopRequested())) {
-		if (Number.isFinite(current[g])) {
-			await jog(GRIPPER_SERVO_ID, Math.min(MAX_JOG_STEPS, homing.gripperOpenSteps));
-			await settle();
-		} else {
-			warnings.push('The mouth (servo 6) did not report a position, so it was not opened.');
+	try {
+		// 1. Open the mouth (first attempt only).
+		if (attempt === 1 && homing.gripperOpenSteps > 0 && !(await stopRequested())) {
+			if (Number.isFinite(current[g])) {
+				await jog(GRIPPER_SERVO_ID, Math.min(MAX_JOG_STEPS, homing.gripperOpenSteps));
+				await settle();
+			} else {
+				warnings.push('The mouth (servo 6) did not report a position, so it was not opened.');
+			}
 		}
+		// 2. Servo B, then 3. everything.
+		await phase([LIFT_SERVO_ID]);
+		await phase(HOME_SERVO_IDS);
+	} finally {
+		// However the moves ended (done, Stop, out of time, a failed jog): full speed back.
+		await restoreFullSpeed(capped, warnings);
 	}
-	// 2. Servo B, then 3. everything.
-	await phase([LIFT_SERVO_ID]);
-	await phase(HOME_SERVO_IDS);
 
 	// 4. Last: close the claw completely — closing jogs until it stops moving
 	// (the closed stop), then ease off 1 step so the servo is not left pushing
@@ -1103,7 +1117,7 @@ async function returnToHomeAttempt(
 	// CLAW_CLOSE_TOLERANCE: the server-side half of "close enough, close the claw" (2026-10-23), so a
 	// Vision tab still running the older loop also gets the mouth closed within ~25 s.
 	else if ((!r.off.length || (attempt >= 2 && r.max <= CLAW_CLOSE_TOLERANCE)) && !stopped) {
-		const c = await closeClawToStop(t0 + ATTEMPT_MOVE_BUDGET_MS);
+		const c = await closeClawToStop(t0 + ATTEMPT_MOVE_BUDGET_MS, warnings);
 		jogs += c.jogs;
 		sent.set(GRIPPER_SERVO_ID, (sent.get(GRIPPER_SERVO_ID) ?? 0) + c.delta);
 		clawClosed = c.closed;
@@ -1149,29 +1163,59 @@ export async function requestHomeStop(user: User, o: { cameraName?: string | nul
  * is not left pushing against the stop. Stops at `deadline` (ms epoch) with
  * closed=false; the caller tries again.
  */
-async function closeClawToStop(deadline: number): Promise<{ closed: boolean; jogs: number; delta: number }> {
+async function closeClawToStop(deadline: number, warnings: string[]): Promise<{ closed: boolean; jogs: number; delta: number }> {
 	const pos = async () => {
 		const s = (await robotArm.listServos()).find((x) => x?.id === GRIPPER_SERVO_ID);
 		if (!s || !Number.isFinite(s.position)) throw new Error('the claw (servo 6) did not report a position');
 		return Number(s.position);
 	};
+	// Closing jogs go at HOME_JOG_SPEED too (a 300-step jog lands well inside SETTLE_MS); the
+	// goal last sent is remembered so the finally can put full speed back without moving it.
+	const capped = new Map<number, number>();
+	const jog = async (delta: number) => capped.set(GRIPPER_SERVO_ID, Number((await robotArm.jogJoint(GRIPPER_SERVO_ID, delta, HOME_JOG_SPEED))?.goal));
 	let jogs = 0;
 	let delta = 0;
 	let now = await pos();
-	while (Date.now() < deadline) {
-		await robotArm.jogJoint(GRIPPER_SERVO_ID, -MAX_JOG_STEPS);
-		jogs++;
-		delta -= MAX_JOG_STEPS;
-		await new Promise((res) => setTimeout(res, SETTLE_MS));
-		const next = await pos();
-		const movedBy = Math.abs(next - now);
-		now = next;
-		if (movedBy < CLAW_STALL_STEPS) {
-			await robotArm.jogJoint(GRIPPER_SERVO_ID, 1);
-			return { closed: true, jogs: jogs + 1, delta: delta + 1 };
+	try {
+		while (Date.now() < deadline) {
+			await jog(-MAX_JOG_STEPS);
+			jogs++;
+			delta -= MAX_JOG_STEPS;
+			await new Promise((res) => setTimeout(res, SETTLE_MS));
+			const next = await pos();
+			const movedBy = Math.abs(next - now);
+			now = next;
+			if (movedBy < CLAW_STALL_STEPS) {
+				await jog(1);
+				return { closed: true, jogs: jogs + 1, delta: delta + 1 };
+			}
+		}
+		return { closed: false, jogs, delta };
+	} finally {
+		await restoreFullSpeed(capped, warnings);
+	}
+}
+
+/**
+ * Put the servos' speed back to full after Return Home's capped jogs
+ * (HOME_JOG_SPEED). The STS3215 keeps its Goal_Speed until something writes
+ * it again, and a Play writes Goal_Position only — so without this a Play
+ * after a Return Home would crawl. Each servo gets its LAST goal re-sent
+ * with FULL_SPEED through /move: same goal, nothing moves. (A jog of 0 steps
+ * would instead re-aim a loaded joint at where it sags to, and it would sag
+ * again from there.) Failures are warnings, never a failed Return Home: the
+ * next Return Home resets the speed as well.
+ */
+async function restoreFullSpeed(capped: Map<number, number>, warnings: string[]): Promise<void> {
+	for (const [sid, goal] of capped) {
+		try {
+			if (Number.isFinite(goal)) await robotArm.moveJoint(sid, goal, FULL_SPEED);
+			else await robotArm.jogJoint(sid, 0, FULL_SPEED);
+		} catch (e) {
+			warnings.push(`Servo ${sid} may be left at Return Home's slower speed (${e instanceof Error ? e.message : String(e)}) — the next Return Home resets it.`);
 		}
 	}
-	return { closed: false, jogs, delta };
+	capped.clear();
 }
 
 /**
@@ -1186,9 +1230,10 @@ export async function closeClaw(user: User, o: { cameraName?: string | null; run
 		const doc = await loadActive(o.cameraName);
 		await requireArmFree();
 		await robotArm.setTorque(true);
-		const c = await closeClawToStop(Date.now() + ATTEMPT_MOVE_BUDGET_MS);
-		await audit('robot_arm.vision.close_claw', 'robot_arm_tag_calibrations', String(doc._id), user, { closed: c.closed, jogs: c.jogs, delta: c.delta });
-		return { ...c, message: c.closed ? 'Claw closed.' : 'Claw still closing…' };
+		const warnings: string[] = [];
+		const c = await closeClawToStop(Date.now() + ATTEMPT_MOVE_BUDGET_MS, warnings);
+		await audit('robot_arm.vision.close_claw', 'robot_arm_tag_calibrations', String(doc._id), user, { closed: c.closed, jogs: c.jogs, delta: c.delta, warnings });
+		return { ...c, message: [c.closed ? 'Claw closed.' : 'Claw still closing…', ...warnings].join(' ') };
 	});
 }
 

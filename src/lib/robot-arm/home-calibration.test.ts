@@ -19,7 +19,10 @@ import {
 	SERVO_LOAD_MARGIN,
 	type ServoReading,
 	LIFT_SERVO_ID,
-	MAX_JOG_STEPS
+	MAX_JOG_STEPS,
+	HOME_JOG_SPEED,
+	FULL_SPEED,
+	jogTravelMs
 } from './home-calibration';
 import type { VisionAssessment } from './apriltags';
 
@@ -112,6 +115,24 @@ describe('shouldRetryHome', () => {
 		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: true }).reason).toBe('encoders are home; the tags disagree');
 		// Claw still open within the first 5 s: another attempt closes it; after 5 s the page does (see 'close enough').
 		expect(shouldRetryHome({ ...base, verdict: 'markers_off', residualMax: 4, clawClosed: false, elapsedMs: 2_000 }).retry).toBe(true);
+	});
+});
+
+describe('Return Home jog speed (2026-11-06: no more snapping at full speed)', () => {
+	it('caps the servo speed inside the Goal_Speed range; full speed is the register value 0', () => {
+		expect(HOME_JOG_SPEED).toBeGreaterThan(0);
+		expect(HOME_JOG_SPEED).toBeLessThanOrEqual(1023);
+		expect(FULL_SPEED).toBe(0);
+	});
+	it('waits for a jog to travel before the next one is aimed: |delta| / speed, plus the margin', () => {
+		expect(jogTravelMs(300, 600, 100)).toBe(600);
+		expect(jogTravelMs(-150, 600, 100)).toBe(350);
+		expect(jogTravelMs(MAX_JOG_STEPS)).toBe(Math.ceil((MAX_JOG_STEPS / HOME_JOG_SPEED) * 1000) + 100);
+		expect(jogTravelMs(1)).toBeGreaterThan(100);
+	});
+	it('an uncapped speed needs no wait', () => {
+		expect(jogTravelMs(300, FULL_SPEED)).toBe(0);
+		expect(jogTravelMs(300, -5)).toBe(0);
 	});
 });
 

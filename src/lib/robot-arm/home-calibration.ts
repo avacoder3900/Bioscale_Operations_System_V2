@@ -63,6 +63,32 @@ export function planJogDeltas(
 export const MAX_JOG_STEPS = 300;
 
 /**
+ * How fast Return Home jogs: the STS3215's Goal_Speed register, in steps/s
+ * (0 = uncapped). Until 2026-11-06 no speed was sent, so every ≤300-step jog
+ * snapped at the servo's full speed — Alejandro: "kinda violent". 600 steps/s
+ * ≈ 53°/s: a max-size jog takes ~0.5 s. Tune here only.
+ *
+ * The register PERSISTS on the servo, and a Play writes Goal_Position only,
+ * so every Return Home request that caps a servo ends by writing FULL_SPEED
+ * back (robot-arm-vision restoreFullSpeed) — a Play after a Return Home
+ * would otherwise crawl.
+ */
+export const HOME_JOG_SPEED = 600;
+/** Goal_Speed 0: the servo's own maximum (what Plays, Go To and Live rely on). */
+export const FULL_SPEED = 0;
+
+/**
+ * How long a jog of `delta` steps takes at `speed` steps/s, plus a margin —
+ * the wait before the next jog, since the Pi aims a jog from the PRESENT
+ * position: two back-to-back jogs on one joint at a capped speed would
+ * otherwise collapse into one. 0 when the speed is uncapped.
+ */
+export function jogTravelMs(delta: number, speed = HOME_JOG_SPEED, marginMs = 100): number {
+	if (!(speed > 0)) return 0;
+	return Math.ceil((Math.abs(delta) / speed) * 1000) + marginMs;
+}
+
+/**
  * Overshoot for a joint that stalls short of home (2026-10-23). Seen on the
  * base (servo 1): told to go to 1991 it rests at 1952 every time — a 39-step
  * steady-state error under load — and each new jog of +39 just re-sends the
