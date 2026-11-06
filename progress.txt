@@ -26838,3 +26838,14 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit a073ed2d (also feat/ot2-movement-log)
 Retrieve this exact code: git checkout a073ed2d
 What this deployment is for: Home Gantry through the cable link (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — B07 bridge daemon 1.4.0 -> 1.6.0 (scan_at_pause)
+================================================================================
+With Alejandro's go-ahead. B07 ran ot2-bridge 1.4.0, which predates scan_at_pause, so every arm-loop scan took the
+fallback path (2026-11-05: park -> scan sent 6.7 s, sent -> barcode 9.3 s). Copied scripts/ot2-bridge.py from master
+(1.6.0, md5 fd02381485a757207df5313cf433cdb1) to /data/ot2-bridge over arm-pi -> cable -> B07 (B07 has no sftp-server:
+scp fails, piped over ssh instead); py_compile ok on B07's Python 3.10.8; backup ot2-bridge.py.bak-20261106-v1.4.0
+(md5 a1da10cb...). No protocol run; a Jog maintenance run was open but idle 5 min (the daemon only closes one when it
+opens a new one). systemctl restart ot2-bridge 21:12:51 UTC: active, scanner opened, 0 errors; heartbeat reports
+ot2-bridge/1.6.0, pollErrors 0; queue /health 0.68-0.79 s. Next: barcode over the cable, start record over the cable.
