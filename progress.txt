@@ -26170,3 +26170,7 @@ Not driven on the arm yet: every test is written against the Pi routes as the cl
 arm-pi is the real check. vitest: 25 new cases pass; robot-arm suite 21 files pass, url-invariant (c) fails on
 origin/master too (pre-existing). npm run check 13 errors (baseline 13, none in touched files). Worked in
 ../Bioscale_V2-wt-maint-log off origin/master fc6b0498.
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ ed52bddd (340c8da2 + ed52bddd, rebased from feat/arm-maintenance-log onto 46fa64b6)
+Retrieve this exact code: git checkout ed52bddd
+What this deployment is for: Maintenance > Change Log (labelled, backfilled, 60 rows) and Maintenance > Tests with its own Test Log.
