@@ -22,7 +22,8 @@ are dropped and printed; rows it could not store are kept.
 Config (environment; a script run by hand also reads .env at the project root):
     BIMS_CHANGES_URL    where to POST. Default: BIMS_WEBHOOK_URL with /webhook -> /changes,
                         else BIMS_URL + /api/robot-arm/changes
-    AGENT_API_KEY       the x-agent-api-key BIMS expects (same key as the webhook)
+    ROBOT_ARM_API_KEY   sent as x-api-key (the service's own key; BIMS holds it too). Else
+    AGENT_API_KEY       sent as x-agent-api-key
 
 Stdlib only; never raises into the caller.
 """
@@ -77,7 +78,7 @@ def _load_dotenv() -> None:
 
 def config() -> tuple[Optional[str], Optional[str]]:
     """(url, key), either None when not configured."""
-    if not os.environ.get("AGENT_API_KEY") or not (os.environ.get("BIMS_CHANGES_URL") or os.environ.get("BIMS_WEBHOOK_URL") or os.environ.get("BIMS_URL")):
+    if not (os.environ.get("ROBOT_ARM_API_KEY") or os.environ.get("AGENT_API_KEY")) or not (os.environ.get("BIMS_CHANGES_URL") or os.environ.get("BIMS_WEBHOOK_URL") or os.environ.get("BIMS_URL")):
         _load_dotenv()
     url = os.environ.get("BIMS_CHANGES_URL")
     if not url:
@@ -86,7 +87,13 @@ def config() -> tuple[Optional[str], Optional[str]]:
             url = hook.rstrip("/")[: -len("/webhook")] + "/changes"
         elif os.environ.get("BIMS_URL"):
             url = os.environ["BIMS_URL"].rstrip("/") + "/api/robot-arm/changes"
-    return (url or None), (os.environ.get("AGENT_API_KEY") or None)
+    return (url or None), (os.environ.get("ROBOT_ARM_API_KEY") or os.environ.get("AGENT_API_KEY") or None)
+
+
+def _auth_header() -> dict[str, str]:
+    if os.environ.get("ROBOT_ARM_API_KEY"):
+        return {"x-api-key": os.environ["ROBOT_ARM_API_KEY"]}
+    return {"x-agent-api-key": os.environ.get("AGENT_API_KEY", "")}
 
 
 def _now() -> str:
@@ -163,10 +170,10 @@ def _post(rows: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
     """BIMS's answer ({written, rejected, failed}) or None when it could not be reached."""
     url, key = config()
     if not url or not key:
-        _log("not configured (BIMS_CHANGES_URL / BIMS_WEBHOOK_URL and AGENT_API_KEY); rows stay pending")
+        _log("not configured (BIMS_CHANGES_URL and ROBOT_ARM_API_KEY); rows stay pending")
         return None
     body = json.dumps({"changes": rows, "host": socket.gethostname()}).encode("utf-8")
-    req = urllib.request.Request(url, data=body, method="POST", headers={"content-type": "application/json", "x-agent-api-key": key})
+    req = urllib.request.Request(url, data=body, method="POST", headers={"content-type": "application/json", **_auth_header()})
     for attempt, delay in enumerate((0.0, *RETRY_DELAYS_S)):
         if delay:
             time.sleep(delay)

@@ -26,7 +26,7 @@ sudo systemctl restart robot-arm
 python3 scripts/bims_report.py pending
 ```
 
-The service needs `BIMS_WEBHOOK_URL` and `AGENT_API_KEY` in its environment, which the webhook already uses. `BIMS_CHANGES_URL` overrides the derived URL. Scripts run by hand read `.env` at the project root.
+The service needs `BIMS_CHANGES_URL` (the production URL + `/api/robot-arm/changes`) in `~/robot-arm/.env`. It authenticates with its own `ROBOT_ARM_API_KEY`, which BIMS also holds. Scripts run by hand read `.env` at the project root.
 
 ## Labels
 

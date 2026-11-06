@@ -19,8 +19,7 @@ Two idempotent edits to src/server/app.py, the same way the other installers do 
 
 Then: `sudo systemctl restart robot-arm` (only with GET /sessions/active == {"active": null})
 and look for the pi.service.start row on Maintenance > Change Log. The service needs
-BIMS_WEBHOOK_URL (or BIMS_CHANGES_URL) and AGENT_API_KEY in its environment, which the
-webhook already uses.
+BIMS_CHANGES_URL in ~/robot-arm/.env; it authenticates with its own ROBOT_ARM_API_KEY.
 """
 
 from __future__ import annotations
