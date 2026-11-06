@@ -46,17 +46,15 @@ export const EASINGS: { id: Easing; label: string; hint: string }[] = [
 	{ id: 'flow', label: 'Flow through', hint: 'Does not stop at this pose' }
 ];
 
-/**
- * Above this, a transition asks for more than the servo can do (pathStats,
- * minDurationS via the easing's peak-speed factor, so the two agree). It is a
- * WARNING, never a refusal (2026-11-05, Alejandro): the STS3215 limits its own
- * speed, and the speed experiment (progress.txt 2026-11-05) landed every move
- * within 3 steps of a slow baseline even when asked for ~10,600 steps/s; asking
- * for more only makes it land harder (shoulder load near its maximum at 0.2 s),
- * not sooner. Was 2000 (a guess at half the no-load speed), which made a
- * 1131-step shoulder move need 1.1 s; at 7000 that move may take 0.5 s with Out.
+/*
+ * There is NO speed limit on a step (2026-11-06, Alejandro: "remove the speed
+ * limit block on steps"). The STS3215 limits its own speed: the speed
+ * experiments (progress.txt 2026-11-05) landed every move within 3 steps of a
+ * slow baseline even when asked for ~10,600 steps/s; asking for more only makes
+ * it land harder, not sooner. A step's time is whatever the operator typed,
+ * between MIN_TRANSITION_S and MAX_TRANSITION_S. (History: a 2000 steps/s cap
+ * refused the play until 2026-11-05, then 7000 as a warning until 2026-11-06.)
  */
-export const MAX_STEPS_PER_S = 7000;
 /** Speed used when BIMS picks a duration itself (lead-in, joins between move sets). */
 export const AUTO_STEPS_PER_S = 600;
 export const MIN_TRANSITION_S = 0.2;
@@ -355,36 +353,6 @@ export function maxDelta(a: number[], b: number[]): number {
 export const roundTenth = (s: number) => Math.round(s * 10) / 10;
 const ceilTenth = (s: number) => Math.ceil(s * 10 - 1e-9) / 10;
 
-/**
- * How much faster than its average speed an easing goes at its steepest
- * (max of d/du of ease()): the arm's peak speed over a move is the average
- * times this. Minimum jerk peaks at 1.875× mid-move; a cubic ease-in/out
- * peaks at 3× at the fast end; linear never exceeds its average. Flow-through
- * segments depend on their neighbours' tangents; the min-jerk figure is used.
- */
-export function peakSpeedFactor(kind: Easing): number {
-	switch (kind) {
-		case 'linear':
-			return 1;
-		case 'in':
-		case 'out':
-			return 3;
-		default:
-			return 1.875;
-	}
-}
-
-/**
- * Shortest transition the arm can physically make between two poses with the
- * given arrival easing (0 when they are the same): the duration at which the
- * easing's PEAK speed on the fastest servo is exactly `stepsPerS`, so a path
- * rendered at this duration passes pathStats' per-frame check.
- */
-export function minDurationS(a: number[], b: number[], stepsPerS = MAX_STEPS_PER_S, easing: Easing = 'ease'): number {
-	const d = maxDelta(a, b);
-	return d ? Math.max(MIN_TRANSITION_S, ceilTenth((d * peakSpeedFactor(easing)) / stepsPerS)) : 0;
-}
-
 /** A comfortable duration BIMS picks when the operator has not: lead-ins and joins. */
 export function autoDurationS(a: number[], b: number[]): number {
 	const d = maxDelta(a, b);
@@ -534,27 +502,6 @@ export function estimateTrim(positions: number[], samples: TrimSample[]): number
 	if (!wSum) return null;
 	const out = acc.map((v, i) => (TRIM_SERVOS.includes(i + 1) ? Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, Math.round(v / wSum))) : 0));
 	return out.some((v) => v !== 0) ? out : null;
-}
-
-export interface KeyframeProblem {
-	index: number;
-	message: string;
-}
-
-/** Transitions that ask for more than the servo's top speed: warnings, the arm still plays them. */
-export function tooFast(kfs: ResolvedKeyframe[]): KeyframeProblem[] {
-	const out: KeyframeProblem[] = [];
-	// Fire steps do not move the arm: each pose is compared with the pose before it.
-	let prev: ResolvedKeyframe | null = null;
-	kfs.forEach((k, i) => {
-		if (k.fire) return;
-		if (prev) {
-			const min = minDurationS(prev.positions, k.positions, MAX_STEPS_PER_S, k.easing);
-			if (k.durationS < min) out.push({ index: i, message: `${k.name}: faster than the servo can go, it will take about ${min} s.` });
-		}
-		prev = k;
-	});
-	return out;
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
@@ -720,10 +667,8 @@ function round4(n: number): number {
 export interface PathStats {
 	frames: number;
 	durationS: number;
-	/** Per servo (index = id − 1), the fastest frame-to-frame rate in steps/s. */
+	/** Per servo (index = id − 1), the fastest frame-to-frame rate in steps/s (information only: no limit). */
 	maxStepsPerS: number[];
-	/** Servo ids that exceed MAX_STEPS_PER_S anywhere. */
-	tooFast: number[];
 }
 
 export function pathStats(p: RenderedPath): PathStats {
@@ -733,8 +678,7 @@ export function pathStats(p: RenderedPath): PathStats {
 		if (dt <= 0) continue;
 		for (let s = 0; s < SERVO_COUNT; s++) max[s] = Math.max(max[s], Math.abs(p.goal[i][s] - p.goal[i - 1][s]) / dt);
 	}
-	const tooFastIds = max.map((v, s) => (v > MAX_STEPS_PER_S ? s + 1 : 0)).filter(Boolean);
-	return { frames: p.goal.length, durationS: p.durationS, maxStepsPerS: max.map((v) => Math.round(v)), tooFast: tooFastIds };
+	return { frames: p.goal.length, durationS: p.durationS, maxStepsPerS: max.map((v) => Math.round(v)) };
 }
 
 // ── sequences ────────────────────────────────────────────────────────────

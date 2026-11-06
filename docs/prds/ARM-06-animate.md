@@ -48,12 +48,13 @@ plays it as an ordinary recording.
 - **Flow** means "do not stop here": the pose gets a Catmull-Rom tangent (in time) and the segments
   either side are cubic Hermite, so a run of flow poses is one continuous sweep. A pose is a stop
   (zero tangent) if it is held, first/last, or if its own or the next pose's easing is not `flow`.
-- **Speed limits:** `MAX_STEPS_PER_S = 2000` (STS3215 no-load ≈ 4000) — a transition that needs more
-  is flagged in the editor and refused at play. BIMS's own durations (lead-in, joins) use 600 steps/s.
-  Play checks the rendered path frame by frame, so the editor's "at least N s" (`minDurationS`) is
-  computed from the easing's **peak** speed, not its average: easy ease peaks at 1.875× the average,
-  cubic in/out at 3×, linear at 1× (`peakSpeedFactor`, fixed 2026-10-21 — before this the editor's
-  minimum for easy ease was ~half what play would accept).
+- **No speed limit on a step** (2026-11-06). A step's time is whatever the operator typed, 0.2–60 s;
+  the STS3215 limits its own speed and lands on the pose anyway (speed experiments, progress.txt
+  2026-11-05: within 3 steps of a slow baseline even when asked for ~10,600 steps/s). History: a
+  `MAX_STEPS_PER_S = 2000` cap refused a too-fast play until 2026-11-05, then 7000 as an amber
+  warning until 2026-11-06, when the check was removed (`tooFast`, `minDurationS`, `peakSpeedFactor`
+  are gone; `pathStats.maxStepsPerS` stays as information). BIMS's own durations (lead-in, joins)
+  still use 600 steps/s.
 - **Output** is the Pi's recording JSONL: header (`rate_hz`, `joint_names`, `follower_neutral` =
   first frame), one `{"event":"frame","t","goal":[6]}` per frame, footer. The last frame is exactly
   the last pose. Limits: 200 keyframes, 600 s per path.
@@ -94,8 +95,8 @@ and every play/stop writes an AuditLog row (`robot_arm.animate.*`).
 - Install the hold route; confirm no movement on hold after a by-hand pose.
 - Whether the STS3215 holds a hand-posed position well enough at torque-on under load (a sagging
   joint may settle a few steps); the saved pose is the encoder reading at *Save*, not after the hold.
-- Real speed ceiling: watch the fastest-servo figure in the editor against what the arm actually
-  does; lower `MAX_STEPS_PER_S` if a path stalls (`move-log` on the Pi).
+- Real speed ceiling: the fastest-servo figure in the editor is information only; the servo limits
+  itself (`move-log` on the Pi shows what it actually did).
 - The scratch `animate-preview` recording is overwritten on every Play; it shows in the Control tab's
   recording list — harmless, but it could be filtered there.
 - Gripper (servo 6) is animated like any joint; a closed-on-cartridge pose will squeeze at full torque.
@@ -108,9 +109,8 @@ smooth, adjustable move set:
 
 - `draftToAnimation(draft, {easing})` (pure, `recording-cleanup.ts`, 6 tests): pose 0 is the draft's
   start pose; every step that moves something becomes one pose at its end position for **all six**
-  servos (`resolveSteps`, so a servo not in the step holds). Keyframe `durationS` = the step's time,
-  raised to `minDurationS` (the 2000 steps/s ceiling) when the recording was faster than the arm can
-  go — those steps are reported as *lengthened*; `holdS` = the step's pause. A step whose moves add up
+  servos (`resolveSteps`, so a servo not in the step holds). Keyframe `durationS` = the step's time
+  as recorded, within 0.2–60 s (no speed limit since 2026-11-06); `holdS` = the step's pause. A step whose moves add up
   to nothing becomes hold time on the previous pose (*folded*). Easing is one choice for the whole set
   (default easy ease), changed per pose afterwards in the editor. Limits: 200 keyframes, 60 s per move.
 - `sendToAnimate` (server) saves what is on screen first, then inserts the poses (`"<name> · start"`,

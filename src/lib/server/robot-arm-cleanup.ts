@@ -627,14 +627,12 @@ export interface SendToAnimateResult {
 	poses: number;
 	keyframes: number;
 	folded: number[];
-	lengthened: number[];
 }
 
 /**
  * Turn the saved draft into a move set on the Teach tab: one saved pose for
  * the start and for the end of every step that moves something, and a move
- * set whose keyframes copy each step's time (lengthened to the arm's speed
- * limit where needed) and pause. The Animate engine renders the easing
+ * set whose keyframes copy each step's time and pause. The Animate engine renders the easing
  * between the poses; the operator adjusts the rest there. The draft is left
  * as it is.
  *
@@ -688,7 +686,6 @@ export async function sendToAnimate(user: User, id: string, o: { name: unknown; 
 	const moveSetId = generateId();
 	const notes = [
 		`From clean-up "${source}" (${draft.steps.length} steps). Each step's time and pause became the move into its pose and the hold; adjust them, the easing and the pose values here.`,
-		anim.lengthened.length ? `Step${anim.lengthened.length > 1 ? 's' : ''} ${anim.lengthened.join(', ')} lengthened to the arm's speed limit.` : '',
 		anim.folded.length ? `Step${anim.folded.length > 1 ? 's' : ''} ${anim.folded.join(', ')} moved nothing and became hold time.` : ''
 	]
 		.filter(Boolean)
@@ -710,7 +707,7 @@ export async function sendToAnimate(user: User, id: string, o: { name: unknown; 
 			$set: { updatedBy: opRef(user) }
 		}
 	);
-	const details = { cleanupId: id, sourceName: source, moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded, lengthened: anim.lengthened };
+	const details = { cleanupId: id, sourceName: source, moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded };
 	await auditRow(user, 'robot_arm_poses', 'robot_arm.animate.pose_save_from_cleanup', moveSetId, {
 		...details,
 		basis: 'goal',
@@ -719,5 +716,5 @@ export async function sendToAnimate(user: User, id: string, o: { name: unknown; 
 	});
 	await auditRow(user, 'robot_arm_move_sets', 'robot_arm.animate.move_set_create', moveSetId, details);
 	await audit(user, 'robot_arm.cleanup.send_to_animate', id, details);
-	return { moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded, lengthened: anim.lengthened };
+	return { moveSetId, name, poses: poseDocs.length, keyframes: keyframes.length, folded: anim.folded };
 }

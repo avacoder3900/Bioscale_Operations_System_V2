@@ -28,7 +28,6 @@
 		previewPath,
 		resolveForPreview,
 		stepCountLabel,
-		tooFast,
 		EASINGS,
 		MAX_TRANSITION_S,
 		MIN_TRANSITION_S,
@@ -93,7 +92,6 @@
 		}
 	});
 	const stats = $derived(render.path ? pathStats(render.path) : null);
-	const problems = $derived(tooFast(flat));
 
 	const playback = new Playback();
 	onDestroy(() => playback.destroy());
@@ -222,7 +220,6 @@
 			</tbody>
 		</table>
 		{#if !items.length}<p class="text-xs" style="color: var(--color-tron-text-secondary)">No Move Sets Yet</p>{/if}
-		{#if problems.length}<ul class="list-disc pl-5 text-xs" style="color: #fbbf24">{#each problems as pr}<li>⚠ {pr.message}</li>{/each}</ul>{/if}
 
 		<div class="flex flex-wrap items-end gap-2">
 			<label class="block text-xs" style="color: var(--color-tron-text-secondary)">Add Move Set

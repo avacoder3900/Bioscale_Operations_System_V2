@@ -26084,3 +26084,27 @@ trim cleared each time) Remove Home -> Shoulder Down -> Remove Home: every joint
 temps 37-42 C flat; Shoulder Down's settle used all 6 rounds (residual within 2); (3) gripper (load 0 = empty) opened
 2143 -> 2500 in 60-step moves: rests at 2487, load 62; closed back: 2152, load -48; 0 jitter, 42 C. The gripper is not
 droop-corrected (by design), so it stays ~10 steps short of a commanded number; the closing load is the jaws pressing.
+
+================================================================================
+2026-11-06 — master — No speed limit on a step: the 7000 steps/s cap, its amber warning and the Clean-Up lengthening are gone
+================================================================================
+Alejandro: "we found out in another session that the robot is capable of moving past the speed limit ... can we
+remove the speed limit block on steps for the robot arm". The 2026-11-05 change (d5728b62) had already raised the
+cap 2000 -> 7000 and made it a warning; this removes the check altogether, since the speed experiments showed the
+STS3215 limits its own speed and lands on the pose regardless of what is asked.
+- animation.ts: MAX_STEPS_PER_S, peakSpeedFactor, minDurationS, KeyframeProblem and tooFast() deleted;
+  pathStats no longer has a tooFast list (maxStepsPerS stays, information only). AUTO_STEPS_PER_S (600, for
+  lead-ins and joins) and MIN/MAX_TRANSITION_S (0.2–60 s, the editor's range) are unchanged.
+- Teach Move Set page: no amber border on Move In and no "faster than the servo can go" line under a step;
+  Sequence page: no list of too-fast steps. robot-arm-animation.ts writeAndPlay: no speed warning on a play.
+- Clean-Up -> Send To Animate (recording-cleanup.ts draftToAnimation): a step keeps its recorded time (0.2 s
+  floor, 60 s ceiling); nothing is lengthened and the "moves too far for one keyframe" refusal is gone.
+  AnimationDraft / sendToAnimate lose `lengthened`; the Clean-Up page no longer shows that note.
+- docs/prds/ARM-06-animate.md speed-limit bullets rewritten with the history.
+- Tests: animation.test.ts (durations + a no-limit render test; the old minDurationS/tooFast tests deleted),
+  recording-cleanup.test.ts (fast step kept at its time). vitest robot-arm + server animation/cleanup 224/224;
+  svelte-check 14 errors (baseline, none in touched files). Worked in worktree ../Bioscale_V2-wt-withdraw-filled.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): no speed limit on a step"
+What this deployment is for: a step may be as fast as the operator types it (down to 0.2 s); BIMS neither refuses nor warns.

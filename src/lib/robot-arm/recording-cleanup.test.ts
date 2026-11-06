@@ -11,7 +11,7 @@ import {
 	type CleanDraft
 } from './recording-cleanup';
 import { parseRecording, recordingToSteps, type RecordingFrame } from './recording-steps';
-import { buildPath, cleanKeyframes, minDurationS, pathStats, tooFast, MAX_STEPS_PER_S, type ResolvedKeyframe } from './animation';
+import { buildPath, cleanKeyframes, MIN_TRANSITION_S, type ResolvedKeyframe } from './animation';
 
 const START = { '1': 2000, '2': 900, '3': 3000, '4': 900, '5': 2000, '6': 2100 };
 
@@ -190,7 +190,7 @@ describe('draftToAnimation', () => {
 		expect(a.keyframes[1]).toMatchObject({ durationS: 1, holdS: 0, easing: 'ease' });
 		expect(a.keyframes[2]).toMatchObject({ durationS: 0.5, holdS: 0.2, easing: 'ease' });
 		expect(a.folded).toEqual([]);
-		expect(a.lengthened).toEqual([]);
+		expect(a).not.toHaveProperty('lengthened');
 		// What the server stores passes the Animate tab's own validation.
 		expect(() => cleanKeyframes(a.keyframes.map((k) => ({ ...k, poseId: `p${k.pose}` })))).not.toThrow();
 	});
@@ -200,21 +200,18 @@ describe('draftToAnimation', () => {
 		expect(draftToAnimation(draft(), { easing: 'bouncy' }).keyframes[1].easing).toBe('ease');
 	});
 
-	it('lengthens a step the arm cannot do in its time, and the rendered path then stays under the speed limit', () => {
+	it('keeps a fast step at its recorded time (no speed limit, 2026-11-06); only the 0.2 s floor applies', () => {
 		const d = draft();
 		d.steps[0] = { id: 'fast', label: '', durationS: 0.1, pauseAfterS: 0, raw: null, moves: [{ servoId: 1, to: 3500, raw: null }] };
 		for (const easing of ['ease', 'linear', 'in'] as const) {
 			const a = draftToAnimation(d, { easing });
-			const min = minDurationS(a.poses[0].positions, a.poses[1].positions, MAX_STEPS_PER_S, easing);
-			expect(min).toBeGreaterThan(0.1);
-			expect(a.keyframes[1].durationS).toBe(min);
-			// Step 2 then brings servo 1 back 1300 steps in 0.5 s: too fast only where the easing's peak needs more.
-			const min2 = minDurationS(a.poses[1].positions, a.poses[2].positions, MAX_STEPS_PER_S, easing);
-			expect(a.lengthened).toEqual(min2 > 0.5 ? [1, 2] : [1]);
-			expect(a.keyframes[2].durationS).toBe(Math.max(0.5, min2));
+			// 1500 steps in 0.1 s is far past any servo speed: not lengthened, only raised to the editor's floor.
+			expect(a.keyframes[1].durationS).toBe(MIN_TRANSITION_S);
+			// Step 2 brings servo 1 back 1300 steps in 0.5 s: kept as recorded.
+			expect(a.keyframes[2].durationS).toBe(0.5);
 			const resolved: ResolvedKeyframe[] = a.keyframes.map((k) => ({ ...k, poseId: `p${k.pose}`, name: a.poses[k.pose].label, positions: a.poses[k.pose].positions }));
-			expect(pathStats(buildPath(resolved)).tooFast).toEqual([]);
-			expect(tooFast(resolved)).toEqual([]);
+			expect(() => buildPath(resolved)).not.toThrow();
+			expect(() => cleanKeyframes(a.keyframes.map((k) => ({ ...k, poseId: `p${k.pose}` })))).not.toThrow();
 		}
 	});
 

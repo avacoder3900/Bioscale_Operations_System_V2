@@ -22,7 +22,6 @@ import {
 	flattenSequence,
 	jogChunks,
 	keyframePositions,
-	minDurationS,
 	nextTrim,
 	pathStats,
 	planPoseDelete,
@@ -31,9 +30,7 @@ import {
 	settleFrames,
 	sliderRange,
 	stepToward,
-	tooFast,
 	trimFromSettle,
-	MAX_STEPS_PER_S,
 	MAX_TRIM_STEPS,
 	type ResolvedKeyframe
 } from './animation';
@@ -63,25 +60,6 @@ describe('easing', () => {
 });
 
 describe('durations', () => {
-	it('minimum duration comes from the fastest servo at the easing\'s peak speed', () => {
-		// steps × the easing's peak factor / the cap, up to the next tenth, never under 0.2 s.
-		const want = (steps: number, factor: number) => Math.max(0.2, Math.ceil(Math.round(((steps * factor) / MAX_STEPS_PER_S) * 1e6) / 1e5) / 10);
-		expect(minDurationS(A, A)).toBe(0);
-		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'linear')).toBe(want(300, 1)); // 300 steps, linear
-		expect(minDurationS(A, B)).toBe(want(300, 1.875)); // easy ease peaks at 1.875× average
-		expect(minDurationS(A, B, MAX_STEPS_PER_S, 'in')).toBe(want(300, 3)); // cubic peaks at 3×
-		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], MAX_STEPS_PER_S, 'linear')).toBe(want(4000, 1));
-		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)])).toBe(want(4000, 1.875));
-		// The same rule with an explicit cap (the old 2000 steps/s): 4000 steps, easy ease → 3.8 s.
-		expect(minDurationS(A, [A[0] + 4000, ...A.slice(1)], 2000)).toBe(3.8);
-	});
-	it('a path rendered at the minimum duration is not refused by pathStats', () => {
-		const far = [A[0] + 1500, ...A.slice(1)];
-		for (const easing of ['ease', 'linear', 'in', 'out'] as const) {
-			const d = minDurationS(A, far, MAX_STEPS_PER_S, easing);
-			expect(pathStats(buildPath([kf('A', A), kf('far', far, { durationS: d, easing })], { rateHz: 30 })).tooFast).toEqual([]);
-		}
-	});
 	it('auto duration is comfortable, not fast', () => {
 		expect(autoDurationS(A, B)).toBe(0.5); // 300 / 600
 	});
@@ -139,15 +117,14 @@ describe('buildPath', () => {
 		expect(p.markers[0]).toMatchObject({ kind: 'pose', label: 'A', t: 0 });
 	});
 
-	it('tooFast warns about a transition faster than the servo can go', () => {
-		const far = [A[0] + 3000, ...A.slice(1)];
-		// 3000 steps at easy ease: 3000 × 1.875 / 7000 = 0.80 → 0.9 s.
-		expect(tooFast([kf('A', A), kf('far', far, { durationS: 0.5 })])).toEqual([{ index: 1, message: expect.stringContaining('about 0.9 s') }]);
-		expect(tooFast([kf('A', A), kf('far', far, { durationS: 2, easing: 'linear' })])).toEqual([]);
-		expect(tooFast([kf('A', A), kf('far', far, { durationS: 3 })])).toEqual([]);
-		const p = buildPath([kf('A', A), kf('far', far, { durationS: 0.5 })]);
-		expect(pathStats(p).tooFast).toEqual([1]);
-		expect(pathStats(p).maxStepsPerS[0]).toBeGreaterThan(MAX_STEPS_PER_S);
+	it('no speed limit on a step (2026-11-06): a very fast move renders and pathStats only reports the rate', () => {
+		const far = [A[0] + 2000, ...A.slice(1)];
+		// 2000 steps in the 0.2 s minimum (10,000 steps/s): past the old 7000 steps/s cap, and nothing refuses or flags it.
+		const p = buildPath([kf('A', A), kf('far', far, { durationS: 0.2 })]);
+		expect(p.goal[p.goal.length - 1][0]).toBe(far[0]);
+		const stats = pathStats(p);
+		expect(stats.maxStepsPerS[0]).toBeGreaterThan(7000);
+		expect(stats).not.toHaveProperty('tooFast');
 	});
 });
 
@@ -484,12 +461,6 @@ describe('fire steps (cartridge trapdoor solenoids)', () => {
 		const flags = settleFrames(p);
 		expect(flags.map((f) => f.pose)).toEqual(['b']);
 		expect(flags[0].frame).toBe(p.goal.length - 1);
-	});
-
-	it('tooFast compares a pose with the pose before it, across fire steps', () => {
-		const far = A.map((v, i) => (i === 0 ? v + 1500 : v));
-		const problems = tooFast([kf('a', A), fire('A'), kf('far', far, { durationS: 0.2 })]);
-		expect(problems.map((p) => p.index)).toEqual([2]);
 	});
 
 	it('sequences: fire steps pass through, and the join runs from the last pose', () => {

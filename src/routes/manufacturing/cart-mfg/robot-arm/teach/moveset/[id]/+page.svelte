@@ -30,19 +30,16 @@
 		friendlyName,
 		heatCheck,
 		keyframePositions,
-		minDurationS,
 		newFireStep,
 		pathStats,
 		previewPath,
 		solenoidLabel,
 		solenoidPin,
 		stepCountLabel,
-		tooFast,
 		DEFAULT_RATE_HZ,
 		EASINGS,
 		MAX_HOLD_S,
 		maxPulseMs,
-		MAX_STEPS_PER_S,
 		MAX_TRANSITION_S,
 		MIN_FIRE_WAIT_S,
 		MIN_PULSE_MS,
@@ -207,14 +204,6 @@
 		}
 	});
 	const stats = $derived(render.path ? pathStats(render.path) : null);
-	const problems = $derived(tooFast(resolved));
-	// Against the pose before it: fire steps in between do not move the arm.
-	const minFor = (i: number) => {
-		const k = resolved[i];
-		if (!k || k.fire) return 0;
-		for (let j = i - 1; j >= 0; j--) if (!resolved[j].fire) return minDurationS(resolved[j].positions, k.positions, MAX_STEPS_PER_S, k.easing);
-		return 0;
-	};
 	const selPose = $derived(selected != null && kfs[selected] && !kfs[selected].fire ? (poseById.get(kfs[selected].poseId) ?? null) : null);
 	const selFire = $derived(selected != null && kfs[selected]?.fire ? kfs[selected] : null);
 	// The pose a fire step holds on: the nearest pose before it (none = where the arm is when it starts).
@@ -340,7 +329,6 @@
 			<ol class="space-y-1">
 				{#each kfs as k, i (i)}
 					{@const p = poseById.get(k.poseId)}
-					{@const min = minFor(i)}
 					{#if k.fire}
 						{@const f = k.fire}
 						<!-- A fire step: blue, so it never reads as a pose. -->
@@ -419,7 +407,7 @@
 							<div class="mt-2 grid grid-cols-3 gap-2 text-[11px]" style={muted}>
 								<label>Move In (s)
 									{#if i === firstPoseIndex}<span class="mt-1 block py-1">Start</span>
-									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style="{inputStyle}; {k.durationS < min ? 'border-color: #f59e0b' : ''}" />{/if}
+									{:else}<input type="number" step="0.1" min={MIN_TRANSITION_S} max={MAX_TRANSITION_S} value={k.durationS} oninput={(e) => (k.durationS = clamp(Number(e.currentTarget.value), MIN_TRANSITION_S, MAX_TRANSITION_S))} class="{input} mt-1 w-full" style={inputStyle} />{/if}
 								</label>
 								<label>Easing
 									{#if i === firstPoseIndex}<span class="mt-1 block py-1">—</span>
@@ -427,7 +415,6 @@
 								</label>
 								<label>Hold (s)<input type="number" step="0.1" min="0" max={MAX_HOLD_S} value={k.holdS} oninput={(e) => (k.holdS = clamp(Number(e.currentTarget.value), 0, MAX_HOLD_S))} class="{input} mt-1 w-full" style={inputStyle} /></label>
 							</div>
-							{#if i !== firstPoseIndex && k.durationS < min}<p class="mt-1 text-[11px]" style="color: #fbbf24">⚠ Faster than the servo can go, it will take about {min} s.</p>{/if}
 							<!-- ARM-09: this step's camera check and its own tolerances (blank = the pose reference's) -->
 							<div class="mt-2 grid grid-cols-4 gap-2 text-[11px]" style={muted}>
 								<label>Camera Check

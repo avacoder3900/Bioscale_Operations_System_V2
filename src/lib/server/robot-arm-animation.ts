@@ -60,7 +60,6 @@ import {
 	isFireTarget,
 	solenoidLabel,
 	solenoidPin,
-	tooFast,
 	trimFromSettle,
 	DEFAULT_RATE_HZ,
 	maxPulseMs,
@@ -1410,9 +1409,8 @@ export async function writeAndPlay(
 	const warnings: string[] = requireCool(now);
 	if (gpio?.simulated) warnings.push('The Pi has no GPIO right now (simulated): the fire steps are timed but nothing is driven.');
 	const path = render(o.keyframes, now.positions, o.rateHz);
+	// No speed check (2026-11-06): the servo limits its own speed and still lands where it should.
 	const stats = pathStats(path);
-	// A warning, not a refusal (2026-11-05): the servo limits its own speed and still lands where it should.
-	for (const p of tooFast(o.keyframes)) warnings.push(p.message);
 	const leadInS = path.markers[0]?.kind === 'lead-in' ? (path.markers[1]?.t ?? 0) : 0;
 	const out = composeAnimationJsonl(path, { jointNames: DEFAULT_JOINT_NAMES, title: o.title, extras: { animate_kind: o.kind, animate_id: o.id, operator: user.username } });
 	const meta: RecordingSidecar & Record<string, unknown> = {

@@ -927,9 +927,6 @@
 			{:else if animatePreview.draft}
 				<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					{animatePreview.draft.poses.length} poses · about {fmtS(animateDurationS)} before easing.
-					{#if animatePreview.draft.lengthened.length}
-						{listSteps(animatePreview.draft.lengthened)} will take longer than recorded: faster than the servo can go.
-					{/if}
 					{#if animatePreview.draft.folded.length}
 						{listSteps(animatePreview.draft.folded)} move nothing and become hold time.
 					{/if}

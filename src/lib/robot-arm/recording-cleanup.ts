@@ -21,10 +21,8 @@ import {
 import {
 	isEasing,
 	maxDelta,
-	minDurationS,
 	MAX_HOLD_S,
 	MAX_KEYFRAMES,
-	MAX_STEPS_PER_S,
 	MAX_TRANSITION_S,
 	MIN_TRANSITION_S,
 	type Easing
@@ -171,8 +169,6 @@ export interface AnimationDraft {
 	keyframes: AnimationKeyframe[];
 	/** Step numbers whose moves added up to nothing; their time was folded into the previous hold. */
 	folded: number[];
-	/** Step numbers whose time was lengthened to the slowest the arm can do (MAX_STEPS_PER_S). */
-	lengthened: number[];
 }
 
 export const DEFAULT_ANIMATION_EASING: Easing = 'ease';
@@ -199,14 +195,12 @@ export function uniqueName(base: string, taken: Set<string>, max = ANIMATE_NAME_
 /**
  * The steps as Animate poses + keyframes. Pose 0 is the start pose, then one
  * pose per step that moves something, at the step's end position for every
- * servo (resolveSteps). Keyframe duration = the step's time, never shorter
- * than the arm can physically do; hold = the step's pause. A step that ends
- * where it started is not a pose: its time and pause extend the previous
- * hold. Positions are the draft's; nothing is smoothed here — the Animate
- * engine renders the easing between poses at play time. The speed limit is
- * Teach's MAX_STEPS_PER_S: a step quicker than that is lengthened to the
- * least the servo can do, which is also what Teach's "faster than the servo
- * can go" warning would say the move takes.
+ * servo (resolveSteps). Keyframe duration = the step's time as recorded
+ * (within Teach's MIN/MAX_TRANSITION_S; there is no speed limit, the servo
+ * limits itself); hold = the step's pause. A step that ends where it started
+ * is not a pose: its time and pause extend the previous hold. Positions are
+ * the draft's; nothing is smoothed here — the Animate engine renders the
+ * easing between poses at play time.
  */
 export function draftToAnimation(draft: CleanDraft, o: { easing?: unknown } = {}): AnimationDraft {
 	const easing: Easing = isEasing(o.easing) ? o.easing : DEFAULT_ANIMATION_EASING;
@@ -220,7 +214,6 @@ export function draftToAnimation(draft: CleanDraft, o: { easing?: unknown } = {}
 	const poses: AnimationPose[] = [{ label: 'start', positions: start, step: 0 }];
 	const keyframes: AnimationKeyframe[] = [{ pose: 0, durationS: 1, holdS: 0, easing }];
 	const folded: number[] = [];
-	const lengthened: number[] = [];
 
 	const { steps } = resolveSteps(draft);
 	for (const rs of steps) {
@@ -235,16 +228,7 @@ export function draftToAnimation(draft: CleanDraft, o: { easing?: unknown } = {}
 			folded.push(rs.number);
 			continue;
 		}
-		const min = minDurationS(prev, after, MAX_STEPS_PER_S, easing);
-		if (min > MAX_TRANSITION_S) {
-			throw new Error(`step ${rs.number} moves too far for one keyframe (needs ${min} s, limit ${MAX_TRANSITION_S} s); split it in the editor`);
-		}
-		let durationS = Math.max(MIN_TRANSITION_S, roundTenth(rs.step.durationS));
-		if (durationS < min) {
-			durationS = min;
-			lengthened.push(rs.number);
-		}
-		durationS = Math.min(MAX_TRANSITION_S, durationS);
+		const durationS = Math.min(MAX_TRANSITION_S, Math.max(MIN_TRANSITION_S, roundTenth(rs.step.durationS)));
 		const label = rs.step.label.trim();
 		poses.push({ label: `step ${rs.number}${label ? ` ${label}` : ''}`, positions: after, step: rs.number });
 		keyframes.push({
@@ -257,7 +241,7 @@ export function draftToAnimation(draft: CleanDraft, o: { easing?: unknown } = {}
 			throw new Error(`a move set holds at most ${MAX_KEYFRAMES} poses; this clean-up has more steps than that`);
 		}
 	}
-	return { poses, keyframes, folded, lengthened };
+	return { poses, keyframes, folded };
 }
 
 /** Throws with an operator-readable message when the draft cannot be saved. */
