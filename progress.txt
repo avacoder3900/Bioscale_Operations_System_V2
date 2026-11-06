@@ -26935,3 +26935,19 @@ Deployed (Alejandro: "do it even if B07 does not say idle"; a Jog run was open, 
   and daemon (the new routes are additive; the daemon still answers the queue's scan_at_pause / write_file).
   The next push to master after the limit resets builds 3be84c7b and later. No local CLI deploy (CLAUDE.md).
 npm run check 13 errors (baseline).
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — Stage protocols apply the Deck Studio tip/tube rack offsets; Jog-run open retry
+================================================================================
+Alejandro: Sam fixed the OT-2 reaching the tip rack and it still went wrong on his run. B07 run f98568eb (21:56 UTC)
+picked up tip F3 at rack offset 0 ('BIMS-native offsets ... x=0.0, y=0.0, z=0.0mm'), though Samantha Wolf saved B07's
+slot-11 tip rack offset (0, 5, 4) mm in the Deck Calibration Studio at 21:51 UTC (robot_labware_offsets). Cause: both
+stage .py files declared no tiprack_offset_* / tuberack_offset_* RTPs, so rackOffsetRtpValues (sends only declared
+RTPs) never reached a robot-arm run; the carriage and reagent .py files have them. Fix 09d0bd35: the six RTPs in both
+stage .py files, set_offset per rack = rack offset + global offset_x/y/z (0 on BIMS runs); rackLoadNamesFor('wax')
+gives the rehearsal (declares z_cal_p300) the 200 uL Biotix rack in slot 11. Tests: protocol surface, rackLoadNamesFor.
+Needs the new .py deployed to B07 (Run tab Add To Library + Deploy; files in Alejandro's Downloads).
+Also 8b8fbda2: openMaintenanceRun retries once after a robot-server 500 (B07 21:44:58: 'unhandled errors in a
+TaskGroup', its runs notifier pointed at the deleted run f96b4c4e; same request worked 5 s later).
+Local live server (localhost:5176, bims-live-updater) follows master; Vercel still rate-limited.
+npm run check 13 errors (baseline). vitest server + robot-arm 771 pass; protocol suites ok.
