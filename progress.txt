@@ -26337,3 +26337,18 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): no droop correction"
 What this deployment is for: every play and Go To sends the pose numbers exactly as set in Live posing; stored trims purged.
+
+================================================================================
+2026-11-06 — feat/screen-gain8-era — SCREEN bench-gain era: gain-1 and gain-8 laser rows never share a trend or ranking
+================================================================================
+Firmware v107 (brevitest-device feat/v107-screen-gain8) reads the SCREEN's laser-into-sensor rows
+(lsr{A,B,C}_c/_f1/_f7, drk{A,B,C}) at gain 8 instead of gain 1 - ~128x more counts; the gain-1 rows read
+only ~6-14 counts and could not separate units. src/lib/server/screen/contract.ts: SCREEN_BENCH_GAIN8_FW
+= 107 + onCurrentGainScale(id, fw); row docs note the gain change. src/routes/validation/screen/
++page.server.ts: per-unit trends and the fleet compare skip gain-dependent rows from screens with
+fw < 107. Photodiode (lsrA/B/C) and assay-gain background rows are unaffected. tsc: no errors in the
+touched files (repo-wide baseline errors elsewhere unchanged; npm run check not run).
+Deployment: production — via push of master (Vercel GitHub integration)
+Source: branch feat/screen-gain8-era @ commit (this commit; see git log feat/screen-gain8-era)
+Retrieve this exact code: git checkout feat/screen-gain8-era
+What this deployment is for: keep SCREEN optics trends valid across the v106 -> v107 gain change
