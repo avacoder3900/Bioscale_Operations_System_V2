@@ -26871,3 +26871,45 @@ Deployment: production — via push of master (Vercel GitHub integration)
 Source: branch master @ commit e4393434
 Retrieve this exact code: git checkout master at commit e4393434
 What this deployment is for: Deck Studio rack Set position in deck mm (slot origin), so a typed jog position on the tip rack no longer saves as a one-slot offset
+
+================================================================================
+2026-11-06 — feat/arm-log-coverage — Movement Log: every Play frame + Conveyor Belt / Trapdoor Solenoid fires; Change Log: audited arm/OT-2 settings, protocol deploys, code changes
+================================================================================
+Alejandro checked the two logs against everything that changed on the arm and its OT-2 today and asked for the gaps
+to be closed. Master 7a68f409 (feature) + ee30fd58 / 8533a4ed (backfill label and dedupe fixes).
+Movement Log (src/lib/robot-arm/move-log.ts, robot-arm-move-log.ts, robot-arm-client.ts, model robot-arm-move.ts):
+- /gpio/pulse, /gpio/sequence, /conveyor/pulse|stop|off, /fires/play|stop are rows (kinds fire, fire_sequence,
+  conveyor, conveyor_stop, fires_play, fires_stop; group "Conveyor Belt And Trapdoor Solenoids"); no servo readings
+  around them (FIRE_KINDS go through sendArmCommand). Before this they were not logged at all.
+- Every Play keeps every frame the Pi was given (frames {rateHz, t[], goals[][], fires[]}, frameCount, frameStats per
+  servo). writeAndPlay passes its JSONL through withPlayRecording (AsyncLocalStorage); a Pi recording played by name
+  (Control tab, /api/robot-arm/trigger-replay) is read back with /recordings/{stem}/export after the play starts, in
+  waitUntil, and its row is written then. frameStats (3-step deadband) feed Moves / Direction Changes: a play counts
+  once per servo it moved, plus its turns. Show Frames on a row reads moves/frames?id= on demand; agents use
+  /api/robot-arm/moves?frames=<id>. These are the goals sent, not measured positions (Reading After is that).
+- Not yet seen on a real Play or fire: nobody moved the arm after the deploy (21:30 UTC).
+Change Log:
+- src/lib/robot-arm/change-from-audit.ts maps audited settings to labelled rows: Run Setup per field + Switch Robot,
+  Stage Calibration (scan position, dispense depth, cart shift, hole offsets, tip calibrator position / probe z / max
+  tip adjust), protocol deploys (arm wax-fill + Opentrons library route), library replaces, conveyor default, tunnel
+  address, droop trims (settle / clear / clear all / purge). Teach edits (poses, move sets) stay audit-only.
+  Live hooks: arm-wax-fill.ts audit(), opentrons-lab deploy route, robot-arm tunnel route (ids armchg-audit-<id>-<n>).
+  New labels: hardware 'ot2', page 'opentrons'.
+- scripts/backfill-arm-changes-from-audit.ts --apply: 141 rows from 144 audit rows (2026-10-19 onwards).
+- scripts/seed-robot-arm-change-log.ts: 12 code-change rows appended (droop correction on/off, settle target, one
+  mover at a time, Replay test removed, cable path, Go To 80 -> 20 x2, first grab gate, Return Home 600 steps/s,
+  Barcode Present Only, Home Gantry 60 s); dates may now carry a time. Applied.
+- Duplicate stiffness rows: the four "Claude (Servo Diagnosis)" servo.p_coefficient rows deleted (the Pi's own
+  alejandrospi3 rows kept); audit_log row robot_arm.change_log.dedupe holds the deleted rows.
+Cable-link Pi fix (480a74e8): checked on arm-pi over Tailscale SSH — ~/robot-arm/src/server/ot2_link.py equals the
+commit (line endings aside), written 13:32:40 CST, service restarted 13:32:41, GET /ot2/link 200. It is in the
+Change Log as the 19:32 UTC Pi rows (pi.app_py hash change, /ot2/* routes added, service start). Nothing to fix.
+npm run check 13 errors (baseline). vitest robot-arm + opentrons + arm-wax-fill + invariants: 757/758, the one
+failure is ot2-protocol.run.test.ts stale-bundle (fails the same on master). npm run test:arm-report: 404/404 stored.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6PqPKYvrqx42Gs25KybsSzkt8unK
+Source: branch feat/arm-log-coverage @ commit 7a68f409 (follow-ups ee30fd58, 8533a4ed on master)
+Follow-up 8533a4ed: Vercel build FAILED, "Deployment rate limited — retry in 24 hours" (account build limit, not the
+code). Production runs 7a68f409; the follow-ups only change backfill scripts and two empty-value labels.
+Retrieve this exact code: git checkout feat/arm-log-coverage at commit 8533a4ed
+  (or: git log feat/arm-log-coverage --oneline to find it if the branch has since moved on)
+What this deployment is for: Play frames and fires in the Movement Log; audited settings, deploys and code changes in the Change Log.
