@@ -26802,3 +26802,16 @@ Deployment: production - via push of master (Vercel GitHub integration), Jacob's
 Source: branch feat/screen-gain8-era rebased onto master 0189dfc8, then master fast-forwarded
 Retrieve this exact code: git checkout feat/screen-gain8-era
 What this deployment is for: v108 tiered screen launch + rows, and the run-reuse / failed-request / fs_val fixes
+
+================================================================================
+2026-11-06 — master — Stage Calibration: Tube Rack 10 / Tip Rack 11 open the Deck Calibration Studio
+================================================================================
+Alejandro could not get from the Stage Calibration page to tip-rack calibration. The "Labware" strip
+there (Cartridge On Stage · Tube Rack 10 · Tip Rack 11) copied the Deck Studio's look but not its
+behaviour: all three were plain spans, so clicking Tip Rack 11 did nothing, and the page had no link to
+the Deck Studio at all.
+1) src/routes/manufacturing/cart-mfg/robot-arm/calibrate/stage/+page.svelte: Tube Rack 10 and Tip Rack 11
+   are links to /manufacturing/cart-mfg/deck-calibration?kind=tube|tip&robot=<the arm's OT-2>, so the
+   Studio opens with that kind selected and the right robot preselected (it already honours ?robot=).
+   Cartridge On Stage stays the active, non-clickable entry — that is what this page teaches.
+svelte-check: 14 errors (baseline), none in the touched file.

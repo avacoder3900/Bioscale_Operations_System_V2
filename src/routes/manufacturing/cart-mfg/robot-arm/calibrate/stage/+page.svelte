@@ -60,6 +60,14 @@
 	const WAX_FILL_HREF = '/manufacturing/cart-mfg/robot-arm/run';
 	const robotId = $derived(data.robotId as string | null);
 	const robotName = $derived((data.robotName as string | null) ?? 'robot');
+	/**
+	 * The tube rack (slot 10) and tip rack (slot 11) are ordinary labware, taught
+	 * in the Deck Calibration Studio — this page only teaches the cartridge on the
+	 * stage. The labware strip links to the Studio with that kind selected and the
+	 * arm's OT-2 preselected (`?robot=`), so the operator lands on the right robot.
+	 */
+	const studioHref = (kind: 'tube' | 'tip') =>
+		`/manufacturing/cart-mfg/deck-calibration?kind=${kind}${robotId ? `&robot=${encodeURIComponent(robotId)}` : ''}`;
 
 	// ── which tip this page teaches with ─────────────────────────────────────
 	// The protocol on the robot decides (stageTipProfile on the server): the
@@ -1493,8 +1501,8 @@
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
 				<span class="bg-[var(--color-tron-cyan)]/20 px-2.5 py-1.5 text-[var(--color-tron-cyan)]" title="One Gen7 cartridge on the arm's elevated stage">Cartridge On Stage</span>
-				<span class="px-2.5 py-1.5" title="Tube rack · slot 10 — the fill reads its labware definition as on a deck robot">Tube Rack 10</span>
-				<span class="px-2.5 py-1.5" title="Tip rack · slot 11">Tip Rack 11</span>
+				<a href={studioHref('tube')} class="px-2.5 py-1.5 transition-colors hover:bg-white/5 hover:text-[var(--color-tron-cyan)]" title="Tube rack · slot 10 — taught in the Deck Calibration Studio on this robot (opens it)">Tube Rack 10 ↗</a>
+				<a href={studioHref('tip')} class="px-2.5 py-1.5 transition-colors hover:bg-white/5 hover:text-[var(--color-tron-cyan)]" title="Tip rack · slot 11 — taught in the Deck Calibration Studio on this robot (opens it)">Tip Rack 11 ↗</a>
 			</div>
 		</div>
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Robot
