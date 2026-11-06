@@ -106,7 +106,8 @@ export const actions: Actions = {
 				testMode: checked(d, 'testMode'),
 				channels: { c: checked(d, 'channelC'), b: checked(d, 'channelB'), a: checked(d, 'channelA') },
 				grabDuringProbe: checked(d, 'grabDuringProbe'),
-				chainGrab: checked(d, 'chainGrab')
+				chainGrab: checked(d, 'chainGrab'),
+				useArmLink: checked(d, 'useArmLink')
 			});
 			return { success: 'Setup saved.' };
 		} catch (err) {

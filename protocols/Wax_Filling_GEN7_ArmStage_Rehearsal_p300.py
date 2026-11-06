@@ -1,4 +1,5 @@
 import math
+import re
 import string
 import serial
 import glob
@@ -164,6 +165,18 @@ ARM_LOOP_FILE = '/data/arm_loop.json'
 ARM_LOOP_ACTIONS = ('scan', 'fill', 'skip', 'end')
 ARM_LOOP_POLL_S = 0.5
 ARM_LOOP_WAIT_S = 60.0
+# The arm Pi over the USB-B cable (2026-11-06): the Pi's eth1 carries a fixed
+# link-local address, and its /ot2/loop/instruction long-poll hands this protocol
+# the next instruction the moment BIMS sets it (one HTTPS hop for BIMS, ~2 ms for
+# us), instead of the bridge daemon's queue job writing the file seconds later.
+# The start record (always the file) may carry `arm_pi_urls` to override these.
+# Every ARM marker is also announced to the Pi (POST /ot2/loop/announce, best
+# effort, never blocking the run) so the arm knows the moment it may move.
+# The file stays the fallback: no Pi, no cable -> the loop runs exactly as before.
+ARM_PI_URLS = ('http://169.254.42.1:8000',)
+ARM_LOOP_HTTP_WAIT_S = 5.0       # one long-poll on the Pi; the file is checked between polls
+ARM_LOOP_HTTP_BACKOFF_S = 10.0   # a Pi URL that failed is left alone this long
+ARM_LOOP_ANNOUNCE_TIMEOUT_S = 0.4
 # Analysis / simulation: the robot's analysis has no instruction file and no taught
 # cart, so the loop is walked once per cart on these stand-in points (well inside
 # the deck; nothing real is at them) with synthesised scan → fill → … → end records.
@@ -182,25 +195,55 @@ def read_arm_loop_record(path=ARM_LOOP_FILE):
     return data if isinstance(data, dict) else None
 
 
+def _http_json(method, url, body=None, timeout_s=5.0):
+    """One HTTP exchange with the arm Pi: (status, dict-or-None). Raises on a
+    connection failure (the caller backs that URL off)."""
+    import json
+    import urllib.error
+    import urllib.request
+    data = json.dumps(body).encode('utf-8') if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method, headers={'Content-Type': 'application/json'})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            raw = resp.read()
+            status = resp.status
+    except urllib.error.HTTPError as e:
+        return e.code, None
+    if status == 204 or not raw:
+        return status, None
+    try:
+        parsed = json.loads(raw.decode('utf-8'))
+    except Exception:
+        return status, None
+    return status, parsed if isinstance(parsed, dict) else None
+
+
 class ArmLoopInstructions:
     """BIMS → protocol instructions (contract §5.1).
 
     start(): the start record (action 'start', seq 0) must be in the file before
-    any motion; it fixes the loop id. next(): after a resume, the first record
-    with the SAME loop, seq > the last one consumed and a known action, polled
-    every ARM_LOOP_POLL_S for up to ARM_LOOP_WAIT_S; None when nothing fresh
-    arrived (the caller pauses 'ARM NO_INSTRUCTION <i>' and asks again after the
-    next resume). A stale or foreign record never acts.
-    simulate=True reads no file: scan, fill for each cart, then end."""
+    any motion; it fixes the loop id and, when it names them, the arm Pi URLs.
+    next(): after a resume, the first record with the SAME loop, seq > the last
+    one consumed and a known action — from the arm Pi's long-poll over the cable
+    (ARM_LOOP_HTTP_WAIT_S a call) and from the file (every ARM_LOOP_POLL_S when no
+    Pi answers), for up to ARM_LOOP_WAIT_S; None when nothing fresh arrived (the
+    caller pauses 'ARM NO_INSTRUCTION <i>' and asks again after the next resume).
+    A stale or foreign record never acts. announce(): tells the Pi a marker was
+    reached (best effort). simulate=True reads nothing: scan, fill per cart, end."""
 
-    def __init__(self, path=ARM_LOOP_FILE, simulate=False, cartridges=1, sleep=None, clock=None):
+    def __init__(self, path=ARM_LOOP_FILE, simulate=False, cartridges=1, sleep=None, clock=None, urls=None, http=None):
         self.path = path
         self.simulate = bool(simulate)
         self.cartridges = max(1, int(cartridges))
         self._sleep = sleep or time.sleep
         self._clock = clock or time.time
+        self._http = http or _http_json
+        self.urls = list(urls) if urls is not None else list(ARM_PI_URLS)
+        self._down_until = {}
         self.loop = None
+        self.run_id = None
         self.seen_seq = 0
+        self.served_by = None
         self._sim = []
 
     def start(self):
@@ -218,6 +261,10 @@ class ArmLoopInstructions:
         if not rec or rec.get('action') != 'start' or not rec.get('loop'):
             raise RuntimeError('ARM LOOP: no start record in /data/arm_loop.json')
         self.loop = str(rec['loop'])
+        self.run_id = rec.get('run_id') or None
+        urls = rec.get('arm_pi_urls')
+        if isinstance(urls, list) and urls and all(isinstance(u, str) and u.startswith('http') for u in urls):
+            self.urls = [u.rstrip('/') for u in urls]
         self.seen_seq = 0
         return rec
 
@@ -230,6 +277,39 @@ class ArmLoopInstructions:
             return False
         return seq > self.seen_seq and rec.get('action') in ARM_LOOP_ACTIONS
 
+    def _live_urls(self):
+        now = self._clock()
+        return [u for u in self.urls if self._down_until.get(u, 0) <= now]
+
+    def _http_next(self, wait_s):
+        """One long-poll on the first live Pi URL: the record, or None."""
+        for url in self._live_urls():
+            q = '?loop=%s&after=%d&wait_s=%.1f' % (self.loop, self.seen_seq, wait_s)
+            try:
+                status, rec = self._http('GET', url + '/ot2/loop/instruction' + q, timeout_s=wait_s + 3.0)
+            except Exception:
+                self._down_until[url] = self._clock() + ARM_LOOP_HTTP_BACKOFF_S
+                continue
+            if status == 200 and rec:
+                self.served_by = url
+                return rec
+            return None
+        return None
+
+    def announce(self, kind, cart=None):
+        """Tell the Pi a marker was reached. Never raises, never waits long."""
+        if self.simulate or not self.urls:
+            return False
+        body = {'loop': self.loop, 'kind': str(kind), 'cart': cart, 'run_id': self.run_id}
+        for url in self._live_urls():
+            try:
+                status, _ = self._http('POST', url + '/ot2/loop/announce', body, timeout_s=ARM_LOOP_ANNOUNCE_TIMEOUT_S)
+            except Exception:
+                self._down_until[url] = self._clock() + ARM_LOOP_HTTP_BACKOFF_S
+                continue
+            return status < 300
+        return False
+
     def next(self, timeout_s=ARM_LOOP_WAIT_S, poll_s=ARM_LOOP_POLL_S):
         if self.simulate:
             if self._sim:
@@ -240,13 +320,23 @@ class ArmLoopInstructions:
             return rec
         deadline = self._clock() + float(timeout_s)
         while True:
-            rec = read_arm_loop_record(self.path)
+            waited_on_pi = False
+            rec = None
+            if self._live_urls():
+                left = deadline - self._clock()
+                rec = self._http_next(max(0.5, min(ARM_LOOP_HTTP_WAIT_S, left)))
+                waited_on_pi = bool(self._live_urls())
+            if not self.is_fresh(rec):
+                rec = read_arm_loop_record(self.path)
+                if self.is_fresh(rec):
+                    self.served_by = 'file'
             if self.is_fresh(rec):
                 self.seen_seq = int(rec['seq'])
                 return rec
             if self._clock() >= deadline:
                 return None
-            self._sleep(poll_s)
+            if not waited_on_pi:
+                self._sleep(poll_s)
 
 
 def _resolve_lift(pipette):
@@ -946,7 +1036,7 @@ def run(protocol: protocol_api.ProtocolContext):
                 # grab from here when Setup says so - the grab path keeps clear of
                 # the calibrator (Alejandro, 2026-10-30). Only the loop passes it;
                 # the calibration-check tour (over the stage) never announces.
-                protocol.comment(announce)
+                arm_mark(announce)
             adj, ok, why = _probe_once()
             if ok:
                 protocol.comment(f'Tip calibration OK: adjust x={adj["x"]}, y={adj["y"]}')
@@ -1242,7 +1332,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     # the tube (blow-out), lifts and parks. BIMS reads this like
                     # 'ARM CLEAR <i>' for the withdraw only (never for a grab or
                     # the fail animation: those still wait for CLEAR / PARKED).
-                    protocol.comment(f'ARM FILLED {cart_index}')
+                    arm_mark(f'ARM FILLED {cart_index}')
                 if wax:
                     pipette.blow_out(location=source_well.top())
                 if swap_at is not None:
@@ -1284,6 +1374,21 @@ def run(protocol: protocol_api.ProtocolContext):
         # stand-in points, with no serial and no probe.
         loop_instructions = ArmLoopInstructions(simulate=protocol.is_simulating(), cartridges=cartridges)
         loop_instructions.start()
+
+        def arm_mark(text):
+            """An ARM announcement: the comment BIMS reads from the command log, and
+            the same marker told to the arm Pi over the cable the moment it happens."""
+            protocol.comment(text)
+            m = re.match(r'^ARM\s+(PROBING|CALIBRATED|CLEAR|FILLED|LOOP END)(?:\s+(\d+))?', text)
+            if m:
+                loop_instructions.announce(m.group(1).replace(' ', '_'), int(m.group(2)) if m.group(2) else None)
+
+        def arm_pause(text):
+            """An ARM pause: announced to the Pi first, then the waitForResume BIMS reads."""
+            m = re.match(r'^ARM\s+(PARKED|AT_SCAN|NO_INSTRUCTION)\s+(\d+)', text)
+            if m:
+                loop_instructions.announce(m.group(1), int(m.group(2)))
+            protocol.pause(text)
         source_well = tuberack[tube_locations['wax']]
         batches = plan_batches(well_volumes)
         row_total = sum(well_volumes[g] for g in ('wax_gate4', 'wax_gate3', 'wax_gate2', 'wax_gate1'))
@@ -1307,7 +1412,7 @@ def run(protocol: protocol_api.ProtocolContext):
                     if named != cart_index:
                         protocol.comment(f'ARM LOOP: instruction {rec.get("action")} names cart {named}; this run is at cart {cart_index}.')
                     return rec
-                protocol.pause(f'ARM NO_INSTRUCTION {cart_index}')
+                arm_pause(f'ARM NO_INSTRUCTION {cart_index}')
 
         def go_to_scan_position():
             """ALL THE WAY UP, then one planned move to the taught scan point (the
@@ -1338,12 +1443,12 @@ def run(protocol: protocol_api.ProtocolContext):
             lift()
             pipette.move_to(source_well.top())
             if clear_of is not None:
-                protocol.comment(f'ARM CLEAR {clear_of}')
+                arm_mark(f'ARM CLEAR {clear_of}')
             if aspirate and not holding and cart_index <= cartridges:
                 batch, batch_volume = batches[0]
                 holding = aspirate_batch(source_well, batch_volume, source_volume, len(batch))
             park(source_well, source_volume, holding)
-            protocol.pause(f'ARM PARKED {cart_index}')
+            arm_pause(f'ARM PARKED {cart_index}')
             return holding
 
         def finish(holding, clear_of):
@@ -1354,12 +1459,12 @@ def run(protocol: protocol_api.ProtocolContext):
             pipette.move_to(source_well.top())
             if holding and wax:
                 pipette.blow_out(location=source_well.top())
-            protocol.comment(f'ARM CLEAR {clear_of}')
+            arm_mark(f'ARM CLEAR {clear_of}')
             if pipette.has_tip:
                 lift()
                 pipette.drop_tip()
             protocol.home()
-            protocol.comment('ARM LOOP END')
+            arm_mark('ARM LOOP END')
             protocol.comment('ARM STAGE: gantry homed - clear for the arm. (REHEARSAL: no wax was dispensed.)')
 
         if wax and protocol.params.run_calibration_check and not protocol.is_simulating():
@@ -1380,7 +1485,7 @@ def run(protocol: protocol_api.ProtocolContext):
         # calibrator or the stage again). The probe routine's reject-retry with a
         # fresh tip is unchanged.
         adjust = pick_up_and_calibrate_tip(announce='ARM PROBING')
-        protocol.comment('ARM CALIBRATED')
+        arm_mark('ARM CALIBRATED')
         protocol.comment(f'ARM LOOP: one tip for the whole loop ({cartridges} cart(s)); adjust x={adjust["x"]}, y={adjust["y"]}')
         cart = 1
         holding = park_for(cart, source_volume, 0)
@@ -1390,7 +1495,7 @@ def run(protocol: protocol_api.ProtocolContext):
             if action == 'scan':
                 go_to_scan_position()
                 while True:
-                    protocol.pause(f'ARM AT_SCAN {cart}')
+                    arm_pause(f'ARM AT_SCAN {cart}')
                     rec = next_instruction(cart)
                     action = rec['action']
                     if action != 'scan':

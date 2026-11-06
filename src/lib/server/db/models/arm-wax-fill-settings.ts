@@ -58,6 +58,11 @@ const armWaxFillSettingsSchema = new Schema(
 		/** Between carts the withdraw and the next grab play as ONE arm path (one play, no tail between them). */
 		chainGrab: { type: Boolean, default: true },
 		/**
+		 * Robot calls and the loop's instructions go through the arm Pi's USB-B cable
+		 * link to the OT-2 when it is up (2026-11-06); off = the Mongo queue only.
+		 */
+		useArmLink: { type: Boolean, default: true },
+		/**
 		 * Default conveyor belt pulse (BCM 22 on the arm Pi), ms. Set from the Robot
 		 * Arm Conveyor tab's Save button (2026-11-04); kept here because the belt
 		 * controls are moving into Wax fill.

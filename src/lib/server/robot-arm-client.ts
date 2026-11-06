@@ -344,6 +344,33 @@ async function armFetchJson<T>(path: string, opts: FetchOptions): Promise<T> {
 	return data as T;
 }
 
+export interface ArmRawResponse {
+	status: number;
+	ok: boolean;
+	headers: Headers;
+	text: string;
+}
+
+/**
+ * A Pi call whose answer is passed through as-is — status, headers and body —
+ * for the OT-2 proxy (/ot2/api/…, 2026-11-06), where the robot's own status
+ * code is the point. Transport failures still throw; HTTP errors do not.
+ */
+export async function robotArmFetchRaw(path: string, opts: FetchOptions = {}): Promise<ArmRawResponse> {
+	const apiKey = env.ROBOT_ARM_API_KEY;
+	if (!apiKey) throw new Error('ROBOT_ARM_API_KEY not set in env');
+	const res = await armRequest(
+		path,
+		{
+			method: opts.method ?? 'GET',
+			headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
+			body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
+		},
+		opts.timeoutMs ?? 5000
+	);
+	return { status: res.status, ok: res.ok, headers: res.headers, text: await res.text() };
+}
+
 // Typed convenience wrappers for the Pi endpoints we use.
 //
 // Match shapes in robot-arm/src/server/app.py:

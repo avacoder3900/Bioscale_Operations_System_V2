@@ -6,7 +6,9 @@
 	 *
 	 * Opentrons rows (2026-11-06): every command the arm line's OT-2 ran, with
 	 * the robot's own start, end and seconds, on the same timeline as the arm;
-	 * Timing sets the two machines side by side ($lib/robot-arm/ot2-move-log).
+	 * Link rows (2026-11-06): every BIMS → OT-2 hop, through the arm Pi's cable
+	 * or the queue, with the Pi's and the robot's ms.
+	 * Timing sets the three side by side ($lib/robot-arm/ot2-move-log).
 	 *
 	 * Filters (2026-11-06): device, a broad type group or one exact type
 	 * ($lib/robot-arm/move-types), time, servo, and the newest N rows (100
@@ -31,10 +33,11 @@
 		{ minutes: 10080, title: 'Last 7 Days' },
 		{ minutes: 0, title: 'All Time' }
 	];
-	const devices: { device: 'arm' | 'ot2' | null; title: string }[] = [
+	const devices: { device: 'arm' | 'ot2' | 'link' | null; title: string }[] = [
 		{ device: null, title: 'All' },
 		{ device: 'arm', title: 'Robot Arm' },
-		{ device: 'ot2', title: 'Opentron' }
+		{ device: 'ot2', title: 'Opentron' },
+		{ device: 'link', title: 'Link' }
 	];
 	const DEVICE_TITLES = { arm: 'Robot Arm', ot2: 'Opentron' } as const;
 	const servos = [1, 2, 3, 4, 5, 6];
@@ -45,7 +48,7 @@
 	interface View {
 		minutes: number;
 		servo: number | null;
-		device: 'arm' | 'ot2' | null;
+		device: 'arm' | 'ot2' | 'link' | null;
 		group: string | null;
 		kind: string | null;
 		count: number | 'all';
@@ -65,7 +68,7 @@
 	}
 
 	/** A device keeps the type only when the type is that device's. */
-	function deviceHref(device: 'arm' | 'ot2' | null): string {
+	function deviceHref(device: 'arm' | 'ot2' | 'link' | null): string {
 		const g = moveGroup(data.group);
 		const keepGroup = !!device && g?.device === device;
 		const keepKind = !!device && !!data.kind && data.kinds.some((k) => k.device === device && k.kind === data.kind);
@@ -117,6 +120,7 @@
 
 	const armTiming = $derived(data.timing.filter((t) => t.device === 'arm'));
 	const ot2Timing = $derived(data.timing.filter((t) => t.device === 'ot2'));
+	const linkTiming = $derived(data.timing.filter((t) => t.device === 'link'));
 	const total = (rows: { totalS: number }[]) => rows.reduce((s, t) => s + t.totalS, 0);
 
 	const pill = 'rounded border px-2 py-0.5 text-xs transition-colors';
@@ -225,8 +229,8 @@
 		{#if data.timing.length}
 			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 				<h2 class="mb-2 text-sm font-semibold" style="color: var(--color-tron-cyan)">Timing</h2>
-				<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-					{#each [{ title: 'Robot Arm', rows: armTiming }, { title: 'Opentron', rows: ot2Timing }] as g (g.title)}
+				<div class="grid grid-cols-1 gap-4 md:grid-cols-3">
+					{#each [{ title: 'Robot Arm', rows: armTiming }, { title: 'Opentron', rows: ot2Timing }, { title: 'Link', rows: linkTiming }] as g (g.title)}
 						<div>
 							<div class="mb-1 flex items-baseline justify-between text-xs">
 								<span class="font-semibold" style="color: var(--color-tron-text)">{g.title}</span>
@@ -309,6 +313,8 @@
 										{#if m.device === 'ot2'}
 											<span class="{badge} border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]">Opentron</span>
 											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{robotShort(m.robot?.name)}</span>
+										{:else if m.device === 'link'}
+											<span class="{badge} border-[var(--color-tron-border)]" style="color: var(--color-tron-text-secondary)">Link</span>
 										{:else}
 											<span class="{badge} border-[var(--color-tron-orange)] text-[var(--color-tron-orange)]">Robot Arm</span>
 										{/if}
@@ -321,7 +327,7 @@
 									<td class="whitespace-nowrap pr-3 font-mono">{took(m)}</td>
 									<td class="pr-3">
 										{#if m.ok}
-											<span class="text-green-300">{m.device === 'ot2' ? 'Done' : m.kind.startsWith('reading_') ? 'Read' : 'Sent'}</span>
+											<span class="text-green-300">{m.device === 'ot2' ? 'Done' : m.device === 'link' ? 'Answered' : m.kind.startsWith('reading_') ? 'Read' : 'Sent'}</span>
 										{:else}
 											<span class="text-red-300">Failed</span>
 											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>

@@ -78,7 +78,10 @@ import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health'
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
 import { recordArmLoopStep, syncOt2Robot } from '$lib/server/ot2-move-log';
-import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, robotDelete, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
+import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
+// 2026-11-06: every robot read / action goes through the arm Pi's cable link when it is
+// usable (one HTTPS hop, ~2 ms on the cable) and through the Mongo queue otherwise.
+import { armLinkFor, armPiUrls, armSetInstruction, ot2Delete, ot2Get, ot2Post, ot2WaitChange } from '$lib/server/ot2-arm-link';
 import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, atScanFor, parseArmComment, type ArmMarker, type ArmMoveWant } from '$lib/robot-arm/arm-loop-protocol';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
@@ -248,6 +251,8 @@ export interface SettingsView {
 	grabDuringProbe: boolean;
 	/** The withdraw of a cart and the grab of the next play as ONE arm path. */
 	chainGrab: boolean;
+	/** Robot calls and the loop's instructions go through the arm Pi's cable link when it is up (2026-11-06). */
+	useArmLink: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
 	failAnimation: AnimationRef | null;
@@ -269,6 +274,7 @@ function settingsView(d: any): SettingsView {
 		channels: { c: d?.channels?.c === true, b: d?.channels?.b === true, a: d?.channels?.a !== false },
 		grabDuringProbe: d?.grabDuringProbe !== false,
 		chainGrab: d?.chainGrab !== false,
+		useArmLink: d?.useArmLink !== false,
 		grabAnimation: animRef(d?.grabAnimation),
 		withdrawAnimation: animRef(d?.withdrawAnimation),
 		failAnimation: animRef(d?.failAnimation),
@@ -292,6 +298,7 @@ export async function saveSetup(
 		channels?: Record<ChannelKey, boolean>;
 		grabDuringProbe?: boolean;
 		chainGrab?: boolean;
+		useArmLink?: boolean;
 	}
 ): Promise<SettingsView> {
 	await connectDB();
@@ -303,6 +310,7 @@ export async function saveSetup(
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
 	const grabDuringProbe = input.grabDuringProbe !== false;
 	const chainGrab = input.chainGrab !== false;
+	const useArmLink = input.useArmLink !== false;
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
 	const cartPosition = input.cartPosition === null || input.cartPosition === undefined || String(input.cartPosition).trim() === '' ? 1 : Math.round(num(input.cartPosition, 'Cart position'));
@@ -311,7 +319,7 @@ export async function saveSetup(
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, grabDuringProbe, chainGrab, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, grabDuringProbe, chainGrab, useArmLink, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -323,7 +331,8 @@ export async function saveSetup(
 		channels,
 		grabDuringProbe,
 		chainGrab,
-		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, grabDuringProbe: before.grabDuringProbe, chainGrab: before.chainGrab }
+		useArmLink,
+		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, grabDuringProbe: before.grabDuringProbe, chainGrab: before.chainGrab, useArmLink: before.useArmLink }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -1548,10 +1557,13 @@ export async function loadArmWaxFill() {
 	const health: RobotHealth | null = settings.robotId
 		? ((await getRobotsHealth([{ _id: settings.robotId, name: robotName }]).catch(() => ({}) as Record<string, RobotHealth>))[settings.robotId] ?? null)
 		: null;
+	// The arm Pi's cable link to that robot (2026-11-06): usable or why not, and the path's ms.
+	const link = settings.robotId ? await armLinkFor({ _id: settings.robotId, name: robotName ?? undefined }).catch(() => null) : null;
 	return {
 		settings,
 		robotName,
 		health,
+		link,
 		scannerDeviceId: scannerDeviceIdForRobot(robotName),
 		robots: (robots as any[]).map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id) })),
 		moveSets: moveSets.filter((m) => !m.archived).map((m) => ({ _id: m._id, name: m.name, keyframes: m.keyframes.length })),
@@ -1905,8 +1917,25 @@ async function writeInstruction(user: User, loop: any, robot: any, action: ArmLo
 	await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { instructionSeq: seq, pendingInstruction: instruction } });
 	loop.instructionSeq = seq;
 	loop.pendingInstruction = instruction;
-	await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: instruction }, 60_000);
-	await audit(user, 'arm_wax_fill.instruction', 'arm_wax_fill_runs', String(loop._id), { seq, action, cart, barcode });
+	// 2026-11-06, the cable: the arm Pi holds the instruction and the protocol
+	// long-polls it over the cable (/ot2/loop/instruction), so it acts the moment
+	// the run resumes. The FILE is still written — for the start record always
+	// (the protocol reads its start there, and learns the Pi's URLs from it), and
+	// otherwise as a mirror the protocol falls back to when it cannot reach the
+	// Pi: queued without waiting when the Pi took it, awaited when it did not.
+	let via: 'arm-pi' | 'file' = 'file';
+	if (action === 'start') {
+		const link = await armLinkFor(robot);
+		const arm_pi_urls = armPiUrls(link.status);
+		await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: { ...instruction, arm_pi_urls } }, 60_000);
+		if (await armSetInstruction(robot, instruction)) via = 'arm-pi';
+	} else if (await armSetInstruction(robot, { ...instruction, run_id: loop.opentronsRunId ?? null })) {
+		via = 'arm-pi';
+		await enqueueBridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: instruction }, 90_000).catch(() => null);
+	} else {
+		await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: instruction }, 60_000);
+	}
+	await audit(user, 'arm_wax_fill.instruction', 'arm_wax_fill_runs', String(loop._id), { seq, action, cart, barcode, via });
 	return seq;
 }
 
@@ -1930,7 +1959,7 @@ interface RunPauseRead {
  */
 async function readRunPause(robot: any, runId: string): Promise<RunPauseRead> {
 	const read = async (path: string): Promise<any> => {
-		const r = await robotGet(robot, path);
+		const r = await ot2Get(robot, path);
 		if (!r.ok) throw new Error(`GET ${path} → HTTP ${r.status}`);
 		return r.json();
 	};
@@ -2012,14 +2041,14 @@ async function resumeRun(robot: any, runId: string): Promise<void> {
 	// polling the instruction file where it stands) — the file write is enough;
 	// 'play' on a running run is refused by the robot.
 	try {
-		const g = await robotGet(robot, `/runs/${runId}`);
+		const g = await ot2Get(robot, `/runs/${runId}`);
 		if (g.ok && String(((await g.json()) as any)?.data?.status ?? '') === 'running') return;
 	} catch {
 		/* fall through to the play */
 	}
 	let res: Response;
 	try {
-		res = await robotPost(robot, `/runs/${runId}/actions`, { data: { actionType: 'play' } });
+		res = await ot2Post(robot, `/runs/${runId}/actions`, { data: { actionType: 'play' } });
 	} catch (e) {
 		throw new ArmWaxFillError(`The OT-2 could not be resumed (${e instanceof Error ? e.message : String(e)}).`, 502);
 	}
@@ -2081,8 +2110,22 @@ async function awaitPause(
 	const runId = String(loop.opentronsRunId ?? '');
 	if (!runId) throw new ArmWaxFillError('This loop has no robot run.', 409);
 	const deadline = Date.now() + maxWaitMs;
+	// Over the cable (2026-11-06) the Pi polls the run every 150 ms and answers
+	// the moment the read changes (fingerprint `fp`), so one HTTPS call replaces
+	// up to ~25 queue polls; the queue polling below is the fallback.
+	let fp: string | null = null;
 	for (;;) {
-		const r = await readRunPause(robot, runId);
+		let r: RunPauseRead;
+		let viaPi = false;
+		const w = await ot2WaitChange(robot, runId, fp, Math.min(20, Math.max(1, Math.floor((deadline - Date.now()) / 1000))));
+		if (w) {
+			r = { status: w.status, message: w.message, pause: w.pause as ArmPause | null, last: w.last as ArmMarker | null, prev: w.prev as ArmMarker | null };
+			fp = w.fp;
+			viaPi = true;
+		} else {
+			r = await readRunPause(robot, runId);
+			fp = null;
+		}
 		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
 		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
 		// The announcements, and a park resumed from outside the loop that never moved.
@@ -2107,7 +2150,7 @@ async function awaitPause(
 			await audit(user, 'arm_wax_fill.await_timeout', 'arm_wax_fill_runs', String(loop._id), { expect, status: r.status, message: r.message, last: r.last, prev: r.prev });
 			return { done: false, terminal: null, read: r };
 		}
-		await waitMs(AWAIT_POLL_MS);
+		if (!viaPi) await waitMs(AWAIT_POLL_MS);
 	}
 }
 
@@ -2125,7 +2168,7 @@ async function runEndedMidLoop(user: User, loop: any, cycle: any, step: string, 
 	if (loop.opentronsRunId) {
 		try {
 			const robot = await loopRobot(loop);
-			const r = await robotGet(robot, `/runs/${loop.opentronsRunId}`);
+			const r = await ot2Get(robot, `/runs/${loop.opentronsRunId}`);
 			if (r.ok) {
 				const errs = (((await r.json()) as any)?.data?.errors ?? []) as any[];
 				const why = errs
@@ -2875,7 +2918,7 @@ const HALT_REASON = 'Stop run: halted by the operator';
 
 /** The robot's current protocol run (links.current) and its status, or null when the engine holds none. */
 async function currentRobotRun(robot: any): Promise<{ id: string; status: string | null } | null> {
-	const res = await robotGet(robot, '/runs');
+	const res = await ot2Get(robot, '/runs');
 	if (!res.ok) throw new Error(`the OT-2 did not list its runs (HTTP ${res.status})`);
 	const body: any = await res.json().catch(() => ({}));
 	const href = String(body?.links?.current?.href ?? '');
@@ -2887,7 +2930,7 @@ async function currentRobotRun(robot: any): Promise<{ id: string; status: string
 
 /** The open maintenance run's id (the scanner sweep moves the gantry in one), or null. */
 async function currentMaintenanceRun(robot: any): Promise<string | null> {
-	const res = await robotGet(robot, '/maintenance_runs/current_run').catch(() => null);
+	const res = await ot2Get(robot, '/maintenance_runs/current_run').catch(() => null);
 	if (!res || !res.ok) return null;
 	const body: any = await res.json().catch(() => ({}));
 	return body?.data?.id ? String(body.data.id) : null;
@@ -2930,7 +2973,7 @@ async function haltRobotWork(user: User, loopId: string, robotId: string): Promi
 	try {
 		const cur = await currentRobotRun(robot);
 		if (cur && !(cur.status && OT2_RUN_TERMINAL.has(cur.status))) {
-			const res = await robotPost(robot, `/runs/${cur.id}/actions`, { data: { actionType: 'stop' } });
+			const res = await ot2Post(robot, `/runs/${cur.id}/actions`, { data: { actionType: 'stop' } });
 			notes.push(res.ok ? `stop sent to robot run ${cur.id.slice(0, 8)}` : `the OT-2 refused to stop run ${cur.id.slice(0, 8)} (HTTP ${res.status})`);
 		}
 	} catch (e) {
@@ -3028,7 +3071,7 @@ export async function haltHomeGantry(user: User, loopId: string): Promise<{ home
 		// halt could not send) is stopped here, once; then we wait for it to end.
 		if (!stopSent && cur.status !== 'stop-requested' && cur.status !== 'finishing') {
 			stopSent = true;
-			const res = await robotPost(robot, `/runs/${cur.id}/actions`, { data: { actionType: 'stop' } }).catch(() => null);
+			const res = await ot2Post(robot, `/runs/${cur.id}/actions`, { data: { actionType: 'stop' } }).catch(() => null);
 			notes.push(res?.ok ? `stop sent to robot run ${cur.id.slice(0, 8)} (still ${cur.status ?? 'active'} after the halt)` : `the OT-2 refused to stop run ${cur.id.slice(0, 8)}`);
 		}
 		if (Date.now() - t0 > HALT_SETTLE_MS) {
@@ -3038,12 +3081,12 @@ export async function haltHomeGantry(user: User, loopId: string): Promise<{ home
 	}
 	const maint = await currentMaintenanceRun(robot);
 	if (maint) {
-		const res = await robotDelete(robot, `/maintenance_runs/${maint}`).catch(() => null);
+		const res = await ot2Delete(robot, `/maintenance_runs/${maint}`).catch(() => null);
 		notes.push(res?.ok ? `closed maintenance run ${maint.slice(0, 8)} (the scan's)` : `maintenance run ${maint.slice(0, 8)} could not be closed`);
 	}
 	let res: Response;
 	try {
-		res = await robotPost(robot, '/robot/home', { target: 'robot' }, { timeoutMs: 80_000 });
+		res = await ot2Post(robot, '/robot/home', { target: 'robot' }, { timeoutMs: 80_000 });
 	} catch (e) {
 		throw new ArmWaxFillError(`The OT-2 could not home (${e instanceof Error ? e.message : String(e)}) — the arm will not move.`, 502);
 	}

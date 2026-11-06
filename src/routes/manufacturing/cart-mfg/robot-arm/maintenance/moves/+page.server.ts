@@ -10,7 +10,7 @@ import type { PageServerLoad } from './$types';
 
 /** Window choices, in minutes; 0 = all time. */
 const WINDOWS = [60, 1440, 10080, 0];
-const DEVICES = ['arm', 'ot2'] as const;
+const DEVICES = ['arm', 'ot2', 'link'] as const;
 /** Newest rows shown unless another number or All is picked. */
 const DEFAULT_COUNT = 100;
 
@@ -24,10 +24,10 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const kind = url.searchParams.get('kind')?.slice(0, 80) || null;
 	const group = moveGroup(url.searchParams.get('group'))?.id ?? null;
 	const d = url.searchParams.get('device');
-	const device: 'arm' | 'ot2' | null = servo
+	const device: 'arm' | 'ot2' | 'link' | null = servo
 		? 'arm'
 		: (DEVICES as readonly string[]).includes(d ?? '')
-			? (d as 'arm' | 'ot2')
+			? (d as 'arm' | 'ot2' | 'link')
 			: (moveGroup(group)?.device ?? null);
 	const n = url.searchParams.get('n');
 	const nn = Number(n);
@@ -36,7 +36,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	// The Movement Log (2026-11-06). A read failure shows as a line, never a 500.
 	let moves: ArmMoveRow[] = [];
 	let total = 0;
-	let kinds: { device: 'arm' | 'ot2'; kind: string; count: number }[] = [];
+	let kinds: { device: 'arm' | 'ot2' | 'link'; kind: string; count: number }[] = [];
 	let summary: ServoMoveSummary[] = [];
 	let timing: TimingRow[] = [];
 	let movesError: string | null = null;

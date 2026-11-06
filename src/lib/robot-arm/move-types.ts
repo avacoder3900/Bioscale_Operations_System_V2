@@ -46,7 +46,9 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	},
 	{ id: 'ot2:lights', device: 'ot2', title: 'Lights', kinds: ['setRailLights', 'lights_on', 'lights_off', 'lights'] },
 	{ id: 'ot2:comment', device: 'ot2', title: 'Comment', kinds: ['comment'] },
-	{ id: 'ot2:other', device: 'ot2', title: 'Other', kinds: [] }
+	{ id: 'ot2:other', device: 'ot2', title: 'Other', kinds: [] },
+	// The link (2026-11-06): every BIMS -> OT-2 hop, through the arm Pi's cable or the queue.
+	{ id: 'link:hop', device: 'link', title: 'OT-2 Hop', kinds: ['ot2_call'] }
 ];
 
 const BY_ID = new Map(MOVE_GROUPS.map((g) => [g.id, g]));

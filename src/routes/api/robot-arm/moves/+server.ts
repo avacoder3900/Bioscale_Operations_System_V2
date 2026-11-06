@@ -5,7 +5,7 @@
  *     → { moves: [...newest first], total, summary: [{ servo, moves, reversals }],
  *         timing: [{ device, kind, count, totalS, avgS, maxS }] }
  *
- * device: 'arm' or 'ot2' (the OT-2's commands, 2026-11-06); both when left out.
+ * device: 'arm', 'ot2' (the OT-2's commands) or 'link' (BIMS → OT-2 hops), 2026-11-06; all when left out.
  * group: a type group from $lib/robot-arm/move-types; kind: one exact type.
  * total: how many rows match, past the limit.
  *
@@ -24,7 +24,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const minutes = Number(url.searchParams.get('minutes')) || null;
 	const servo = Number(url.searchParams.get('servo')) || null;
 	const d = url.searchParams.get('device');
-	const device: 'arm' | 'ot2' | null = d === 'arm' || d === 'ot2' ? d : null;
+	const device: 'arm' | 'ot2' | 'link' | null = d === 'arm' || d === 'ot2' || d === 'link' ? d : null;
 	const group = url.searchParams.get('group');
 	const kind = url.searchParams.get('kind');
 	const limit = Number(url.searchParams.get('limit')) || 500;

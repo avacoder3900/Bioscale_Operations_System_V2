@@ -10,7 +10,7 @@
  */
 import type { Ot2CommandSummary } from './run-profile';
 
-export type MoveDevice = 'arm' | 'ot2';
+export type MoveDevice = 'arm' | 'ot2' | 'link';
 
 /** Ids → names from GET /runs/{id}: labware by slot and load name, pipettes by name and mount. */
 export interface Ot2RunNames {
@@ -191,15 +191,16 @@ type TimedRow = { device?: string | null; kind: string; durationMs: number | nul
 
 /**
  * Seconds per device and type, for rows that carry a measured start and end
- * (every OT-2 command, the arm's loop steps). The arm's single commands carry
- * only the time the Pi took to answer, not how long it moved: left out.
- * Longest total first within each device; the arm first.
+ * (every OT-2 command, the arm's loop steps, every BIMS→OT-2 hop with device
+ * 'link'). The arm's single commands carry only the time the Pi took to
+ * answer, not how long it moved: left out. Longest total first within each
+ * device; the arm first, then the OT-2, then the link.
  */
 export function summarizeTiming(rows: TimedRow[]): TimingRow[] {
 	const m = new Map<string, TimingRow>();
 	for (const r of rows) {
 		if (!r.endAt || r.durationMs == null) continue;
-		const device: MoveDevice = r.device === 'ot2' ? 'ot2' : 'arm';
+		const device: MoveDevice = r.device === 'ot2' ? 'ot2' : r.device === 'link' ? 'link' : 'arm';
 		const key = `${device}|${r.kind}`;
 		const t = m.get(key) ?? { device, kind: r.kind, count: 0, totalS: 0, avgS: 0, maxS: 0 };
 		const s = r.durationMs / 1000;
@@ -209,7 +210,8 @@ export function summarizeTiming(rows: TimedRow[]): TimingRow[] {
 		m.set(key, t);
 	}
 	const out = [...m.values()].map((t) => ({ ...t, totalS: Math.round(t.totalS * 10) / 10, avgS: Math.round((t.totalS / t.count) * 100) / 100, maxS: Math.round(t.maxS * 100) / 100 }));
-	return out.sort((a, b) => (a.device === b.device ? b.totalS - a.totalS : a.device === 'arm' ? -1 : 1));
+	const order: Record<MoveDevice, number> = { arm: 0, ot2: 1, link: 2 };
+	return out.sort((a, b) => (a.device === b.device ? b.totalS - a.totalS : order[a.device] - order[b.device]));
 }
 
 export type LoopStep = 'grab' | 'withdraw' | 'withdraw_grab' | 'fail';

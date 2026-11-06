@@ -148,6 +148,85 @@ def check_reader(m, label):
     print(f'ok: {label} instruction reader')
 
 
+class FakePi:
+    """The arm Pi's /ot2/loop/instruction and /ot2/loop/announce, in memory."""
+
+    def __init__(self, clock, fail=False):
+        self.clock = clock
+        self.rec = None
+        self.fail = fail
+        self.calls = []
+        self.announced = []
+
+    def __call__(self, method, url, body=None, timeout_s=5.0):
+        self.calls.append((method, url))
+        if self.fail:
+            raise OSError('connection refused')
+        if '/ot2/loop/announce' in url:
+            self.announced.append((body['kind'], body['cart']))
+            return 200, {'ok': True}
+        m = re.search(r'loop=([^&]+)&after=(-?\d+)&wait_s=([\d.]+)', url)
+        loop, after, wait = m.group(1), int(m.group(2)), float(m.group(3))
+        r = self.rec
+        if r and r['loop'] == loop and r['seq'] > after:
+            return 200, dict(r)
+        self.clock.sleep(wait)
+        return 204, None
+
+
+def check_reader_pi(m, label):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, 'arm_loop.json')
+        clock = FakeClock()
+        pi = FakePi(clock)
+        write(path, {'seq': 0, 'loop': 'L2', 'action': 'start', 'run_id': 'run-9', 'arm_pi_urls': ['http://pi-a:8000/', 'http://pi-b:8000']})
+        r = m.ArmLoopInstructions(path=path, sleep=clock.sleep, clock=clock.now, http=pi)
+        rec = r.start()
+        assert r.loop == 'L2' and r.run_id == 'run-9' and r.urls == ['http://pi-a:8000', 'http://pi-b:8000'], r.urls
+
+        # The Pi's record is taken without touching the file; stale seq on the Pi is not.
+        pi.rec = {'seq': 1, 'loop': 'L2', 'cart': 1, 'action': 'scan', 'barcode': None}
+        rec = r.next()
+        assert rec['action'] == 'scan' and r.seen_seq == 1 and r.served_by == 'http://pi-a:8000'
+        assert pi.calls[-1][1].startswith('http://pi-a:8000/ot2/loop/instruction?loop=L2&after=0&wait_s=5.0')
+        t0 = clock.now()
+        assert r.next(timeout_s=12.0) is None
+        assert 12.0 <= clock.now() - t0 < 20.0, 'long-polls the Pi, no file spin'
+
+        # A foreign loop on the Pi is ignored; the file still works beside the Pi.
+        pi.rec = {'seq': 5, 'loop': 'OTHER', 'cart': 1, 'action': 'fill'}
+        write(path, {'seq': 2, 'loop': 'L2', 'cart': 1, 'action': 'fill', 'barcode': 'abcd'})
+        rec = r.next(timeout_s=10.0)
+        assert rec['action'] == 'fill' and rec['barcode'] == 'abcd' and r.served_by == 'file'
+
+        # Announcements: best effort, to the first live Pi.
+        assert r.announce('PARKED', 2) is True and pi.announced[-1] == ('PARKED', 2)
+
+        # A Pi that fails is backed off; the file carries on at the poll cadence; the Pi is retried later.
+        pi.fail = True
+        write(path, {'seq': 3, 'loop': 'L2', 'cart': 2, 'action': 'skip'})
+        n_calls = len(pi.calls)
+        rec = r.next(timeout_s=10.0)
+        assert rec['action'] == 'skip' and r.served_by == 'file'
+        assert len(pi.calls) == n_calls + 2, 'both URLs tried once, then backed off'
+        assert r.announce('AT_SCAN', 2) is False
+        t0 = clock.now()
+        assert r.next(timeout_s=3.0) is None
+        assert clock.now() - t0 >= 3.0
+        pi.fail = False
+        clock.sleep(m.ARM_LOOP_HTTP_BACKOFF_S)
+        pi.rec = {'seq': 4, 'loop': 'L2', 'cart': 3, 'action': 'end', 'barcode': None}
+        rec = r.next()
+        assert rec['action'] == 'end' and r.served_by == 'http://pi-a:8000'
+
+        # Without a URL list in the start record the default cable address is used.
+        write(path, {'seq': 0, 'loop': 'L3', 'action': 'start'})
+        r2 = m.ArmLoopInstructions(path=path, sleep=clock.sleep, clock=clock.now, http=FakePi(clock, fail=True))
+        r2.start()
+        assert r2.urls == list(m.ARM_PI_URLS)
+    print(f'ok: {label} instruction reader over the Pi')
+
+
 def check_surface(m, src, label):
     # RTPs: the loop's cart count and the scan position, with the contract's bounds.
     p = _Params()
@@ -160,16 +239,16 @@ def check_surface(m, src, label):
     assert m.MIN_TAUGHT_MM == 1.0 and m.SIM_CART[2] > 0 and m.SIM_SCAN[2] > 0
 
     # The pause messages and comments, exactly as the contract names them.
-    assert "protocol.pause(f'ARM PARKED {cart_index}')" in src
-    assert "protocol.pause(f'ARM AT_SCAN {cart}')" in src
-    assert "protocol.pause(f'ARM NO_INSTRUCTION {cart_index}')" in src
+    assert "arm_pause(f'ARM PARKED {cart_index}')" in src
+    assert "arm_pause(f'ARM AT_SCAN {cart}')" in src
+    assert "arm_pause(f'ARM NO_INSTRUCTION {cart_index}')" in src
     assert "protocol.comment(f'ARM CART {cart_index} FILLED {barcode}')" in src
     assert "protocol.comment(f'ARM CART {cart} SKIPPED')" in src
-    assert "protocol.comment('ARM LOOP END')" in src
+    assert "arm_mark('ARM LOOP END')" in src
     # 2026-10-30: the loop's probe announces itself (the first grab may start there) - once, by the loop only.
     assert "pick_up_and_calibrate_tip(announce='ARM PROBING')" in src
     assert src.count("pick_up_and_calibrate_tip(announce=") == 1
-    assert "protocol.comment('ARM CALIBRATED')" in src
+    assert "arm_mark('ARM CALIBRATED')" in src
     assert "raise RuntimeError('ARM LOOP: no start record in /data/arm_loop.json')" in src
 
     # One tip for the loop: the only drop_tip sites are the probe's own retry
@@ -192,29 +271,29 @@ def check_surface(m, src, label):
     assert 'pick_up_tip_for_loop' not in src and 'adjust is None' not in src
     assert 'adjust = pick_up_and_calibrate_tip(pick_up=False)' not in src, 'no deferred probe (the tip-swap re-probe is the only pick_up=False)'
     assert src.count('= pick_up_and_calibrate_tip(') == 2, 'the optional calibration check + the loop start-up (which announces ARM PROBING)'
-    assert "protocol.comment('ARM CALIBRATED')" in src
+    assert "arm_mark('ARM CALIBRATED')" in src
     i_probe = src.index("        adjust = pick_up_and_calibrate_tip(announce='ARM PROBING')")
-    i_calibrated = src.index("protocol.comment('ARM CALIBRATED')")
+    i_calibrated = src.index("arm_mark('ARM CALIBRATED')")
     i_parked = src.index('        holding = park_for(cart, source_volume, 0)\n')
     i_loop = src.index('        while True:\n            rec = next_instruction(cart)')
     assert i_probe < i_calibrated < i_parked < i_loop, 'order: probe, ARM CALIBRATED, aspirate + park (PARKED 1), loop'
     # 'ARM CLEAR <i>' is emitted only after the planned move to the tube top has
     # completed: in park_for (fill / skip) and in finish (end), and nowhere else.
-    assert src.count("protocol.comment(f'ARM CLEAR {clear_of}')") == 2
+    assert src.count("arm_mark(f'ARM CLEAR {clear_of}')") == 2
     for fn in ('def park_for(', 'def finish('):
         body = src[src.index(fn):]
         body = body[:body.index('\n        def ') if '\n        def ' in body else len(body)]
         i_tube = body.index('pipette.move_to(source_well.top())')
-        i_clear = body.index("protocol.comment(f'ARM CLEAR {clear_of}')")
+        i_clear = body.index("arm_mark(f'ARM CLEAR {clear_of}')")
         assert i_tube < i_clear, fn + ': CLEAR must follow the move to the tube'
     # 'ARM FILLED <i>' (2026-11-05): once per cart in fill_cart, right after the
     # LAST batch's dispense_batch returned (the tip is out of the last hole) and
     # BEFORE the blow-out at the tube — the withdraw may start from it.
-    assert src.count("protocol.comment(f'ARM FILLED {cart_index}')") == 1
+    assert src.count("arm_mark(f'ARM FILLED {cart_index}')") == 1
     body = src[src.index('def fill_cart('):]
     body = body[:body.index('\n        # ── Volumes')]
     i_batch = body.index('dispensed_volume, swap_at = dispense_batch(')
-    i_filled = body.index("protocol.comment(f'ARM FILLED {cart_index}')")
+    i_filled = body.index("arm_mark(f'ARM FILLED {cart_index}')")
     i_blow = body.index('pipette.blow_out(location=source_well.top())')
     assert i_batch < i_filled < i_blow, 'ARM FILLED: after the last batch, before the blow-out at the tube'
     assert 'if swap_at is None and bi + 1 == len(batches):' in body, 'ARM FILLED only after the final batch'
@@ -225,6 +304,14 @@ def check_surface(m, src, label):
     assert 'def _resolve_lift' in src and src.count('lift()') >= 14, src.count('lift()')
     # Analysis never touches serial: no probe, baseline zero.
     assert "ser = None" in src and "no X/Y probe (adjust 0, 0)" in src
+    # 2026-11-06: every ARM marker is one of arm_mark (comment + announce to the arm
+    # Pi) / arm_pause (announce + waitForResume); the comment / pause text is unchanged.
+    assert 'def arm_mark(text):' in src and 'def arm_pause(text):' in src
+    assert "protocol.comment(text)" in src and "protocol.pause(text)" in src
+    assert "arm_mark(announce)" in src and "protocol.comment(announce)" not in src
+    for bare in ("protocol.pause(f'ARM ", "protocol.comment('ARM CALIBRATED')", "protocol.comment(f'ARM CLEAR", "protocol.comment(f'ARM FILLED", "protocol.comment('ARM LOOP END')"):
+        assert bare not in src, bare + ' must go through arm_mark / arm_pause'
+    assert m.ARM_PI_URLS == ('http://169.254.42.1:8000',) and m.ARM_LOOP_HTTP_WAIT_S == 5.0
     print(f'ok: {label} loop surface')
 
 
@@ -233,6 +320,7 @@ def main():
     srcs = {k: open(v, encoding='utf-8').read() for k, v in FILES.items()}
     for k in FILES:
         check_reader(mods[k], k)
+        check_reader_pi(mods[k], k)
         check_surface(mods[k], srcs[k], k)
     # The rehearsal mirrors production: same instruction class source.
     def class_src(s):

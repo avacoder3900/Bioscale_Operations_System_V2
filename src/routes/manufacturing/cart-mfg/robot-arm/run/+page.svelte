@@ -1019,6 +1019,18 @@
 							</form>
 						{/if}
 					</div>
+					<!-- The arm Pi's cable link to this OT-2 (2026-11-06): robot calls and the loop's instructions go through it when it is up. -->
+					{#if data.link}
+						<span class="rounded border px-1.5 py-0.5 text-[10px] font-semibold"
+							style={data.link.usable ? 'border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)' : 'border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)'}
+							title={data.link.usable ? `Arm Pi → OT-2 over the ${data.link.status?.active === 'cable' ? 'USB cable' : 'office Wi-Fi'}` : (data.link.reason ?? '')}>
+							{#if data.link.usable}
+								{data.link.status?.active === 'cable' ? 'Cable' : 'Wi-Fi'} {data.link.status?.[data.link.status.active ?? 'cable']?.rtt_ms?.toFixed(1) ?? '?'} ms
+							{:else}
+								Queue
+							{/if}
+						</span>
+					{/if}
 					{#if robotId}
 						<span class="truncate {healthText(health?.status)}" title={health?.detail ?? ''}>
 							{health?.label ?? 'No Health Data'}
@@ -1307,6 +1319,10 @@
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
 					<span>Chain Withdraw And Next Grab</span>
+				</label>
+				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
+					<input type="checkbox" name="useArmLink" checked={data.settings.useArmLink} class="mt-0.5" />
+					<span>Use Cable Link To The OT-2</span>
 				</label>
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">

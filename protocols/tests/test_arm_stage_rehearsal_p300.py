@@ -98,7 +98,7 @@ def main():
         assert params.by_name['row_pattern_2']['default'] is True
     for s in (src, open(PRODUCTION, encoding='utf-8').read()):
         assert "pick_up_and_calibrate_tip(announce='ARM PROBING')" in s
-        assert s.count("protocol.comment(announce)") == 1
+        assert s.count("arm_mark(announce)") == 1 and "protocol.comment(announce)" not in s
         assert 'check_wells = [w for w in calibration_check_wells if w in by_name]' in s
     hole_params = [n for n in p.names if n.startswith('hole_')]
     assert hole_params == [n for n in q.names if n.startswith('hole_')]
@@ -172,8 +172,8 @@ def main():
     # ARM-WAX-LOOP-B: the same one-run-per-loop machinery (instruction file, pauses, one tip).
     assert reh.ARM_LOOP_FILE == prod.ARM_LOOP_FILE == '/data/arm_loop.json'
     assert reh.ARM_LOOP_ACTIONS == prod.ARM_LOOP_ACTIONS
-    for needle in ("protocol.pause(f'ARM PARKED {cart_index}')", "protocol.pause(f'ARM AT_SCAN {cart}')",
-                   "protocol.pause(f'ARM NO_INSTRUCTION {cart_index}')", "def fill_cart(", "def park_for(", "def finish("):
+    for needle in ("arm_pause(f'ARM PARKED {cart_index}')", "arm_pause(f'ARM AT_SCAN {cart}')",
+                   "arm_pause(f'ARM NO_INSTRUCTION {cart_index}')", "def fill_cart(", "def park_for(", "def finish("):
         assert needle in src, needle
     assert len([ln for ln in src.splitlines() if 'pipette.drop_tip()' in ln]) == 4, 'one tip per loop: no drop between carts'
 
