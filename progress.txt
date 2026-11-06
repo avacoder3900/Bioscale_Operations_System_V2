@@ -26750,3 +26750,22 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ 4accb024 (PRD note 40d58b39)
 Retrieve this exact code: git checkout 4accb024
 What this deployment is for: a gentler Return to home — capped servo speed on every jog, full speed restored after.
+
+================================================================================
+2026-11-06 — master — Setup box "Barcode Present Only"; why B07 grabbed the p300
+================================================================================
+Alejandro: "B07 is using the wrong pipette, I am trying to grab p20s but it grabs the other one." Cause (audit log):
+Giovanni deployed Wax_Filling_GEN7_ArmStage.py to B07 at 20:01:17Z and REPLACED it with the p300 rehearsal at
+20:01:50Z; the three loops since (20:16, 20:22, 20:36Z) ran as rehearsals. The rehearsal .py loads the p300 and
+the 200 uL rack by design, and the Stage Calibration page + the loop follow the protocol on the robot. Fix is
+operator-side: Run tab, Setup -> Protocol on the robot -> deploy Wax_Filling_GEN7_ArmStage.py (not doable here).
+He also asked for the presence-only scan (built into the rehearsal earlier today, 577bee64) as a Setup option:
+settings.scanPresenceOnly ("Barcode Present Only" on the Setup card; model arm-wax-fill-settings.ts), helper
+scanPresenceOnly(settings, protocol) in arm-wax-fill.ts used by cycleScanRead, the typed-barcode start and
+cycleDecide (audit arm_wax_fill.presence_only_cart). Any barcode passes, nothing looked up, no cart attached to
+the wax run or advanced, wax still dispensed; only an empty read takes the fail route. Readiness notes, the wax
+run note and the Run log say which mode is on. svelte-check 14 errors (baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CpBwzFeoJ81hkNs3itWD1cPPsmzE
+Source: branch master @ commit 26ea0d2b
+Retrieve this exact code: git checkout 26ea0d2b
+What this deployment is for: the Barcode Present Only Setup box (Vercel status success).
