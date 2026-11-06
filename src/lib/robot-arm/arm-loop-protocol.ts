@@ -60,11 +60,12 @@ export function isParkedFor(pause: ArmPause | null, cart: number): boolean {
  * protocol ANNOUNCES moments with a plain comment, and the arm may move from
  * them on while the run keeps going:
  *   'ARM PROBING'     — the OT-2 is about to probe its tip on the calibrator
- *                       (once per loop; a rejected tip repeats it). The grab of
- *                       cart 1 may start HERE when Setup's "grab during the
- *                       probe" is on (Alejandro, 2026-10-30): the grab path
- *                       keeps clear of the calibrator. Off, the grab waits for
- *                       CALIBRATED as before.
+ *                       (once per loop; a rejected tip repeats it). A status
+ *                       marker ONLY: the arm never moves on it (Alejandro,
+ *                       2026-11-06 — the arm moved too early; the probe is also
+ *                       where a MISSING tip is found, and the run pauses there).
+ *                       The first grab waits for CALIBRATED, which the protocol
+ *                       announces only after a successful probe with a tip on.
  *   'ARM CALIBRATED'  — the once-per-loop probe is done; the OT-2 now only
  *                       visits the tube (aspirate, park) until 'ARM PARKED 1'.
  *   'ARM CLEAR <i>'   — cart i's fill (or skip / end) has left the stage and
@@ -108,10 +109,8 @@ export interface ArmMoveWant {
 	orClear?: number;
 	/** Also allowed while the run is RUNNING after 'ARM FILLED <orFilled>' — the withdraw of that cart only (2026-11-05). */
 	orFilled?: number;
-	/** Also allowed while the run is RUNNING after 'ARM CALIBRATED' (nothing later in the log). */
+	/** Also allowed while the run is RUNNING after 'ARM CALIBRATED' (nothing later in the log) — the first grab: the tip is on and probed. */
 	orCalibrated?: boolean;
-	/** Also allowed while the run is RUNNING after 'ARM PROBING' — the first grab, when Setup says so. */
-	orProbing?: boolean;
 }
 
 export interface ArmMoveContext {
@@ -136,7 +135,7 @@ export function armMayMove(status: string, last: ArmMarker | null, want: ArmMove
 	if (ctx.uninstructed && last.kind === 'NO_INSTRUCTION' && last.cart === want.parked && last.paused && status === 'paused' && ctx.prev?.kind === 'PARKED' && ctx.prev.cart === want.parked) return true;
 	if (ctx.uninstructed && last.kind === 'PARKED' && last.cart === want.parked && !last.paused && status === 'running') return true;
 	if (status !== 'running') return false;
-	if (want.orProbing && want.parked === 1 && last.kind === 'PROBING') return true; // start-up only: the first grab
+	// Never on 'ARM PROBING': the OT-2 is at the calibrator, and the tip may turn out to be missing (2026-11-06).
 	if (want.orCalibrated && last.kind === 'CALIBRATED') return true;
 	if (want.orClear != null && last.kind === 'CLEAR' && last.cart === want.orClear) return true;
 	if (want.orFilled != null && last.kind === 'FILLED' && last.cart === want.orFilled) return true;

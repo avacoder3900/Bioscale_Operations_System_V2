@@ -32,7 +32,7 @@ describe('arm-loop-protocol pause messages', () => {
 	});
 });
 
-describe('ARM PROBING — the first grab may start while the tip is probed (2026-10-30)', async () => {
+describe('ARM PROBING — a status marker only; the first grab waits for ARM CALIBRATED (2026-11-06)', async () => {
 	const { armMayMove, parseArmComment } = await import('./arm-loop-protocol');
 	it('parses the announcements, PROBING and CALIBRATED with cart 0', () => {
 		expect(parseArmComment('ARM PROBING')).toEqual({ kind: 'PROBING', cart: 0 });
@@ -41,14 +41,20 @@ describe('ARM PROBING — the first grab may start while the tip is probed (2026
 		expect(parseArmComment('ARM PARKED 1')).toBeNull();
 		expect(parseArmComment('Tip calibration OK')).toBeNull();
 	});
-	it('lets the first grab start at PROBING only when asked, and only while the run is running', () => {
+	it('never lets the arm move at PROBING — the probe is where a missing tip is found', () => {
 		const probing = { kind: 'PROBING' as const, cart: 0, paused: false };
 		expect(armMayMove('running', probing, { parked: 1, orCalibrated: true })).toBe(false);
-		expect(armMayMove('running', probing, { parked: 1, orCalibrated: true, orProbing: true })).toBe(true);
-		expect(armMayMove('paused', probing, { parked: 1, orCalibrated: true, orProbing: true })).toBe(false);
-		expect(armMayMove('running', { kind: 'CALIBRATED', cart: 0, paused: false }, { parked: 1, orCalibrated: true, orProbing: true })).toBe(true);
-		// Never a later cart's grab: PROBING is a start-up marker only.
-		expect(armMayMove('running', probing, { parked: 2, orClear: 1, orProbing: true })).toBe(false);
+		expect(armMayMove('paused', probing, { parked: 1, orCalibrated: true })).toBe(false);
+		expect(armMayMove('running', probing, { parked: 2, orClear: 1 })).toBe(false);
+		// The NO TIP DETECTED pause carries no ARM note: the last marker stays PROBING and the run is paused — still no.
+		expect(armMayMove('paused', { kind: 'PROBING' as const, cart: 0, paused: true }, { parked: 1, orCalibrated: true })).toBe(false);
+	});
+	it('lets the first grab start at CALIBRATED — announced only after a successful probe with a tip on', () => {
+		const calibrated = { kind: 'CALIBRATED' as const, cart: 0, paused: false };
+		expect(armMayMove('running', calibrated, { parked: 1, orCalibrated: true })).toBe(true);
+		expect(armMayMove('paused', calibrated, { parked: 1, orCalibrated: true })).toBe(false);
+		// Never a later cart's grab: CALIBRATED is a start-up marker only.
+		expect(armMayMove('running', calibrated, { parked: 2, orClear: 1 })).toBe(false);
 	});
 });
 
@@ -87,6 +93,5 @@ describe('ARM FILLED — the withdraw may start once the final row is filled (20
 		expect(armMayMove('paused', filled(2), withdraw2)).toBe(false); // a paused run is on a pause marker
 		// The fail animation and the next grab do not ask for it: they still wait for CLEAR / PARKED.
 		expect(armMayMove('running', filled(2), { parked: 3, orClear: 2 })).toBe(false);
-		expect(armMayMove('running', filled(2), { parked: 3, orClear: 2, orProbing: true })).toBe(false);
 	});
 });

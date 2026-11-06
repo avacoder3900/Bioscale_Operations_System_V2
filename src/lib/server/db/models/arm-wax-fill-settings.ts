@@ -17,9 +17,10 @@ import mongoose, { Schema } from 'mongoose';
  *
  * 2026-10-30 (the speed work): `channels` picks which rows of the cart the
  * stage protocol fills (sent as the carriage line's row_pattern_0/1/2);
- * `grabDuringProbe` lets the first grab start at 'ARM PROBING' instead of
- * 'ARM CALIBRATED'; `chainGrab` plays a cart's withdraw and the next cart's
- * grab as one arm path.
+ * `chainGrab` plays a cart's withdraw and the next cart's grab as one arm
+ * path. (`grabDuringProbe`, 2026-10-30 to 2026-11-06, is gone: the first grab
+ * always waits for 'ARM CALIBRATED' — a successful probe with a tip on. Old
+ * documents may still carry the field; it is ignored.)
  */
 const animationRefSchema = new Schema(
 	{
@@ -53,8 +54,6 @@ const armWaxFillSettingsSchema = new Schema(
 			b: { type: Boolean, default: false },
 			a: { type: Boolean, default: true }
 		},
-		/** The arm's first grab may start while the OT-2 probes its tip ('ARM PROBING'), not only after ('ARM CALIBRATED'). */
-		grabDuringProbe: { type: Boolean, default: true },
 		/** Between carts the withdraw and the next grab play as ONE arm path (one play, no tail between them). */
 		chainGrab: { type: Boolean, default: true },
 		/**

@@ -105,7 +105,6 @@ export const actions: Actions = {
 				waxSourceLot: field(d, 'waxSourceLot'),
 				testMode: checked(d, 'testMode'),
 				channels: { c: checked(d, 'channelC'), b: checked(d, 'channelB'), a: checked(d, 'channelA') },
-				grabDuringProbe: checked(d, 'grabDuringProbe'),
 				chainGrab: checked(d, 'chainGrab'),
 				useArmLink: checked(d, 'useArmLink')
 			});

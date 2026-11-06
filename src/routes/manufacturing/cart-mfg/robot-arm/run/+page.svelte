@@ -290,12 +290,11 @@
 						if (loop?.status !== 'running') break;
 					}
 					// The run must be parked (tip in the wax tube) for this cart before the arm swings in;
-					// the server refuses cycleGrab otherwise.
+					// the server refuses cycleGrab otherwise. The first grab waits for a SUCCESSFUL tip
+					// calibration (ARM CALIBRATED) — never the probe itself: no tip, no arm (2026-11-06).
 					note(
 						cycle.index === 1
-							? data.settings.grabDuringProbe
-								? `${tag}: waiting for the OT-2 to home and take its tip; the grab starts at ARM PROBING.`
-								: `${tag}: waiting for the OT-2 to home, take its tip and calibrate it; the grab starts at ARM CALIBRATED.`
+							? `${tag}: waiting for the OT-2 to home, take its tip and calibrate it successfully; the grab starts at ARM CALIBRATED.`
 							: `${tag}: the OT-2 is clear of the stage — grab.`
 					);
 					let parked = false;
@@ -1314,10 +1313,6 @@
 						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot fills all three rows; deploy the current stage .py.</span>{/if}
 					</p>
 				</fieldset>
-				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
-					<input type="checkbox" name="grabDuringProbe" checked={data.settings.grabDuringProbe} class="mt-0.5" />
-					<span>First Grab During Tip Probe</span>
-				</label>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
 					<span>Chain Withdraw And Next Grab</span>

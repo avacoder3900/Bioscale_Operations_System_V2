@@ -196,10 +196,11 @@ keeps going. A marker is the LAST ARM pause or announcement in the log; a later 
 
 ### 5.8 Speed fixes (added 2026-10-30, after the first 3-cart loop; Alejandro's six observations)
 - **`ARM PROBING`** — a comment the protocol emits right before the loop's own tip probe (only that probe; the
-  optional calibration-check tour never announces). With Setup's "first grab starts while the tip is being
-  calibrated" ON (default) BIMS lets the grab of cart 1 start at PROBING instead of CALIBRATED: the gantry is at
-  the calibrator while the arm travels, so the grab path must keep clear of it. Gate: grab(1) = PARKED 1 | running
-  after CALIBRATED | running after PROBING (option on). Never for a later cart.
+  optional calibration-check tour never announces). A status marker only. **Withdrawn 2026-11-06** (Alejandro: the
+  arm moved too quickly): the Setup option that let the grab of cart 1 start at PROBING is gone. The first grab
+  waits for a SUCCESSFUL calibration — `ARM CALIBRATED` is announced only after the probe has found the tip and
+  accepted its adjust; a pipette with no tip pauses at NO TIP DETECTED and the arm does not move. Gate: grab(1) =
+  PARKED 1 | running after CALIBRATED. Never for a later cart.
 - **Channels** — both stage protocols declare the carriage line's `row_pattern_0/1/2` (Channel C = row X, the first
   row from the taught hole; B = row W; A = row V; every box off = all three). BIMS sends Setup's channel checkboxes
   with the run; the fill skips unticked rows (one tube trip per row). The calibration-check tour visits only corners

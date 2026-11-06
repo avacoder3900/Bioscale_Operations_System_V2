@@ -26687,3 +26687,28 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ d16b4a02
 Retrieve this exact code: git checkout d16b4a02
 What this deployment is for: a New Tip Rack box on the robot-arm Run card that resets the OT-2's tip tracker to A1.
+
+================================================================================
+2026-11-06 — master — First grab waits for a successful tip calibration (ARM CALIBRATED); no tip, no arm
+================================================================================
+Alejandro: "the robot arm moved too quickly, always wait for the OT-2 to confirm successful calibration before
+the arm begins moving. If a tip is not on the OT-2, the robot arm should not move." The 2026-10-30 Setup option
+"First Grab During Tip Probe" (default ON) let the grab of cart 1 start at ARM PROBING, while the gantry was at
+the calibrator and before the probe had found the tip — the calibrator probe is the OT-2's only tip-presence
+check (a missing tip pauses the run at NO TIP DETECTED; a twice-rejected tip raises).
+- Removed the option end to end: grabDuringProbe out of SettingsView / settingsView / saveSetup / the audit, the
+  settings schema (old documents keep the field; it is ignored), the Setup checkbox and the page action;
+  orProbing out of ArmMoveWant and armMayMove (never on PROBING — status marker only); grabWant(1) =
+  PARKED 1 | running after CALIBRATED. The readiness note and the Run log line say the grab waits for
+  ARM CALIBRATED.
+- Both stage .py files: comments only (ARM PROBING is a marker; ARM CALIBRATED comes only after a successful
+  probe with a tip on). No behaviour change on the robot; the loop runs the gate in BIMS. No redeploy needed
+  for this; the pending stage .py redeploy (channels / ARM FILLED) is unchanged.
+- PRD §5.8 ARM PROBING bullet rewritten (withdrawn 2026-11-06).
+- Tests: arm-loop-protocol.test.ts 12/12 (PROBING never allows the grab, paused or running; CALIBRATED does);
+  protocols/tests loop, rehearsal, geometry, rtp ok; py_compile ok. svelte-check 14 errors (baseline, none in touched files).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): first grab waits for ARM CALIBRATED"
+What this deployment is for: the arm's first grab never starts while the OT-2 is still probing; with no tip on the
+OT-2 the run pauses and the arm stays put.

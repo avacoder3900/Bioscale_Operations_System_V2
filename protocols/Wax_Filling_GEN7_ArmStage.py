@@ -972,10 +972,12 @@ def run(protocol: protocol_api.ProtocolContext):
                 )
 
             if announce:
-                # 'ARM PROBING' (the loop's own probe): BIMS may start the arm's FIRST
-                # grab from here when Setup says so - the grab path keeps clear of
-                # the calibrator (Alejandro, 2026-10-30). Only the loop passes it;
-                # the calibration-check tour (over the stage) never announces.
+                # 'ARM PROBING' (the loop's own probe): a status marker for BIMS only.
+                # The arm does NOT move on it (Alejandro, 2026-11-06 - it moved too
+                # early): the probe is the one tip-presence check this pipette has,
+                # and a missing tip pauses below at NO TIP DETECTED. The arm's first
+                # grab waits for 'ARM CALIBRATED'. Only the loop passes it; the
+                # calibration-check tour (over the stage) never announces.
                 arm_mark(announce)
             adj, ok, why = _probe_once()
             if ok:
@@ -1413,8 +1415,11 @@ def run(protocol: protocol_api.ProtocolContext):
         # (2026-10-30): the OT-2 starts and calibrates its tip while the arm waits;
         # 'ARM CALIBRATED' is the moment the arm may start its first grab - from
         # here to 'ARM PARKED 1' the OT-2 only visits the wax tube (never the
-        # calibrator or the stage again). The probe routine's reject-retry with a
-        # fresh tip is unchanged.
+        # calibrator or the stage again). It is announced only after a SUCCESSFUL
+        # probe, i.e. with a tip on: a missing tip pauses inside the routine
+        # (NO TIP DETECTED) and a twice-rejected tip raises, so the arm never
+        # starts without one (Alejandro, 2026-11-06). The probe routine's
+        # reject-retry with a fresh tip is unchanged.
         adjust = pick_up_and_calibrate_tip(announce='ARM PROBING')
         arm_mark('ARM CALIBRATED')
         protocol.comment(f'ARM LOOP: one tip for the whole loop ({cartridges} cart(s)); adjust x={adjust["x"]}, y={adjust["y"]}')

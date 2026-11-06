@@ -52,6 +52,13 @@
  * still goes ALL THE WAY UP before every move that leaves the tube or the
  * stage (the lift rule, in the protocol and the Stage Calibration Studio).
  *
+ * The FIRST grab (Alejandro, 2026-11-06, after the arm moved too early): the
+ * arm waits for `ARM CALIBRATED`, which the protocol announces only once the
+ * calibrator probe has SUCCEEDED. The probe is also the only tip-presence check
+ * the OT-2 has: a pipette with no tip pauses at NO TIP DETECTED and the arm
+ * stays put until a tip is on and calibrated. 'ARM PROBING' is a status marker
+ * only; the Setup option that let the grab start there (2026-10-30) is gone.
+ *
  * Later: the cart-drop unit that dispenses carts for the arm will slot in
  * before the grab step; nothing here assumes where the arm picks a cart up.
  */
@@ -249,8 +256,6 @@ export interface SettingsView {
 	testMode: boolean;
 	/** Which channels (rows of four holes) the stage fill does: C = row X, B = row W, A = row V. */
 	channels: Record<ChannelKey, boolean>;
-	/** The arm's first grab may start while the OT-2 probes its tip (ARM PROBING), not only after (ARM CALIBRATED). */
-	grabDuringProbe: boolean;
 	/** The withdraw of a cart and the grab of the next play as ONE arm path. */
 	chainGrab: boolean;
 	/** Robot calls and the loop's instructions go through the arm Pi's cable link when it is up (2026-11-06). */
@@ -274,7 +279,6 @@ function settingsView(d: any): SettingsView {
 		testMode: !!d?.testMode,
 		// Default channel A only (Alejandro, 2026-11-04): C and B are on only when saved so.
 		channels: { c: d?.channels?.c === true, b: d?.channels?.b === true, a: d?.channels?.a !== false },
-		grabDuringProbe: d?.grabDuringProbe !== false,
 		chainGrab: d?.chainGrab !== false,
 		useArmLink: d?.useArmLink !== false,
 		grabAnimation: animRef(d?.grabAnimation),
@@ -298,7 +302,6 @@ export async function saveSetup(
 		waxSourceLot: unknown;
 		testMode: boolean;
 		channels?: Record<ChannelKey, boolean>;
-		grabDuringProbe?: boolean;
 		chainGrab?: boolean;
 		useArmLink?: boolean;
 	}
@@ -310,7 +313,6 @@ export async function saveSetup(
 	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds from the robot menu on the Run card.');
 	const channels: Record<ChannelKey, boolean> = { c: input.channels?.c === true, b: input.channels?.b === true, a: input.channels?.a !== false };
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
-	const grabDuringProbe = input.grabDuringProbe !== false;
 	const chainGrab = input.chainGrab !== false;
 	const useArmLink = input.useArmLink !== false;
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
@@ -321,7 +323,7 @@ export async function saveSetup(
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, grabDuringProbe, chainGrab, useArmLink, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, chainGrab, useArmLink, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -331,10 +333,9 @@ export async function saveSetup(
 		waxSourceLot,
 		testMode: !!input.testMode,
 		channels,
-		grabDuringProbe,
 		chainGrab,
 		useArmLink,
-		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, grabDuringProbe: before.grabDuringProbe, chainGrab: before.chainGrab, useArmLink: before.useArmLink }
+		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, chainGrab: before.chainGrab, useArmLink: before.useArmLink }
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -1319,8 +1320,9 @@ export function readiness(
 			notes.push(`Channels ${on.map((c) => c.label).join(', ')}: ${on.length} row${on.length === 1 ? '' : 's'} of 4 holes per cart${on.length < 3 ? ` — the other row${on.length === 2 ? '' : 's'} skipped, ${on.length} tube trip${on.length === 1 ? '' : 's'} instead of 3` : ''}.`);
 		else if (protocol && on.length < 3)
 			notes.push(`Channels: the protocol on the robot predates the channel checkboxes and fills all 3 rows; add the current stage .py to the library and deploy it to fill only ${on.map((c) => c.label).join(', ')}.`);
-		if (settings.grabDuringProbe)
-			notes.push('The arm starts its FIRST grab as soon as the OT-2 begins probing its tip (ARM PROBING), while the gantry is at the calibrator: the grab path must keep clear of the calibrator. Turn this off in Setup to wait for ARM CALIBRATED.');
+		notes.push(
+			'The arm\'s FIRST grab waits for the OT-2 to report a successful tip calibration (ARM CALIBRATED). A probe that finds no tip pauses the run (NO TIP DETECTED) and the arm stays where it is until a tip is on and calibrated.'
+		);
 		if (settings.chainGrab) notes.push('Between carts the withdraw and the next grab play as one arm path; the OT-2 is parked in the wax throughout.');
 		notes.push('After every arm play the arm is read against the animation\'s last pose; if it did not get there the loop stops where it is and the OT-2 is not moved.');
 	}
@@ -2080,9 +2082,13 @@ async function resumeRun(robot: any, runId: string): Promise<void> {
 	}
 }
 
-/** What the grab of `cart` needs: parked for it, or running after CALIBRATED (cart 1) / after CLEAR of the previous cart. */
-function grabWant(cart: number, grabDuringProbe = false): ArmMoveWant {
-	return cart === 1 ? { parked: 1, orCalibrated: true, orProbing: grabDuringProbe } : { parked: cart, orClear: cart - 1 };
+/**
+ * What the grab of `cart` needs: parked for it, or running after CALIBRATED
+ * (cart 1: the probe succeeded, so a tip is on — never PROBING, 2026-11-06) /
+ * after CLEAR of the previous cart.
+ */
+function grabWant(cart: number): ArmMoveWant {
+	return cart === 1 ? { parked: 1, orCalibrated: true } : { parked: cart, orClear: cart - 1 };
 }
 
 /** What the fail animation of `cart` needs: parked for the next cart, or running after CLEAR of this one. */
@@ -2126,7 +2132,7 @@ async function awaitPause(
 	user: User,
 	loop: any,
 	robot: any,
-	expect: ArmPause & { orClear?: number; orFilled?: number; orCalibrated?: boolean; orProbing?: boolean; uninstructed?: boolean },
+	expect: ArmPause & { orClear?: number; orFilled?: number; orCalibrated?: boolean; uninstructed?: boolean },
 	maxWaitMs = AWAIT_BUDGET_MS
 ): Promise<AwaitResult> {
 	const runId = String(loop.opentronsRunId ?? '');
@@ -2151,7 +2157,7 @@ async function awaitPause(
 		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
 		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
 		// The announcements, and a park resumed from outside the loop that never moved.
-		if (expect.kind === 'PARKED' && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orFilled: expect.orFilled, orCalibrated: expect.orCalibrated, orProbing: expect.orProbing }, { prev: r.prev, uninstructed: expect.uninstructed })) {
+		if (expect.kind === 'PARKED' && armMayMove(r.status, r.last, { parked: expect.cart, orClear: expect.orClear, orFilled: expect.orFilled, orCalibrated: expect.orCalibrated }, { prev: r.prev, uninstructed: expect.uninstructed })) {
 			return { done: true, read: r };
 		}
 		if (expect.kind === 'AT_SCAN' && atScanFor(r.status, r.last, r.prev, expect.cart)) return { done: true, read: r };
@@ -2260,8 +2266,8 @@ export async function cycleAwaitParked(user: User, loopId: string): Promise<{ do
 	// A loop started at the fill or the withdraw also waits for PARKED 1 before its first instruction.
 	if (!['grab', 'scan', 'decide', 'withdraw'].includes(String(cycle.step))) expectStep(cycle, 'grab', 'scan', 'decide', 'withdraw');
 	const robot = await loopRobot(loop);
-	const want: ArmMoveWant = cycle.step === 'grab' ? grabWant(cycle.index, (await getSettings()).grabDuringProbe) : { parked: cycle.index };
-	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index, orClear: want.orClear, orCalibrated: want.orCalibrated, orProbing: want.orProbing, uninstructed: !cycle.scanSeq });
+	const want: ArmMoveWant = cycle.step === 'grab' ? grabWant(cycle.index) : { parked: cycle.index };
+	const r = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cycle.index, orClear: want.orClear, orCalibrated: want.orCalibrated, uninstructed: !cycle.scanSeq });
 	if (!r.done && r.terminal) return { done: true, loop: await runEndedMidLoop(user, loop, cycle, String(cycle.step), r.terminal) };
 	if (r.done) await audit(user, 'arm_wax_fill.run_parked', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, before: cycle.step, message: r.read.message });
 	return { done: r.done, loop: (await getLoop(loopId))! };
@@ -2273,7 +2279,7 @@ export async function cycleGrab(user: User, loopId: string): Promise<{ play: Pla
 	expectStep(cycle, 'grab');
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
 	const robot = await loopRobot(loop);
-	await assertArmMayMove(robot, loop, grabWant(cycle.index, (await getSettings()).grabDuringProbe), 'grab', { uninstructed: !cycle.scanSeq });
+	await assertArmMayMove(robot, loop, grabWant(cycle.index), 'grab', { uninstructed: !cycle.scanSeq });
 	await assertReadyToReplay(user, loopId, cycle, animRef(loop.grabAnimation), 'grab');
 	const playedAt = new Date();
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
