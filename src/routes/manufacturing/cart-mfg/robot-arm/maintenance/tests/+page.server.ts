@@ -10,10 +10,9 @@ import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { ARM_TESTS } from '$lib/robot-arm/arm-tests';
 import { latestArmTestRuns, listArmTestRuns, listArmUnitRuns, runArmTest, unitRunLogRow, type ArmTestRunRow, type ArmUnitRunRow } from '$lib/server/robot-arm-tests';
-import { listMoveSets } from '$lib/server/robot-arm-animation';
 import type { Actions, PageServerLoad } from './$types';
 
-// The longest tests (repeatability, return to home, a replay) drive the arm for over a minute.
+// The longest tests (repeatability, return to home) drive the arm for over a minute.
 export const config = { maxDuration: 120 };
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -21,7 +20,6 @@ export const load: PageServerLoad = async ({ locals }) => {
 	requirePermission(locals.user, 'manufacturing:read');
 	let latest: Record<string, ArmTestRunRow> = {};
 	let runs: ArmTestRunRow[] = [];
-	let moveSets: { _id: string; name: string }[] = [];
 	let unit: ArmUnitRunRow | null = null;
 	let logError: string | null = null;
 	try {
@@ -33,12 +31,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	} catch (err) {
 		logError = err instanceof Error ? err.message : String(err);
 	}
-	try {
-		moveSets = (await listMoveSets()).filter((m) => !m.archived).map((m) => ({ _id: m._id, name: m.name }));
-	} catch {
-		moveSets = [];
-	}
-	return { tests: ARM_TESTS, latest, runs, unit, moveSets, logError, canRun: hasPermission(locals.user, 'manufacturing:write') };
+	return { tests: ARM_TESTS, latest, runs, unit, logError, canRun: hasPermission(locals.user, 'manufacturing:write') };
 };
 
 export const actions: Actions = {
@@ -47,9 +40,8 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'manufacturing:write');
 		const d = await request.formData();
 		const key = d.get('key')?.toString() ?? '';
-		const moveSetId = d.get('moveSetId')?.toString() || null;
 		try {
-			const result = await runArmTest({ _id: locals.user._id, username: locals.user.username }, key, { moveSetId });
+			const result = await runArmTest({ _id: locals.user._id, username: locals.user.username }, key);
 			return { result };
 		} catch (err) {
 			return fail(400, { error: err instanceof Error ? err.message : String(err) });

@@ -14,9 +14,9 @@
  */
 import { env } from '$env/dynamic/private';
 import { connectDB } from './db/connection';
-import { ArmWaxFillSettings, RobotArmCameraPreset, RobotArmEndpoint, RobotArmPose, RobotArmTagCalibration, RobotArmTestRun, RobotArmUnitRun } from './db/models';
+import { ArmWaxFillSettings, RobotArmCameraPreset, RobotArmEndpoint, RobotArmTagCalibration, RobotArmTestRun, RobotArmUnitRun } from './db/models';
 import { robotArm, robotArmFetch, type ServoState } from './robot-arm-client';
-import { afterPlay, getMoveSet, playMoveSet, playbackActive, readArm, requireCool, requireIdle, type ArmNow } from './robot-arm-animation';
+import { readArm, requireCool, requireIdle, type ArmNow } from './robot-arm-animation';
 import { checkHome, returnToHome } from './robot-arm-vision';
 import { lastLoggedValue, logArmChange } from './robot-arm-change-log';
 import {
@@ -422,37 +422,9 @@ async function linesReachable(): Promise<Outcome> {
 	return problems.length ? { status: 'fail', message: problems.join('; '), measured } : { status: 'pass', message: okLine, measured };
 }
 
-async function replay(user: User, moveSetId: string | null): Promise<Outcome> {
-	if (!moveSetId) return skipped('Pick A Move Set');
-	const ms = await getMoveSet(moveSetId);
-	if (!ms) return skipped('Move Set Not Found');
-	const lastPose = [...ms.keyframes].reverse().find((k: any) => k?.poseId);
-	if (!lastPose) return skipped('Move Set Has No Pose');
-	await connectDB();
-	const pose = (await RobotArmPose.findById((lastPose as any).poseId).select('positions name').lean()) as { positions?: number[]; name?: string } | null;
-	if (!pose?.positions) return skipped('Last Pose Not Found');
-	const goals = pose.positions.map((p, i) => p + ((lastPose as any).offsets?.[i] ?? 0));
-	await readyToMove();
-	const play = await playMoveSet(user, moveSetId);
-	const t0 = Date.now();
-	const budget = Math.min(100_000, play.durationS * 1000 + 15_000);
-	let active = await playbackActive(play.runId);
-	while (active && Date.now() - t0 < budget) {
-		await sleep(1000);
-		active = await playbackActive(play.runId);
-	}
-	if (active) return { status: 'fail', message: `Still Playing After ${Math.round(budget / 1000)} s`, measured: { runId: play.runId, durationS: play.durationS } };
-	await afterPlay(user, play.runId);
-	const now = await readArm();
-	const deltas = goals.slice(0, 5).map((g, i) => now.positions[i] - g);
-	const worst = maxDelta(goals.slice(0, 5), now.positions.slice(0, 5));
-	const measured = { moveSet: ms.name, lastPose: pose.name, runId: play.runId, durationS: play.durationS, playedS: (Date.now() - t0) / 1000, goals, landed: now.positions, deltas, warnings: play.warnings };
-	return { status: worst <= L.replayArrivalSteps ? 'pass' : 'fail', message: `${ms.name}: Off ${deltas.join(' / ')} Steps After ${measured.playedS.toFixed(0)} s (Limit ${L.replayArrivalSteps})`, measured };
-}
-
 // ── runner ──────────────────────────────────────────────────────────────────
 
-async function runOne(def: ArmTestDef, user: User, opts: { moveSetId?: string | null }): Promise<Outcome> {
+async function runOne(def: ArmTestDef, user: User): Promise<Outcome> {
 	switch (def.key) {
 		case 'test.bus_echo':
 			return busEcho();
@@ -488,21 +460,19 @@ async function runOne(def: ArmTestDef, user: User, opts: { moveSetId?: string | 
 			return routesPresent();
 		case 'test.lines_reachable':
 			return linesReachable();
-		case 'test.replay':
-			return replay(user, opts.moveSetId ?? null);
 		default:
 			return { status: 'error', message: 'Not Implemented' };
 	}
 }
 
 /** Run one catalog test, log it, and answer with the result. Throws only for an unknown key. */
-export async function runArmTest(user: User, key: string, opts: { moveSetId?: string | null } = {}): Promise<ArmTestResult> {
+export async function runArmTest(user: User, key: string): Promise<ArmTestResult> {
 	const def = armTest(key);
 	if (!def) throw new Error(`Unknown test ${key}`);
 	const t0 = Date.now();
 	let out: Outcome;
 	try {
-		out = await runOne(def, user, opts);
+		out = await runOne(def, user);
 	} catch (err) {
 		out = { status: 'error', message: (err as Error)?.message ?? String(err) };
 	}

@@ -7,7 +7,6 @@
 
 	let running = $state<string | null>(null);
 	let logHidden = $state(false);
-	let moveSetId = $state('');
 
 	function when(iso: string): string {
 		const d = new Date(iso);
@@ -108,14 +107,6 @@
 									}}
 								>
 									<input type="hidden" name="key" value={t.key} />
-									{#if t.needsMoveSet}
-										<select name="moveSetId" bind:value={moveSetId} class="rounded border bg-transparent px-1.5 py-1 text-[11px]" style="border-color: var(--color-tron-border); color: var(--color-tron-text)">
-											<option value="">Move Set</option>
-											{#each data.moveSets as m (m._id)}
-												<option value={m._id}>{m.name}</option>
-											{/each}
-										</select>
-									{/if}
 									<button type="submit" class={ctlBlue} disabled={running !== null}>
 										{running === t.key ? 'Running…' : 'Run'}
 									</button>

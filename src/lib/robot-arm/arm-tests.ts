@@ -22,8 +22,6 @@ export interface ArmTestDef {
 	moves: boolean;
 	/** What passes, in one short line. */
 	expected: string;
-	/** Needs a move set picked on the page. */
-	needsMoveSet?: boolean;
 }
 
 export const ARM_TEST_LIMITS = {
@@ -62,9 +60,7 @@ export const ARM_TEST_LIMITS = {
 	voltageMin: 11.5,
 	voltageMax: 13.0,
 	/** Lines: one /health round trip must answer within this. */
-	lineTimeoutMs: 5000,
-	/** Replay: how close servos 1-5 land on the last pose. */
-	replayArrivalSteps: 20
+	lineTimeoutMs: 5000
 } as const;
 
 /** Pi routes the arm pages rely on, as they appear in the Pi's openapi.json. */
@@ -106,8 +102,7 @@ export const ARM_TESTS: ArmTestDef[] = [
 	{ key: 'test.voltage', title: 'Supply Voltage', hardware: 'servo', moves: false, expected: `${ARM_TEST_LIMITS.voltageMin} To ${ARM_TEST_LIMITS.voltageMax} V On Every Servo` },
 	{ key: 'test.servo_gains', title: 'Servo Gains', hardware: 'servo', moves: false, expected: 'P Gains Equal The Last Logged Values' },
 	{ key: 'test.routes_present', title: 'Pi Routes Present', hardware: 'pi', moves: false, expected: `All ${REQUIRED_PI_ROUTES.length} Routes Listed` },
-	{ key: 'test.lines_reachable', title: 'Lines Reachable', hardware: 'network', moves: false, expected: 'Funnel And Tunnel Answer, Wi-Fi Matches' },
-	{ key: 'test.replay', title: 'Replay', hardware: 'servo', moves: true, expected: `Lands On The Last Pose Within ${ARM_TEST_LIMITS.replayArrivalSteps} Steps`, needsMoveSet: true }
+	{ key: 'test.lines_reachable', title: 'Lines Reachable', hardware: 'network', moves: false, expected: 'Funnel And Tunnel Answer, Wi-Fi Matches' }
 ];
 
 export function armTest(key: string): ArmTestDef | null {

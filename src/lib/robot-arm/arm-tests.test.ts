@@ -33,8 +33,8 @@ describe('catalog', () => {
 		expect(armTest('test.bus_echo')?.title).toBe('Bus Echo');
 		expect(armTest('test.nope')).toBeNull();
 	});
-	it('only the replay needs a move set', () => {
-		expect(ARM_TESTS.filter((t) => t.needsMoveSet).map((t) => t.key)).toEqual(['test.replay']);
+	it('has no Replay test (operator decision 2026-11-06)', () => {
+		expect(ARM_TESTS.some((t) => t.key === 'test.replay')).toBe(false);
 	});
 });
 
