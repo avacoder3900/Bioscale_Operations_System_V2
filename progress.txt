@@ -26819,3 +26819,22 @@ Deployment: production — via push of master (Vercel GitHub integration)
 Source: branch master @ commit 5e4dd0f5
 Retrieve this exact code: git checkout master at commit 5e4dd0f5
 What this deployment is for: Stage Calibration's Tube Rack 10 / Tip Rack 11 entries open the Deck Calibration Studio on the arm's OT-2
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — Home Gantry through the cable link fixed; cable speed-up review
+================================================================================
+Link rows from Alejandro's four loops (20:16-20:50 UTC, all stopped by him after the grab) showed every Stop's
+Home Gantry failing: BIMS asked the arm Pi for timeout_s=80, the Pi allows 60, it answered 422 and the home never
+reached B07. ot2-arm-link.ts: timeout_s capped at 60; any answer without x-ot2-link (the Pi's own) falls back to the
+queue; robot GET 4xx (no current maintenance run) no longer logged as a failed Link row. ot2-arm-link.test.ts (3).
+Those loops did use the cable: run waits read B07 in 150-280 ms, the resume went over the cable in 270 ms.
+Review of where the cable can still help (logs + docs + transcript fcba71f2): B07 runs daemon 1.4.0, so every scan
+takes the fallback path (2026-11-05: park -> scan sent 6.7 s, sent -> barcode 9.3 s); scan_at_pause and its result
+still use the queue; the start record write_file is awaited (3.6 s); Jog/Teach/Calibrate/Dry Fill mx.* verbs and
+protocol uploads still use the queue. Recommended order: B07 daemon -> 1.6.0 over SSH, then barcode over the cable,
+then the start record over the cable. Awaiting Alejandro's go-ahead.
+npm run check 13 errors (baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/3k1iKiSQPv8djGEQNSehN3G76By6
+Source: branch master @ commit a073ed2d (also feat/ot2-movement-log)
+Retrieve this exact code: git checkout a073ed2d
+What this deployment is for: Home Gantry through the cable link (Vercel status success).
