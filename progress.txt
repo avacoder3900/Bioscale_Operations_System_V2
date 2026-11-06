@@ -26424,3 +26424,12 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit e1400a0f (also feat/dry-fill-jog-run)
 Retrieve this exact code: git checkout e1400a0f
 What this deployment is for: Dry Fill All Holes in the Stage Calibration Jog run, tip kept (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/arm-motion-log — Show/Hide on the Change Log and Movement Log; no Replay test
+================================================================================
+- Change Log and Movement Log boxes get a header with Show/Hide top right, like the Test Log (78b6698a).
+- Maintenance -> Tests no longer has a Replay test: catalog entry (arm-tests.ts), its runner and limit
+  (robot-arm-tests.ts), the Move Set picker and move-set load on the page are gone (Alejandro: the Replay
+  feature is not part of the tests). Pi Routes Present still lists /replay/start, the route Play needs.
+- Unit run stored at 7f494b73: 366/366 (25 files). npm run check 13 errors, none in touched files.
