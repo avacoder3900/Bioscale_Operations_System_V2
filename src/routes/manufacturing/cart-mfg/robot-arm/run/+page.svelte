@@ -18,8 +18,9 @@
 	 * plays only while the robot reports the PARKED pause; the run leaves the
 	 * tube only after the arm's play has settled.
 	 *
-	 * The fail route: a scan that fails (nothing read, or the cart is not a
-	 * backed cart) sends `skip` (the gantry back to the tube), the arm plays the
+	 * The fail route: a scan that fails (nothing read, or — production only — the
+	 * cart is not a backed cart; the rehearsal accepts any barcode and checks
+	 * nothing) sends `skip` (the gantry back to the tube), the arm plays the
 	 * FAIL animation once the run is parked, and the loop ends failed.
 	 */
 	import { onDestroy, onMount } from 'svelte';
@@ -415,7 +416,7 @@
 						}
 						if (fillBroke) break;
 					}
-					note(`${tag}: ${rehearsal ? 'cart checked' : `cart ${cycle.barcode} goes on the wax run`} — telling the OT-2 to fill.`);
+					note(`${tag}: ${rehearsal ? `barcode ${cycle.barcode} read (rehearsal: not checked, not changed)` : `cart ${cycle.barcode} goes on the wax run`} — telling the OT-2 to fill.`);
 					const r = await post('cycleDecide', { loopId: loopId });
 					if (!r.ok) {
 						await fail('decide', r.error);

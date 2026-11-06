@@ -173,7 +173,9 @@ const REHEARSAL_MARKER = `variable_name="${REHEARSAL_RTP}"`;
  * and only then does the loop end as failed. Today only the scan takes it:
  * the scanner read nothing (sweep errored, timed out or completed without a
  * barcode), or it read a barcode but the cart is not in the right state to be
- * filled (not a backed cart, a bucket label, unknown outside test mode). A
+ * filled (not a backed cart, a bucket label, unknown outside test mode). The
+ * REHEARSAL protocol takes only the first of those: any barcode read passes,
+ * unchecked and untouched (Alejandro, 2026-11-06). A
  * failure of the fail route itself (home refused, play refused) ends the loop
  * the plain way, with the cart still on the stage. More fail modes add their
  * step here and call enterFailRoute.
@@ -1301,7 +1303,7 @@ export function readiness(
 	if (settings.robotId && protocol?.rehearsal) {
 		notes.push(
 			`REHEARSAL protocol on the robot (${protocol.protocolName}): the p300 walks the stage fill with 200 µL tips and air — nothing is dispensed. ` +
-				'Real carts and real barcodes are fine: the scanned cart is only CHECKED (a backed cart passes, anything else takes the fail route); it stays in its bucket at backing and nothing is recorded as wax-filled. ' +
+				'Any cart with a barcode is fine: the scan only asks whether a barcode is there (its status, bucket or existence in the system is NOT checked, and nothing is looked up or changed); only a read of nothing takes the fail route. The cart stays as it was and nothing is recorded as wax-filled. ' +
 				'Deploy the production stage protocol (Setup → Protocol on the robot) before a real fill.'
 		);
 	}
@@ -1322,7 +1324,10 @@ export function readiness(
 		if (settings.chainGrab) notes.push('Between carts the withdraw and the next grab play as one arm path; the OT-2 is parked in the wax throughout.');
 		notes.push('After every arm play the arm is read against the animation\'s last pose; if it did not get there the loop stops where it is and the OT-2 is not moved.');
 	}
-	if (settings.failAnimation) notes.push(`If the scan fails — nothing read, or the cart is not a backed cart — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`);
+	if (settings.failAnimation)
+		notes.push(
+			`If the scan fails — ${protocol?.rehearsal ? 'nothing read (the rehearsal accepts any barcode)' : 'nothing read, or the cart is not a backed cart'} — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`
+		);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
 	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
 	return { blocking, notes };
@@ -1605,17 +1610,18 @@ export async function startLoop(
 	if (startAt === 'decide' && !startBarcode) throw new ArmWaxFillError('Enter the barcode of the cart on the stage to start at the fill.');
 	if (requestedRuns < 1 || requestedRuns > 24) throw new ArmWaxFillError('Number of runs must be 1–24: one OT-2 run serves the whole loop and the protocol serves at most 24 carts.');
 	const settings = await getSettings();
-	if (startAt === 'decide') {
-		// The same checks the scan applies, before the OT-2 run is created.
-		const problem = await cartScanProblem(startBarcode, settings.testMode);
-		if (problem) throw new ArmWaxFillError(problem, 409);
-	}
 	const [calibration, protocol, active, robotConflict] = await Promise.all([
 		getCalibration(settings.robotId),
 		protocolFor(settings.robotId),
 		activeLoop(),
 		settings.robotId ? checkRobotConflict(settings.robotId) : Promise.resolve(null)
 	]);
+	if (startAt === 'decide' && !protocol?.rehearsal) {
+		// The same checks the scan applies, before the OT-2 run is created
+		// (the rehearsal checks nothing: a typed barcode is enough, like a read one).
+		const problem = await cartScanProblem(startBarcode, settings.testMode);
+		if (problem) throw new ArmWaxFillError(problem, 409);
+	}
 	const r = readiness(settings, calibration, protocol, active, robotConflict);
 	if (r.blocking.length) throw new ArmWaxFillError(r.blocking.join(' '), 409);
 	if (!protocol || !protocol.declaresCartLocation || !protocol.declaresLoop || !calibration?.cartLocation || !calibration.dispenseDepth || !calibration.scanPosition) {
@@ -2386,10 +2392,14 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
 	await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
 	await audit(user, 'arm_wax_fill.scan_read', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode: barcode || null, raw: raw.slice(0, 200) });
 	if (!barcode) return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', 'the scanner read nothing') };
-	const problem = await cartScanProblem(barcode, (await getSettings()).testMode);
+	// REHEARSAL (Alejandro, 2026-11-06): the scan only asks whether a barcode is
+	// there. Whatever it reads passes — an unknown cart, a bucket label, a cart
+	// at any status — and nothing is looked up or changed. Only an empty read fails.
+	const rehearsal = !!(await protocolFor(String(loop.robot?._id ?? '')))?.rehearsal;
+	const problem = rehearsal ? null : await cartScanProblem(barcode, (await getSettings()).testMode);
 	if (problem) return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', problem, { barcode }) };
 	await patchCycle(loopId, cycle.index, { step: 'decide', barcode });
-	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode });
+	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode, rehearsal, checked: !rehearsal });
 	return { pending: false, loop: (await getLoop(loopId))! };
 }
 
@@ -2397,6 +2407,7 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
  * Why a barcode the scanner read cannot be filled, or null if it can. The
  * rules attachCart enforces at the fill, checked at the scan so a wrong cart
  * takes the fail route instead of failing the loop with the cart on the stage.
+ * Production only: the rehearsal never calls this (any barcode passes there).
  */
 async function cartScanProblem(barcode: string, testMode: boolean): Promise<string | null> {
 	const cart = (await CartridgeRecord.findById(barcode).select('_id status').lean()) as any;
