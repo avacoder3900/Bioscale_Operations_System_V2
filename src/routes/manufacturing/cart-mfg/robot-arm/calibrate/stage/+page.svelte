@@ -1,4 +1,5 @@
 <script lang="ts">
+	import ArmLinkChip from '$lib/components/robot-arm/ArmLinkChip.svelte';
 	/**
 	 * Stage Calibration Studio — the robot-arm line's own calibration studio.
 	 *
@@ -1459,6 +1460,8 @@
 						{health?.label ?? 'No Health Data'}
 					</span>
 				{/if}
+				<!-- The arm Pi's cable link to this OT-2 (2026-11-06). -->
+				<ArmLinkChip link={data.link} />
 			</div>
 			<div class="flex flex-wrap items-center gap-1">
 				<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>

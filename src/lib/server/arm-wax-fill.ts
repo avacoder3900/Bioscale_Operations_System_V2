@@ -1422,10 +1422,13 @@ export async function loadStageCalibration() {
 	const health: RobotHealth | null = robotId
 		? ((await getRobotsHealth([{ _id: robotId, name: robotName }]).catch(() => ({}) as Record<string, RobotHealth>))[robotId] ?? null)
 		: null;
+	// The arm Pi's cable link to that robot (2026-11-06), the same chip as the Run tab.
+	const link = robotId ? await armLinkFor({ _id: robotId, name: robotName ?? undefined }).catch(() => null) : null;
 	return {
 		robotId,
 		robotName,
 		health,
+		link,
 		robots: (robots as any[]).map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id) })),
 		scannerDeviceId: scannerDeviceIdForRobot(robotName),
 		calibration,
