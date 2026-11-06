@@ -26199,3 +26199,7 @@ whatever". The Change Log's Pi half:
   servo_config.py next to app.py, run install_change_reporter.py, restart with no session).
 Not deployed to arm-pi: needs the Pi's Wi-Fi. Smoke-tested locally (gain rows, start diff, pending queue without a
 BIMS); py_compile with warnings as errors clean. npm run check 13 errors (baseline 13, none in touched files).
+Deployment: production — via Vercel GitHub integration on the push to master
+Source: branch master @ 5d75fc2a (fast-forwarded from feat/arm-maintenance-log)
+Retrieve this exact code: git checkout 5d75fc2a
+What this deployment is for: POST /api/robot-arm/changes, the Pi's way into the Change Log; the Pi-side files ship in the same commit but still need installing on arm-pi.
