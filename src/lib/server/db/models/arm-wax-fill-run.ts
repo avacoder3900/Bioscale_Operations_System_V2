@@ -63,6 +63,13 @@ const cycleSchema = new Schema(
 		gantryHomedForGrabAt: Date,
 		gantryHomedForWithdrawAt: Date,
 		gantryHomedForFailAt: Date,
+		/** 2026-11-06 Movement Log: when each play was sent and its planned seconds (the logged step runs to the arrival check). */
+		grabPlayedAt: Date,
+		grabPlannedS: Number,
+		withdrawPlayedAt: Date,
+		withdrawPlannedS: Number,
+		failPlayedAt: Date,
+		failPlannedS: Number,
 		error: String
 	},
 	{ _id: false }

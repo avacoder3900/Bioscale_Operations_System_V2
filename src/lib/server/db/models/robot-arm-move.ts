@@ -9,13 +9,24 @@ import { applyImmutableMiddleware } from '../middleware/immutable.js';
  * robotArmFetch via $lib/server/robot-arm-move-log; shapes in
  * $lib/robot-arm/move-log. Kept so "it kept going back and forth an hour
  * ago" can be checked. Immutable, no TTL, like the Change Log.
+ *
+ * 2026-11-06: the OT-2 too (device 'ot2') — one row per command its run
+ * executed, with the robot's own start and end ($lib/server/ot2-move-log),
+ * and the arm's loop steps (kind 'loop_step', play sent → arrival checked),
+ * so the two machines' timing sits on one timeline. Rows from before have no
+ * device and are the arm's.
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
+const robotRef = new Schema({ _id: { type: String }, name: { type: String } }, { _id: false });
 
 const robotArmMoveSchema = new Schema(
 	{
 		_id: { type: String, default: () => generateId() },
+		/** 'arm' | 'ot2'; missing on rows from before 2026-11-06 (all arm). */
+		device: { type: String, default: 'arm' },
 		at: { type: Date, required: true, default: () => new Date() },
+		/** When it ended, for rows with a measured end (OT-2 commands, arm loop steps). */
+		endAt: { type: Date, default: null },
 		kind: { type: String, required: true },
 		servo: { type: Number, default: null },
 		goal: { type: Number, default: null },
@@ -29,7 +40,17 @@ const robotArmMoveSchema = new Schema(
 		durationMs: { type: Number, default: null },
 		/** The BIMS page or route that sent it. */
 		from: { type: String, default: null },
-		movedBy: { type: operatorRef, default: null }
+		movedBy: { type: operatorRef, default: null },
+		/** OT-2 rows: the robot, its run, the command's place in the run, its params. */
+		robot: { type: robotRef, default: undefined },
+		runId: { type: String, default: undefined },
+		seq: { type: Number, default: undefined },
+		commandId: { type: String, default: undefined },
+		intent: { type: String, default: undefined },
+		params: { type: Schema.Types.Mixed, default: undefined },
+		/** Arm loop steps: the wax-fill loop and cart. */
+		loopId: { type: String, default: undefined },
+		cart: { type: Number, default: undefined }
 	},
 	{ timestamps: false, minimize: false, collection: 'robot_arm_moves' }
 );

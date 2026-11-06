@@ -225,4 +225,5 @@ export { RobotArmTestRun } from './robot-arm-test-run.js';
 export { RobotArmMotion } from './robot-arm-motion.js';
 // Every arm movement BIMS sends, and the automated arm unit test runs (2026-11-06).
 export { RobotArmMove } from './robot-arm-move.js';
+export { Ot2MoveSync } from './ot2-move-sync.js';
 export { RobotArmUnitRun } from './robot-arm-unit-run.js';

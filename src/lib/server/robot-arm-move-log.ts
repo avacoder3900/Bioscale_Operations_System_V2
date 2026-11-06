@@ -27,8 +27,12 @@ export function withArmActor<T>(actor: ArmActor, fn: () => T): T {
 
 export interface ArmMoveRow {
 	_id: string;
+	/** 'ot2' for an Opentrons command; missing or 'arm' for the arm. */
+	device?: 'arm' | 'ot2';
 	at: string;
-	kind: ArmMoveKind;
+	endAt?: string | null;
+	/** An arm kind, or an OT-2 commandType for an Opentrons row. */
+	kind: ArmMoveKind | string;
 	servo: number | null;
 	goal: number | null;
 	delta: number | null;
@@ -40,6 +44,11 @@ export interface ArmMoveRow {
 	durationMs: number | null;
 	from: string | null;
 	movedBy: { _id?: string; username?: string } | null;
+	robot?: { _id?: string; name?: string } | null;
+	runId?: string | null;
+	seq?: number | null;
+	params?: Record<string, unknown> | null;
+	cart?: number | null;
 }
 
 export async function recordArmMove(
@@ -74,17 +83,23 @@ export async function recordArmMove(
 /**
  * Newest first; `sinceMinutes` and `servo` narrow it. A servo also matches
  * whole-arm rows: the ones that set it (hold, Cartesian jog) and the ones
- * that drive every servo (play, leader arm, task, torque, Stop).
+ * that drive every servo (play, leader arm, task, torque, Stop). `device`
+ * picks the arm or the OT-2 (Opentrons rows, 2026-11-06).
  */
-export async function listArmMoves(o: { sinceMinutes?: number | null; servo?: number | null; limit?: number } = {}): Promise<ArmMoveRow[]> {
+export async function listArmMoves(
+	o: { sinceMinutes?: number | null; servo?: number | null; device?: 'arm' | 'ot2' | null; limit?: number } = {}
+): Promise<ArmMoveRow[]> {
 	await connectDB();
 	const q: Record<string, unknown> = {};
+	// Rows from before 2026-11-06 carry no device: they are the arm's. A servo means the arm.
+	if (o.device === 'ot2') q.device = 'ot2';
+	else if (o.device === 'arm' || o.servo) q.device = { $ne: 'ot2' };
 	if (o.sinceMinutes && o.sinceMinutes > 0) q.at = { $gte: new Date(Date.now() - o.sinceMinutes * 60_000) };
 	if (o.servo) q.$or = [{ servo: o.servo }, { [`goals.${o.servo}`]: { $exists: true } }, { servo: null, goals: null }];
 	const rows = await RobotArmMove.find(q)
 		.sort({ at: -1 })
 		.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000))
-		.select('at kind servo goal delta goals what line ok error durationMs from movedBy')
+		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart')
 		.lean();
 	return JSON.parse(JSON.stringify(rows));
 }

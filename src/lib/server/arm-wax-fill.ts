@@ -77,6 +77,7 @@ import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
+import { recordArmLoopStep, syncOt2Robot } from '$lib/server/ot2-move-log';
 import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, robotDelete, robotGet, robotPost, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, atScanFor, parseArmComment, type ArmMarker, type ArmMoveWant } from '$lib/robot-arm/arm-loop-protocol';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
@@ -2209,8 +2210,9 @@ export async function cycleGrab(user: User, loopId: string): Promise<{ play: Pla
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, grabWant(cycle.index, (await getSettings()).grabDuringProbe), 'grab', { uninstructed: !cycle.scanSeq });
 	await assertReadyToReplay(user, loopId, cycle, animRef(loop.grabAnimation), 'grab');
+	const playedAt = new Date();
 	const p = await play(user, animRef(loop.grabAnimation), 'grab');
-	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date() });
+	await patchCycle(loopId, cycle.index, { grabArmRunId: p.runId, startedAt: cycle.startedAt ?? new Date(), grabPlayedAt: playedAt, grabPlannedS: p.durationS });
 	await audit(user, 'arm_wax_fill.cycle_grab', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS });
 	return { play: p, cycle: cycle.index };
 }
@@ -2220,6 +2222,7 @@ export async function cycleGrabDone(user: User, loopId: string): Promise<LoopVie
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'grab');
 	await assertArrived(user, loopId, cycle, animRef(loop.grabAnimation), 'grab', cycle.grabArmRunId ?? null);
+	await recordArmLoopStep({ step: 'grab', loopId, cart: cycle.index, startedAt: cycle.grabPlayedAt, plannedS: cycle.grabPlannedS, animation: loop.grabAnimation?.name ?? null, user });
 	await patchCycle(loopId, cycle.index, { step: 'scan' });
 	return (await getLoop(loopId))!;
 }
@@ -2441,8 +2444,9 @@ export async function cycleFail(user: User, loopId: string): Promise<{ play: Pla
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'play the fail animation', { uninstructed: true });
 	await assertReadyToReplay(user, loopId, cycle, animRef(loop.failAnimation), 'fail animation');
+	const playedAt = new Date();
 	const p = await play(user, animRef(loop.failAnimation), 'fail');
-	await patchCycle(loopId, cycle.index, { failArmRunId: p.runId });
+	await patchCycle(loopId, cycle.index, { failArmRunId: p.runId, failPlayedAt: playedAt, failPlannedS: p.durationS });
 	await audit(user, 'arm_wax_fill.cycle_fail', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, failedStep: cycle.failedStep ?? null, armRunId: p.runId, durationS: p.durationS });
 	return { play: p, cycle: cycle.index };
 }
@@ -2459,6 +2463,7 @@ export async function cycleFailDone(user: User, loopId: string): Promise<LoopVie
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fail');
 	await assertArrived(user, loopId, cycle, animRef(loop.failAnimation), 'fail animation', cycle.failArmRunId ?? null);
+	await recordArmLoopStep({ step: 'fail', loopId, cart: cycle.index, startedAt: cycle.failPlayedAt, plannedS: cycle.failPlannedS, animation: loop.failAnimation?.name ?? null, user });
 	const now = new Date();
 	const failedStep = cycle.failedStep ?? 'scan';
 	const msg = cycle.error ?? 'failed';
@@ -2645,6 +2650,7 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 	await assertReadyToReplay(user, loopId, cycle, withdrawRef, 'withdraw');
 	let chainedGrab = !last && !cycle.arrivalMiss && (await getSettings()).chainGrab && !!withdrawRef && !!grabRef;
 	let p: PlayResult;
+	const playedAt = new Date();
 	if (chainedGrab) {
 		try {
 			p = await playChain(user, [withdrawRef!, grabRef!], `${withdrawRef!.name ?? 'withdraw'} + ${grabRef!.name ?? 'grab'}`);
@@ -2656,7 +2662,7 @@ export async function cycleWithdraw(user: User, loopId: string): Promise<{ play:
 		chainedGrab = false;
 		p = await play(user, withdrawRef, 'withdraw');
 	}
-	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId, chainedGrab });
+	await patchCycle(loopId, cycle.index, { withdrawArmRunId: p.runId, chainedGrab, withdrawPlayedAt: playedAt, withdrawPlannedS: p.durationS });
 	await audit(user, 'arm_wax_fill.cycle_withdraw', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, armRunId: p.runId, durationS: p.durationS, last, endSent: last && !endNote, chainedGrab });
 	return { play: p, cycle: cycle.index, endSent: last && !endNote, endNote, chainedGrab };
 }
@@ -2693,6 +2699,15 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 	expectStep(cycle, 'withdraw');
 	const chained = !!cycle.chainedGrab;
 	await assertArrived(user, loopId, cycle, animRef(chained ? loop.grabAnimation : loop.withdrawAnimation), chained ? 'withdraw + grab' : 'withdraw', cycle.withdrawArmRunId ?? null);
+	await recordArmLoopStep({
+		step: chained ? 'withdraw_grab' : 'withdraw',
+		loopId,
+		cart: cycle.index,
+		startedAt: cycle.withdrawPlayedAt,
+		plannedS: cycle.withdrawPlannedS,
+		animation: chained ? [loop.withdrawAnimation?.name, loop.grabAnimation?.name].filter(Boolean).join(' + ') || null : (loop.withdrawAnimation?.name ?? null),
+		user
+	});
 	const now = new Date();
 	// A loop started at the withdraw: its first cart was filled before the loop, so it is not counted here.
 	const completedRuns = Number(loop.completedRuns ?? 0) + (Number(cycle.index) === 1 && loop.startStep === 'withdraw' ? 0 : 1);
@@ -2770,6 +2785,8 @@ export async function loopFinish(user: User, loopId: string): Promise<{ done: bo
 	if (status !== 'succeeded' || note) set.error = [loop.error, status !== 'succeeded' ? `The robot run ended ${status} after the last cart.` : '', note.trim()].filter(Boolean).join(' ');
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: set });
 	await audit(user, 'arm_wax_fill.loop_run_finished', 'arm_wax_fill_runs', loopId, { status, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId, advanced, loopStatus: loop.status });
+	// Every command of the ended run into the Movement Log; what the budget leaves, the Movement Log page reads on its next load.
+	await syncOt2Robot(String(loop.robot?._id ?? ''), { runId: String(loop.opentronsRunId), budgetMs: 10_000 });
 	return { done: true, status, loop: (await getLoop(loopId))! };
 }
 

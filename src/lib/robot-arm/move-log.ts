@@ -11,6 +11,7 @@
  * recording rather than each frame.
  */
 import { DEFAULT_JOINT_NAMES } from './recording-cleanup';
+import { camelTitle } from './ot2-move-log';
 
 export type ArmMoveKind =
 	| 'move'
@@ -23,7 +24,8 @@ export type ArmMoveKind =
 	| 'leader'
 	| 'record'
 	| 'task'
-	| 'stop';
+	| 'stop'
+	| 'loop_step';
 
 export interface ArmMoveEntry {
 	kind: ArmMoveKind;
@@ -50,10 +52,12 @@ const KIND_TITLES: Record<ArmMoveKind, string> = {
 	leader: 'Leader Arm',
 	record: 'Record',
 	task: 'Task',
-	stop: 'Stop'
+	stop: 'Stop',
+	loop_step: 'Loop Step'
 };
 
-export const kindTitle = (k: string): string => KIND_TITLES[k as ArmMoveKind] ?? k;
+/** Arm kinds by name; an OT-2 row's kind is its commandType ("moveToWell" → "Move To Well"). */
+export const kindTitle = (k: string): string => KIND_TITLES[k as ArmMoveKind] ?? camelTitle(k);
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' ? (v as Record<string, unknown>) : null);
@@ -138,7 +142,7 @@ export interface ServoMoveSummary {
 	reversals: number;
 }
 
-type SummaryRow = Pick<ArmMoveEntry, 'kind' | 'servo' | 'goal' | 'delta' | 'goals'> & { at: string | Date; ok?: boolean };
+type SummaryRow = Pick<ArmMoveEntry, 'servo' | 'goal' | 'delta' | 'goals'> & { kind: string; at: string | Date; ok?: boolean; device?: string | null };
 
 /**
  * Per servo: how many commands drove it and how many times it reversed —
@@ -147,7 +151,7 @@ type SummaryRow = Pick<ArmMoveEntry, 'kind' | 'servo' | 'goal' | 'delta' | 'goal
  * present, so it is where the servo is, not a move.
  */
 export function summarizeServoMoves(rows: SummaryRow[], servoCount = 6): ServoMoveSummary[] {
-	const sorted = rows.filter((r) => r.ok !== false).sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+	const sorted = rows.filter((r) => r.ok !== false && r.device !== 'ot2').sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
 	const state = new Map<number, { moves: number; reversals: number; last: number | null; dir: number }>();
 	for (let s = 1; s <= servoCount; s++) state.set(s, { moves: 0, reversals: 0, last: null, dir: 0 });
 	const step = (sid: number, goal: number | null, delta: number | null) => {
