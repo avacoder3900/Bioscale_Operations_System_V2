@@ -61,6 +61,25 @@
 	const rackVector = $derived<Vec3>(currentRackOffset?.vector ?? ZERO3);
 	const rackLabel = $derived(kind === 'tip' ? 'tip rack' : 'tube rack');
 	const fmtVec = (v: Vec3) => `(${v.x}, ${v.y}, ${v.z})`;
+	/**
+	 * Where a rack's slot sits on the OT-2 deck (ot2_standard: columns 0 / 132.5 /
+	 * 265 mm, rows 0 / 90.5 / 181 / 271.5 mm). A rack's wells are defined in the
+	 * LABWARE frame, so a deck-mm position (what the operator reads off the jog
+	 * panel) is slot origin + well + this robot's offset. Cartridge decks sit in
+	 * slot 1, whose origin is zero, which is why they never needed this. The
+	 * origin learned from the run's loaded rack (slotOrigin, after one Move to
+	 * hole) is exact for this robot; this table is the fallback before that.
+	 */
+	const OT2_SLOT_ORIGIN: Record<string, Vec3> = {
+		'1': { x: 0, y: 0, z: 0 }, '2': { x: 132.5, y: 0, z: 0 }, '3': { x: 265, y: 0, z: 0 },
+		'4': { x: 0, y: 90.5, z: 0 }, '5': { x: 132.5, y: 90.5, z: 0 }, '6': { x: 265, y: 90.5, z: 0 },
+		'7': { x: 0, y: 181, z: 0 }, '8': { x: 132.5, y: 181, z: 0 }, '9': { x: 265, y: 181, z: 0 },
+		'10': { x: 0, y: 271.5, z: 0 }, '11': { x: 132.5, y: 271.5, z: 0 }, '12': { x: 265, y: 271.5, z: 0 }
+	};
+	/** The selected rack's slot origin in deck mm: the run-learned one when there is one, else the standard slot. */
+	function rackOriginNow(): Vec3 {
+		return slotOrigin ?? OT2_SLOT_ORIGIN[String(data.rackSlot ?? data.slot ?? '')] ?? ZERO3;
+	}
 
 	// ── Fill-mistake marks from the reagent run-page well tracker (2026-10-08) ──
 	// Entries logged on runs that used THIS deck on the SELECTED robot (60 days),
@@ -352,10 +371,15 @@
 		if (anchor) {
 			const w = wellByName.get(anchor);
 			// On a rack tab the fields show where THIS robot's anchor actually lands
-			// (shared definition + its offset), so "Set position" types a landing
-			// point and the saved vector is typed − shared (CALIB-5).
+			// IN DECK MM (slot origin + shared definition + its offset), so "Set
+			// position" types the number read off the jog panel and the saved vector
+			// is typed − slot origin − shared (CALIB-5). Before 2026-11-06 the slot
+			// origin was left out: the field prefilled with the labware-frame well
+			// (x 14 for H1), the operator typed the deck x (146), and the "offset"
+			// came out one slot width (132 mm) — rejected by the ±10 mm bound.
 			const v = isRack ? rackVector : ZERO3;
-			if (w) { setX = +(w.x + v.x).toFixed(3); setY = +(w.y + v.y).toFixed(3); setZ = +(w.z + v.z).toFixed(3); }
+			const o = isRack ? rackOriginNow() : ZERO3;
+			if (w) { setX = +(o.x + w.x + v.x).toFixed(3); setY = +(o.y + w.y + v.y).toFixed(3); setZ = +(o.z + w.z + v.z).toFixed(3); }
 		}
 	});
 
@@ -550,11 +574,15 @@
 		const a = aName ? wellByName.get(aName) : null;
 		if (!a) { errMsg = 'Anchor hole not found'; return; }
 		if (isRack) {
-			// The typed point is where THIS robot's anchor should land, so the robot's
-			// vector becomes typed − shared definition: an absolute set, not a delta.
-			const v = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
+			// The typed point is where THIS robot's anchor should land, in deck mm, so
+			// the robot's vector becomes typed − slot origin − shared definition: an
+			// absolute set, not a delta. The origin is the run-learned one when a
+			// Move to hole has happened in this run (exact for this robot), else the
+			// standard OT-2 slot.
+			const o = rackOriginNow();
+			const v = { x: +(setX - o.x - a.x).toFixed(3), y: +(setY - o.y - a.y).toFixed(3), z: +(setZ - o.z - a.z).toFixed(3) };
 			if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position equals current — nothing to change'; return; }
-			await saveRackOffsetFor(v, 'absolute', `set ${aName} → (${setX}, ${setY}, ${setZ})`);
+			await saveRackOffsetFor(v, 'absolute', `set ${aName} → (${setX}, ${setY}, ${setZ})${slotOrigin ? '' : ' (standard slot origin)'}`);
 			return;
 		}
 		const d = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
@@ -2121,7 +2149,7 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
 		{#if isRack}
-			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) where the <strong>anchor</strong> hole should land on <strong>{robot?.name ?? 'this robot'}</strong>. Prefilled with where it lands now (shared definition + {robot?.name ?? 'the robot'}'s offset {fmtVec(rackVector)}); the whole {rackLabel} moves with it, and the saved offset becomes typed − shared definition.</p>
+			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm, as the jog panel reads them) where the <strong>anchor</strong> hole should land on <strong>{robot?.name ?? 'this robot'}</strong>. Prefilled with where it lands now (slot {data.rackSlot ?? data.slot} origin + shared definition + {robot?.name ?? 'the robot'}'s offset {fmtVec(rackVector)}); the whole {rackLabel} moves with it, and the saved offset becomes typed − slot origin − shared definition.{#if !slotOrigin} Before a Move to hole in this run the slot origin is the standard OT-2 one; after one it is this robot's own.{/if}</p>
 		{:else}
 			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
 		{/if}

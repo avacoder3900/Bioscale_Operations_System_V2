@@ -26849,3 +26849,21 @@ scp fails, piped over ssh instead); py_compile ok on B07's Python 3.10.8; backup
 (md5 a1da10cb...). No protocol run; a Jog maintenance run was open but idle 5 min (the daemon only closes one when it
 opens a new one). systemctl restart ot2-bridge 21:12:51 UTC: active, scanner opened, 0 errors; heartbeat reports
 ot2-bridge/1.6.0, pollErrors 0; queue /health 0.68-0.79 s. Next: barcode over the cable, start record over the cable.
+
+================================================================================
+2026-11-06 — master — Deck Studio: rack "Set position" is deck mm (slot origin added); the 131.9 mm tip-rack offset
+================================================================================
+Alejandro, on the Tip rack tab for B07, typed the jog panel's live position into Set position for anchor H1 and got
+"Rack offset for cosmasanddamian_96_tiprack_20ul on this robot: x offset 131.908 mm is outside ±10 mm — re-seat the
+rack instead". 131.9 mm is one OT-2 slot column (132.5): the rack path prefilled the field with the LABWARE-frame
+well (H1 x 14.38 + offset) and saved typed − shared definition, while the help text said "deck mm". Cartridge decks
+never showed it because slot 1's origin is zero; the tip rack is in slot 11 (132.5, 271.5).
+1) src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte: OT2_SLOT_ORIGIN table + rackOriginNow() (the
+   run-learned slotOrigin after a Move to hole, else the standard slot); the rack prefill is origin + well + offset,
+   applyAbsolute saves typed − origin − shared; help text says deck mm as the jog panel reads them and which origin
+   is in use. Delta paths (Capture → Apply, rack shift, Undo) were already frame-correct and are unchanged.
+svelte-check: 14 errors (baseline), none in the touched file.
+Diagnosis for the day (BIMS audit + B07 journal): the stage calibration values have not changed since 11/5 20:18Z;
+the 12:13 PM and 2:50 PM runs received identical RTPs (only channel A→C). Calibrate Tip fails since 2:57 PM with
+"X, Y limit switch not reached within 5mm — tip didn't contact the fixture" (5 attempts); the lever tests on B07 at
+15:10 local saw no bytes from a hand press — the calibrator fixture's switches, not BIMS.
