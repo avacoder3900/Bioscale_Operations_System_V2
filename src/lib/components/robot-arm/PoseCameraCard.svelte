@@ -66,6 +66,9 @@
 	const atPose = $derived(!!arm && nearPose(arm.positions, pose.positions));
 	const offBy = $derived(arm ? Math.round(worstOffset(arm.positions, pose.positions)) : null);
 	const canAct = $derived(armReachable && !blocked);
+	// Go To Pose hides inside 20 steps, as on the pose editor (2026-11-06); "On Pose" and Capture keep AT_POSE_STEPS.
+	const GOTO_HIDE_STEPS = 20;
+	const showGoTo = $derived(offBy == null || offBy > GOTO_HIDE_STEPS);
 
 	// A detection belongs to one camera and one pose.
 	$effect(() => {
@@ -208,8 +211,10 @@
 			<button type="button" class={btn} style={cyan} disabled={!camera || detecting} onclick={detect} title="No motion: detect the tags in view now, the way Capture does: {CALIBRATION_FRAMES} detections, each on a {CALIBRATION_AVERAGE}-frame average (hold the arm still)">
 				{detecting ? 'Detecting…' : det ? 'Detect Again' : 'Detect Tags'}
 			</button>
-			{#if !atPose}
+			{#if showGoTo}
 				<button type="button" class={btn} style={amber} disabled={!canAct} title={blocked ? blockReason : 'The arm plays to the pose (absolute goals), then holds it'} onclick={() => ongoto(pose)}>Go To Pose</button>
+			{/if}
+			{#if !atPose}
 				<span class="text-xs" style={muted}>{arm ? `${offBy} steps off · max ${AT_POSE_STEPS}` : 'Arm Not Read'}</span>
 			{:else}
 				<form
