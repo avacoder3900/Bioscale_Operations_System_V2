@@ -117,6 +117,26 @@ export const actions: Actions = {
 		const spu = (await Spu.findById(spuId).select('udi particleLink.particleDeviceId').lean()) as any;
 		if (!spu?.particleLink?.particleDeviceId) return fail(400, { error: 'That unit has no Particle device linked' });
 		const deviceId = spu.particleLink.particleDeviceId as string;
+		const who = { _id: locals.user!._id, username: locals.user!.username };
+		// A refused or undeliverable request used to leave no trace outside the page banner
+		// (0244, 11/5/26: the unit was offline and nothing in BIMS showed a screen was attempted).
+		const recordFailure = async (status: number, error: string) => {
+			try {
+				await AuditLog.create({
+					_id: generateId(),
+					tableName: 'spus',
+					recordId: spuId,
+					action: 'screen_request_failed',
+					newData: { spuUdi: spu.udi, levels, reps, deviceId, error },
+					changedBy: who.username,
+					changedAt: new Date()
+				});
+				await appendSpuJournal(spuId, `Screen NOT started (levels ${levels}, ×${reps}): ${error}`, who, { source: 'validation', refLabel: 'Screen' });
+			} catch {
+				/* never let the record keeping hide the error from the operator */
+			}
+			return fail(status, { error });
+		};
 		// Third field = assay id; blank means the production assay the firmware defaults to.
 		const arg = `${levels},${reps},`;
 		let rv: number;
@@ -125,12 +145,11 @@ export const actions: Actions = {
 			rv = Number(r.return_value);
 		} catch (err) {
 			const msg = err instanceof Error ? err.message : String(err);
-			if (/not found/i.test(msg)) return fail(400, { error: `The unit has no "run_screen" function — it needs firmware v102.` });
-			return fail(502, { error: `Could not reach the unit: ${msg}` });
+			if (/not found/i.test(msg)) return recordFailure(400, `The unit has no "run_screen" function — it needs firmware v102.`);
+			return recordFailure(502, `Could not reach the unit (offline?): ${msg}`);
 		}
 		const why = describeReturn(rv);
-		if (why) return fail(400, { error: why });
-		const who = { _id: locals.user!._id, username: locals.user!.username };
+		if (why) return recordFailure(400, why);
 		await AuditLog.create({
 			_id: generateId(),
 			tableName: 'spus',

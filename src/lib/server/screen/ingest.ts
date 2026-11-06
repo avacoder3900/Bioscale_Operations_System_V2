@@ -104,6 +104,22 @@ export interface IngestResult {
 	overallPassed: boolean | null;
 }
 
+/**
+ * The live session for a device's screen run. The device's run counter restarts at 1 whenever a
+ * firmware version bump resets its EEPROM, so device + run alone is not unique: on 0255 (10/15 and
+ * 11/2) and 0250 (11/6) a new run 1/2 merged into a weeks-old session. Only a session that heard
+ * from the device within SCREEN_SESSION_WINDOW_MS of this event is the same run; anything older
+ * is a previous run that happened to carry the same number. A 5-rep full screen is ~2.5 h.
+ */
+const SCREEN_SESSION_WINDOW_MS = 12 * 60 * 60 * 1000;
+async function findScreenSession(particleDeviceId: string, run: number, at: Date, select: string): Promise<any> {
+	const since = new Date(at.getTime() - SCREEN_SESSION_WINDOW_MS).toISOString();
+	return (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': run, 'rawData.lastEventAt': { $gte: since } })
+		.sort({ startedAt: -1 })
+		.select(select)
+		.lean()) as any;
+}
+
 /** Apply one `bioscale/screen` event. */
 export async function ingestScreenEvent(particleDeviceId: string, data: unknown, publishedAt: Date | null): Promise<IngestResult | { error: string }> {
 	const ev = parseScreenEvent(data);
@@ -121,7 +137,7 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 	// summary's invocation overwrite the level-3 part with its stale copy
 	// (first screen on 0255, 2026-10-15: the three ping failures vanished and
 	// the screen read as passed). Evaluation re-reads the document afterwards.
-	let session = (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': ev.run }).select('_id').lean()) as any;
+	let session = await findScreenSession(particleDeviceId, ev.run, at, '_id');
 	if (!session) {
 		try {
 			await ValidationSession.create({
@@ -139,7 +155,7 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 		} catch {
 			/* a concurrent first event created it — fall through to the lookup */
 		}
-		session = (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': ev.run }).select('_id').lean()) as any;
+		session = await findScreenSession(particleDeviceId, ev.run, at, '_id');
 		if (!session) return { error: 'could not create the screen session' };
 	}
 	const sessionId: string = session._id;
@@ -232,7 +248,7 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 /** Attach a level-2 background record (reassembled `bioscale/screen_record`) to its screen session. */
 export async function attachScreenRecord(particleDeviceId: string, run: number, runIndex: number, payload: TestPayload, receivedAt: Date): Promise<{ sessionId: string | null }> {
 	await connectDB();
-	const session = (await ValidationSession.findOne({ type: 'screen', particleDeviceId, 'rawData.run': run }).select('_id rawData').lean()) as any;
+	const session = await findScreenSession(particleDeviceId, run, receivedAt, '_id rawData');
 	const background: ScreenRecordSummary['background'] = {};
 	for (const ch of ['A', 'B', 'C']) {
 		const rs = payload.readings.filter((r) => r.channel === ch);

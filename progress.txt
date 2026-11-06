@@ -26384,7 +26384,6 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 1a44ef99 (also feat/arm-motion-log; feature commit c73b87f9)
 Retrieve this exact code: git checkout 1a44ef99
 What this deployment is for: Maintenance Movement Log + Change Log bubble + unit test results on Tests (Vercel status success).
-=======
 ================================================================================
 2026-11-06 — feat/dry-fill-jog-run — Stage Calibration: Dry Fill All Holes rebuilt in the Jog run; the tip stays on
 ================================================================================
@@ -26769,3 +26768,18 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 26ea0d2b
 Retrieve this exact code: git checkout 26ea0d2b
 What this deployment is for: the Barcode Present Only Setup box (Vercel status success).
+================================================================================
+2026-11-06 — feat/screen-gain8-era — SCREEN: run-number reuse no longer merges sessions; failed requests leave a record; fs_val false warning cleared
+================================================================================
+1) src/lib/server/screen/ingest.ts: findScreenSession() matches device + run only to a session that heard
+   from the device in the last 12 h. Root cause: a firmware version bump resets the device's EEPROM screen
+   counter, so run numbers repeat; device + run alone merged new screens into weeks-old sessions (0255 10/15
+   vs 11/2; 0250 11/6 avoided by a manual retag). Used for both screen events and screen_record attach.
+2) src/routes/validation/screen/+page.server.ts: a refused or undeliverable run_screen (offline, no function,
+   busy, cartridge, assay missing) now writes an audit 'screen_request_failed' and an SPU journal line
+   "Screen NOT started ...", besides the page banner. Root cause: 0244 on 11/5 - attempt left no trace.
+3) src/lib/server/screen/contract.ts: BUILTIN_CRITERIA fs_val {max 50, warnOnly}, used when the saved
+   criteria have none. v96+ prunes /validation to 50 files, so the device's "within 5 of the cap" warning
+   fired on every healthy unit. Only a count above the cap warns now.
+New src/lib/server/screen/contract.test.ts (6 tests, pass). tsc: no errors in touched files.
+Pushed to branch only (preview build); production needs master pushed - awaiting Jacob's go-ahead.

@@ -208,7 +208,7 @@ export const SCREEN_TEST_DOCS: Record<string, { what: string; rule: string }> = 
 	uptime: { what: 'Seconds since boot; note timeok/notime', rule: 'info' },
 	eeprom: { what: 'EEPROM firmware + data-format versions match, no stale running test', rule: 'fail on mismatch or stale uuid' },
 	fs: { what: 'Filesystem write/read probe; value = /cache file count', rule: 'fail if the probe fails' },
-	fs_val: { what: '/validation file count against the 50-file cap', rule: 'warn within 5 of the cap' },
+	fs_val: { what: '/validation file count against the 50-file cap (v96+ prunes to the cap)', rule: 'warn above the cap (BIMS default; the device warned within 5 of it)' },
 	fs_assay: { what: '/assay file count', rule: 'info' },
 	fs_sweep: { what: '/sweep file count', rule: 'info' },
 	assay: { what: 'Production assay BCODE present on disk (note = id)', rule: 'fail if missing' },
@@ -387,13 +387,24 @@ export interface ScreenCriterion {
 }
 export type ScreenCriteria = Record<string, ScreenCriterion>;
 
+/**
+ * Built-in limits used when the saved criteria have none for the id.
+ * fs_val: firmware v96+ prunes /validation to its 50-file cap, so a count of 45-50 is the normal
+ * steady state, yet the device still warns "within 5 of the cap". Only a count above the cap
+ * (pruning not working) is worth a warning.
+ */
+const BUILTIN_CRITERIA: ScreenCriteria = {
+	fs_val: { max: 50, warnOnly: true, label: 'built-in: warn only above the 50-file cap' }
+};
+
 export function criterionFor(id: string, criteria: ScreenCriteria | null | undefined): ScreenCriterion | null {
-	if (!criteria) return null;
-	if (criteria[id]) return criteria[id];
-	const base = baseTestId(id);
-	if (criteria[base]) return criteria[base];
-	const m = /^run\d+_(.+)$/.exec(id);
-	if (m && criteria[`run_${m[1]}`]) return criteria[`run_${m[1]}`];
+	for (const set of [criteria ?? {}, BUILTIN_CRITERIA]) {
+		if (set[id]) return set[id];
+		const base = baseTestId(id);
+		if (set[base]) return set[base];
+		const m = /^run\d+_(.+)$/.exec(id);
+		if (m && set[`run_${m[1]}`]) return set[`run_${m[1]}`];
+	}
 	return null;
 }
 
