@@ -479,12 +479,6 @@
 					<PoseEditor pose={selPose} allPoses={poses} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} {home} />
 					<PoseCameraCard pose={selPose} {camera} cameras={cameraNames} oncamera={setCamera} calibration={calFor(selPose._id)} arm={armNow} {armReachable} {blocked} {blockReason} ongoto={goTo} />
 				{/key}
-				{#if selPose.trim}
-					<form method="POST" action="?/clearDroop" use:enhance class="text-[11px]" style={muted}>
-						<input type="hidden" name="poseId" value={selPose._id} />
-						Learned Droop Correction <button type="submit" class="underline">Forget It</button>
-					</form>
-				{/if}
 			{:else}
 				<div class={card} style={cardStyle}><p class="text-sm" style={muted}>No Step Selected</p></div>
 			{/if}

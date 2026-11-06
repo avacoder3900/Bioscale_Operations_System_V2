@@ -26300,3 +26300,40 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit f72bb9a9 (code commit e3d5b45b; also branch fix/arm-motion-lock)
 Retrieve this exact code: git checkout f72bb9a9
 What this deployment is for: Return Home, the droop settle and Play / Go To refuse to start while another of them is moving the arm.
+
+================================================================================
+2026-11-06 — master — Droop correction removed, retroactively: a play sends exactly the numbers set in Live posing
+================================================================================
+Alejandro: "retroactively remove all droop correction because it is only making our final animation play less
+accurate. I want our animation to match exactly what we set in the live posing; with stiffened servos you
+shouldn't need it." Everything PRD ARM-06 sections 9-11 and 13 built for droop is gone (section 14 records it):
+- animation.ts: keyframePositions(pose, offsets) only; ResolvedKeyframe / PathMarker lose target + settle;
+  MAX_TRIM_STEPS, TRIM_SERVOS, TRIM_DONE_STEPS, nextTrim, TrimSample, estimateTrim, SettleFlag, settleFrames,
+  trimFromSettle deleted; composeAnimationJsonl writes plain frames (no settle flags), so the Pi replay_settle.py
+  takes its open-loop path and replays the goals exactly — no Pi change, hold_at_end stays.
+- robot-arm-animation.ts: PoseSummary loses trim / trimMeasuredAt; resolveKeyframes(keyframes, poses) adds nothing;
+  goToPose / resolveMoveSet / resolveSequence no trim samples; settleAtPose, settleRounds, learnFromPiSettle,
+  DroopResult, PiSettledPose, SettleResult, trimSamples, clearPoseDroop, clearAllPoseDroop deleted; afterPlay is
+  torque-back-on only (claims lastPlay.settledAt once; the `droop` form field is ignored); lastPlay.end.target and
+  animationEnd/Start use the pose positions; setPosePositions / duplicatePose no longer touch trim fields.
+- purgeDroopTrims(): on the first listPoses after the deploy, $unset trim / trimMeasuredAt / trimMeasuredBy on
+  every pose that has them (strict: false; audit robot_arm.animate.pose_droop_purged with the count) — the
+  retroactive part: the old numbers cannot come back. Fields left the robot-arm-pose schema.
+- PoseEditor.svelte (Live): no liveTrim, no closed-loop correction rounds; a moved slider sends its number
+  exactly; Arm Now is read 350 ms after the last send and left alone.
+- playback.svelte.ts: the after-play message is only about torque (or an error). robot-arm-animate-actions settle
+  action and the Sequence page call afterPlay(user, runId). robot-arm-verified.ts: step records lose target/settle.
+- Teach pages: Clear All Droop (this morning's d604c46a) and the Move Set page's Forget It are gone, with their
+  actions. verified-poses.ts suggestion text no longer refers to the droop trim.
+- Return Home's own home correction (home-calibration.ts) and the arm Tests page's Droop drift test (holds
+  torque, measures drift; not a correction) are unchanged.
+- Tests: animation.test.ts drops the settle-flag / droop-trim / estimateTrim / trimFromSettle blocks and asserts
+  no frame carries settle or target; keyframePositions test is offsets-only. vitest robot-arm + server animation
+  + lock: 240/240. svelte-check 14 errors (baseline, none in touched files).
+The Pi still has this morning's target-aware replay_settle.py (79af8410): harmless, it only acts on flagged
+frames, which BIMS no longer writes. Not yet driven on the arm: the check is Live-pose a step, Save, Go To /
+Play it, and read Arm Now against the pose numbers — any difference now is the servo under load, not BIMS.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): no droop correction"
+What this deployment is for: every play and Go To sends the pose numbers exactly as set in Live posing; stored trims purged.

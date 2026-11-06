@@ -23,9 +23,11 @@
 	 * encoder reading back as every servo's goal; a loaded joint sits short of
 	 * its goal, so the new, lower goal dropped the arm again (elbow 2377 →
 	 * 2456 → 2464 on Rr.0.5 home). Now, at the pose, the sliders start on the
-	 * pose's numbers and each servo keeps the goal it holds (pose + droop trim);
-	 * only a slider that moves sends its servo a goal, slider + the same trim.
-	 * Away from the pose they start at the reading, still sending nothing.
+	 * pose's numbers and each servo keeps the goal it holds; only a slider that
+	 * moves sends its servo a goal — the slider's number, exactly (no droop
+	 * trim and no closed-loop correction since 2026-11-06: what you set is
+	 * what every play sends). Away from the pose they start at the reading,
+	 * still sending nothing.
 	 *
 	 * Edit Values (2026-11-05): an explicit second way in. It unlocks the
 	 * sliders and number boxes WITHOUT the arm (unreachable, torque off, a
@@ -44,11 +46,8 @@
 		sliderRange,
 		DEG_PER_STEP,
 		ENCODER_MAX,
-		MAX_TRIM_STEPS,
 		SERVO_COUNT,
-		SERVO_TEMP_STOP_C,
-		TRIM_DONE_STEPS,
-		TRIM_SERVOS
+		SERVO_TEMP_STOP_C
 	} from '$lib/robot-arm/animation';
 	import type { PoseSummary } from '$lib/server/robot-arm-animation';
 	import { liveBus } from '$lib/robot-arm/bus-free';
@@ -83,7 +82,7 @@
 
 	/** "The arm is at these values" — loaded joints sit a few tens of steps short of their goal. */
 	const AT_POSE_STEPS = 80;
-	/** Live starts on the pose's numbers when every servo is this close (the server's droop "near" band). */
+	/** Live starts on the pose's numbers when every servo is this close. */
 	const LIVE_FROM_POSE_STEPS = 150;
 	// Fast enough that the New Pose sliders track an arm moved by hand (2026-11-04, was 1500).
 	// One read at a time (readArmNow), so a slow route just lowers the rate.
@@ -127,8 +126,6 @@
 	let newName = $state('');
 	/** Goals last sent to the arm, per servo (null = never sent this session). */
 	let sent: (number | null)[] = new Array(SERVO_COUNT).fill(null);
-	/** Added to each slider when Live sends it: the pose's droop trim when Live started at the pose, else 0. */
-	let liveTrim: number[] = new Array(SERVO_COUNT).fill(0);
 
 	// Take the page's fresh read after its own actions (Go to, Torque on) re-ran the load —
 	// only when that prop actually changes, never on our own state changes.
@@ -232,56 +229,9 @@
 		if (timer) clearInterval(timer);
 	});
 
-	/**
-	 * Live closed loop (2026-11-05). A loaded joint stops short of its goal
-	 * (its position loop is proportional: the shoulder sat 108 steps short of a
-	 * typed 2300 at an extended pose). After a moved slider's servo comes to
-	 * rest, its goal is raised by whatever it is still short (liveTrim), re-sent
-	 * and checked again, until Arm Now is within TRIM_DONE_STEPS of the number,
-	 * the trim reaches MAX_TRIM_STEPS, or the joint stops moving (blocked). Only
-	 * servos whose slider moved, never the gripper (a closed grip is short on
-	 * purpose). A new slider move restarts it.
-	 */
-	const LIVE_SETTLE_MS = 500;
-	const LIVE_CORRECT_ROUNDS = 8;
-	/** Servos whose slider moved since the last correction finished. */
-	let touched = new Set<number>();
-	/** Bumped by every operator move; a correction from an older move stops. */
-	let correction = 0;
 	const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-	async function correct(token: number) {
-		const stale = () => token !== correction || !live || sending;
-		const stalls = new Map<number, number>();
-		let last: number[] | null = null;
-		for (let round = 0; round < LIVE_CORRECT_ROUNDS; round++) {
-			await sleep(LIVE_SETTLE_MS);
-			if (stale()) return;
-			await readArmNow();
-			if (stale() || !armPos) return;
-			const now = armPos;
-			const off = [...touched].filter((s) => TRIM_SERVOS.includes(s + 1) && Math.abs(values[s] - now[s]) > TRIM_DONE_STEPS && (stalls.get(s) ?? 0) < 2);
-			if (!off.length) break;
-			for (const s of off) {
-				// Did not move since the last raise: at the cap, or blocked. Two of those and it is left alone.
-				stalls.set(s, last && Math.abs(now[s] - last[s]) <= 1 ? (stalls.get(s) ?? 0) + 1 : 0);
-				liveTrim[s] = Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, liveTrim[s] + values[s] - now[s]));
-			}
-			last = [...now];
-			await pump(false);
-			if (stale()) return;
-		}
-		await sleep(LIVE_SETTLE_MS);
-		if (stale()) return;
-		await readArmNow();
-		if (stale() || !armPos) return;
-		const now = armPos;
-		const short = [...touched].filter((s) => TRIM_SERVOS.includes(s + 1) && Math.abs(values[s] - now[s]) > TRIM_DONE_STEPS);
-		touched = new Set();
-		if (short.length) note = { text: short.map((s) => `${JOINT_LABELS[s]} Still ${Math.abs(values[s] - now[s])} Steps Off`).join(' · '), kind: 'warn' };
-	}
-
-	/** Send goals until every servo's last goal equals its slider (+ trim); one request in flight. `operator` = a slider moved: correct afterwards. */
-	async function pump(operator = true) {
+	/** Send goals until every servo's last goal equals its slider, exactly; one request in flight. */
+	async function pump() {
 		if (sending || !live) return;
 		sending = true;
 		liveBus.sending = true;
@@ -291,7 +241,7 @@
 			while (live) {
 				const goals: Record<number, number> = {};
 				SERVOS.forEach((s) => {
-					const g = Math.max(0, Math.min(ENCODER_MAX, values[s] + liveTrim[s]));
+					const g = Math.max(0, Math.min(ENCODER_MAX, values[s]));
 					if (sent[s] === g) return;
 					goals[s + 1] = g;
 				});
@@ -321,10 +271,11 @@
 			sending = false;
 			liveBus.sending = false;
 		}
-		if (!operator) return;
-		// The arm settles after the last move; show where it ended up, then make it land on the numbers.
-		setTimeout(() => void readArmNow(), 350);
-		if (sentAny && live) void correct(++correction);
+		// Show where the arm came to rest after the last move (Arm Now); nothing corrects it.
+		if (sentAny) {
+			await sleep(350);
+			void readArmNow();
+		}
 	}
 
 	function setValue(s: number, v: number) {
@@ -332,16 +283,15 @@
 		if (!unlocked || !Number.isFinite(v)) return;
 		// The slider's range follows the value (sliderRange includes it), so only the encoder bounds apply.
 		const next = Math.round(Math.max(0, Math.min(ENCODER_MAX, v)));
-		if (next !== values[s]) touched.add(s);
 		values[s] = next;
 		if (live) void pump();
 	}
 
 	/**
 	 * Live on. Nothing is sent: each servo keeps the goal it holds, so the arm
-	 * does not move. At the pose the sliders start on the pose's numbers (the
-	 * goals are pose + trim); elsewhere on the reading. From then on a slider
-	 * that moves sends only its own servo.
+	 * does not move. At the pose the sliders start on the pose's numbers;
+	 * elsewhere on the reading. From then on a slider that moves sends only its
+	 * own servo, the number as typed.
 	 */
 	async function startLive() {
 		if (editing && dirty && !confirm('Live sets the sliders to the pose (or where the arm is). Discard the unsaved values?')) return;
@@ -354,17 +304,13 @@
 		const now = armPos;
 		const atPose = !!pose && pose.positions.every((v, i) => Math.abs(v - now[i]) <= LIVE_FROM_POSE_STEPS);
 		values = atPose ? [...pose!.positions] : [...now];
-		liveTrim = atPose && pose!.trim ? pose!.trim.map((t, i) => (i < SERVO_COUNT ? t : 0)) : new Array(SERVO_COUNT).fill(0);
-		sent = values.map((v, i) => Math.max(0, Math.min(ENCODER_MAX, v + liveTrim[i])));
-		touched = new Set();
-		correction++;
+		sent = [...values];
 		live = true;
 		note = { text: atPose ? 'Sliders At The Pose' : 'Sliders At The Arm', kind: 'ok' };
 	}
 
 	function reset() {
 		if (pose && unlocked) {
-			SERVOS.forEach((s) => pose.positions[s] !== values[s] && touched.add(s));
 			values = [...pose.positions];
 			if (live) void pump();
 		}

@@ -416,3 +416,19 @@ slider; the arm follows within a fraction of a second; ● tracks it. If the Pi 
 the note says so (jog fallback). (4) Temperatures show per servo; a play is refused when one reads
 ≥ 65 °C. (5) After copying `replay_settle.py`: a play ends with torque on and `replay.stop` says
 `held: true`.
+
+## 14. Droop correction removed (2026-11-06)
+
+Alejandro: "remove all droop correction, it is only making our final animation play less accurate. I want
+our animation to match exactly what we set in the live posing; with stiffened servos you shouldn't need it."
+Everything §9–§11 and §13 built for droop is gone, retroactively:
+
+- A pose's numbers are the goals: `keyframePositions(pose, offsets)` only; `resolveKeyframes` adds nothing.
+  `ResolvedKeyframe.target` / `.settle` and the marker fields are gone (positions are the target).
+- No settle flags: `composeAnimationJsonl` writes plain frames, so the Pi's `replay_settle.py` replays the
+  goals open-loop (its flagged-frame path is simply never taken; no Pi change).
+- `afterPlay` only puts torque back on if the Pi dropped it; no learning, no settle, no Pi report wait.
+- Live posing sends the slider's number exactly (no `liveTrim`, no closed-loop rounds).
+- Stored trims are purged (`purgeDroopTrims`, on the first pose listing after the deploy, audited
+  `pose_droop_purged`); `trim`, `trimMeasuredAt`, `trimMeasuredBy` left the schema. Clear All Droop and
+  Forget It are gone. Return Home's own home correction (home-calibration.ts) is unrelated and stays.

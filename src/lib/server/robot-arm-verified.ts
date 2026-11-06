@@ -727,11 +727,9 @@ export async function startVerifiedRun(user: User, o: { kind: PlayKind; id: stri
 			poseId: k.poseId,
 			name: k.name,
 			positions: k.positions,
-			target: k.target,
 			holdS: k.holdS,
 			durationS: k.durationS,
 			easing: k.easing,
-			settle: k.settle,
 			verify,
 			calibrationId: verify && ref ? ref._id : null,
 			tolerances: tol
@@ -782,11 +780,9 @@ function chunkKeyframes(doc: any, chunk: Chunk): ResolvedKeyframe[] {
 		poseId: s.poseId ?? '',
 		name: s.name,
 		positions: (s.positions ?? []).map(Number),
-		...(Array.isArray(s.target) && s.target.length ? { target: s.target.map(Number) } : {}),
 		holdS: Number(s.holdS ?? 0),
 		durationS: Number(s.durationS ?? 1),
 		easing: s.easing ?? 'ease',
-		...(s.settle === false ? { settle: false } : {}),
 		...(s.fire?.solenoid ? { fire: { solenoid: s.fire.solenoid, pulseMs: Number(s.fire.pulseMs) } } : {})
 	}));
 }

@@ -259,5 +259,5 @@ export const AFTER_FAILURE_IDEAS: readonly string[] = [
 	'Back off to the previous verified pose and replay the chunk once.',
 	'Run the home routine, then resume from the failed step.',
 	'Pause with the live camera view and let the operator nudge the sliders, then continue.',
-	'Learn a per-pose trim from the encoder residual (like the droop trim) and retry once.'
+	'Learn a per-pose trim from the encoder residual and retry once.'
 ];

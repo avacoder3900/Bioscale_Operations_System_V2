@@ -10,15 +10,15 @@
  *
  * When a play finishes on its own, the helper calls `settle` by itself
  * (afterPlay on the server): torque straight back on if the Pi dropped it,
- * and, for a captured (reading) pose at the end, the droop correction. Not
- * after Stop — the arm is mid-path then. `onend` lets the page refresh.
+ * nothing else (droop correction removed 2026-11-06). Not after Stop — the
+ * arm is mid-path then. `onend` lets the page refresh.
  *
  * 2026-10-30: every request carries a timeout, so a poll that hangs (one did,
  * for a minute, on the arm wax-fill line) can no longer stall the end of a
  * play; the poll runs every half second near the end and sends the run id,
  * which lets the server answer from the Pi's own `replay.stop` webhook
- * without a Pi round trip. A loop play (`{ loop: true }`) settles with torque
- * only — no droop learning, the loop checks the arm's arrival itself.
+ * without a Pi round trip. A loop play (`{ loop: true }`) is one the robot-arm
+ * wax-fill line drives; the loop checks the arm's arrival itself.
  */
 import { deserialize } from '$app/forms';
 
@@ -67,8 +67,7 @@ export class Playback {
 
 	/**
 	 * Start: `action` is the page's play action (playMoveSet / playSequence / play).
-	 * `loop: true` marks a robot-arm wax-fill loop play: the after-play settle only
-	 * puts torque back on (no droop learning).
+	 * `loop: true` marks a robot-arm wax-fill loop play.
 	 */
 	async play(action: string, fields: Record<string, string>, title: string, opts: { loop?: boolean } = {}) {
 		if (this.busy || this.running) return;
@@ -146,39 +145,18 @@ export class Playback {
 		}
 	}
 
-	/** Automatic, after a play ends: torque back on, then droop correction for captured poses (not for loop plays). */
+	/** Automatic, after a play ends: torque back on if the Pi dropped it. Nothing else (no droop correction since 2026-11-06). */
 	private async settle() {
 		const runId = this.runId;
 		if (!runId) return;
 		this.settled = 'Holding the last pose…';
 		try {
-			const r = await this.action('settle', { runId, ...(this.loopPlay ? { droop: 'off' } : {}) });
-			type PiPose = { poseName: string; trim: number[]; residual: number[]; rounds: number; ok: boolean };
-			type Settle = {
-				poseName: string;
-				skipped: string | null;
-				pi: { poses: PiPose[] } | null;
-				droop: { trim: number[]; rounds: number; warnings: string[] } | null;
-				torqueRestored: boolean;
-				torqueError: string | null;
-			};
+			const r = await this.action('settle', { runId });
+			type Settle = { torqueRestored: boolean; torqueError: string | null; skipped: string | null };
 			const s = r.type === 'success' ? (r.data as { settle?: Settle } | undefined)?.settle : null;
-			const torque = s?.torqueError ? `Torque could NOT be turned back on (${s.torqueError}) — the arm may be limp. ` : '';
 			if (!s) this.settled = r.type === 'failure' ? String((r.data as { error?: string } | undefined)?.error ?? '') : null;
-			else if (s.skipped === 'nothing to settle for this play' || s.skipped === 'already settled' || s.skipped === 'loop play — no droop learning' || (!s.skipped && !s.pi && !s.droop)) this.settled = torque || null;
-			else if (s.skipped) this.settled = `${torque}Droop correction skipped: ${s.skipped}.`;
-			else if (s.pi) {
-				// The Pi settled each held pose during the replay (closed-loop route); nothing moved afterwards.
-				const parts = s.pi.poses.map((p) => {
-					const worst = p.residual.length ? Math.max(...p.residual.map(Math.abs)) : 0;
-					return `"${p.poseName}" ${p.ok ? `on target (${p.rounds} round${p.rounds === 1 ? '' : 's'})` : `still ${worst} step(s) off when the hold ran out`}`;
-				});
-				const missed = s.pi.poses.filter((p) => !p.ok).length;
-				this.settled = `Settled on the arm during the play: ${parts.join('; ')}. Corrections learned for the next play.${missed ? ' Give the poses that missed a longer hold.' : ''}`;
-			} else if (s.droop) {
-				const t = s.droop.trim.map((v, i) => (v ? `servo ${i + 1} ${v > 0 ? '+' : ''}${v}` : null)).filter(Boolean);
-				this.settled = `Settled on "${s.poseName}"${t.length ? ` — droop correction ${t.join(', ')}` : ' — no droop'} (learned; used from the next play).` + (s.droop.warnings.length ? ' ' + s.droop.warnings.join(' ') : '');
-			}
+			else if (s.torqueError) this.settled = `Torque could NOT be turned back on (${s.torqueError}) — the arm may be limp.`;
+			else this.settled = s.torqueRestored ? 'Torque was off after the play and is back on.' : null;
 		} catch (e) {
 			this.settled = `After-play check failed: ${e instanceof Error ? e.message : String(e)}`;
 		}

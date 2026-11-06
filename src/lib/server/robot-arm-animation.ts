@@ -20,7 +20,7 @@
  * Pi calls:
  *   GET  /servos                 follower positions, temperatures, torque state
  *   POST /servos/{id}/move       live slider: one servo to an absolute goal
- *   POST /servos/{id}/jog        fallback for /move on an older Pi; droop settle
+ *   POST /servos/{id}/jog        fallback for /move on an older Pi
  *   POST /teleop/start           follower tracks the control (leader) arm under torque
  *   POST /sessions/stop          stop that / a play
  *   POST /torque                 torque back ON after a session dropped it
@@ -45,7 +45,6 @@ import {
 	cleanOffsets,
 	cleanPoseIds,
 	cleanPositions,
-	estimateTrim,
 	planPoseDelete,
 	type PoseSkip,
 	composeAnimationJsonl,
@@ -56,12 +55,10 @@ import {
 	isEasing,
 	jogChunks,
 	keyframePositions,
-	nextTrim,
 	pathStats,
 	isFireTarget,
 	solenoidLabel,
 	solenoidPin,
-	trimFromSettle,
 	DEFAULT_RATE_HZ,
 	maxPulseMs,
 	MIN_PULSE_MS,
@@ -71,18 +68,14 @@ import {
 	JOG_CHUNK_STEPS,
 	MAX_OFFSET_STEPS,
 	MAX_TRANSITION_S,
-	MAX_TRIM_STEPS,
 	MIN_TRANSITION_S,
 	SERVO_COUNT,
 	SERVO_TEMP_STOP_C,
-	TRIM_DONE_STEPS,
-	TRIM_SERVOS,
 	type Easing,
 	type Keyframe,
 	type RenderedPath,
 	type ResolvedKeyframe,
-	type SequenceItem,
-	type TrimSample
+	type SequenceItem
 } from '$lib/robot-arm/animation';
 
 type User = { _id: string; username: string };
@@ -107,7 +100,7 @@ async function viaArchive<T>(fn: () => Promise<T>): Promise<T> {
 export const PREVIEW_RECORDING = 'animate-preview';
 /** The Pi caps one jog at 300 steps. */
 const JOG_CHUNK = JOG_CHUNK_STEPS;
-/** Go to pose holds the pose this long at the end (time for the Pi to settle a reading pose). */
+/** Go to pose holds the pose this long at the end. */
 const GOTO_HOLD_S = 1;
 
 export class AnimateError extends Error {
@@ -120,8 +113,7 @@ export class AnimateError extends Error {
 }
 
 /**
- * Take the arm-motion lease (one BIMS mover at a time: Return Home, the droop
- * settle, the start of a Play). Busy becomes a 409 for the page.
+ * Take the arm-motion lease (one BIMS mover at a time: Return Home, the start of a Play). Busy becomes a 409 for the page.
  */
 async function holdArmMotion(user: User, owner: string, label: string, ttlMs: number): Promise<void> {
 	try {
@@ -438,7 +430,7 @@ export interface LeaderPoseResult {
  * driver is not thread-safe and the teleop thread owns the bus, so it is
  * never read mid-session: stop (torque straight back on), let it settle on
  * the leader's last position, read it, save, then start a fresh teleop so the
- * operator carries on. The pose is a READING (droop-corrected when played).
+ * operator carries on. The pose is a READING, played exactly as read.
  */
 export async function savePoseFromLeader(user: User, input: { name: unknown; notes?: unknown; resume: boolean }): Promise<LeaderPoseResult> {
 	await connectDB();
@@ -495,14 +487,10 @@ export interface PoseSummary {
 	positions: number[];
 	/**
 	 * goal = set with the sliders or typed in; reading = encoder capture. Kept as
-	 * history only: since 2026-11-05 every pose is droop-corrected, so the arm
-	 * lands ON its numbers (a goal pose used to be played exactly and sat a few
-	 * tens of steps short under gravity — 79 on the elbow of Rr.0.5 home).
+	 * history only: both are played back exactly as stored (droop correction
+	 * removed 2026-11-06).
 	 */
 	basis: PoseBasis;
-	/** Droop trim added to the goal when played (six entries), or null if never measured. */
-	trim: number[] | null;
-	trimMeasuredAt: string | null;
 	notes: string | null;
 	archived: boolean;
 	/** When the 30-day trash deletes it for good (null: live, or archived before the trash). */
@@ -514,14 +502,11 @@ export interface PoseSummary {
 
 export function poseSummary(d: any): PoseSummary {
 	const basis: PoseBasis = d.basis === 'goal' ? 'goal' : 'reading';
-	const trim = Array.isArray(d.trim) && d.trim.length === SERVO_COUNT ? d.trim.map(Number) : null;
 	return {
 		_id: String(d._id),
 		name: d.name,
 		positions: (d.positions ?? []).map(Number),
 		basis,
-		trim,
-		trimMeasuredAt: d.trimMeasuredAt ? new Date(d.trimMeasuredAt).toISOString() : null,
 		notes: d.notes ?? null,
 		archived: !!d.archivedAt,
 		deletesAt: d.expiresAt ? new Date(d.expiresAt).toISOString() : null,
@@ -533,6 +518,7 @@ export function poseSummary(d: any): PoseSummary {
 
 export async function listPoses(): Promise<PoseSummary[]> {
 	await connectDB();
+	await purgeDroopTrims();
 	const [rows, archived] = await Promise.all([RobotArmPose.find({}).select('-lastPlay').sort({ archivedAt: 1, createdAt: -1 }).lean(), listArchived('pose')]);
 	return [...(rows as any[]), ...archivedRows(archived, { positions: [] }, rows as any[])].map(poseSummary);
 }
@@ -585,10 +571,8 @@ export async function createPose(user: User, input: { name: unknown; notes?: unk
 }
 
 /**
- * Save the sliders into an existing pose (it becomes a goal pose). Its old
- * droop trim was learned at the old numbers, so it is dropped; the next Go To
- * / Play starts from an estimate and learns the new one. Every move set using
- * the pose follows.
+ * Save the sliders into an existing pose (it becomes a goal pose). Every move
+ * set using the pose follows.
  */
 export async function setPosePositions(user: User, id: string, raw: unknown): Promise<{ pose: PoseSummary; moved: number[] }> {
 	await connectDB();
@@ -597,13 +581,12 @@ export async function setPosePositions(user: User, id: string, raw: unknown): Pr
 	if (before.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
 	const positions = positionsOrThrow(raw);
 	const old: number[] = (before.positions ?? []).map(Number);
-	await RobotArmPose.updateOne({ _id: id }, { $set: { positions, basis: 'goal', trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
+	await RobotArmPose.updateOne({ _id: id }, { $set: { positions, basis: 'goal' } });
 	await audit(user, 'robot_arm.animate.pose_edit', 'robot_arm_poses', id, {
 		name: before.name,
 		before: old,
 		after: positions,
-		beforeBasis: before.basis ?? 'reading',
-		clearedTrim: Array.isArray(before.trim) && before.trim.length ? before.trim : null
+		beforeBasis: before.basis ?? 'reading'
 	});
 	return { pose: poseSummary(await RobotArmPose.findById(id).lean()), moved: positions.map((p, i) => p - (old[i] ?? p)) };
 }
@@ -622,7 +605,7 @@ export async function updatePose(user: User, id: string, input: { name: unknown;
 
 /**
  * Duplicate Pose (Move Set page, 2026-11-05): a new pose with the same values
- * (positions, basis, droop trim, notes) under the first free "<name> Copy",
+ * (positions, basis, notes) under the first free "<name> Copy",
  * "<name> Copy 2", … The copy is its own pose, so editing it leaves the
  * original and every move set using it alone. Camera references are not
  * copied: they belong to the original pose.
@@ -634,13 +617,11 @@ export async function duplicatePose(user: User, id: string): Promise<PoseSummary
 	if (src.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
 	const name = await freeCopyName(String(src.name));
 	const _id = generateId();
-	const trim = Array.isArray(src.trim) && src.trim.length ? src.trim.map(Number) : undefined;
 	await RobotArmPose.create({
 		_id,
 		name,
 		positions: (src.positions ?? []).map(Number),
 		basis: src.basis ?? 'reading',
-		...(trim ? { trim, trimMeasuredAt: src.trimMeasuredAt ?? null, trimMeasuredBy: src.trimMeasuredBy ?? null } : {}),
 		notes: src.notes ?? null,
 		createdBy: opRef(user)
 	});
@@ -755,209 +736,45 @@ export async function deleteArchivedPoses(user: User, rawIds: unknown[]): Promis
  * Go to a pose: played like a one-pose move set — a smooth path of absolute
  * goals from where the arm is, ending held on the pose — so it lands in the
  * same place whatever the arm did before. Returns the play for the page's
- * playback poll; the page's afterPlay puts torque back on (older Pi) and
- * learns the pose's droop. The arm MOVES.
+ * playback poll; the page's afterPlay puts torque back on (older Pi). The arm MOVES.
  */
 export async function goToPose(user: User, poseId: string): Promise<PlayResult> {
 	await connectDB();
 	const pose = (await RobotArmPose.findById(poseId).select('-lastPlay').lean()) as any;
 	if (!pose) throw new AnimateError('Pose not found.', 404);
 	const summary = poseSummary(pose);
-	const keyframes = resolveKeyframes([{ poseId, holdS: GOTO_HOLD_S, durationS: 1, easing: 'ease' }], new Map([[poseId, summary]]), await trimSamples());
+	const keyframes = resolveKeyframes([{ poseId, holdS: GOTO_HOLD_S, durationS: 1, easing: 'ease' }], new Map([[poseId, summary]]));
 	return writeAndPlay(user, { title: summary.name, keyframes, rateHz: DEFAULT_RATE_HZ, kind: 'pose', id: poseId });
 }
 
-// ── droop (automatic) ────────────────────────────────────────────────────
+// ── after a play ─────────────────────────────────────────────────────────
 
-/** The settle pass only nudges the arm; it must already be at (or near) the target. */
-const DROOP_NEAR_STEPS = 150;
-const DROOP_SETTLE_MS = 1200;
-const DROOP_MAX_ROUNDS = 6;
-/** The settle's hold on the arm-motion lease: six rounds of five writes + 1.2 s, with margin. */
-const DROOP_LEASE_MS = 30_000;
-
-export interface DroopResult {
-	trim: number[];
-	/** Target − where the arm settled on the last round (≈0 when the trim works). */
-	residual: number[];
-	rounds: number;
-	done: boolean;
-	/** Where the first round's trim came from. */
-	startedFrom: 'measured' | 'estimated' | 'none';
-	warnings: string[];
-}
-
-/** Every live pose with a learned trim, as samples for estimateTrim. */
-async function trimSamples(exceptId?: string): Promise<TrimSample[]> {
-	const rows = (await RobotArmPose.find({ 'trim.5': { $exists: true }, archivedAt: null }).select('_id positions trim').lean()) as any[];
-	return rows.filter((d) => String(d._id) !== exceptId).map((d) => ({ positions: d.positions.map(Number), trim: d.trim.map(Number) }));
-}
-
-/**
- * Why the claw ends up lower than the pose: replay writes each frame's goal
- * and nothing else, and under gravity a loaded STS3215 settles a few to a few
- * tens of steps SHORT of its goal (its position loop is proportional). A pose
- * captured where the joints really were (by hand, or the follower's encoders
- * under teleop) then plays back with every loaded joint short, on the
- * gravity side.
- *
- * The correction runs by itself whenever the arm is known to be sitting at a
- * pose — at the end of every Go to pose and every Play that finishes — with
- * no operator step: command goal = target + trim on servos 1–5 (a jog of
- * goal − present sets the goal exactly), let it settle, add whatever it is
- * still short to the trim, repeat until it lands within TRIM_DONE_STEPS. It
- * starts from the pose's last trim (or an estimate from nearby learned
- * poses), so a pose that has been learned settles in one round. The trim is
- * saved on the pose and every later Play / Save to Pi adds it to the goal.
- * The arm MOVES a few steps and ends holding the target.
- */
-async function settleAtPose(user: User, pose: any, target: number[], now: ArmNow, reason: 'go_to' | 'play_end'): Promise<DroopResult> {
-	if (now.torqueOn === false) throw new AnimateError('torque is off', 409);
-	const far = TRIM_SERVOS.filter((sid) => Math.abs(target[sid - 1] - now.positions[sid - 1]) > DROOP_NEAR_STEPS);
-	if (far.length) throw new AnimateError(`servo ${far.join(', ')} is more than ${DROOP_NEAR_STEPS} steps from "${pose.name}"`, 409);
-	// Held for the whole settle, so Return Home cannot jog the arm away while each round sends it back
-	// (2026-11-06 16:28: that fight swung the shoulder 300–480 steps a round and saved a +300 trim).
-	const owner = `settle:${generateId()}`;
-	await holdArmMotion(user, owner, `Settling "${pose.name}"`, DROOP_LEASE_MS);
-	try {
-		return await settleRounds(user, pose, target, now, reason);
-	} finally {
-		await releaseArmMotion(owner);
-	}
-}
-
-async function settleRounds(user: User, pose: any, target: number[], now: ArmNow, reason: 'go_to' | 'play_end'): Promise<DroopResult> {
-	const learned = Array.isArray(pose.trim) && pose.trim.length === SERVO_COUNT ? (pose.trim as number[]).map(Number) : null;
-	const estimated = learned ? null : estimateTrim(pose.positions.map(Number), await trimSamples(String(pose._id)));
-	let trim: number[] = learned ?? estimated ?? new Array(SERVO_COUNT).fill(0);
-	const startedFrom: DroopResult['startedFrom'] = learned ? 'measured' : estimated ? 'estimated' : 'none';
-	let residual: number[] = new Array(SERVO_COUNT).fill(0);
-	let done = false;
-	let rounds = 0;
-	const history: { goal: number[]; settled: number[] }[] = [];
-	while (rounds < DROOP_MAX_ROUNDS) {
-		rounds++;
-		const goal = keyframePositions(target, null, trim);
-		for (const sid of TRIM_SERVOS) {
-			// The absolute move route writes the goal exactly. An older Pi has only the
-			// jog (goal = present + delta), whose route refuses a zero delta (400
-			// "delta_steps must be non-zero", which aborted every settle on a joint
-			// already on target, 2026-11-05) — that servo already sits on its goal.
-			try {
-				if (moveRouteMissing) throw new Error('robot-arm 404');
-				await robotArm.moveJoint(sid, goal[sid - 1]);
-			} catch (err) {
-				if (!/robot-arm 404/.test((err as Error).message ?? '')) throw new AnimateError(`servo ${sid} did not take the correction: ${(err as Error).message}`, 502);
-				moveRouteMissing = true;
-				const delta = goal[sid - 1] - now.positions[sid - 1];
-				try {
-					if (delta !== 0) await robotArm.jogJoint(sid, delta);
-				} catch (jogErr) {
-					throw new AnimateError(`servo ${sid} did not take the correction: ${(jogErr as Error).message}`, 502);
-				}
-			}
-		}
-		await new Promise((r) => setTimeout(r, DROOP_SETTLE_MS));
-		now = await readArm();
-		history.push({ goal, settled: now.positions });
-		const step = nextTrim(target, now.positions, trim);
-		residual = step.residual;
-		done = step.done;
-		trim = step.trim;
-		if (done) break;
-	}
-
-	const warnings: string[] = [];
-	for (const sid of TRIM_SERVOS) {
-		const r = residual[sid - 1];
-		if (Math.abs(r) > TRIM_DONE_STEPS && Math.abs(trim[sid - 1]) >= MAX_TRIM_STEPS)
-			warnings.push(`Servo ${sid} is still ${r} steps off with the droop correction at its ${MAX_TRIM_STEPS}-step limit — it may be stalled, blocked or overloaded.`);
-	}
-
-	const stored = trim.some((t) => t !== 0) ? trim : [];
-	await RobotArmPose.updateOne({ _id: pose._id }, { $set: { trim: stored, trimMeasuredAt: new Date(), trimMeasuredBy: opRef(user) } });
-	await audit(user, 'robot_arm.animate.pose_droop_settle', 'robot_arm_poses', String(pose._id), { name: pose.name, reason, target, startedFrom, before: pose.trim ?? [], trim: stored, residual, rounds, done, history });
-	return { trim, residual, rounds, done, startedFrom, warnings };
-}
-
-/** One settled pose, as the Pi's closed-loop replay reported it (replay_settle.py). */
-export interface PiSettledPose {
-	poseName: string;
-	t: number;
-	/** The droop trim learned from what the Pi had to write to land there. */
-	trim: number[];
-	/** Target − where the arm was on the Pi's last read. */
-	residual: number[];
-	rounds: number;
-	/** Landed within tolerance before the hold ran out. */
-	ok: boolean;
-}
-
-export interface SettleResult {
-	poseName: string;
-	droop: DroopResult | null;
-	/** Set when the Pi settled the poses itself during the replay; BIMS then only learns from it. */
-	pi: { poses: PiSettledPose[] } | null;
-	/** Why nothing was done (the arm is left as the replay left it). */
-	skipped: string | null;
-}
-
-/** How long to wait for the Pi's `replay.settle` webhook event after the session ends. */
-const PI_SETTLE_WAIT_MS = 1000;
-const PI_SETTLE_WAIT_TRIES = 3;
-
-/**
- * The Pi's closed-loop replay (PRD §11) settles the arm on every held pose
- * and the last one, and reports each as a `replay.settle` run event. Learn
- * the poses' trims from it — no arm movement needed — or null when the run
- * has no such event (route not installed, or nothing was flagged).
- */
-async function learnFromPiSettle(user: User, runId: string): Promise<PiSettledPose[] | null> {
-	let ev: any = null;
-	for (let i = 0; i < PI_SETTLE_WAIT_TRIES && !ev; i++) {
-		if (i) await new Promise((r) => setTimeout(r, PI_SETTLE_WAIT_MS));
-		const run = (await RobotArmRun.findOne({ runId }).select('events').lean()) as any;
-		ev = run?.events?.find((e: any) => e?.type === 'replay.settle') ?? null;
-	}
-	const entries: any[] = Array.isArray(ev?.payload?.settle) ? ev.payload.settle : [];
-	if (!entries.length) return null;
-	const out: PiSettledPose[] = [];
-	for (const e of entries) {
-		const poseId = typeof e?.pose === 'string' ? e.pose : null;
-		const trim = trimFromSettle(e?.written, e?.target);
-		if (!poseId || !trim) continue;
-		const pose = (await RobotArmPose.findById(poseId).lean()) as any;
-		if (!pose) continue;
-		const stored = trim.some((v) => v !== 0) ? trim : [];
-		await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: stored, trimMeasuredAt: new Date(), trimMeasuredBy: opRef(user) } });
-		await audit(user, 'robot_arm.animate.pose_droop_from_replay', 'robot_arm_poses', poseId, { name: pose.name, runId, before: pose.trim ?? [], trim: stored, residual: e.residual, rounds: e.rounds, ok: !!e.ok, t: e.t });
-		out.push({ poseName: pose.name, t: Number(e.t) || 0, trim, residual: Array.isArray(e.residual) ? e.residual.map(Number) : [], rounds: Number(e.rounds) || 0, ok: !!e.ok });
-	}
-	return out.length ? out : null;
-}
-
-export interface AfterPlayResult extends SettleResult {
+export interface AfterPlayResult {
 	/** Torque was off when the play ended (older Pi replay) and was turned back on. */
 	torqueRestored: boolean;
 	torqueError: string | null;
 	/** The arm right after, for the page's sliders and temperatures (null if it could not be read). */
 	arm: ArmNow | null;
+	/** Why nothing was done beyond the torque check ('already done': a second call for the same play). */
+	skipped: string | null;
 }
 
 /**
  * Called by the page when a Play or Go to finished on its own (not stopped).
- * First, torque: a Pi replay without `hold_at_end` support writes torque OFF
+ * Torque only: a Pi replay without `hold_at_end` support writes torque OFF
  * at the end and the arm sags off the last pose — put it straight back on
- * (the last goal is the last frame, so it lifts back onto the pose). Then,
- * for the pose at the end: if the Pi settled poses during the replay, learn
- * their trims from its report; else settle the arm onto the target here and
- * learn it. Runs once per play.
+ * (the last goal is the last frame, so it lifts back onto the pose).
+ *
+ * No droop correction (removed 2026-11-06, Alejandro): the arm is left
+ * exactly where the recording's last goals put it, nothing is measured and
+ * nothing is learned. The `droop` form field older pages send is ignored.
+ * Runs once per play (lastPlay.settledAt is the claim).
  */
-export async function afterPlay(user: User, runId: string, opts: { droop?: boolean } = {}): Promise<AfterPlayResult> {
+export async function afterPlay(user: User, runId: string, _opts: { droop?: boolean } = {}): Promise<AfterPlayResult> {
 	await connectDB();
 	const base = { torqueRestored: false, torqueError: null as string | null, arm: null as ArmNow | null };
 	// A fires-only run never moved the arm (and may have played with it unpowered).
-	if (runId.startsWith(FIRES_RUN_PREFIX)) return { ...base, poseName: '', droop: null, pi: null, skipped: 'nothing to settle for this play' };
+	if (runId.startsWith(FIRES_RUN_PREFIX)) return { ...base, skipped: 'fires only' };
 	// Torque first, whatever else happens: a limp arm is the worst end state.
 	try {
 		await requireIdle();
@@ -973,40 +790,13 @@ export async function afterPlay(user: User, runId: string, opts: { droop?: boole
 	} catch (err) {
 		base.torqueError = (err as Error).message;
 	}
+	// Claim the play so a double call (two tabs, a retry) reports once.
 	const q = { 'lastPlay.runId': runId, 'lastPlay.settledAt': null };
-	const models = [RobotArmMoveSet, RobotArmSequence, RobotArmPose] as (typeof RobotArmMoveSet)[];
-	let model: typeof RobotArmMoveSet | null = null;
-	let doc: any = null;
-	for (const m of models) {
-		doc = await m.findOne(q).select('_id lastPlay').lean();
-		if (doc) {
-			model = m;
-			break;
-		}
+	for (const m of [RobotArmMoveSet, RobotArmSequence, RobotArmPose] as (typeof RobotArmMoveSet)[]) {
+		const r = await m.updateOne(q, { $set: { 'lastPlay.settledAt': new Date() } });
+		if (r.modifiedCount) return { ...base, skipped: null };
 	}
-	const end = doc?.lastPlay?.end;
-	if (!doc || !model || !end?.poseId || !Array.isArray(end.target)) return { ...base, poseName: '', droop: null, pi: null, skipped: 'nothing to settle for this play' };
-	// Claim it first so a double call (two tabs, a retry) settles once.
-	const claim = await model.updateOne({ _id: doc._id, 'lastPlay.runId': runId, 'lastPlay.settledAt': null }, { $set: { 'lastPlay.settledAt': new Date() } });
-	if (!claim.modifiedCount) return { ...base, poseName: '', droop: null, pi: null, skipped: 'already settled' };
-	// A loop play (the robot-arm wax-fill line): torque is enough. Droop learning
-	// would wait on the Pi's settle report and may nudge the arm; the loop reads
-	// the arm itself to check it arrived (checkArrival).
-	if (opts.droop === false) return { ...base, poseName: '', droop: null, pi: null, skipped: 'loop play — no droop learning' };
-	const fromPi = await learnFromPiSettle(user, runId);
-	if (fromPi) return { ...base, poseName: fromPi[fromPi.length - 1].poseName, droop: null, pi: { poses: fromPi }, skipped: null };
-	const pose = (await RobotArmPose.findById(end.poseId).select('-lastPlay').lean()) as any;
-	if (!pose) return { ...base, poseName: '', droop: null, pi: null, skipped: 'the last pose no longer exists' };
-	try {
-		await requireIdle();
-		const now = base.arm ?? (await readArm());
-		const droop = await settleAtPose(user, pose, end.target.map(Number), now, 'play_end');
-		return { ...base, arm: await readArm().catch(() => base.arm), poseName: pose.name, droop, pi: null, skipped: null };
-	} catch (err) {
-		const skipped = (err as Error).message;
-		await audit(user, 'robot_arm.animate.pose_droop_skip', 'robot_arm_poses', String(pose._id), { name: pose.name, reason: 'play_end', runId, skipped });
-		return { ...base, poseName: pose.name, droop: null, pi: null, skipped };
-	}
+	return { ...base, skipped: 'already done' };
 }
 
 /** How long the backstop waits for the Pi to release the bus after `replay.stop`. */
@@ -1052,27 +842,27 @@ export async function holdAfterReplayStop(runId: string, stop: Record<string, un
 }
 
 /**
- * Forget every pose's learned droop trim (live poses). For after a change that
- * makes the old numbers wrong for every pose at once — the servo stiffness
- * (P 6 → 16 on 2026-11-05/06) or the Pi settle fix of 2026-11-06, whose
- * predecessor had inflated every trim it touched. Each pose relearns at its
- * next Go To / Play. Returns how many poses had a trim.
+ * Droop correction was removed on 2026-11-06 (Alejandro: the animation must
+ * match what was set in Live posing exactly). Trims learned before then are
+ * inert — nothing reads them — and are dropped from the records the first
+ * time the pose library is listed after a deploy, so the old numbers can
+ * never come back. Idempotent; audited once when it finds any.
  */
-export async function clearAllPoseDroop(user: User): Promise<number> {
-	await connectDB();
-	const rows = (await RobotArmPose.find({ 'trim.0': { $exists: true }, archivedAt: null }).select('_id name trim').lean()) as any[];
-	if (!rows.length) return 0;
-	await RobotArmPose.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
-	await audit(user, 'robot_arm.animate.pose_droop_clear_all', 'robot_arm_poses', 'all', { count: rows.length, poses: rows.map((r) => ({ _id: String(r._id), name: r.name, before: r.trim })) });
-	return rows.length;
-}
-
-export async function clearPoseDroop(user: User, poseId: string): Promise<void> {
-	await connectDB();
-	const pose = (await RobotArmPose.findById(poseId).lean()) as any;
-	if (!pose) throw new AnimateError('Pose not found.', 404);
-	await RobotArmPose.updateOne({ _id: poseId }, { $set: { trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
-	await audit(user, 'robot_arm.animate.pose_droop_clear', 'robot_arm_poses', poseId, { name: pose.name, before: pose.trim ?? [] });
+let droopPurged = false;
+async function purgeDroopTrims(): Promise<void> {
+	if (droopPurged) return;
+	droopPurged = true;
+	try {
+		const r = await RobotArmPose.updateMany(
+			{ $or: [{ trim: { $exists: true } }, { trimMeasuredAt: { $exists: true } }, { trimMeasuredBy: { $exists: true } }] },
+			{ $unset: { trim: 1, trimMeasuredAt: 1, trimMeasuredBy: 1 } },
+			{ strict: false }
+		);
+		if (r.modifiedCount) await audit({ _id: 'system', username: 'system' }, 'robot_arm.animate.pose_droop_purged', 'robot_arm_poses', 'all', { count: r.modifiedCount });
+	} catch (err) {
+		droopPurged = false;
+		console.warn('robot-arm: droop trim purge failed, will retry on the next listing:', (err as Error).message);
+	}
 }
 
 // ── move sets ────────────────────────────────────────────────────────────
@@ -1235,36 +1025,26 @@ export async function setMoveSetArchivedWithPoses(user: User, id: string, archiv
 
 /**
  * Keyframes with the positions the ARM is sent to: pose + the keyframe's
- * timeline offsets + the pose's droop trim — learned, or estimated from
- * nearby learned poses (`samples`) when this pose has not been settled yet.
- * `target` keeps where the arm should end up (without the trim). Everything
- * that resolves here goes to the Pi (play, save to Pi); the editors draw the
- * path without the trim. Archived poses still resolve.
+ * timeline offsets, exactly (no droop trim since 2026-11-06). Everything
+ * that resolves here goes to the Pi (play, save to Pi). Archived poses still
+ * resolve.
  */
-export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseSummary>, samples: TrimSample[] = []): ResolvedKeyframe[] {
-	const estimates = new Map<string, number[] | null>();
+export function resolveKeyframes(keyframes: Keyframe[], poses: Map<string, PoseSummary>): ResolvedKeyframe[] {
 	// A fire step's positions are where the arm holds while it fires (the pose
 	// before it; [] when it comes first — buildPath works that out from the arm).
 	let here: number[] = [];
 	return keyframes.map((k, i): ResolvedKeyframe => {
 		if (k.fire) return { ...k, name: `Fire ${solenoidLabel(k.fire.solenoid)}`, positions: here };
-		const r = resolvePoseKeyframe(k, i, poses, samples, estimates);
+		const r = resolvePoseKeyframe(k, i, poses);
 		here = r.positions;
 		return r;
 	});
 }
 
-function resolvePoseKeyframe(k: Keyframe, i: number, poses: Map<string, PoseSummary>, samples: TrimSample[], estimates: Map<string, number[] | null>): ResolvedKeyframe {
+function resolvePoseKeyframe(k: Keyframe, i: number, poses: Map<string, PoseSummary>): ResolvedKeyframe {
 	const p = poses.get(k.poseId);
 	if (!p) throw new AnimateError(`Keyframe ${i + 1} refers to a pose that no longer exists.`);
-	let trim = p.trim;
-	if (!trim) {
-		if (!estimates.has(p._id)) estimates.set(p._id, estimateTrim(p.positions, samples));
-		trim = estimates.get(p._id) ?? null;
-	}
-	const target = keyframePositions(p.positions, k.offsets);
-	const positions = keyframePositions(p.positions, k.offsets, trim);
-	return { ...k, name: p.name, positions, ...(trim ? { target } : {}) };
+	return { ...k, name: p.name, positions: keyframePositions(p.positions, k.offsets) };
 }
 
 async function posesById(ids: string[]): Promise<Map<string, PoseSummary>> {
@@ -1275,8 +1055,8 @@ async function posesById(ids: string[]): Promise<Map<string, PoseSummary>> {
 export async function resolveMoveSet(id: string): Promise<{ summary: MoveSetSummary; keyframes: ResolvedKeyframe[] }> {
 	const summary = await getMoveSet(id);
 	if (!summary) throw new AnimateError('Move set not found.', 404);
-	const [poses, samples] = await Promise.all([posesById(summary.keyframes.filter((k) => !k.fire).map((k) => k.poseId)), trimSamples()]);
-	return { summary, keyframes: resolveKeyframes(summary.keyframes, poses, samples) };
+	const poses = await posesById(summary.keyframes.filter((k) => !k.fire).map((k) => k.poseId));
+	return { summary, keyframes: resolveKeyframes(summary.keyframes, poses) };
 }
 
 // ── sequences ────────────────────────────────────────────────────────────
@@ -1393,11 +1173,11 @@ export async function resolveSequence(id: string): Promise<{ summary: SequenceSu
 	if (!summary) throw new AnimateError('Sequence not found.', 404);
 	const sets = (await RobotArmMoveSet.find({ _id: { $in: summary.items.map((i) => i.moveSetId) } }).lean()) as any[];
 	const byId = new Map(sets.map((d) => [String(d._id), moveSetSummary(d)]));
-	const [poses, samples] = await Promise.all([posesById(sets.flatMap((d) => (d.keyframes ?? []).map((k: any) => String(k.poseId ?? '')).filter(Boolean))), trimSamples()]);
+	const poses = await posesById(sets.flatMap((d) => (d.keyframes ?? []).map((k: any) => String(k.poseId ?? '')).filter(Boolean)));
 	const items: SequenceItem[] = summary.items.map((it, i) => {
 		const ms = byId.get(it.moveSetId);
 		if (!ms) throw new AnimateError(`Item ${i + 1} refers to a move set that no longer exists.`);
-		return { name: ms.name, keyframes: resolveKeyframes(ms.keyframes, poses, samples), join: { durationS: it.joinDurationS, easing: it.joinEasing } };
+		return { name: ms.name, keyframes: resolveKeyframes(ms.keyframes, poses), join: { durationS: it.joinDurationS, easing: it.joinEasing } };
 	});
 	return { summary, keyframes: flattenSequence(items), items };
 }
@@ -1447,7 +1227,7 @@ export async function writeAndPlay(
 		return playFiresOnly(user, o, firesOnly);
 	}
 	// Held from the first read until the Pi's run has started (from then the Pi's own busy check keeps
-	// Return Home off), so a Play cannot start under Return Home or a droop settle, nor they under it.
+	// Return Home off), so a Play cannot start under Return Home, nor Return Home under it.
 	const owner = `play:${generateId()}`;
 	await holdArmMotion(user, owner, `Playing "${o.title}"`, PLAY_START_LEASE_MS);
 	try {
@@ -1507,10 +1287,10 @@ export async function writeAndPlay(
 			const msg = (err as Error).message ?? String(err);
 			throw new AnimateError(msg.includes('409') ? `The Pi refused to start: ${msg}` : `Replay did not start: ${msg}`, 502);
 		}
-		// Where the play leaves the arm, so the page can settle it there afterwards
-		// (afterPlay): the last pose — fire steps after it do not move the arm.
+		// Where the play leaves the arm (for the record; afterPlay only puts torque back
+		// on): the last pose — fire steps after it do not move the arm.
 		const last = [...o.keyframes].reverse().find((k) => !k.fire);
-		const end = last ? { poseId: last.poseId, target: last.target ?? last.positions } : { poseId: '', target: [] as number[] };
+		const end = last ? { poseId: last.poseId, target: last.positions } : { poseId: '', target: [] as number[] };
 		if (o.lastPlay !== false) await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
 		await audit(user, o.auditAction ?? (o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`), PLAY_TABLE[o.kind], o.id, {
 			...(o.auditExtra ?? {}),
@@ -1746,7 +1526,7 @@ export async function playbackActive(runId?: string | null): Promise<{ runId: st
 
 // ── loop plays: arrival check and chained plays (the arm wax-fill line) ─────
 
-/** Steps a servo may be off the end pose of a loop play and still count as arrived (the droop "near" band). */
+/** Steps a servo may be off the end pose of a loop play and still count as arrived. */
 export const ARRIVAL_TOL_STEPS = 150;
 /** Servos checked for arrival: 1–5. The gripper (6) stops on the cart, not at its goal. */
 const ARRIVAL_SERVOS = [1, 2, 3, 4, 5];
@@ -1754,7 +1534,7 @@ const ARRIVAL_SERVOS = [1, 2, 3, 4, 5];
 export interface AnimationEnd {
 	/** "<animation> · <last pose>" for messages. */
 	name: string;
-	/** Where the animation leaves the arm: its last pose's target (trim-free). */
+	/** Where the animation leaves the arm: its last pose (plus that step's offsets). */
 	target: number[];
 }
 
@@ -1764,7 +1544,7 @@ export async function animationEnd(ref: { kind: 'move_set' | 'sequence'; id: str
 	const poses = r.keyframes.filter((k) => !k.fire);
 	const last = poses[poses.length - 1];
 	if (!last) throw new AnimateError(`"${r.summary.name}" has no poses.`, 409);
-	return { name: `${r.summary.name} · ${last.name}`, target: (last.target ?? last.positions).map(Number) };
+	return { name: `${r.summary.name} · ${last.name}`, target: last.positions.map(Number) };
 }
 
 /** Where a move set or sequence expects the arm to BE when it starts: its first pose's target. */
@@ -1772,7 +1552,7 @@ export async function animationStart(ref: { kind: 'move_set' | 'sequence'; id: s
 	const r = ref.kind === 'sequence' ? await resolveSequence(ref.id) : await resolveMoveSet(ref.id);
 	const first = r.keyframes.find((k) => !k.fire);
 	if (!first) throw new AnimateError(`"${r.summary.name}" has no poses.`, 409);
-	return { name: `${r.summary.name} · ${first.name}`, target: (first.target ?? first.positions).map(Number) };
+	return { name: `${r.summary.name} · ${first.name}`, target: first.positions.map(Number) };
 }
 
 export interface ArrivalCheck {

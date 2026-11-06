@@ -127,15 +127,15 @@ export const sharedAnimateActions = {
 		}
 	},
 
-	// Automatic, after a play / go-to ends on its own: torque back on; droop correction for captured poses.
-	// `droop=off` (the arm wax-fill loop): torque only, no droop learning.
+	// Automatic, after a play / go-to ends on its own: torque back on if the Pi dropped it. Nothing else
+	// (droop correction removed 2026-11-06); the `droop` field older pages send is ignored.
 	settle: async ({ request, locals }: Ev) => {
 		if (!writer(locals)) return fail(401, { error: 'Unauthorized' });
 		const d = await request.formData();
 		const runId = field(d, 'runId');
 		if (!runId) return fail(400, { error: 'No run.' });
 		try {
-			return { settle: JSON.parse(JSON.stringify(await afterPlay(who(locals), runId, { droop: field(d, 'droop') !== 'off' }))) };
+			return { settle: JSON.parse(JSON.stringify(await afterPlay(who(locals), runId))) };
 		} catch (err) {
 			return failFrom(err);
 		}

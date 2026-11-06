@@ -66,17 +66,15 @@ export const MAX_PATH_S = 600;
 
 /** A timeline edit may move one joint at most this far from its pose. */
 export const MAX_OFFSET_STEPS = 1000;
-/**
- * Droop trim (pose.trim) is capped here. Under gravity an STS3215 settles
- * short of its goal by however far it takes its proportional loop to push back
- * the load: a few steps near home, but 108 (shoulder) and ~80 (elbow) at
- * extended poses (measured 2026-11-05), so the cap went 50 → 300 together with
- * the Pi's replay_settle.py MAX_OFFSET. Past it the joint is stalled or
- * blocked. A trim over 50 can push the first frame of a Save To Pi recording
- * past Control's ±50-step replay preflight; Animate plays lead in from where
- * the arm is and are not affected.
+/*
+ * No droop correction (2026-11-06, Alejandro): "the animation must match
+ * exactly what we set in the live posing; with the stiffened servos you
+ * shouldn't need it". A pose's numbers are the goals the Pi writes, nothing
+ * is added, nothing settles afterwards and nothing is learned. The trim /
+ * settle machinery that lived here (MAX_TRIM_STEPS, nextTrim, estimateTrim,
+ * settleFrames, trimFromSettle) was removed; the Pi's replay_settle.py only
+ * settles frames flagged "settle", and BIMS no longer flags any.
  */
-export const MAX_TRIM_STEPS = 300;
 
 // ── solenoids (cartridge trapdoors) ──────────────────────────────────────
 
@@ -186,7 +184,7 @@ export function stepCountLabel(kfs: { fire?: FireSpec }[]): string {
 }
 
 /**
- * Steps → resolved keyframes for the editors' previews (no droop trim): a
+ * Steps → resolved keyframes for the editors' previews: a
  * fire step keeps positions [] (buildPath holds it where the arm is). Null
  * when a pose is missing. `offsets` false leaves timeline offsets out.
  */
@@ -278,19 +276,8 @@ export interface Keyframe {
 
 export interface ResolvedKeyframe extends Keyframe {
 	name: string;
+	/** Where the arm is sent: the pose plus the keyframe's timeline offsets, exactly. */
 	positions: number[];
-	/**
-	 * Where the arm should END UP at this keyframe (pose + offsets) when
-	 * `positions` also carries a droop trim; absent when they are the same.
-	 */
-	target?: number[];
-	/**
-	 * false = the Pi plays this pose exactly and never "settles" it; anything
-	 * else = the Pi may settle onto it (settleFrames). Since 2026-11-05 every
-	 * pose settles (goal poses sagged short of their numbers), so nothing sets
-	 * false today.
-	 */
-	settle?: boolean;
 }
 
 export type MarkerKind = 'pose' | 'lead-in' | 'join' | 'fire';
@@ -307,10 +294,6 @@ export interface PathMarker {
 	positions: number[];
 	/** The pose this marker arrives at (none for the lead-in origin). */
 	poseId?: string;
-	/** Where the arm should end up here without any droop trim (pose + offsets); see ResolvedKeyframe.target. */
-	target?: number[];
-	/** false = the Pi must not settle here (ResolvedKeyframe.settle). */
-	settle?: boolean;
 	/** kind 'fire': the solenoid fired at `t` (holdS is pulse + wait). */
 	fire?: FireSpec & { pin: number };
 }
@@ -425,83 +408,11 @@ export function cleanOffsets(input: unknown, limit: number): number[] | null {
 }
 
 /**
- * Where a keyframe sends the arm: the pose, plus the keyframe's timeline
- * offsets, plus (for what is written to the Pi) the pose's droop trim.
- * Clamped to the encoder range.
+ * Where a keyframe sends the arm: the pose plus the keyframe's timeline
+ * offsets, clamped to the encoder range. Nothing else is ever added.
  */
-export function keyframePositions(pose: number[], offsets?: number[] | null, trim?: number[] | null): number[] {
-	return pose.map((p, s) => clampStep(p + (offsets?.[s] ?? 0) + (trim?.[s] ?? 0)));
-}
-
-// ── droop ────────────────────────────────────────────────────────────────
-
-/**
- * Servos whose droop is measured and trimmed: base, shoulder, elbow, wrist
- * flex, wrist roll. Not the gripper — its "shortfall" when closed on a part is
- * the grip itself, and trimming it would only squeeze harder.
- */
-export const TRIM_SERVOS = [1, 2, 3, 4, 5];
-/** A measurement is done when every trimmed servo settles this close to the pose. */
-export const TRIM_DONE_STEPS = 2;
-
-/**
- * One step of the droop measurement. The arm was commanded to `pose + trim`
- * and settled at `present`; whatever it is still short of the pose is added
- * to the trim, so next time the goal leads the pose by what gravity takes
- * off it. Returns the new trim and the residual (pose − present) it used.
- */
-export function nextTrim(pose: number[], present: number[], trim: number[]): { trim: number[]; residual: number[]; done: boolean } {
-	const residual = pose.map((p, s) => (TRIM_SERVOS.includes(s + 1) ? p - present[s] : 0));
-	const done = residual.every((r) => Math.abs(r) <= TRIM_DONE_STEPS);
-	const next = trim.map((t, s) => {
-		if (!TRIM_SERVOS.includes(s + 1)) return 0;
-		return done ? t : Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, t + residual[s]));
-	});
-	return { trim: next, residual, done };
-}
-
-/** A pose measured on the arm: its positions and the trim that made it land. */
-export interface TrimSample {
-	positions: number[];
-	trim: number[];
-}
-
-/**
- * Servos whose angle decides how much gravity pulls on the arm: shoulder lift,
- * elbow, wrist flex (ids 2–4). Base yaw and wrist roll turn the arm about a
- * vertical / its own axis and barely change the load, so poses are compared
- * on these three only.
- */
-const GRAVITY_SERVOS = [2, 3, 4];
-/** A measured pose further than this (steps, on the gravity servos) says nothing about another. */
-export const TRIM_ESTIMATE_RADIUS = 400;
-
-/**
- * Droop trim for a pose that has not been measured, from the poses that have.
- * Droop is a smooth function of the arm's shape (how far each link sticks
- * out), so nearby measured poses predict it: inverse-distance weighting over
- * every sample within TRIM_ESTIMATE_RADIUS on the gravity servos. A sample at
- * the same shape returns its own trim. Null when nothing is close enough —
- * then the pose plays untrimmed until it is visited.
- */
-export function estimateTrim(positions: number[], samples: TrimSample[]): number[] | null {
-	let wSum = 0;
-	const acc = new Array(SERVO_COUNT).fill(0);
-	for (const s of samples) {
-		if (s.trim.length !== SERVO_COUNT || s.positions.length !== SERVO_COUNT) continue;
-		let d2 = 0;
-		for (const sid of GRAVITY_SERVOS) d2 += (positions[sid - 1] - s.positions[sid - 1]) ** 2;
-		const d = Math.sqrt(d2);
-		if (d > TRIM_ESTIMATE_RADIUS) continue;
-		if (d < 1) return s.trim.map((t, i) => (TRIM_SERVOS.includes(i + 1) ? t : 0));
-		// Falls to zero at the radius, so a sample does not switch on and off abruptly.
-		const w = (1 / d ** 2) * (1 - d / TRIM_ESTIMATE_RADIUS);
-		wSum += w;
-		for (let i = 0; i < SERVO_COUNT; i++) acc[i] += w * s.trim[i];
-	}
-	if (!wSum) return null;
-	const out = acc.map((v, i) => (TRIM_SERVOS.includes(i + 1) ? Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, Math.round(v / wSum))) : 0));
-	return out.some((v) => v !== 0) ? out : null;
+export function keyframePositions(pose: number[], offsets?: number[] | null): number[] {
+	return pose.map((p, s) => clampStep(p + (offsets?.[s] ?? 0)));
 }
 
 // ── rendering ────────────────────────────────────────────────────────────
@@ -516,8 +427,6 @@ interface Node {
 	kind: MarkerKind;
 	index: number;
 	poseId?: string;
-	target?: number[];
-	settle?: boolean;
 	fire?: FireSpec & { pin: number };
 }
 
@@ -552,9 +461,7 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		label: k.name,
 		kind: (k as any).kind === 'join' ? 'join' : 'pose',
 		index,
-		poseId: k.poseId,
-		target: k.target,
-		...(k.settle === false ? { settle: false } : {})
+		poseId: k.poseId
 	});
 	const first = kfs.find((k) => !k.fire) ?? null;
 	const from = o.leadIn && o.leadIn.from.length === SERVO_COUNT ? o.leadIn.from : null;
@@ -649,8 +556,6 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		holdS: nd.holdS,
 		positions: nd.positions.map(clampStep),
 		...(nd.poseId ? { poseId: nd.poseId } : {}),
-		...(nd.target ? { target: nd.target.map(clampStep) } : {}),
-		...(nd.settle === false ? { settle: false } : {}),
 		...(nd.fire ? { fire: nd.fire } : {})
 	}));
 	return { rateHz: rate, t: tOut, goal, markers, durationS: round4(total) };
@@ -736,50 +641,6 @@ export interface ComposeOptions {
 	extras?: Record<string, unknown>;
 }
 
-/** What a settle-flagged frame carries, so the Pi can settle there and echo the pose back. */
-export interface SettleFlag {
-	frame: number;
-	pose: string;
-	target: number[];
-}
-
-/**
- * Frames where the Pi's closed-loop replay (services/robot-arm/src/arm/
- * replay_settle.py) should settle the arm ON the pose: the arrival at every
- * held pose (the hold is the time it has to do it in) and the last frame.
- * Only poses can be settled — the lead-in origin has none — and a stop that
- * is not held gives the Pi no window, so it is left alone.
- */
-export function settleFrames(p: RenderedPath): SettleFlag[] {
-	const last = p.goal.length - 1;
-	const out = new Map<number, SettleFlag>();
-	// Fire steps after the last pose keep the arm on it, so that pose still settles at the end.
-	const lastPose = p.markers.reduce((acc, m, i) => (m.poseId ? i : acc), -1);
-	p.markers.forEach((m, i) => {
-		// Goal poses are played exactly as commanded; settling would push the arm past where the operator saw it.
-		if (!m.poseId || m.settle === false) return;
-		const isLast = i === lastPose;
-		if (m.holdS <= 0 && !isLast) return;
-		const frame = isLast && m.holdS <= 0 ? last : Math.min(last, Math.round(m.t * p.rateHz));
-		out.set(frame, { frame, pose: m.poseId, target: m.target ?? m.positions });
-	});
-	return [...out.values()].sort((a, b) => a.frame - b.frame);
-}
-
-/**
- * The droop trim a pose needs, from what the Pi's settle pass ended up
- * writing to land on `target`: written − target on servos 1–5, capped.
- * Null when the Pi reported nothing usable.
- */
-export function trimFromSettle(written: unknown, target: unknown): number[] | null {
-	if (!Array.isArray(written) || !Array.isArray(target) || written.length !== SERVO_COUNT || target.length !== SERVO_COUNT) return null;
-	return written.map((w, i) => {
-		const d = Number(w) - Number(target[i]);
-		if (!Number.isFinite(d) || !TRIM_SERVOS.includes(i + 1)) return 0;
-		return Math.max(-MAX_TRIM_STEPS, Math.min(MAX_TRIM_STEPS, Math.round(d)));
-	});
-}
-
 /** What a fire frame carries: the Pi pulses `pin` for `ms` at this frame's time. */
 export interface FireFlag {
 	frame: number;
@@ -820,7 +681,6 @@ export function fireFrames(p: RenderedPath): FireFlag[] {
 /** The dense path as a recording the Pi replays (header / frame / footer JSONL). */
 export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jsonl: string; frames: number; durationS: number; fires: number } {
 	const lines: string[] = [];
-	const flags = new Map(settleFrames(p).map((f) => [f.frame, f]));
 	const fires = fireFrames(p);
 	const fireAt = new Map(fires.map((f) => [f.frame, f]));
 	lines.push(
@@ -842,11 +702,9 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 		})
 	);
 	for (let i = 0; i < p.goal.length; i++) {
-		const f = flags.get(i);
 		const fire = fireAt.get(i);
-		const frame: Record<string, unknown> = f
-			? { event: 'frame', t: p.t[i], goal: p.goal[i], settle: true, pose: f.pose, target: f.target }
-			: { event: 'frame', t: p.t[i], goal: p.goal[i] };
+		// Plain frames only: no "settle" flags, so the Pi replays the goals exactly (2026-11-06).
+		const frame: Record<string, unknown> = { event: 'frame', t: p.t[i], goal: p.goal[i] };
 		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid };
 		lines.push(JSON.stringify(frame));
 	}

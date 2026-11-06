@@ -2,7 +2,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
-import { clearPoseDroop, duplicatePose, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, solenoidStatus, updateMoveSet, updatePose } from '$lib/server/robot-arm-animation';
+import { duplicatePose, getMoveSet, listPoses, playMoveSet, playbackActive, readArm, saveToPi, solenoidStatus, updateMoveSet, updatePose } from '$lib/server/robot-arm-animation';
 import { friendlyName, stepCountLabel, type Keyframe } from '$lib/robot-arm/animation';
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
@@ -115,19 +115,6 @@ export const actions: Actions = {
 				keyframes: [...keyframes.slice(0, step + 1), copy, ...keyframes.slice(step + 1)]
 			});
 			return { success: `Duplicated as "${friendlyName(p.name)}" and saved: "${m.name}" has ${stepCountLabel(m.keyframes)}.`, duplicatedStep: step + 1 };
-		} catch (err) {
-			return failFrom(err);
-		}
-	},
-
-	clearDroop: async ({ request, locals }) => {
-		if (!locals.user) return fail(401, { error: 'Unauthorized' });
-		requirePermission(locals.user, 'manufacturing:write');
-		const id = field(await request.formData(), 'poseId');
-		if (!id) return fail(400, { error: 'No pose.' });
-		try {
-			await clearPoseDroop(who(locals), id);
-			return { success: 'Droop trim cleared.' };
 		} catch (err) {
 			return failFrom(err);
 		}
