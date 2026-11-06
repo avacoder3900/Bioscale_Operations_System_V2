@@ -26255,3 +26255,7 @@ Fill or a loop holds the robot; Recover ends a Dry Fill / loop (resetLoop), forc
 deletes the maintenance run, so the page forgets its Jog run and tip state), restarts the server only when
 hung/unreachable (shift-click forces). The old static Robot box in the Pickers row is still there.
 - svelte-check 14 errors (baseline, none in touched files). Not driven against a robot yet.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/5TfGqkRmJQM8J8b8FgHbE1eVuLzL (GitHub status success)
+Source: branch master @ commit 2de8a5c5
+Retrieve this exact code: git checkout 2de8a5c5 (also branch feat/stage-cal-robot-bar)
+What this deployment is for: Identify / Lights / Home / Recover and the robot menu on the Stage Calibration page.
