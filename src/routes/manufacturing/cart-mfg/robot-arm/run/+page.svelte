@@ -415,7 +415,7 @@
 						}
 						if (fillBroke) break;
 					}
-					note(`${tag}: ${rehearsal ? `barcode ${cycle.barcode} read (rehearsal: not checked, not changed)` : `cart ${cycle.barcode} goes on the wax run`} — telling the OT-2 to fill.`);
+					note(`${tag}: ${rehearsal || data.settings.scanPresenceOnly ? `barcode ${cycle.barcode} read (${rehearsal ? "rehearsal" : "barcode present only"}: not checked, not changed)` : `cart ${cycle.barcode} goes on the wax run`} — telling the OT-2 to fill.`);
 					const r = await post('cycleDecide', { loopId: loopId });
 					if (!r.ok) {
 						await fail('decide', r.error);
@@ -1316,6 +1316,11 @@
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
 					<span>Chain Withdraw And Next Grab</span>
+				</label>
+				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)"
+					title="The scan only asks whether a barcode is there: any barcode passes (unknown cart, bucket label, any status), nothing is looked up, no cart is put on the wax run or recorded as wax-filled. Only a read of nothing takes the fail route. The rehearsal protocol always works this way; this box applies it to the production protocol too (wax is still dispensed).">
+					<input type="checkbox" name="scanPresenceOnly" checked={data.settings.scanPresenceOnly} class="mt-0.5" />
+					<span>Barcode Present Only <span class="text-[11px]">(don't check the cart, record nothing)</span></span>
 				</label>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="useArmLink" checked={data.settings.useArmLink} class="mt-0.5" />

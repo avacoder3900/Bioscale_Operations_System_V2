@@ -62,6 +62,14 @@ const armWaxFillSettingsSchema = new Schema(
 		 */
 		useArmLink: { type: Boolean, default: true },
 		/**
+		 * Barcode present only (Alejandro, 2026-11-06): the scan only asks whether a
+		 * barcode is there. Any barcode passes — unknown cart, bucket label, any
+		 * status — nothing is looked up, the cart is not put on the wax run and
+		 * not advanced; only an empty read takes the fail route. The rehearsal
+		 * protocol always behaves this way; this box applies it to any protocol.
+		 */
+		scanPresenceOnly: { type: Boolean, default: false },
+		/**
 		 * Default conveyor belt pulse (BCM 22 on the arm Pi), ms. Set from the Robot
 		 * Arm Conveyor tab's Save button (2026-11-04); kept here because the belt
 		 * controls are moving into Wax fill.

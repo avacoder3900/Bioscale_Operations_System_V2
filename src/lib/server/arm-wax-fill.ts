@@ -260,6 +260,12 @@ export interface SettingsView {
 	chainGrab: boolean;
 	/** Robot calls and the loop's instructions go through the arm Pi's cable link when it is up (2026-11-06). */
 	useArmLink: boolean;
+	/**
+	 * Barcode present only (2026-11-06): the scan only asks whether a barcode is
+	 * there — nothing is looked up, no cart is put on the wax run or advanced;
+	 * only an empty read fails. The rehearsal protocol does this regardless.
+	 */
+	scanPresenceOnly: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
 	failAnimation: AnimationRef | null;
@@ -281,6 +287,7 @@ function settingsView(d: any): SettingsView {
 		channels: { c: d?.channels?.c === true, b: d?.channels?.b === true, a: d?.channels?.a !== false },
 		chainGrab: d?.chainGrab !== false,
 		useArmLink: d?.useArmLink !== false,
+		scanPresenceOnly: d?.scanPresenceOnly === true,
 		grabAnimation: animRef(d?.grabAnimation),
 		withdrawAnimation: animRef(d?.withdrawAnimation),
 		failAnimation: animRef(d?.failAnimation),
@@ -294,6 +301,16 @@ export async function getSettings(): Promise<SettingsView> {
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
 
+/**
+ * Whether the scan only asks that a barcode is THERE (Alejandro, 2026-11-06):
+ * any barcode passes, nothing is looked up, the cart is not put on the wax run
+ * and not advanced; only an empty read takes the fail route. Always so on the
+ * rehearsal protocol; on any protocol when Setup's "Barcode Present Only" is on.
+ */
+export function scanPresenceOnly(settings: Pick<SettingsView, 'scanPresenceOnly'>, protocol: Pick<ProtocolView, 'rehearsal'> | null | undefined): boolean {
+	return !!protocol?.rehearsal || settings.scanPresenceOnly;
+}
+
 export async function saveSetup(
 	user: User,
 	input: {
@@ -304,6 +321,7 @@ export async function saveSetup(
 		channels?: Record<ChannelKey, boolean>;
 		chainGrab?: boolean;
 		useArmLink?: boolean;
+		scanPresenceOnly?: boolean;
 	}
 ): Promise<SettingsView> {
 	await connectDB();
@@ -315,6 +333,7 @@ export async function saveSetup(
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
 	const chainGrab = input.chainGrab !== false;
 	const useArmLink = input.useArmLink !== false;
+	const presenceOnly = input.scanPresenceOnly === true;
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
 	const cartPosition = input.cartPosition === null || input.cartPosition === undefined || String(input.cartPosition).trim() === '' ? 1 : Math.round(num(input.cartPosition, 'Cart position'));
@@ -323,7 +342,7 @@ export async function saveSetup(
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, chainGrab, useArmLink, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, chainGrab, useArmLink, scanPresenceOnly: presenceOnly, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -335,7 +354,17 @@ export async function saveSetup(
 		channels,
 		chainGrab,
 		useArmLink,
-		before: { robotId: before.robotId, cartPosition: before.cartPosition, waxSourceLot: before.waxSourceLot, testMode: before.testMode, channels: before.channels, chainGrab: before.chainGrab, useArmLink: before.useArmLink }
+		scanPresenceOnly: presenceOnly,
+		before: {
+			robotId: before.robotId,
+			cartPosition: before.cartPosition,
+			waxSourceLot: before.waxSourceLot,
+			testMode: before.testMode,
+			channels: before.channels,
+			chainGrab: before.chainGrab,
+			useArmLink: before.useArmLink,
+			scanPresenceOnly: before.scanPresenceOnly
+		}
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
 }
@@ -1307,6 +1336,11 @@ export function readiness(
 				'Any cart with a barcode is fine: the scan only asks whether a barcode is there (its status, bucket or existence in the system is NOT checked, and nothing is looked up or changed); only a read of nothing takes the fail route. The cart stays as it was and nothing is recorded as wax-filled. ' +
 				'Deploy the production stage protocol (Setup → Protocol on the robot) before a real fill.'
 		);
+	} else if (settings.robotId && settings.scanPresenceOnly) {
+		notes.push(
+			'Setup: BARCODE PRESENT ONLY — the scan only asks whether a barcode is there (the cart\'s status, bucket or existence in the system is NOT checked, and nothing is looked up or changed); only a read of nothing takes the fail route. ' +
+				'Wax IS dispensed, but no cart is put on the wax run, drawn from its bucket or recorded as wax-filled. Untick it in Setup for a production fill.'
+		);
 	}
 	if (settings.robotId) {
 		notes.push(
@@ -1328,7 +1362,7 @@ export function readiness(
 	}
 	if (settings.failAnimation)
 		notes.push(
-			`If the scan fails — ${protocol?.rehearsal ? 'nothing read (the rehearsal accepts any barcode)' : 'nothing read, or the cart is not a backed cart'} — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`
+			`If the scan fails — ${scanPresenceOnly(settings, protocol) ? `nothing read (${protocol?.rehearsal ? 'the rehearsal' : 'Barcode Present Only'} accepts any barcode)` : 'nothing read, or the cart is not a backed cart'} — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`
 		);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
 	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
@@ -1618,9 +1652,9 @@ export async function startLoop(
 		activeLoop(),
 		settings.robotId ? checkRobotConflict(settings.robotId) : Promise.resolve(null)
 	]);
-	if (startAt === 'decide' && !protocol?.rehearsal) {
+	if (startAt === 'decide' && !scanPresenceOnly(settings, protocol)) {
 		// The same checks the scan applies, before the OT-2 run is created
-		// (the rehearsal checks nothing: a typed barcode is enough, like a read one).
+		// (barcode-present-only checks nothing: a typed barcode is enough, like a read one).
 		const problem = await cartScanProblem(startBarcode, settings.testMode);
 		if (problem) throw new ArmWaxFillError(problem, 409);
 	}
@@ -1684,8 +1718,10 @@ export async function startLoop(
 			{
 				_id: generateId(),
 				body: protocol.rehearsal
-					? `Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}); carts are checked only — none is put on this run, drawn from its bucket or advanced.`
-					: `Robot-arm wax fill: one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}) at the taught stage location; one tip for the whole loop, parked in the wax between carts.`,
+					? `Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}); carts are only read at the scan — none is put on this run, drawn from its bucket or advanced.`
+					: settings.scanPresenceOnly
+						? `Robot-arm wax fill, BARCODE PRESENT ONLY (Setup): one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}) at the taught stage location; carts are only read at the scan — none is put on this run, drawn from its bucket or advanced, although wax is dispensed.`
+						: `Robot-arm wax fill: one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}) at the taught stage location; one tip for the whole loop, parked in the wax between carts.`,
 				phase: 'wax_run',
 				author: opRef(user),
 				createdAt: now
@@ -2398,14 +2434,16 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
 	await patchCycle(loopId, cycle.index, { scanReadAt: new Date() });
 	await audit(user, 'arm_wax_fill.scan_read', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode: barcode || null, raw: raw.slice(0, 200) });
 	if (!barcode) return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', 'the scanner read nothing') };
-	// REHEARSAL (Alejandro, 2026-11-06): the scan only asks whether a barcode is
-	// there. Whatever it reads passes — an unknown cart, a bucket label, a cart
-	// at any status — and nothing is looked up or changed. Only an empty read fails.
-	const rehearsal = !!(await protocolFor(String(loop.robot?._id ?? '')))?.rehearsal;
-	const problem = rehearsal ? null : await cartScanProblem(barcode, (await getSettings()).testMode);
+	// BARCODE PRESENT ONLY (Alejandro, 2026-11-06; the rehearsal, or Setup's box):
+	// the scan only asks whether a barcode is there. Whatever it reads passes —
+	// an unknown cart, a bucket label, a cart at any status — and nothing is
+	// looked up or changed. Only an empty read fails.
+	const [settings, protocol] = await Promise.all([getSettings(), protocolFor(String(loop.robot?._id ?? ''))]);
+	const presenceOnly = scanPresenceOnly(settings, protocol);
+	const problem = presenceOnly ? null : await cartScanProblem(barcode, settings.testMode);
 	if (problem) return { pending: false, loop: await enterFailRoute(user, loopId, cycle, 'scan', problem, { barcode }) };
 	await patchCycle(loopId, cycle.index, { step: 'decide', barcode });
-	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode, rehearsal, checked: !rehearsal });
+	await audit(user, 'arm_wax_fill.cycle_scan', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, barcode, rehearsal: !!protocol?.rehearsal, presenceOnly, checked: !presenceOnly });
 	return { pending: false, loop: (await getLoop(loopId))! };
 }
 
@@ -2442,9 +2480,14 @@ export async function cycleDecide(user: User, loopId: string): Promise<LoopView>
 	const protocol = await protocolFor(String(loop.robot?._id ?? ''));
 	const rehearsal = !!protocol?.rehearsal;
 	const robot = await loopRobot(loop);
-	if (rehearsal) {
-		// REHEARSAL: the cart was checked at the scan and that is all that happens to it.
-		await audit(user, 'arm_wax_fill.rehearsal_cart', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId: loop.waxRunId ?? null, barcode: cycle.barcode, touched: false });
+	if (scanPresenceOnly(settings, protocol)) {
+		// REHEARSAL, or Setup's Barcode Present Only: the barcode was read at the scan and that is all that happens to the cart.
+		await audit(user, rehearsal ? 'arm_wax_fill.rehearsal_cart' : 'arm_wax_fill.presence_only_cart', 'arm_wax_fill_runs', loopId, {
+			cycle: cycle.index,
+			waxRunId: loop.waxRunId ?? null,
+			barcode: cycle.barcode,
+			touched: false
+		});
 	} else {
 		try {
 			await attachCart(user, loop, String(loop.waxRunId), cycle.barcode, settings.testMode, loop.cartPosition);
