@@ -26352,3 +26352,32 @@ Deployment: production — via push of master (Vercel GitHub integration)
 Source: branch feat/screen-gain8-era @ commit (this commit; see git log feat/screen-gain8-era)
 Retrieve this exact code: git checkout feat/screen-gain8-era
 What this deployment is for: keep SCREEN optics trends valid across the v106 -> v107 gain change
+
+================================================================================
+2026-11-06 — feat/arm-motion-log — Robot arm Movement Log; Change Log its own bubble; unit test results on Tests
+================================================================================
+Alejandro wanted every arm movement, for every servo, kept, so a vague "it kept going back and forth in the
+last hour" can be checked; the Change Log as its own Maintenance bubble like Tests; and the automated
+(non-physical) arm unit tests on the Tests page as passed/total.
+- Movement Log: robotArmFetch (robot-arm-client.ts) hands every POST to recordArmMove
+  (src/lib/server/robot-arm-move-log.ts). describeArmMove ($lib/robot-arm/move-log.ts, pure) decides what is a
+  movement: servo move / jog (one row per servo command, each jog chunk too), hold, Cartesian jog, torque on/off,
+  play (the recording's name; the Pi drives its frames), leader arm, record, task, Stop. Reads, cameras, GPIO,
+  conveyor and gains are not movements. Rows go to robot_arm_moves (model robot-arm-move.ts, immutable, no TTL)
+  after the Pi answers or fails (ok/error kept). Who and from which page: hooks.server.ts runs every request in
+  withArmActor (AsyncLocalStorage), so no route passes the user down. Rows are never written under vitest.
+- Page Maintenance -> Movement Log (maintenance/moves): Last Hour / Last 24 Hours / Last 7 Days / All, All Servos /
+  Servo 1-6, per servo Moves + Direction Changes (summarizeServoMoves), then every row with seconds.
+  GET /api/robot-arm/moves?minutes=&servo= (agent key) returns the same rows + summary.
+- Change Log moved from the Maintenance page into maintenance/changes; Maintenance is now bubbles only.
+- Unit tests: scripts/report-arm-unit-tests.ts (npm run test:arm-report) runs every unit test file with
+  robot-arm in its path (no DB passed to the tests) and stores robot_arm_unit_runs (robot-arm-unit-run.ts).
+  The Tests page shows the newest as "358/358 Passed" with a row per area; unit runs also appear in the Test
+  Log. It is not automatic: run it after arm changes. First row stored at c73b87f9: 358/358.
+- robot-arm-url-invariant.test.ts (c) failed on master: the camera panel, connection panel and arm layout no
+  longer print ROBOT_ARM_BASE_URL (2026-11-04 no-explanatory-text pass). It now checks the same thing on a fixture.
+- Indexes: ensure-indexes --apply created robot_arm_moves at:-1, servo:1+at:-1 and robot_arm_unit_runs at:-1
+  (only those were missing).
+Not covered: movements the Pi makes on its own (Pi-local scripts, the leader arm's frames) beyond the start row.
+npm run check: 13 errors, none in touched files (master baseline). vitest robot-arm 358/358.
+Worked in worktree ../Bioscale_V2-wt-motion-log.
