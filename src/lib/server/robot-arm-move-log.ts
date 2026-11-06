@@ -12,6 +12,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { connectDB } from './db/connection';
 import { RobotArmMove } from './db/models';
 import { describeArmMove, moveLine, type ArmMoveKind } from '$lib/robot-arm/move-log';
+import { groupKindQuery, moveGroup } from '$lib/robot-arm/move-types';
 
 interface ArmActor {
 	user: { _id: string; username: string } | null;
@@ -80,26 +81,58 @@ export async function recordArmMove(
 	}
 }
 
+export interface ArmMoveFilter {
+	sinceMinutes?: number | null;
+	servo?: number | null;
+	device?: 'arm' | 'ot2' | null;
+	/** A Movement Log type group id ("ot2:liquid"); picks its device too. */
+	group?: string | null;
+	/** One exact kind ("aspirate"); wins over the group. */
+	kind?: string | null;
+}
+
+function moveQuery(o: ArmMoveFilter): Record<string, unknown> {
+	const q: Record<string, unknown> = {};
+	const g = moveGroup(o.group);
+	const device = o.servo ? 'arm' : (g?.device ?? o.device ?? null);
+	// Rows from before 2026-11-06 carry no device: they are the arm's. A servo means the arm.
+	if (device === 'ot2') q.device = 'ot2';
+	else if (device === 'arm') q.device = { $ne: 'ot2' };
+	if (o.kind) q.kind = o.kind;
+	else if (g) q.kind = groupKindQuery(g);
+	if (o.sinceMinutes && o.sinceMinutes > 0) q.at = { $gte: new Date(Date.now() - o.sinceMinutes * 60_000) };
+	if (o.servo) q.$or = [{ servo: o.servo }, { [`goals.${o.servo}`]: { $exists: true } }, { servo: null, goals: null }];
+	return q;
+}
+
 /**
  * Newest first; `sinceMinutes` and `servo` narrow it. A servo also matches
  * whole-arm rows: the ones that set it (hold, Cartesian jog) and the ones
  * that drive every servo (play, leader arm, task, torque, Stop). `device`
- * picks the arm or the OT-2 (Opentrons rows, 2026-11-06).
+ * picks the arm or the OT-2 (Opentrons rows, 2026-11-06); `group` and `kind`
+ * a type ($lib/robot-arm/move-types). `limit` null = every row.
  */
-export async function listArmMoves(
-	o: { sinceMinutes?: number | null; servo?: number | null; device?: 'arm' | 'ot2' | null; limit?: number } = {}
-): Promise<ArmMoveRow[]> {
+export async function listArmMoves(o: ArmMoveFilter & { limit?: number | null } = {}): Promise<ArmMoveRow[]> {
 	await connectDB();
-	const q: Record<string, unknown> = {};
-	// Rows from before 2026-11-06 carry no device: they are the arm's. A servo means the arm.
-	if (o.device === 'ot2') q.device = 'ot2';
-	else if (o.device === 'arm' || o.servo) q.device = { $ne: 'ot2' };
-	if (o.sinceMinutes && o.sinceMinutes > 0) q.at = { $gte: new Date(Date.now() - o.sinceMinutes * 60_000) };
-	if (o.servo) q.$or = [{ servo: o.servo }, { [`goals.${o.servo}`]: { $exists: true } }, { servo: null, goals: null }];
-	const rows = await RobotArmMove.find(q)
-		.sort({ at: -1 })
-		.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000))
+	let find = RobotArmMove.find(moveQuery(o)).sort({ at: -1 });
+	if (o.limit !== null) find = find.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000));
+	const rows = await find
 		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart')
 		.lean();
 	return JSON.parse(JSON.stringify(rows));
+}
+
+/** How many rows match, for "Showing 100 of 4210". */
+export async function countArmMoves(o: ArmMoveFilter = {}): Promise<number> {
+	await connectDB();
+	return RobotArmMove.countDocuments(moveQuery(o));
+}
+
+/** Every kind in the log per device, for the type filter. */
+export async function listMoveKinds(): Promise<{ device: 'arm' | 'ot2'; kind: string; count: number }[]> {
+	await connectDB();
+	const rows: { _id: { device: string; kind: string }; count: number }[] = await RobotArmMove.aggregate([
+		{ $group: { _id: { device: { $cond: [{ $eq: ['$device', 'ot2'] }, 'ot2', 'arm'] }, kind: '$kind' }, count: { $sum: 1 } } }
+	]);
+	return rows.map((r) => ({ device: r._id.device as 'arm' | 'ot2', kind: r._id.kind, count: r.count }));
 }
