@@ -28,6 +28,17 @@ scripts/install_ot2_link_router.py so this module never imports app.py):
     GET  /ot2/loop/events?limit=         (key)  announcements and served instructions, newest first, with timestamps
     GET  /ot2/calls?limit=               (key)  journal of every call this module made to the robot (ms per hop)
 
+  The barcode over the cable (2026-11-06): the OT-2's bridge daemon (1.7.0, ARM_PI_URLS set)
+  long-polls the scan requests here and posts the barcode back over the cable.
+    POST /ot2/loop/scanner-hello         (key or robot)  the daemon says it is there (every 30 s)
+    GET  /ot2/loop/scan-request?wait_s=  (key or robot)  the daemon's long-poll: {req_id, run_id, cart} or 204
+    POST /ot2/loop/scan                  (key or robot)  the daemon's result {req_id, run_id, cart, barcode, raw, error, attempts}
+    GET  /ot2/loop/scan?run_id=&cart=&wait_s=  (key)     BIMS's long-poll for that result; while it waits the
+                                                 request is raised the moment the run reaches ARM AT_SCAN <cart>
+                                                 (the protocol's announcement, or this module's own run read)
+  The instruction file over the cable (2026-11-06):
+    POST /ot2/loop/file {json}           (key)  write /data/arm_loop.json on the robot over SSH (cable first)
+
 The robot is trusted without a key only from its own addresses (the cable's
 169.254/16, IPv6 link-local, or its known LAN address), and only on the two
 protocol routes. Nothing here moves the arm or touches the servo bus.
@@ -40,6 +51,7 @@ from __future__ import annotations
 
 import http.client
 import inspect
+import shlex
 import ipaddress
 import json
 import os
@@ -70,6 +82,9 @@ PROBE_TIMEOUT_S = 1.5
 CHECK_UP_S = float(os.environ.get("OT2_LINK_CHECK_UP_S", "15"))
 CHECK_DOWN_S = float(os.environ.get("OT2_LINK_CHECK_DOWN_S", "3"))
 MAX_WAIT_S = 25.0
+SSH_KEY = os.path.expanduser(os.environ.get("OT2_SSH_KEY", "~/.ssh/id_rsa_ot2"))
+ARM_LOOP_FILE = "/data/arm_loop.json"
+SCANNER_FRESH_S = 90.0
 LINK_LOCAL_V4 = ipaddress.ip_network("169.254.0.0/16")
 
 # Injected by the installer: app.py's require_api_key(x_api_key). None = open (dev).
@@ -202,6 +217,7 @@ class Link:
                 "robot": dict(self.robot),
                 "self": dict(self.self_addrs),
                 "port": PORT,
+                "scanner": SCANS.scanner_view(),
             }
 
     def _persist(self) -> None:
@@ -343,7 +359,7 @@ class Link:
         return self.snapshot()
 
     # ---- requests ----
-    def request(self, method: str, path: str, *, content: Optional[bytes] = None, json_body: Any = None, timeout_s: float = 10.0, by: str = "bims") -> tuple[httpx.Response, str, float]:
+    def request(self, method: str, path: str, *, content: Optional[bytes] = None, json_body: Any = None, timeout_s: float = 10.0, by: str = "bims", content_type: Optional[str] = None) -> tuple[httpx.Response, str, float]:
         """One request to the robot over the best path; a cable failure falls back to the LAN once."""
         tried: list[str] = []
         last_err: Optional[Exception] = None
@@ -354,7 +370,8 @@ class Link:
             tried.append(name)
             t0 = time.perf_counter()
             try:
-                r = self.client.request(method, base + path, content=content, json=json_body, timeout=timeout_s, headers={"Content-Type": "application/json"} if (content or json_body is not None) else None)
+                hdrs = {"Content-Type": content_type or "application/json"} if (content or json_body is not None) else None
+                r = self.client.request(method, base + path, content=content, json=json_body, timeout=timeout_s, headers=hdrs)
                 ms = (time.perf_counter() - t0) * 1000
                 CALLS.add(method=method, path=path, status=r.status_code, ms=round(ms, 1), link=name, by=by)
                 return r, name, ms
@@ -513,8 +530,10 @@ async def proxy(path: str, request: Request, timeout_s: float = Query(10.0, ge=0
     qs = "&".join(f"{k}={v}" for k, v in request.query_params.multi_items() if k != "timeout_s")
     target = "/" + path + (f"?{qs}" if qs else "")
 
+    ctype = request.headers.get("content-type")
+
     def go():
-        return LINK.request(request.method, target, content=body or None, timeout_s=timeout_s)
+        return LINK.request(request.method, target, content=body or None, timeout_s=timeout_s, content_type=ctype)
 
     r, link, ms = await run_in_threadpool(go)
     return Response(
@@ -592,6 +611,8 @@ class Announce(BaseModel):
 @router.post("/loop/announce", dependencies=[Depends(_key_or_robot)])
 async def loop_announce(body: Announce, request: Request) -> dict:
     row = BROKER.event("announce", loop=body.loop, marker=body.kind.upper(), cart=body.cart, run_id=body.run_id, note=body.note, peer=request.client.host if request.client else None)
+    if body.kind.upper() == "AT_SCAN" and body.cart and body.run_id:
+        SCANS.request(str(body.run_id), int(body.cart), why="announce")
     return {"ok": True, "at": row["at"]}
 
 
@@ -605,3 +626,186 @@ async def loop_state() -> dict:
 @router.get("/loop/events", dependencies=[Depends(_key)])
 async def loop_events(limit: int = Query(200, ge=1, le=2000)) -> dict:
     return {"events": BROKER.last_events(limit)}
+
+
+# ---------------------------------------------------------------- the barcode over the cable
+
+class Scans:
+    """Scan requests for the OT-2's daemon and its results, keyed by (run, cart)."""
+
+    def __init__(self) -> None:
+        self.cond = threading.Condition()
+        self.pending: deque = deque()
+        self.requested: dict = {}
+        self.results: dict = {}
+        self.hello: Optional[dict] = None
+
+    def scanner_view(self) -> Optional[dict]:
+        h = self.hello
+        if not h:
+            return None
+        age = _now() - h["at"]
+        return {"version": h.get("version"), "at": h["at"], "age_s": round(age, 1), "fresh": age < SCANNER_FRESH_S}
+
+    def say_hello(self, info: dict) -> None:
+        self.hello = {**info, "at": _now()}
+
+    def request(self, run_id: str, cart: int, why: str) -> Optional[str]:
+        key = (run_id, cart)
+        with self.cond:
+            if key in self.requested or key in self.results:
+                return None
+            req = {"req_id": f"{run_id[:8]}-{cart}-{int(_now() * 1000) % 100000}", "run_id": run_id, "cart": cart, "at": _now(), "why": why}
+            self.requested[key] = req
+            self.pending.append(req)
+            self.cond.notify_all()
+        BROKER.event("scan_requested", run_id=run_id, cart=cart, why=why, req_id=req["req_id"])
+        return req["req_id"]
+
+    def next_request(self, wait_s: float) -> Optional[dict]:
+        deadline = time.monotonic() + wait_s
+        with self.cond:
+            while not self.pending:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                self.cond.wait(min(left, 1.0))
+            return self.pending.popleft()
+
+    def put_result(self, res: dict) -> None:
+        key = (str(res.get("run_id")), int(res.get("cart") or 0))
+        with self.cond:
+            self.results[key] = {**res, "at": _now()}
+            req = self.requested.get(key)
+            self.cond.notify_all()
+        took = round((_now() - req["at"]) * 1000) if req else None
+        BROKER.event("scan_result", run_id=key[0], cart=key[1], barcode=res.get("barcode"), error=res.get("error"), attempts=res.get("attempts"), ms_from_request=took)
+
+    def result(self, run_id: str, cart: int) -> Optional[dict]:
+        with self.cond:
+            return self.results.get((run_id, cart))
+
+    def wait_result(self, run_id: str, cart: int, seconds: float) -> Optional[dict]:
+        deadline = time.monotonic() + seconds
+        with self.cond:
+            while True:
+                r = self.results.get((run_id, cart))
+                if r:
+                    return r
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    return None
+                self.cond.wait(min(left, 0.3))
+
+
+SCANS = Scans()
+
+
+class Hello(BaseModel):
+    version: Optional[str] = None
+    device: Optional[str] = None
+
+
+@router.post("/loop/scanner-hello", dependencies=[Depends(_key_or_robot)])
+async def scanner_hello(body: Hello, request: Request) -> dict:
+    SCANS.say_hello({"version": body.version, "device": body.device, "peer": request.client.host if request.client else None})
+    return {"ok": True}
+
+
+@router.get("/loop/scan-request", dependencies=[Depends(_key_or_robot)])
+async def scan_request(wait_s: float = Query(20.0, ge=0.0, le=MAX_WAIT_S)) -> Response:
+    req = await run_in_threadpool(SCANS.next_request, wait_s)
+    if req is None:
+        return Response(status_code=204)
+    return Response(content=json.dumps(req), media_type="application/json")
+
+
+class ScanResult(BaseModel):
+    req_id: Optional[str] = None
+    run_id: str
+    cart: int
+    barcode: Optional[str] = None
+    raw: Optional[str] = None
+    error: Optional[str] = None
+    attempts: Optional[int] = None
+    scan_ms: Optional[float] = None
+    pause: Optional[str] = None
+
+
+@router.post("/loop/scan", dependencies=[Depends(_key_or_robot)])
+async def scan_result(body: ScanResult) -> dict:
+    SCANS.put_result(body.model_dump())
+    return {"ok": True}
+
+
+@router.get("/loop/scan", dependencies=[Depends(_key)])
+async def scan_wait(run_id: str = Query(min_length=1), cart: int = Query(ge=1), wait_s: float = Query(20.0, ge=0.0, le=MAX_WAIT_S)) -> dict:
+    """BIMS's long-poll for (run, cart)'s barcode. While waiting, the run is read every
+    ~0.3 s so the scan is requested the moment the run pauses at ARM AT_SCAN <cart>,
+    whether or not the protocol announced it."""
+
+    def go():
+        t0 = time.perf_counter()
+        status = None
+        at_scan = False
+        while True:
+            r = SCANS.result(run_id, cart)
+            if r:
+                return {"result": r, "run_status": status, "at_scan": True, "requested": True, "waited_ms": round((time.perf_counter() - t0) * 1000, 1)}
+            try:
+                rd = read_pause(run_id, by="scan-wait")
+                status = rd["status"]
+                p = rd.get("pause") or {}
+                at_scan = p.get("kind") == "AT_SCAN" and p.get("cart") == cart
+                last = rd.get("last") or {}
+                if not at_scan and last.get("kind") == "NO_INSTRUCTION" and (rd.get("prev") or {}).get("kind") == "AT_SCAN":
+                    at_scan = (rd.get("prev") or {}).get("cart") == cart
+            except HTTPException:
+                pass
+            if at_scan:
+                SCANS.request(run_id, cart, why="run read")
+            if status in TERMINAL:
+                return {"result": None, "run_status": status, "at_scan": False, "requested": (run_id, cart) in SCANS.requested, "waited_ms": round((time.perf_counter() - t0) * 1000, 1)}
+            if (time.perf_counter() - t0) >= wait_s:
+                return {"result": None, "run_status": status, "at_scan": at_scan, "requested": (run_id, cart) in SCANS.requested, "waited_ms": round((time.perf_counter() - t0) * 1000, 1)}
+            got = SCANS.wait_result(run_id, cart, 0.3)
+            if got:
+                continue
+
+    return await run_in_threadpool(go)
+
+
+# ---------------------------------------------------------------- the instruction file over the cable
+
+class LoopFile(BaseModel):
+    json_body: dict = Field(alias="json")
+
+
+def write_robot_file(data: dict) -> dict:
+    """Write /data/arm_loop.json on the robot over SSH (the cable's address first, then the LAN)."""
+    payload = json.dumps(data)
+    tried = []
+    snap = LINK.snapshot()
+    hosts = [h for h in ((snap["cable"]["addr"] if snap["cable"]["up"] else None), (snap["lan"]["addr"] if snap["lan"]["up"] else None)) if h]
+    for host in hosts:
+        t0 = time.perf_counter()
+        tmp = ARM_LOOP_FILE + ".tmp"
+        cmd = ["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", "-o", "ConnectTimeout=3", "-o", "StrictHostKeyChecking=accept-new",
+               f"root@{host}", f"cat > {shlex.quote(tmp)} && mv {shlex.quote(tmp)} {shlex.quote(ARM_LOOP_FILE)}"]
+        try:
+            p = subprocess.run(cmd, input=payload.encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=8)
+            ms = round((time.perf_counter() - t0) * 1000, 1)
+            if p.returncode == 0:
+                CALLS.add(method="SSH", path=ARM_LOOP_FILE, status=0, ms=ms, link="cable" if host == snap["cable"]["addr"] else "lan", by="bims")
+                return {"ok": True, "host": host, "ms": ms}
+            tried.append(f"{host}: exit {p.returncode} {p.stderr.decode('utf-8', 'replace')[:120]}")
+        except Exception as e:
+            tried.append(f"{host}: {type(e).__name__}: {e}"[:160])
+    raise HTTPException(status_code=502, detail="could not write the file on the robot: " + ("; ".join(tried) or "no path up"))
+
+
+@router.post("/loop/file", dependencies=[Depends(_key)])
+async def loop_file(body: LoopFile) -> dict:
+    out = await run_in_threadpool(write_robot_file, body.json_body)
+    BROKER.event("file_written", ms=out["ms"], host=out["host"], seq=body.json_body.get("seq"), action=body.json_body.get("action"))
+    return out

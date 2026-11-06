@@ -22,6 +22,8 @@ import { ArmWaxFillSettings, RobotArmMove } from './db/models';
 import { robotArmFetchRaw } from './robot-arm-client';
 import { robotDelete, robotGet, robotPost } from './opentrons/proxy';
 
+export type ArmLinkMethod = 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT';
+
 export interface ArmLinkPath {
 	addr: string | null;
 	up: boolean;
@@ -39,6 +41,8 @@ export interface ArmLinkStatus {
 	/** The Pi's own addresses: what the protocol must call. */
 	self: { cable: string | null; lan: string | null };
 	port: number;
+	/** The OT-2's bridge daemon (1.7.0, ARM_PI_URLS) saying hello over the cable: the barcode can come this way. */
+	scanner?: { version: string | null; at: number; age_s: number; fresh: boolean } | null;
 }
 
 export interface ArmLinkView {
@@ -136,7 +140,13 @@ function asResponse(r: { status: number; text: string; headers: Headers }): Resp
  * caller then uses the queue); throws only when the Pi accepted the call and
  * the robot's own answer is a transport failure (status 502/503 from the Pi).
  */
-export async function ot2ViaArm(robot: any, method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown, opts: { timeoutMs?: number; log?: boolean } = {}): Promise<Response | null> {
+export async function ot2ViaArm(
+	robot: any,
+	method: ArmLinkMethod,
+	path: string,
+	body?: unknown,
+	opts: { timeoutMs?: number; log?: boolean; rawBody?: Uint8Array; contentType?: string } = {}
+): Promise<Response | null> {
 	const link = await armLinkFor(robot);
 	if (!link.usable) return null;
 	const timeoutMs = opts.timeoutMs ?? 12_000;
@@ -146,7 +156,7 @@ export async function ot2ViaArm(robot: any, method: 'GET' | 'POST' | 'DELETE', p
 	const t0 = Date.now();
 	let r;
 	try {
-		r = await robotArmFetchRaw(`/ot2/api${path}${sep}timeout_s=${timeoutS}`, { method, body, timeoutMs: timeoutS * 1000 + 3000 });
+		r = await robotArmFetchRaw(`/ot2/api${path}${sep}timeout_s=${timeoutS}`, { method, body, rawBody: opts.rawBody, contentType: opts.contentType, timeoutMs: timeoutS * 1000 + 3000 });
 	} catch (e) {
 		const why = e instanceof Error ? e.message : String(e);
 		markLinkDown(`arm Pi call failed: ${why}`);
@@ -175,18 +185,15 @@ export async function ot2ViaArm(robot: any, method: 'GET' | 'POST' | 'DELETE', p
 	return asResponse(r);
 }
 
-/** robotGet through the Pi when the link is usable, else the queue. */
-export async function ot2Get(robot: any, path: string): Promise<Response> {
-	return (await ot2ViaArm(robot, 'GET', path)) ?? robotGet(robot, path);
-}
-
-export async function ot2Post(robot: any, path: string, body?: unknown, opts: { timeoutMs?: number } = {}): Promise<Response> {
-	return (await ot2ViaArm(robot, 'POST', path, body, opts)) ?? robotPost(robot, path, body, opts);
-}
-
-export async function ot2Delete(robot: any, path: string): Promise<Response> {
-	return (await ot2ViaArm(robot, 'DELETE', path)) ?? robotDelete(robot, path);
-}
+/**
+ * robotGet / robotPost / robotDelete: since 2026-11-06 (later) proxy.ts tries
+ * the arm Pi's link itself for EVERY server-side robot call (the loop, Jog,
+ * Teach, Calibrate, Dry Fill, uploads, the Movement Log's reads), falling back
+ * to the queue / LAN — so these are the same calls under the loop's names.
+ */
+export const ot2Get = (robot: any, path: string): Promise<Response> => robotGet(robot, path);
+export const ot2Post = (robot: any, path: string, body?: unknown, opts: { timeoutMs?: number } = {}): Promise<Response> => robotPost(robot, path, body, opts);
+export const ot2Delete = (robot: any, path: string): Promise<Response> => robotDelete(robot, path);
 
 // ── the run's pause state, long-polled on the Pi ─────────────────────────
 
@@ -287,4 +294,64 @@ export function armPiUrls(status: ArmLinkStatus | null, port = 8000): string[] {
 	if (status?.self.cable) out.push(`http://${status.self.cable}:${port}`);
 	if (status?.self.lan) out.push(`http://${status.self.lan}:${port}`);
 	return out;
+}
+
+// ── the barcode over the cable (daemon 1.7.0 on the robot, 2026-11-06) ──
+
+/** The robot's daemon is saying hello to the Pi over the cable: the scan can go that way. */
+export function armScanAvailable(link: ArmLinkView | null): boolean {
+	return !!link?.usable && !!link.status?.scanner?.fresh;
+}
+
+export interface ArmScanWait {
+	result: { barcode: string | null; raw: string | null; error: string | null; attempts: number | null; scan_ms?: number | null; pause?: string | null } | null;
+	run_status: string | null;
+	at_scan: boolean;
+	requested: boolean;
+	waited_ms: number;
+}
+
+/** GET /ot2/loop/scan: the barcode for (run, cart), long-polled up to waitS. Null when the Pi cannot be asked. */
+export async function armScanWait(robot: any, runId: string, cart: number, waitS: number): Promise<ArmScanWait | null> {
+	const t = Math.max(1, Math.min(25, Math.round(waitS)));
+	const t0 = Date.now();
+	try {
+		const r = await robotArmFetchRaw(`/ot2/loop/scan?run_id=${encodeURIComponent(runId)}&cart=${cart}&wait_s=${t}`, { timeoutMs: t * 1000 + 6000 });
+		if (!r.ok) throw new Error(`robot-arm ${r.status}: ${r.text.slice(0, 160)}`);
+		const w = JSON.parse(r.text) as ArmScanWait;
+		if (w.result) {
+			await logHop({
+				method: 'SCAN',
+				path: `cart ${cart} ${w.result.barcode ?? w.result.error ?? 'no barcode'}`,
+				status: 200,
+				link: 'cable',
+				ms: Date.now() - t0,
+				robotMs: w.result.scan_ms ?? null,
+				error: w.result.barcode ? null : (w.result.error ?? 'no barcode'),
+				robot
+			});
+		}
+		return w;
+	} catch (e) {
+		const why = e instanceof Error ? e.message : String(e);
+		markLinkDown(`arm Pi scan wait failed: ${why}`);
+		await logHop({ method: 'SCAN', path: `cart ${cart}`, status: null, link: null, ms: Date.now() - t0, robotMs: null, error: `queue scan used: ${why}`.slice(0, 300), robot });
+		return null;
+	}
+}
+
+/** POST /ot2/loop/file: the arm Pi writes /data/arm_loop.json on the robot over SSH (cable first). False when it could not. */
+export async function armWriteFile(robot: any, json: Record<string, unknown>): Promise<boolean> {
+	const link = await armLinkFor(robot);
+	if (!link.usable) return false;
+	const t0 = Date.now();
+	try {
+		const r = await robotArmFetchRaw('/ot2/loop/file', { method: 'POST', body: { json }, timeoutMs: 12_000 });
+		await logHop({ method: 'FILE', path: `/data/arm_loop.json seq ${json.seq} ${json.action}`, status: r.status, link: 'cable', ms: Date.now() - t0, robotMs: null, error: r.ok ? null : r.text.slice(0, 200), robot });
+		return r.ok;
+	} catch (e) {
+		const why = e instanceof Error ? e.message : String(e);
+		await logHop({ method: 'FILE', path: `/data/arm_loop.json seq ${json.seq}`, status: null, link: null, ms: Date.now() - t0, robotMs: null, error: `queue used: ${why}`.slice(0, 300), robot });
+		return false;
+	}
 }

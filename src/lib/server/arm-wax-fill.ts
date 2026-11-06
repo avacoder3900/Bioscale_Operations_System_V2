@@ -88,7 +88,7 @@ import { recordArmLoopStep, syncOt2Robot } from '$lib/server/ot2-move-log';
 import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 // 2026-11-06: every robot read / action goes through the arm Pi's cable link when it is
 // usable (one HTTPS hop, ~2 ms on the cable) and through the Mongo queue otherwise.
-import { armLinkFor, armPiUrls, armSetInstruction, ot2Delete, ot2Get, ot2Post, ot2WaitChange } from '$lib/server/ot2-arm-link';
+import { armLinkFor, armPiUrls, armScanAvailable, armScanWait, armSetInstruction, armWriteFile, ot2Delete, ot2Get, ot2Post, ot2WaitChange } from '$lib/server/ot2-arm-link';
 import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, atScanFor, parseArmComment, type ArmMarker, type ArmMoveWant } from '$lib/robot-arm/arm-loop-protocol';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
@@ -1988,19 +1988,28 @@ async function writeInstruction(user: User, loop: any, robot: any, action: ArmLo
 	// (the protocol reads its start there, and learns the Pi's URLs from it), and
 	// otherwise as a mirror the protocol falls back to when it cannot reach the
 	// Pi: queued without waiting when the Pi took it, awaited when it did not.
+	// The file itself goes over the cable too (later 2026-11-06): the arm Pi writes
+	// it on the robot over SSH (~0.3 s); the queue's write_file is the fallback.
 	let via: 'arm-pi' | 'file' = 'file';
+	let fileVia: 'cable' | 'queue' = 'cable';
+	const writeFile = async (json: Record<string, unknown>, wait: boolean) => {
+		if (await armWriteFile(robot, json)) return;
+		fileVia = 'queue';
+		if (wait) await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json }, 60_000);
+		else await enqueueBridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json }, 90_000).catch(() => null);
+	};
 	if (action === 'start') {
 		const link = await armLinkFor(robot);
 		const arm_pi_urls = armPiUrls(link.status);
-		await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: { ...instruction, arm_pi_urls } }, 60_000);
+		await writeFile({ ...instruction, arm_pi_urls }, true);
 		if (await armSetInstruction(robot, instruction)) via = 'arm-pi';
 	} else if (await armSetInstruction(robot, { ...instruction, run_id: loop.opentronsRunId ?? null })) {
 		via = 'arm-pi';
-		await enqueueBridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: instruction }, 90_000).catch(() => null);
+		await writeFile({ ...instruction }, false);
 	} else {
-		await bridgeCommand(robot, user, 'write_file', { path: ARM_LOOP_INSTRUCTION_PATH, json: instruction }, 60_000);
+		await writeFile({ ...instruction }, true);
 	}
-	await audit(user, 'arm_wax_fill.instruction', 'arm_wax_fill_runs', String(loop._id), { seq, action, cart, barcode, via });
+	await audit(user, 'arm_wax_fill.instruction', 'arm_wax_fill_runs', String(loop._id), { seq, action, cart, barcode, via, fileVia });
 	return seq;
 }
 
@@ -2350,6 +2359,16 @@ export async function cycleScanStart(user: User, loopId: string): Promise<LoopVi
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, { parked: cycle.index }, 'send the scan instruction', { uninstructed: true });
 	const seq = await writeInstruction(user, loop, robot, 'scan', cycle.index, null);
+	// The barcode over the cable (2026-11-06): with the robot's daemon saying hello to
+	// the arm Pi (1.7.0, ARM_PI_URLS), the Pi asks it to scan the moment the run
+	// reaches AT_SCAN and cycleScanRead long-polls the Pi for the barcode — no queue
+	// command at all. Otherwise the queue's scan_at_pause below, as before.
+	if (armScanAvailable(await armLinkFor(robot))) {
+		await resumeRun(robot, String(loop.opentronsRunId));
+		await patchCycle(loopId, cycle.index, { scanSeq: seq, scanCommandId: null, scanVia: 'arm-pi' });
+		await audit(user, 'arm_wax_fill.cycle_scan_sent', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq, scanVia: 'arm-pi' });
+		return (await getLoop(loopId))!;
+	}
 	// The daemon watches the run LOCALLY for `ARM AT_SCAN <i>` and reads the scanner
 	// the moment it lands (one queue command, answered from its own thread), so
 	// cycleScanRead only waits for that answer — no relayed polling of the run and
@@ -2389,7 +2408,34 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
 	let barcode = '';
 	let raw = '';
 	let viaDaemon = false;
-	if (cycle.scanCommandId) {
+	if (cycle.scanVia === 'arm-pi') {
+		const runId = String(loop.opentronsRunId);
+		const deadline = Date.now() + AWAIT_BUDGET_MS;
+		let w: Awaited<ReturnType<typeof armScanWait>> = null;
+		for (;;) {
+			w = await armScanWait(robot, runId, cycle.index, Math.min(20, Math.max(1, (deadline - Date.now()) / 1000)));
+			if (!w || w.result || (w.run_status && OT2_RUN_TERMINAL.has(w.run_status)) || Date.now() >= deadline) break;
+		}
+		if (!w) {
+			// The Pi could not be asked: hand the scan to the queue (the daemon watches for the pause itself).
+			const scanCommandId = await enqueueBridgeCommand(
+				robot,
+				user,
+				'scan_at_pause',
+				{ runId, cart: cycle.index, pauseTimeoutS: SCAN_PAUSE_TIMEOUT_S, scanTimeoutS: SCAN_READ_WINDOW_S },
+				SCAN_PAUSE_TIMEOUT_S * 1000 + 60_000
+			).catch(() => null);
+			await patchCycle(loopId, cycle.index, { scanVia: 'queue', scanCommandId });
+			await audit(user, 'arm_wax_fill.scan_fallback_queue', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, scanCommandId });
+			return { pending: true, loop: (await getLoop(loopId))! };
+		}
+		if (w.run_status && OT2_RUN_TERMINAL.has(w.run_status) && !w.result) return { pending: false, loop: await runEndedMidLoop(user, loop, cycle, 'scan', w.run_status) };
+		if (!w.result) return { pending: true, loop: (await getLoop(loopId))! };
+		viaDaemon = true;
+		await audit(user, 'arm_wax_fill.scan_over_cable', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waitedMs: w.waited_ms, scanMs: w.result.scan_ms ?? null, attempts: w.result.attempts ?? null, error: w.result.error ?? null, pause: w.result.pause ?? null });
+		barcode = String(w.result.barcode ?? '').trim();
+		raw = String(w.result.raw ?? '');
+	} else if (cycle.scanCommandId) {
 		// The daemon's scan_at_pause reads the scanner the moment the run pauses at the scan position; wait for its answer.
 		let answer: { done: true; body: any } | { done: false } | null = null;
 		try {

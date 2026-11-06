@@ -794,5 +794,120 @@ class RestartWindowTests(unittest.TestCase):
         self.assertIsNone(bridge.restart_state())
 
 
+class ArmPiScanTests(unittest.TestCase):
+    """ot2-bridge 1.7.0: the OPTIONAL barcode over the arm Pi's cable (ARM_PI_URLS)."""
+
+    def setUp(self):
+        self._urls = bridge.ARM_PI_URLS
+        self._sess = bridge._arm_pi_session
+        self._fetch = bridge._fetch_run
+        self._msg = bridge._current_pause_message
+        self._scan = bridge.scan_with_retry
+
+    def tearDown(self):
+        bridge.ARM_PI_URLS = self._urls
+        bridge._arm_pi_session = self._sess
+        bridge._fetch_run = self._fetch
+        bridge._current_pause_message = self._msg
+        bridge.scan_with_retry = self._scan
+
+    def test_off_without_arm_pi_urls(self):
+        bridge.ARM_PI_URLS = ()
+        bridge._arm_pi_session = lambda: (_ for _ in ()).throw(AssertionError("no session when off"))
+        stop = threading.Event()
+        bridge.arm_pi_scan_loop(None, stop)  # returns at once, touches nothing
+
+    def test_scans_on_request_and_posts_back(self):
+        bridge.ARM_PI_URLS = ("http://pi:8000",)
+        stop = threading.Event()
+        posts = []
+
+        class Resp:
+            def __init__(self, code, body=None):
+                self.status_code = code
+                self._b = body
+
+            def json(self):
+                return self._b
+
+            def raise_for_status(self):
+                pass
+
+        gets = iter([Resp(200, {"req_id": "r1", "run_id": "run-1", "cart": 2}), Resp(204)])
+
+        class Sess:
+            trust_env = True
+
+            def get(self, url, params=None, timeout=None):
+                try:
+                    return next(gets)
+                except StopIteration:
+                    stop.set()
+                    return Resp(204)
+
+            def post(self, url, json=None, timeout=None):
+                posts.append((url, json))
+                return Resp(200, {})
+
+        bridge._arm_pi_session = lambda: Sess()
+        bridge._fetch_run = lambda run_id, timeout=6: {"status": "paused"}
+        bridge._current_pause_message = lambda run_id: "ARM AT_SCAN 2"
+        bridge.scan_with_retry = lambda port, t, r: {"barcode": "abc123", "rawPayload": "abc123", "error": None, "attempts": 1}
+        bridge.arm_pi_scan_loop(None, stop)
+        results = [b for u, b in posts if u.endswith("/ot2/loop/scan")]
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]["barcode"], "abc123")
+        self.assertEqual((results[0]["run_id"], results[0]["cart"], results[0]["pause"]), ("run-1", 2, "ARM AT_SCAN 2"))
+        self.assertTrue(any(u.endswith("/ot2/loop/scanner-hello") for u, _ in posts))
+
+    def test_refuses_to_scan_when_not_at_the_scan_pause(self):
+        bridge.ARM_PI_URLS = ("http://pi:8000",)
+        stop = threading.Event()
+        posts = []
+        scanned = []
+
+        class Resp:
+            def __init__(self, code, body=None):
+                self.status_code = code
+                self._b = body
+
+            def json(self):
+                return self._b
+
+            def raise_for_status(self):
+                pass
+
+        gets = iter([Resp(200, {"req_id": "r2", "run_id": "run-1", "cart": 3})])
+
+        class Sess:
+            trust_env = True
+
+            def get(self, url, params=None, timeout=None):
+                try:
+                    return next(gets)
+                except StopIteration:
+                    stop.set()
+                    return Resp(204)
+
+            def post(self, url, json=None, timeout=None):
+                posts.append((url, json))
+                return Resp(200, {})
+
+        bridge._arm_pi_session = lambda: Sess()
+        bridge._fetch_run = lambda run_id, timeout=6: {"status": "running"}
+        bridge._current_pause_message = lambda run_id: None
+        bridge.scan_with_retry = lambda *a: scanned.append(1)
+        real_wait = bridge._wait_at_scan
+        bridge._wait_at_scan = lambda run_id, cart, max_s=3.0: real_wait(run_id, cart, max_s=0.05)
+        try:
+            bridge.arm_pi_scan_loop(None, stop)
+        finally:
+            bridge._wait_at_scan = real_wait
+        self.assertEqual(scanned, [])
+        res = [b for u, b in posts if u.endswith("/ot2/loop/scan")]
+        self.assertEqual(len(res), 1)
+        self.assertIn("not paused at ARM AT_SCAN 3", res[0]["error"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -49,6 +49,13 @@ Configuration (env vars; run.sh sources .env):
                             BRIDGE_DEVICE_ID is always checked).
   BRIDGE_JOB_SERVER_PORT    default 31960 (bound on 127.0.0.1 only)
   BRIDGE_ALLOWED_ORIGINS    optional comma list of extra exact CORS origins
+  ARM_PI_URLS               OPTIONAL (1.7.0), e.g. http://169.254.42.1:8000 — the robot-arm Pi on
+                            this robot's USB-B cable. Set ONLY on the OT-2 cabled to the arm Pi
+                            (B07 as of 2026-11-06). When set, a thread long-polls the Pi for scan
+                            requests (GET /ot2/loop/scan-request), reads the scanner and posts the
+                            barcode back over the cable (POST /ot2/loop/scan), and says hello every
+                            30 s. Unset (every other robot) = no thread, no change: the daemon
+                            behaves exactly as 1.6.0. The queue's read_scanner / scan_at_pause stay.
   BRIDGE_JOURNAL_DIR        default /data/ot2-bridge — journal.jsonl (ring of
                             the last report attempts) + retry.jsonl (failed job
                             reports), OT2-LOG-1. Unwritable = both off, logged
@@ -107,7 +114,7 @@ except ImportError:
 # read_scanner (trigger + read the scanner over serial, no maintenance run, no motion:
 # the protocol itself parks the gantry at the scan position) and write_file (the
 # instruction record /data/arm_loop.json the running protocol polls after each pause).
-VERSION = "ot2-bridge/1.6.0"  # 1.6.0: non-blocking robot-server restart + 'restarting' in the heartbeat (B14 restart storm 2026-11-03); 1.5.0: scan_at_pause (the arm loop's scan read the moment the run pauses at the scan position); 1.4.0: read_scanner + write_file
+VERSION = "ot2-bridge/1.7.0"  # 1.7.0: OPTIONAL barcode over the arm Pi's USB cable (ARM_PI_URLS; unset = off, behaves as 1.6.0); 1.6.0: non-blocking robot-server restart + 'restarting' in the heartbeat (B14 restart storm 2026-11-03); 1.5.0: scan_at_pause (the arm loop's scan read the moment the run pauses at the scan position); 1.4.0: read_scanner + write_file
 
 # Waveshare GM-class trigger command (returns decoded payload over serial).
 # 0x7E 0x00 0x08 0x01 0x00 0x02 0x01 0xAB 0xCD
@@ -156,6 +163,8 @@ BRIDGE_TOKEN_SECRET = os.environ.get("BRIDGE_TOKEN_SECRET", "")
 BRIDGE_ROBOT_ID = os.environ.get("BRIDGE_ROBOT_ID", "")
 JOB_SERVER_HOST = "127.0.0.1"  # never 0.0.0.0 — Tailscale serve is the only way in
 JOB_SERVER_PORT = int(os.environ.get("BRIDGE_JOB_SERVER_PORT", "31960"))
+# 1.7.0, OPTIONAL: the arm Pi on this robot's USB-B cable. Empty = the feature is off.
+ARM_PI_URLS = tuple(u.strip().rstrip("/") for u in os.environ.get("ARM_PI_URLS", "").split(",") if u.strip())
 BRIDGE_ALLOWED_ORIGINS = tuple(
     o.strip().rstrip("/") for o in os.environ.get("BRIDGE_ALLOWED_ORIGINS", "").split(",") if o.strip()
 )
@@ -2500,6 +2509,77 @@ def _scan_at_pause_watch(command_id: str, run_id: str, cart: int, pause_timeout_
         error="the run did not reach {} within {:.0f} s (last pause: {})".format(want, pause_timeout_s, last_msg or "none"))})
 
 
+# 1.7.0 — the barcode over the arm Pi's USB cable (OPTIONAL: only with ARM_PI_URLS).
+# The arm Pi raises a scan request the moment the loop's run reaches ARM AT_SCAN <i>
+# (the protocol announces it to the Pi, or the Pi reads the run); this thread is
+# long-polling the Pi for it over the cable, reads the scanner (the same
+# scan_with_retry a queue read_scanner uses) and posts the barcode straight back.
+# No BIMS queue hop either way. Requests to the Pi never use a proxy.
+ARM_PI_HELLO_S = 30.0
+ARM_PI_POLL_WAIT_S = 20.0
+
+
+def _arm_pi_session():
+    s = requests.Session()
+    s.trust_env = False  # never through HTTP(S)_PROXY: the Pi is on the cable
+    return s
+
+
+def _wait_at_scan(run_id: str, cart: int, max_s: float = 3.0) -> Optional[str]:
+    """The pause message once the run is paused at ARM AT_SCAN <cart> (the
+    announcement comes a moment before the pause itself), else None."""
+    want = re.compile(r"^\s*ARM\s+AT_SCAN\s+{}\b".format(int(cart)))
+    deadline = time.time() + max_s
+    while True:
+        data = _fetch_run(run_id, timeout=4)
+        if data and data.get("status") == "paused":
+            msg = _current_pause_message(run_id)
+            if msg and want.match(msg):
+                return msg
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.1)
+
+
+def arm_pi_scan_loop(port: "ScannerPort", stop: threading.Event) -> None:
+    if not ARM_PI_URLS:
+        return
+    sess = _arm_pi_session()
+    url_i = 0
+    last_hello = 0.0
+    log.info("arm Pi scan link on: %s", ", ".join(ARM_PI_URLS))
+    while not stop.is_set():
+        base = ARM_PI_URLS[url_i % len(ARM_PI_URLS)]
+        try:
+            if time.time() - last_hello >= ARM_PI_HELLO_S:
+                sess.post(base + "/ot2/loop/scanner-hello", json={"version": VERSION, "device": BRIDGE_DEVICE_ID}, timeout=3)
+                last_hello = time.time()
+            r = sess.get(base + "/ot2/loop/scan-request", params={"wait_s": ARM_PI_POLL_WAIT_S}, timeout=ARM_PI_POLL_WAIT_S + 5)
+            if r.status_code == 204:
+                continue
+            r.raise_for_status()
+            req = r.json() or {}
+            run_id, cart = str(req.get("run_id") or ""), int(req.get("cart") or 0)
+            if not run_id or cart < 1:
+                continue
+            t0 = time.time()
+            pause = _wait_at_scan(run_id, cart)
+            if pause is None:
+                body = {"req_id": req.get("req_id"), "run_id": run_id, "cart": cart, "barcode": None, "raw": None,
+                        "error": "the run is not paused at ARM AT_SCAN {}".format(cart), "attempts": 0}
+            else:
+                scan = scan_with_retry(port, SCAN_TIMEOUT, True)
+                body = {"req_id": req.get("req_id"), "run_id": run_id, "cart": cart, "barcode": scan["barcode"] or None,
+                        "raw": scan["rawPayload"], "error": scan["error"], "attempts": scan["attempts"],
+                        "scan_ms": round((time.time() - t0) * 1000, 1), "pause": pause}
+            log.info("arm Pi scan %s cart %d: %s (%.1fs)", run_id[:8], cart, body["barcode"] or body["error"], time.time() - t0)
+            sess.post(base + "/ot2/loop/scan", json=body, timeout=5)
+        except Exception as e:
+            log.warning("arm Pi scan link (%s): %s", base, e)
+            url_i += 1
+            stop.wait(2.0)
+
+
 def execute_scan_at_pause(command_id: str, payload: dict, port: ScannerPort, _sync: bool = False) -> None:
     """payload: { runId, cart, pauseTimeoutS?, scanTimeoutS? } -> body { barcode | null,
     raw, error, attempts, pause (the AT_SCAN message when it was read there, else
@@ -3584,6 +3664,8 @@ def main() -> None:
         threading.Thread(target=trigger_loop, args=(port, stop), name="trigger", daemon=True),
         threading.Thread(target=heartbeat_loop, args=(port, stop), name="heartbeat", daemon=True),
     ]
+    if ARM_PI_URLS:  # 1.7.0, optional: only the OT-2 on the arm Pi's cable
+        threads.append(threading.Thread(target=arm_pi_scan_loop, args=(port, stop), name="arm-pi-scan", daemon=True))
     for t in threads:
         t.start()
 

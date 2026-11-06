@@ -23,6 +23,30 @@ const DEFAULT_PORT = 31950;
 
 type Ot2Transport = 'direct' | 'bridge';
 
+/**
+ * The arm Pi's USB cable link (2026-11-06): for the ONE robot on the Pi's cable
+ * (armLinkFor checks it by slot), every robot call here goes Pi → cable → robot
+ * (~0.1 s) instead of the queue (0.8-3 s) or the LAN. Null = not that robot, the
+ * link is off or down: the call carries on exactly as before. Loaded lazily:
+ * ot2-arm-link imports this module.
+ */
+async function viaArmLink(
+	robot: any,
+	method: 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT',
+	path: string,
+	body?: unknown,
+	opts: { timeoutMs?: number; rawBody?: Uint8Array; contentType?: string } = {}
+): Promise<Response | null> {
+	if (process.env.VITEST || !robot) return null;
+	try {
+		const { ot2ViaArm } = await import('../ot2-arm-link');
+		return await ot2ViaArm(robot, method, path, body, opts);
+	} catch (e) {
+		console.warn('[ot2-arm-link] skipped:', e instanceof Error ? e.message : e);
+		return null;
+	}
+}
+
 function resolveTransport(): Ot2Transport {
 	const mode = (process.env.OT2_TRANSPORT ?? 'auto').toLowerCase();
 	if (mode === 'direct' || mode === 'bridge') return mode;
@@ -148,6 +172,8 @@ async function robotFetch(url: string, init: RequestInit & { method?: string } =
 
 /** Proxy a GET request to the robot */
 export async function robotGet(robot: any, path: string): Promise<Response> {
+	const viaArm = await viaArmLink(robot, 'GET', path);
+	if (viaArm) return viaArm;
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'GET', path);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
@@ -176,6 +202,8 @@ const requesterUser = () => {
 };
 
 async function robotPostRaw(robot: any, path: string, body: unknown, opts: { timeoutMs?: number }): Promise<Response> {
+	const viaArm = await viaArmLink(robot, 'POST', path, body, opts);
+	if (viaArm) return viaArm;
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'POST', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
@@ -190,6 +218,8 @@ async function robotPostRaw(robot: any, path: string, body: unknown, opts: { tim
 
 /** Proxy a PATCH request to the robot */
 export async function robotPatch(robot: any, path: string, body?: unknown): Promise<Response> {
+	const viaArm = await viaArmLink(robot, 'PATCH', path, body);
+	if (viaArm) return viaArm;
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'PATCH', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
@@ -208,6 +238,8 @@ export async function robotPatch(robot: any, path: string, body?: unknown): Prom
  * the Opentrons UI's PUT /clientData/{key} and PUT /system/time (OT2-TAILNET-5).
  */
 export async function robotPut(robot: any, path: string, body?: unknown): Promise<Response> {
+	const viaArm = await viaArmLink(robot, 'PUT', path, body);
+	if (viaArm) return viaArm;
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'PUT', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
@@ -222,6 +254,8 @@ export async function robotPut(robot: any, path: string, body?: unknown): Promis
 
 /** Proxy a DELETE request to the robot */
 export async function robotDelete(robot: any, path: string): Promise<Response> {
+	const viaArm = await viaArmLink(robot, 'DELETE', path);
+	if (viaArm) return viaArm;
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'DELETE', path);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
@@ -327,6 +361,15 @@ const blobB64 = async (b: Blob) => Buffer.from(new Uint8Array(await b.arrayBuffe
  *  - direct (lab LAN): the multipart POST itself, `opentrons-version: *`.
  */
 export async function robotPostMultipart(robot: any, path: string, form: FormData, opts: { timeoutMs?: number } = {}): Promise<Response> {
+	// The cable (2026-11-06): the multipart POST itself, through the arm Pi; the
+	// answer is the robot's own (not pre-analyzed), so run.uploadProtocol then
+	// waits for the analysis the direct-line way — over the cable too.
+	if (!process.env.VITEST && robot) {
+		const req = new Request('http://local/upload', { method: 'POST', body: form });
+		const rawBody = new Uint8Array(await req.arrayBuffer());
+		const viaArm = await viaArmLink(robot, 'POST', path, undefined, { timeoutMs: Math.min(opts.timeoutMs ?? 60_000, 60_000), rawBody, contentType: req.headers.get('content-type') ?? undefined });
+		if (viaArm) return viaArm;
+	}
 	if (resolveTransport() === 'bridge') {
 		if (path !== '/protocols') throw new Error(`multipart ${path} is not supported over the bridge`);
 		const parts = form.getAll('files').filter((p): p is File => typeof p !== 'string');

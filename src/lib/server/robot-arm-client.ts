@@ -27,9 +27,12 @@ import {
 } from '$lib/robot-arm/move-log';
 
 interface FetchOptions {
-	method?: 'GET' | 'POST' | 'DELETE';
+	method?: 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT';
 	body?: unknown;
 	timeoutMs?: number;
+	/** robotArmFetchRaw only: send these bytes as-is with this content type (a multipart protocol upload). */
+	rawBody?: Uint8Array;
+	contentType?: string;
 }
 
 // The Pi heartbeats its tunnel URL every 5 min. A row older than this is
@@ -396,8 +399,8 @@ export async function robotArmFetchRaw(path: string, opts: FetchOptions = {}): P
 		path,
 		{
 			method: opts.method ?? 'GET',
-			headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey },
-			body: opts.body !== undefined ? JSON.stringify(opts.body) : undefined
+			headers: { 'Content-Type': opts.contentType ?? 'application/json', 'x-api-key': apiKey },
+			body: (opts.rawBody as unknown as string | undefined) ?? (opts.body !== undefined ? JSON.stringify(opts.body) : undefined)
 		},
 		opts.timeoutMs ?? 5000
 	);
