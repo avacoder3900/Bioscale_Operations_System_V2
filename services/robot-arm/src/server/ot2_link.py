@@ -39,6 +39,7 @@ addresses) and ~/.bims-arm/arm_loop_instruction.json (the last instruction).
 from __future__ import annotations
 
 import http.client
+import inspect
 import ipaddress
 import json
 import os
@@ -76,8 +77,11 @@ require_api_key = None
 
 
 async def _key(x_api_key: Optional[str] = Header(None)) -> None:
+    # app.py's require_api_key is sync on the live Pi, async in the repo copy: take either.
     if require_api_key is not None:
-        await require_api_key(x_api_key)
+        r = require_api_key(x_api_key)
+        if inspect.isawaitable(r):
+            await r
 
 
 def _peer_is_robot(host: Optional[str]) -> bool:
