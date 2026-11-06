@@ -26658,3 +26658,15 @@ BIMS away (ProxyError, No route to host). Fix 19:56 UTC: the three proxy lines c
 moving their cables (no SSH to them yet).
 Still to do: deploy the updated stage protocol to B07 (Run tab Add To Library + Deploy; blocked for me as a
 shared-resource write), then a 1-cart loop and read the Link rows / Timing on the Movement Log.
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — Cable link chip on Stage Calibration
+================================================================================
+Alejandro did not see the Cable / Wi-Fi / Queue chip on Stage Calibration: it was only on the Run tab. Now a shared
+component (src/lib/components/robot-arm/ArmLinkChip.svelte) beside the health label on both robot bars;
+loadStageCalibration returns link (armLinkFor). Also copied both stage .py files from master into his Downloads
+for Add To Library + Deploy. npm run check 13 errors (baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6npQ41eMf79TWwu7jTwzMXsET4pE
+Source: branch master @ commit 2fb5a7cc (also feat/ot2-movement-log)
+Retrieve this exact code: git checkout 2fb5a7cc
+What this deployment is for: the cable link chip on Stage Calibration (Vercel status success).
