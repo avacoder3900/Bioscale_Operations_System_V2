@@ -26433,3 +26433,7 @@ What this deployment is for: Dry Fill All Holes in the Stage Calibration Jog run
   (robot-arm-tests.ts), the Move Set picker and move-set load on the page are gone (Alejandro: the Replay
   feature is not part of the tests). Pi Routes Present still lists /replay/start, the route Play needs.
 - Unit run stored at 7f494b73: 366/366 (25 files). npm run check 13 errors, none in touched files.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/Hjj2hmgfx6hvkv8hB3cCv6wzH8eR
+Source: branch master @ commit ef228634 (also feat/arm-motion-log)
+Retrieve this exact code: git checkout ef228634
+What this deployment is for: Show/Hide on the Change Log and Movement Log; Replay test removed (Vercel status success).
