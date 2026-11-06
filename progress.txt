@@ -26420,3 +26420,7 @@ at 37.1 / 36.836 / 36.881 mm below the rim, 85 steps. Not run on a robot yet.
 svelte-check 13 errors (baseline; none in touched files). vitest robot-arm + run-lifecycle-records +
 arm-wax-fill 278 pass.
 Worked in worktree ../Bioscale_V2-wt-dryfill-jog (node_modules junction).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/8zsL8za9AbnhCXjEgYcoBcYPWDts
+Source: branch master @ commit e1400a0f (also feat/dry-fill-jog-run)
+Retrieve this exact code: git checkout e1400a0f
+What this deployment is for: Dry Fill All Holes in the Stage Calibration Jog run, tip kept (Vercel status success).
