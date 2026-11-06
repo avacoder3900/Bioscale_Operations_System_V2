@@ -39,7 +39,7 @@
 		{ device: 'ot2', title: 'Opentron' },
 		{ device: 'link', title: 'Link' }
 	];
-	const DEVICE_TITLES = { arm: 'Robot Arm', ot2: 'Opentron' } as const;
+	const DEVICE_TITLES = { arm: 'Robot Arm', ot2: 'Opentron', link: 'Link' } as const;
 	const servos = [1, 2, 3, 4, 5, 6];
 
 	const jointTitle = (sid: number) =>
