@@ -26611,8 +26611,7 @@ What this deployment is for: Go To Pose between poses 20-80 steps apart (Vercel 
 
 ================================================================================
 2026-11-06 — feat/arm-motion-log — Go To checked on the arm; camera card Go To Pose also at 20 steps
-================================================================================
-The user could not go 7. Wrist Flex -> 8. Elbow and had trouble with 5 <-> 6. Their last Go To (19:33:48
+=========================================================================The user could not go 7. Wrist Flex -> 8. Elbow and had trouble with 5 <-> 6. Their last Go To (19:33:48
 UTC) was before adb3b54f went live, so that page still hid both buttons inside 80 steps. The Move Set page
 has a second Go To Pose on PoseCameraCard, hidden while "On Pose" (80): 7 <-> 8 are 50 steps apart, so it
 stayed hidden there even after the fix. Checked on the arm with the page's own goToPose / afterPlay
@@ -26637,3 +26636,20 @@ duplicated until restored. Each copy writes an audit entry (move_set_duplicate /
 Files: src/lib/server/robot-arm-animation.ts (duplicateMoveSet, duplicateSequence; freeCopyName takes
 the model), teach/+page.server.ts (two actions), teach/+page.svelte (the button).
 npm run check: 14 errors, none in touched files. vitest robot-arm 385/385.
+=======
+2026-11-06 — feat/ot2-movement-log — Cable link live on arm-pi; B07 bridge daemon fixed (dead iMac proxy)
+================================================================================
+arm-pi (sudo, with Alejandro's OK): NM profile ot2-cable on eth1 = 169.254.42.1/16; robot-arm restarted (no session).
+/ot2/* answered 500: the live Pi's require_api_key is sync, the repo copy async; ot2_link.py now takes either (480a74e8).
+/ot2/link: active 'cable' to OT2CEP20200217B07. PC -> Pi (Tailscale) -> cable -> B07 GET /health 70-110 ms
+(robot ~58 ms of it); the public route BIMS uses reaches /ot2/link too.
+SSH key on B07 (Alejandro's OK): RSA only (B07 rejects ed25519), installed over the cable with POST /server/ssh_keys;
+from arm-pi: ssh -i ~/.ssh/id_rsa_ot2 root@169.254.199.218.
+ROOT CAUSE of the B07 bridge outage since 18:24 UTC: /data/ot2-bridge/.env had HTTPS_PROXY/HTTP_PROXY=
+http://169.254.146.227:8899, the lab iMac on this same USB cable. Moving the cable to arm-pi took B07's only path to
+BIMS away (ProxyError, No route to host). Fix 19:56 UTC: the three proxy lines commented out (backup
+.env.bak-20261106-proxy), systemctl restart ot2-bridge. B07 reaches BIMS directly over its Wi-Fi: queue /health
+0.7-0.9 s, daemon pollErrors 0, no errors since the restart. Check R04/B14 .env for the same iMac proxy before
+moving their cables (no SSH to them yet).
+Still to do: deploy the updated stage protocol to B07 (Run tab Add To Library + Deploy; blocked for me as a
+shared-resource write), then a 1-cart loop and read the Link rows / Timing on the Movement Log.
