@@ -32,7 +32,7 @@
 	 * Wax_Filling_GEN7_ArmStage.py). Only the short vertical moves over a hole
 	 * stay direct.
 	 */
-	import { onDestroy } from 'svelte';
+	import { onDestroy, onMount } from 'svelte';
 	import { deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
 	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
@@ -757,6 +757,118 @@
 		fillPaused = false;
 	}
 
+	// ── Dry Fill: the wax fill's own OT-2 run, one cart, all 12 holes, no cart record, no arm ──
+	// The server starts it exactly as the Run page starts a loop (same protocol and
+	// parameters); this page then sends the fill and the end as the loop would.
+	let dryLoop = $state<any>(data.dryFill ?? null);
+	let dryPhase = $state<'starting' | 'running' | 'stopping' | null>(null);
+	let dryStatus = $state<string | null>(null);
+	let dryStopAsked = false;
+	async function dryPost(action: string, loopId?: string): Promise<any> {
+		const fd = new FormData();
+		if (loopId) fd.set('loopId', loopId);
+		const res = await fetch(`?/${action}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+		const result = deserialize(await res.text());
+		if (result.type === 'failure') throw new Error((result.data as any)?.error ?? 'Action failed');
+		if (result.type === 'error') throw new Error(result.error?.message ?? 'Action failed');
+		return (result as any).data ?? {};
+	}
+	async function startDryFill() {
+		if (!confirm("Dry Fill All Holes?\n\nThe OT-2 runs the wax fill's own steps at all 12 holes: new tip, calibrate, wax tube, every hole, tip to the trash, home.")) return;
+		clearMsg();
+		dryPhase = 'starting';
+		dryStopAsked = false;
+		try {
+			// One run at a time on the OT-2: this page's maintenance run closes first.
+			if (runId) await stopMaintenance();
+			dryStatus = 'Starting The Run';
+			dryLoop = (await dryPost('dryFillStart')).loop;
+		} catch (e) {
+			errMsg = `Dry Fill did not start: ${e instanceof Error ? e.message : String(e)}`;
+			dryPhase = null;
+			dryStatus = null;
+			return;
+		}
+		await driveDryFill();
+	}
+	async function driveDryFill() {
+		if (!dryLoop) return;
+		dryPhase = 'running';
+		const id = String(dryLoop._id);
+		try {
+			while (dryLoop.status === 'running' && !dryStopAsked) {
+				const step = dryLoop.cycles?.[dryLoop.cycles.length - 1]?.step;
+				if (step === 'decide') {
+					dryStatus = 'Taking A Tip, Calibrating It, Parking In The Wax Tube';
+					const w = await dryPost('dryFillAwaitParked', id);
+					dryLoop = w.loop;
+					if (!w.done || dryLoop.status !== 'running' || dryStopAsked) continue;
+					dryLoop = (await dryPost('dryFillFill', id)).loop;
+				} else if (step === 'fill') {
+					dryStatus = 'Filling All 12 Holes';
+					dryLoop = (await dryPost('dryFillWait', id)).loop;
+				} else if (step === 'withdraw') {
+					dryStatus = 'Tip To The Trash, Home';
+					dryLoop = (await dryPost('dryFillEnd', id)).loop;
+				} else break;
+			}
+			if (dryStopAsked) return;
+			while (dryLoop.ending && !dryLoop.runFinished) {
+				const r = await dryPost('dryFillFinish', id);
+				dryLoop = r.loop;
+				if (r.done) break;
+			}
+			if (dryLoop.status === 'completed' && dryLoop.opentronsRunFinalStatus === 'succeeded' && !dryLoop.error) msg = 'Dry Fill complete: all 12 holes.';
+			else errMsg = `Dry Fill ended ${dryLoop.status}${dryLoop.opentronsRunFinalStatus ? ` (OT-2 run ${dryLoop.opentronsRunFinalStatus})` : ''}${dryLoop.error ? `: ${dryLoop.error}` : ''}`;
+		} catch (e) {
+			if (!dryStopAsked) errMsg = `Dry Fill: ${e instanceof Error ? e.message : String(e)}`;
+		} finally {
+			if (!dryStopAsked) {
+				dryPhase = null;
+				dryStatus = null;
+				dryLoop = null;
+				await invalidateAll();
+			}
+		}
+	}
+	/** Stop: the OT-2 run is stopped now (the Run page's STOP RUN), then homed; the pipette keeps its tip. */
+	async function stopDryFill() {
+		if (!dryLoop) return;
+		dryStopAsked = true;
+		dryPhase = 'stopping';
+		dryStatus = 'Stopping The OT-2';
+		const id = String(dryLoop._id);
+		clearMsg();
+		try {
+			await dryPost('dryFillHalt', id);
+			dryStatus = 'Homing The OT-2';
+			let lastErr: unknown = null;
+			for (let i = 0; i < 10; i++) {
+				try {
+					await dryPost('dryFillHome', id);
+					lastErr = null;
+					break;
+				} catch (e) {
+					lastErr = e; // still stopping: try again shortly
+					await new Promise((r) => setTimeout(r, 3000));
+				}
+			}
+			if (lastErr) throw lastErr;
+			msg = 'Dry Fill stopped. The OT-2 is home; remove the tip from the pipette.';
+		} catch (e) {
+			errMsg = `Dry Fill stop: ${e instanceof Error ? e.message : String(e)}`;
+		} finally {
+			dryPhase = null;
+			dryStatus = null;
+			dryLoop = null;
+			await invalidateAll();
+		}
+	}
+	onMount(() => {
+		// A reload during a Dry Fill: the OT-2 waits on this page for its next instruction.
+		if (dryLoop && dryLoop.status === 'running') void driveDryFill();
+	});
+
 	// ── Tip: pick up, probe on the calibrator, swap, drop; fixture teach ─────
 	let hasTip = $state(false);
 	let tipAdjust = $state<{ x: number; y: number } | null>(null);
@@ -1403,7 +1515,10 @@
 		</section>
 		<section class="mb-3 break-inside-avoid rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill Motion</h2>
-			{#if touring}
+			{#if dryPhase || dryLoop}
+				<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">Dry Fill{dryStatus ? `: ${dryStatus}` : ''}</div>
+				<button type="button" onclick={stopDryFill} disabled={dryPhase === 'stopping' || dryPhase === 'starting' || !dryLoop} class="w-full rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300 disabled:opacity-40">Stop</button>
+			{:else if touring}
 				<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
 				<div class="grid grid-cols-4 gap-1">
 					<button type="button" onclick={tourPrev} disabled={busy || tourIndex === 0} class={pad} style="color: var(--color-tron-text)">‹ Prev</button>
@@ -1429,6 +1544,7 @@
 				<div class="grid grid-cols-2 gap-1">
 					<button type="button" onclick={startTour} disabled={!pipetteId || busy || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through all 12 holes in fill order">Run Through All Holes</button>
 					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): all the way up → pre-jump → dispense depth → dwell → pre-jump → all the way up">▶ Fill Motion ({selCount} Selected)</button>
+					<button type="button" onclick={startDryFill} disabled={!robotId || busy || !taught || locked} class="col-span-2 rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The wax fill's own OT-2 run at all 12 holes, with nothing in the wax tube: new tip, calibrate, wax tube, every hole, tip to the trash, home. No cart, no arm.">Dry Fill All Holes</button>
 				</div>
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					<span class="opacity-70">Fill:</span>

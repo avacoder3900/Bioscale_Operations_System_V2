@@ -26108,3 +26108,22 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): no speed limit on a step"
 What this deployment is for: a step may be as fast as the operator types it (down to 0.2 s); BIMS neither refuses nor warns.
+================================================================================
+2026-11-06 — feat/stage-dry-fill — Stage Calibration: Dry Fill All Holes (the wax fill's own run, no cart, no arm)
+================================================================================
+Alejandro asked for a button in Stage Calibration's Tour / Fill Motion that runs through all the holes and
+pretends to fill them, with the exact steps of a wax fill, while the wax tube is empty. The two buttons already
+there do not do that: Run Through All Holes only visits each hole, and Fill Motion is a browser-side copy of the
+approach. Dry Fill All Holes starts the REAL loop run (startLoop with dryFill: the same protocol on the robot, the
+same run-time parameters, the same startRunQueue start with tip tracking) for ONE cart with all three channels
+on (all 12 holes), started at the fill with no barcode and no cart record. The page drives it: await PARKED 1
+(new tip, probe, wax tube, aspirate, park) -> `fill` instruction + resume (cycleDecide, no attachCart) -> wait
+for FILLED/CLEAR (cycleFillWait) -> dryFillEnd (`end`: tip to the trash, home) -> loopFinish records the run.
+wax stays True, so the plunger moves too (air in, air out). The scan position is not visited: there is no cart.
+Stop = the Run page's STOP RUN (haltLoop, then haltHomeGantry). A reload picks the dry fill up again.
+Safety: cycleGrab / cycleWithdraw / cycleFail refuse a dryFill loop, so the Run page's Resume can never move the
+arm for it. finishConfirm advances no carts for a dryFill wax run (like the rehearsal).
+Files: src/lib/server/arm-wax-fill.ts, db/models/arm-wax-fill-run.ts (dryFill), db/models/wax-filling-run.ts
+(armWaxFill.dryFill), opentrons/run-lifecycle-records.ts, robot-arm/calibrate/stage/+page.server.ts + +page.svelte.
+Not run on a robot yet. svelte-check 14 errors = clean master's 14 (none in touched files). vitest
+run-lifecycle-records + robot-arm 262 pass.

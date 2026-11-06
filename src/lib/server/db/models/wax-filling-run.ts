@@ -90,7 +90,8 @@ const waxFillingRunSchema = new Schema({
 	// oneRunPerLoop (ARM-WAX-LOOP-B): this run serves EVERY cart of the loop — carts join
 	// cartridgeIds as they are scanned and filled, so it starts with none, and the
 	// protocol's own ARM pauses must never be auto-resumed.
-	armWaxFill: { loopId: String, cycleIndex: Number, rehearsal: Boolean, oneRunPerLoop: Boolean },
+	// dryFill: a Dry Fill from Stage Calibration — no cart is ever put on it.
+	armWaxFill: { loopId: String, cycleIndex: Number, rehearsal: Boolean, oneRunPerLoop: Boolean, dryFill: Boolean },
 	// Two-phase start marker (OT2-TAILNET-5). Unset except while a start is in flight.
 	startIntent: { type: startIntentSchema, default: undefined },
 }, { timestamps: true });

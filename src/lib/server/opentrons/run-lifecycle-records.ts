@@ -1206,8 +1206,8 @@ export async function finishConfirm(kind: FillKind, run: any, obs: FinishObserva
 		// the carts the robot log proves were finished).
 		let advanced = 0;
 		if (finalStatus === 'succeeded') {
-			// A robot-arm REHEARSAL run dispensed air and carries no cart: complete it, advance nothing.
-			if (!run.armWaxFill?.rehearsal) {
+			// A robot-arm REHEARSAL run dispensed air and carries no cart: complete it, advance nothing (a Dry Fill likewise).
+			if (!run.armWaxFill?.rehearsal && !run.armWaxFill?.dryFill) {
 				const r = await advanceCartsToWaxFilled(run, run.cartridgeIds ?? [], user, 'run-complete auto-advance');
 				advanced = r.advanced;
 			}

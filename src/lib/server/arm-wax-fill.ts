@@ -925,6 +925,8 @@ export interface LoopView {
 	status: 'running' | 'completed' | 'stopped' | 'failed';
 	/** The step the first cart started at (grab unless the operator chose otherwise). */
 	startStep: StartStep;
+	/** A Dry Fill from Stage Calibration (no cart, no arm; see startLoop). */
+	dryFill: boolean;
 	stopRequested: boolean;
 	grabAnimation: AnimationRef | null;
 	withdrawAnimation: AnimationRef | null;
@@ -956,6 +958,7 @@ export function loopView(d: any): LoopView {
 		completedRuns: Number(d.completedRuns) || 0,
 		skippedRuns: Number(d.skippedRuns) || 0,
 		status: d.status,
+		dryFill: !!d.dryFill,
 		stopRequested: !!d.stopRequested,
 		grabAnimation: animRef(d.grabAnimation),
 		withdrawAnimation: animRef(d.withdrawAnimation),
@@ -1413,6 +1416,8 @@ export async function loadStageCalibration() {
 		protocol,
 		teach,
 		loopRunning: !!active,
+		/** The running Dry Fill (this page drives it), so a reload picks it up again. */
+		dryFill: active?.dryFill ? active : null,
 		checklist: stageChecklist(calibration, protocol)
 	};
 }
@@ -1500,17 +1505,25 @@ export async function loadArmWaxFill() {
 
 // ── the loop ─────────────────────────────────────────────────────────────
 
-export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: unknown; barcode?: unknown } = {}): Promise<LoopView> {
+/**
+ * opts.dryFill (Stage Calibration's Dry Fill, 2026-11-06): the same start as a
+ * real loop — the same protocol, run-time parameters and start path, so the OT-2
+ * takes and probes its tip, goes to the tube, aspirates, parks and fills exactly
+ * as it would — for ONE cart, every channel (all 12 holes), started at the fill
+ * with no barcode, no cart record and no arm. Nothing is attached to its wax run.
+ */
+export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: unknown; barcode?: unknown; dryFill?: boolean } = {}): Promise<LoopView> {
 	await connectDB();
-	const requestedRuns = Math.round(num(rawRuns, 'Number of runs'));
-	const startAtRaw = String(opts.startAt ?? 'grab').trim() || 'grab';
+	const dryFill = !!opts.dryFill;
+	const requestedRuns = dryFill ? 1 : Math.round(num(rawRuns, 'Number of runs'));
+	const startAtRaw = dryFill ? 'decide' : String(opts.startAt ?? 'grab').trim() || 'grab';
 	if (!(START_STEPS as readonly string[]).includes(startAtRaw)) throw new ArmWaxFillError(`Start at must be one of ${START_STEPS.join(', ')}.`);
 	const startAt = startAtRaw as StartStep;
-	const startBarcode = String(opts.barcode ?? '').trim();
-	if (startAt === 'decide' && !startBarcode) throw new ArmWaxFillError('Enter the barcode of the cart on the stage to start at the fill.');
+	const startBarcode = dryFill ? '' : String(opts.barcode ?? '').trim();
+	if (startAt === 'decide' && !startBarcode && !dryFill) throw new ArmWaxFillError('Enter the barcode of the cart on the stage to start at the fill.');
 	if (requestedRuns < 1 || requestedRuns > 24) throw new ArmWaxFillError('Number of runs must be 1–24: one OT-2 run serves the whole loop and the protocol serves at most 24 carts.');
 	const settings = await getSettings();
-	if (startAt === 'decide') {
+	if (startAt === 'decide' && !dryFill) {
 		// The same checks the scan applies, before the OT-2 run is created.
 		const problem = await cartScanProblem(startBarcode, settings.testMode);
 		if (problem) throw new ArmWaxFillError(problem, 409);
@@ -1522,7 +1535,9 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 		settings.robotId ? checkRobotConflict(settings.robotId) : Promise.resolve(null)
 	]);
 	const r = readiness(settings, calibration, protocol, active, robotConflict);
-	if (r.blocking.length) throw new ArmWaxFillError(r.blocking.join(' '), 409);
+	// A dry fill plays no animation.
+	const blocking = dryFill ? r.blocking.filter((b) => !b.startsWith('Animations:')) : r.blocking;
+	if (blocking.length) throw new ArmWaxFillError(blocking.join(' '), 409);
 	if (!protocol || !protocol.declaresCartLocation || !protocol.declaresLoop || !calibration?.cartLocation || !calibration.dispenseDepth || !calibration.scanPosition) {
 		throw new ArmWaxFillError('The loop needs the one-run stage protocol on the robot and a taught cart location, dispense depth and scan position.', 409);
 	}
@@ -1542,7 +1557,8 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 		withdrawAnimation: settings.withdrawAnimation,
 		failAnimation: settings.failAnimation,
 		startStep: startAt,
-		cycles: [{ index: 1, step: startAt, startedAt: now, ...(startAt === 'decide' ? { barcode: startBarcode } : {}) }],
+		dryFill,
+		cycles: [{ index: 1, step: startAt, startedAt: now, ...(startAt === 'decide' && startBarcode ? { barcode: startBarcode } : {}) }],
 		instructionSeq: 0,
 		startedBy: opRef(user),
 		startedAt: now
@@ -1576,12 +1592,14 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 		cartridgeIds: [],
 		plannedCartridgeCount: requestedRuns,
 		setupTimestamp: now,
-		armWaxFill: { loopId: _id, rehearsal: protocol.rehearsal, oneRunPerLoop: true },
+		armWaxFill: { loopId: _id, rehearsal: protocol.rehearsal, oneRunPerLoop: true, dryFill },
 		notes: [
 			{
 				_id: generateId(),
-				body: protocol.rehearsal
-					? `Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}); carts are checked only — none is put on this run, drawn from its bucket or advanced.`
+				body: dryFill
+					? `Robot-arm DRY FILL from Stage Calibration: loop ${_id} runs the stage fill's own steps at all 12 holes with nothing in the wax tube; no cart is put on this run.`
+					: protocol.rehearsal
+					?`Robot-arm wax fill REHEARSAL (p300, air, nothing dispensed): one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}); carts are checked only — none is put on this run, drawn from its bucket or advanced.`
 					: `Robot-arm wax fill: one run for loop ${_id} (${requestedRuns} cart${requestedRuns === 1 ? '' : 's'}) at the taught stage location; one tip for the whole loop, parked in the wax between carts.`,
 				phase: 'wax_run',
 				author: opRef(user),
@@ -1590,11 +1608,13 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 		]
 	});
 	await ArmWaxFillRun.updateOne({ _id }, { $set: { waxRunId } });
-	await audit(user, 'arm_wax_fill.wax_run_create', 'wax_filling_runs', waxRunId, { loopId: _id, requestedRuns, rehearsal: protocol.rehearsal });
+	await audit(user, 'arm_wax_fill.wax_run_create', 'wax_filling_runs', waxRunId, { loopId: _id, requestedRuns, rehearsal: protocol.rehearsal, dryFill });
 
 	// 3. The ordinary start (freshness gate, create, play). The protocol homes,
 	//    takes its one tip, probes it, aspirates and parks → `ARM PARKED 1`.
-	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns, settings);
+	//    A dry fill runs every hole: all three channels on, whatever Setup says.
+	const runSettings: SettingsView = dryFill ? { ...settings, channels: { a: true, b: true, c: true } } : settings;
+	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns, runSettings);
 	await assertFormWithinSchema(String(robot._id), loopForm);
 	const started = await startRunQueue('wax', loopForm, user);
 	if (isActionFail(started)) {
@@ -1612,6 +1632,7 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 		waxRunId,
 		opentronsRunId: started.opentronsRunId,
 		rehearsal: protocol.rehearsal,
+		dryFill,
 		grab: settings.grabAnimation,
 		withdraw: settings.withdrawAnimation,
 		fail: settings.failAnimation
@@ -1632,6 +1653,11 @@ async function runningLoop(loopId: string): Promise<{ loop: any; cycle: any }> {
 
 function expectStep(cycle: any, ...steps: string[]) {
 	if (!steps.includes(cycle.step)) throw new ArmWaxFillError(`Cycle ${cycle.index} is at "${cycle.step}", not ${steps.join(' / ')} — reload the page.`, 409);
+}
+
+/** A Dry Fill never moves the arm (the Run page's Resume must not play one). */
+function refuseDryFill(loop: any, what: string) {
+	if (loop.dryFill) throw new ArmWaxFillError(`This is a Dry Fill from Stage Calibration — the arm does not ${what} in it. Stop it there.`, 409);
 }
 
 async function patchCycle(loopId: string, index: number, set: Record<string, unknown>) {
@@ -2138,6 +2164,7 @@ export async function cycleAwaitParked(user: User, loopId: string): Promise<{ do
 export async function cycleGrab(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'grab');
+	refuseDryFill(loop, 'grab');
 	if (loop.stopRequested) throw new ArmWaxFillError('Stop was requested — the loop ends here.', 409);
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, grabWant(cycle.index, (await getSettings()).grabDuringProbe), 'grab', { uninstructed: !cycle.scanSeq });
@@ -2290,13 +2317,15 @@ async function cartScanProblem(barcode: string, testMode: boolean): Promise<stri
 export async function cycleDecide(user: User, loopId: string): Promise<LoopView> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'decide');
-	if (!cycle.barcode) throw new ArmWaxFillError('This cycle has no scanned barcode.', 409);
+	if (!cycle.barcode && !loop.dryFill) throw new ArmWaxFillError('This cycle has no scanned barcode.', 409);
 	if (cycle.fillSeq) return (await getLoop(loopId))!; // a retry after a reload
 	const settings = await getSettings();
 	const protocol = await protocolFor(String(loop.robot?._id ?? ''));
 	const rehearsal = !!protocol?.rehearsal;
 	const robot = await loopRobot(loop);
-	if (rehearsal) {
+	if (loop.dryFill) {
+		// DRY FILL: there is no cart; the run fills the stage as it is.
+	} else if (rehearsal) {
 		// REHEARSAL: the cart was checked at the scan and that is all that happens to it.
 		await audit(user, 'arm_wax_fill.rehearsal_cart', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, waxRunId: loop.waxRunId ?? null, barcode: cycle.barcode, touched: false });
 	} else {
@@ -2307,10 +2336,10 @@ export async function cycleDecide(user: User, loopId: string): Promise<LoopView>
 			return enterFailRoute(user, loopId, cycle, 'decide', err instanceof Error ? err.message : String(err), { barcode: cycle.barcode });
 		}
 	}
-	const seq = await writeInstruction(user, loop, robot, 'fill', cycle.index, cycle.barcode);
+	const seq = await writeInstruction(user, loop, robot, 'fill', cycle.index, cycle.barcode ?? null);
 	await resumeRun(robot, String(loop.opentronsRunId));
 	await patchCycle(loopId, cycle.index, { step: 'fill', fillSeq: seq, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId ?? null });
-	await audit(user, 'arm_wax_fill.cycle_fill', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId ?? null, barcode: cycle.barcode, rehearsal });
+	await audit(user, 'arm_wax_fill.cycle_fill', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, seq, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId ?? null, barcode: cycle.barcode ?? null, rehearsal, dryFill: !!loop.dryFill });
 	return (await getLoop(loopId))!;
 }
 
@@ -2370,6 +2399,7 @@ export async function cycleFailPrepare(user: User, loopId: string): Promise<{ pe
 export async function cycleFail(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'fail');
+	refuseDryFill(loop, 'play the fail animation');
 	if (!cycle.skipSeq) throw new ArmWaxFillError('The skip instruction has not been sent yet — the gantry may still be over the stage.', 409);
 	const robot = await loopRobot(loop);
 	await assertArmMayMove(robot, loop, afterCartWant(cycle.index), 'play the fail animation', { uninstructed: true });
@@ -2554,6 +2584,7 @@ function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: Cali
 export async function cycleWithdraw(user: User, loopId: string): Promise<{ play: PlayResult; cycle: number; endSent: boolean; endNote: string | null; chainedGrab: boolean }> {
 	const { loop, cycle } = await runningLoop(loopId);
 	expectStep(cycle, 'withdraw');
+	refuseDryFill(loop, 'withdraw');
 	const robot = await loopRobot(loop);
 	const last = Number(cycle.index) >= Number(loop.requestedRuns) || !!loop.stopRequested;
 	let endNote: string | null = null;
@@ -2651,6 +2682,24 @@ export async function cycleWithdrawDone(user: User, loopId: string): Promise<{ l
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns }, $push: { cycles: nextCycle } });
 	await audit(user, 'arm_wax_fill.cycle_done', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, completedRuns, next: cycle.index + 1, chainedGrab: chained });
 	return { loop: (await getLoop(loopId))!, next: true };
+}
+
+/**
+ * A Dry Fill's fill is done (cycleFillWait moved it to 'withdraw'): there is no
+ * withdraw. The run parks as after any last cart; `end` goes out (tip to the
+ * trash, home) and the loop completes. loopFinish then records the run's end.
+ */
+export async function dryFillEnd(user: User, loopId: string): Promise<LoopView> {
+	const { loop, cycle } = await runningLoop(loopId);
+	if (!loop.dryFill) throw new ArmWaxFillError('This loop is not a Dry Fill.', 409);
+	expectStep(cycle, 'withdraw');
+	const robot = await loopRobot(loop);
+	const endNote = await sendEnd(user, loop, robot, cycle.index);
+	const now = new Date();
+	await patchCycle(loopId, cycle.index, { step: 'done', endedAt: now });
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { completedRuns: 1, status: 'completed', endedAt: now, ...(endNote ? { error: endNote } : {}) } });
+	await audit(user, 'arm_wax_fill.loop_complete', 'arm_wax_fill_runs', loopId, { completedRuns: 1, skippedRuns: 0, requestedRuns: 1, dryFill: true, endNote });
+	return (await getLoop(loopId))!;
 }
 
 /**

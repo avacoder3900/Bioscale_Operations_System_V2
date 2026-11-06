@@ -17,6 +17,12 @@
  *   stage geometry   the cart's rotation on the stage and the travel height
  *   calibrator       this robot's tip-calibrator fixture point (robot-keyed)
  *
+ * DRY FILL (2026-11-06): the wax fill's own run for one cart at all 12 holes,
+ * with no cart and no arm (startLoop with dryFill). The page drives it:
+ * dryFillStart → dryFillAwaitParked (until done) → dryFillFill →
+ * dryFillWait (until not pending) → dryFillEnd → dryFillFinish (until done).
+ * Stop is the Run page's STOP RUN: dryFillHalt → dryFillHome.
+ *
  * All logic is in $lib/server/arm-wax-fill; this file maps form fields to it.
  */
 import { fail, redirect } from '@sveltejs/kit';
@@ -24,15 +30,27 @@ import { requirePermission } from '$lib/server/permissions';
 import {
 	ArmWaxFillError,
 	applyStageEdits,
+	cycleAwaitParked,
+	cycleDecide,
+	cycleFillWait,
+	dryFillEnd,
 	getSettings,
+	haltHomeGantry,
+	haltLoop,
 	loadStageCalibration,
+	loopFinish,
 	saveCartLocation,
 	saveDispenseDepth,
 	saveScanPosition,
 	saveStageCalibrator,
-	saveStageGeometry
+	saveStageGeometry,
+	startLoop
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
+
+// The dry fill's start runs the whole OT-2 start in one action, and its wait
+// actions each poll the robot for up to ~85 s (as on the Run page).
+export const config = { maxDuration: 120 };
 
 export const load: PageServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -56,6 +74,26 @@ async function writer({ request, locals }: { request: Request; locals: App.Local
 	requirePermission(locals.user, 'manufacturing:write');
 	const robotId = (await getSettings()).robotId ?? '';
 	return { d: await request.formData(), user: who(locals), robotId };
+}
+
+/** The dry fill creates a wax run: manufacturing:write + waxFilling:write, as the Run page's loop actions. */
+async function dryWriter({ request, locals }: { request: Request; locals: App.Locals }) {
+	if (!locals.user) redirect(302, '/login');
+	requirePermission(locals.user, 'manufacturing:write');
+	requirePermission(locals.user, 'waxFilling:write');
+	const d = await request.formData();
+	return { loopId: field(d, 'loopId'), user: who(locals) };
+}
+
+/** One dry-fill step on the loop the form names. */
+async function dryStep(ev: { request: Request; locals: App.Locals }, step: (user: ReturnType<typeof who>, loopId: string) => Promise<unknown>) {
+	const { loopId, user } = await dryWriter(ev);
+	if (!loopId) return fail(400, { error: 'loopId missing.' });
+	try {
+		return json(await step(user, loopId));
+	} catch (err) {
+		return failFrom(err);
+	}
 }
 
 export const actions: Actions = {
@@ -146,5 +184,26 @@ export const actions: Actions = {
 		} catch (err) {
 			return failFrom(err);
 		}
-	}
+	},
+
+	// ── Dry Fill ──
+	dryFillStart: async (ev) => {
+		const { user } = await dryWriter(ev);
+		try {
+			return { loop: json(await startLoop(user, 1, { dryFill: true })) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+	// Until the run has taken and probed its tip, been to the tube and parked (ARM PARKED 1).
+	dryFillAwaitParked: (ev) => dryStep(ev, cycleAwaitParked),
+	// The `fill` instruction + resume: the run fills all 12 holes.
+	dryFillFill: (ev) => dryStep(ev, async (user, id) => ({ loop: await cycleDecide(user, id) })),
+	dryFillWait: (ev) => dryStep(ev, cycleFillWait),
+	// `end`: tip to the trash, home.
+	dryFillEnd: (ev) => dryStep(ev, async (user, id) => ({ loop: await dryFillEnd(user, id) })),
+	dryFillFinish: (ev) => dryStep(ev, loopFinish),
+	// Stop: the OT-2 run is stopped now, then homed.
+	dryFillHalt: (ev) => dryStep(ev, haltLoop),
+	dryFillHome: (ev) => dryStep(ev, haltHomeGantry)
 };
