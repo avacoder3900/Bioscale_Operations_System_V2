@@ -26815,3 +26815,7 @@ the Deck Studio at all.
    Studio opens with that kind selected and the right robot preselected (it already honours ?robot=).
    Cartridge On Stage stays the active, non-clickable entry — that is what this page teaches.
 svelte-check: 14 errors (baseline), none in the touched file.
+Deployment: production — via push of master (Vercel GitHub integration)
+Source: branch master @ commit 5e4dd0f5
+Retrieve this exact code: git checkout master at commit 5e4dd0f5
+What this deployment is for: Stage Calibration's Tube Rack 10 / Tip Rack 11 entries open the Deck Calibration Studio on the arm's OT-2
