@@ -26495,6 +26495,10 @@ homes/lights sent outside a run. Arm rows only start 2026-11-06 (43 so far), so 
 npm run check 13 errors (baseline, none in touched files). vitest src/lib/robot-arm 269/269.
 Read-only DB check of the new queries: all 100 of 11,905; Opentron Liquid 100 of 2,644; Aspirate 100 of 247.
 Worked in worktree ../Bioscale_V2-wt-movelog-filters (node_modules junction).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6kDEUT66CBZQvotFRjjrZoQsTGiz
+Source: branch master @ commit a3f2726b (feature 9df92351, also feat/movement-log-filters)
+Retrieve this exact code: git checkout a3f2726b
+What this deployment is for: Movement Log device/type filters, Newest N + All, Showing X Of Y (Vercel status success).
 
 ================================================================================
 2026-11-06 — feat/arm-motion-log — Short Move fix: elbow (servo 3) P 16 -> 32, saved
