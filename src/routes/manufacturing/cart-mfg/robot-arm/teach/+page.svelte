@@ -163,6 +163,8 @@
 	// Poses card Hide/Show (2026-11-04); shown by default, an explicit Hide is remembered.
 	const POSES_HIDDEN_KEY = 'robot-arm:teach-poses-hidden';
 	let posesHidden = $state(false);
+	// Poses with a learned droop trim (2026-11-06): Clear All Droop forgets them so they relearn.
+	const trimmedPoses = $derived(activePoses.filter((p) => p.trim).length);
 	$effect(() => {
 		try {
 			posesHidden = localStorage.getItem(POSES_HIDDEN_KEY) === '1';
@@ -466,6 +468,11 @@
 				<div class="flex items-center gap-3">
 					{#if !posesHidden && (activePoses.length || selecting)}
 						<button type="button" class="text-xs underline" style={selecting ? 'color: var(--color-tron-cyan)' : muted} onclick={() => setSelecting(!selecting)}>{selecting ? 'Done' : 'Select'}</button>
+					{/if}
+					{#if !posesHidden && trimmedPoses}
+						<form method="POST" action="?/clearAllDroop" use:enhance onsubmit={(e) => { if (!confirm(`Forget the droop correction on ${trimmedPoses} pose${trimmedPoses === 1 ? '' : 's'}? Each relearns at its next Go To or Play. Do this after a servo stiffness change.`)) e.preventDefault(); }}>
+							<button type="submit" class="text-xs underline" style={muted} title="Forget every pose's learned droop correction; each relearns at its next Go To or Play">Clear All Droop ({trimmedPoses})</button>
+						</form>
 					{/if}
 					<button type="button" class="text-xs underline" style="color: var(--color-tron-cyan)" onclick={() => (editing = 'new')}>+ New</button>
 					<button type="button" onclick={() => setPosesHidden(!posesHidden)} class="rounded border px-2 py-0.5 text-xs" style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)" aria-expanded={!posesHidden}>{posesHidden ? 'Show' : 'Hide'}</button>

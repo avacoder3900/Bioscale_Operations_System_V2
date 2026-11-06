@@ -26203,3 +26203,41 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch master @ 5d75fc2a (fast-forwarded from feat/arm-maintenance-log)
 Retrieve this exact code: git checkout 5d75fc2a
 What this deployment is for: POST /api/robot-arm/changes, the Pi's way into the Change Log; the Pi-side files ship in the same commit but still need installing on arm-pi.
+
+================================================================================
+2026-11-06 — master + arm-pi — Poses landed HIGH and crept higher every play: the Pi settle aimed at the trimmed goal, not the pose
+================================================================================
+Alejandro: "poses are not consistent between the runs and between the move to pose; the arm is consistently
+higher, notable when it has to extend outward and is more under the effects of gravity". Root cause, confirmed
+in code (no arm run needed): BIMS writes each frame goal = pose + learned droop trim and echoes the bare pose as
+`target`; replay_settle.py settle() computed residual = GOAL - present, so it drove every joint to rest on
+pose + trim (above the pose by the whole trim, biggest on loaded, extended joints). BIMS then learned the new
+trim as written - target = old trim + the sag the Pi saw on top -> every play pushed the next one higher, until
+the cap. Unmasked on 2026-11-05 by: every pose now settles (530a24d5), the trim cap 50 -> 300 (d6ebd84f), and
+shoulder/elbow stiffness 6 -> 16 (trims learned at P 6 were already ~2.5x too big). Go To looked better than a
+run because a run also carries each settle offset into the next pose on top of that pose own trim. The simulator
+could not see it: its frames had target == goal. The fix-2 test cleared each trim first (goal == target on the
+first visit).
+- services/robot-arm/src/hardware/replay_settle.py: settle(..., target=None) aims at the frame target when it
+  carries one (new _target_of), goal + offset is still the first write, so a well-learned pose lands in one round;
+  written - target is then the trim the pose really needs (BIMS trimFromSettle unchanged). Plain Pi recordings
+  (no target) behave as before. Header docstring records the 2026-11-06 change.
+- services/robot-arm/scripts/simulate_replay_settle.py: recording(..., trim=) adds a BIMS-style trim to the goals;
+  new case 2c runs small / exact / stale (too big) trims and checks the arm rests on the POSE, written - target
+  equals the fake bus droop, and an exact trim settles in one round. all checks passed (workstation and the Pi).
+- BIMS: clearAllPoseDroop (robot-arm-animation.ts, audit robot_arm.animate.pose_droop_clear_all with every
+  pose before-trim) + Teach page action clearAllDroop + "Clear All Droop (N)" link in the Poses card header
+  (confirm; shown only when some live pose has a trim). Use it ONCE now, and after any servo stiffness change:
+  every pose relearns at its next Go To / Play.
+- vitest robot-arm + server animation 249 pass; svelte-check 14 errors (baseline, none in touched files).
+arm-pi install (ssh brevitest3@192.168.1.231, Alejandro gave the credentials and permission): /sessions/active
+null, torque off on all six (arm resting at home). Backup src/hardware/replay_settle.py.bak-pre-target-20261106-101518;
+installed md5 79af841075c25c8b34dd3514937f3cc3 = repo; scripts/simulate_replay_settle.py updated too; sudo systemctl
+restart robot-arm at 10:15:19 CST, /health ok after 1 s, Application startup complete, app.py install() lines 68-69
+present, settle() signature on the Pi takes target, /sessions/active null, torque still off. Not yet driven on the
+arm: the first Go To on an extended pose after Clear All Droop is the real check (expect: lands on the pose, the
+audit pose_droop_from_replay trim = the real sag, and the SAME numbers on the next play).
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched); arm-pi as above
+Source: branch master @ (this commit)
+Retrieve this exact code: git log master --oneline, the commit titled "fix(robot-arm): Pi settle aims at the pose, not the trimmed goal"
+What this deployment is for: poses land on their numbers again and stay there between plays; Clear All Droop to reset the inflated trims.

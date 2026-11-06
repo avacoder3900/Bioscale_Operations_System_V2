@@ -10,6 +10,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { deriveArmHolder } from '$lib/server/robot-arm-lock';
 import {
+	clearAllPoseDroop,
 	createMoveSet,
 	createSequence,
 	deleteArchivedPoses,
@@ -104,6 +105,18 @@ function bulkFlash(verb: string, r: PoseBulkResult) {
 export const actions: Actions = {
 	...sharedAnimateActions,
 	...conveyorActions,
+
+	// Forget every pose's learned droop trim; each relearns at its next Go To / Play (2026-11-06).
+	clearAllDroop: async ({ locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		try {
+			const n = await clearAllPoseDroop(who(locals));
+			return { success: n ? `Droop correction cleared on ${n} pose${n === 1 ? '' : 's'}. Each relearns at its next Go To or Play.` : 'No pose had a droop correction.' };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
 
 	// The follower tracks the control (leader) arm under torque — quick rough posing.
 	poseWithLeader: async ({ locals }) => {

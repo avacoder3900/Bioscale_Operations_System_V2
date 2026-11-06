@@ -54,6 +54,19 @@ servo per frame, no reads.
 Simulated against a sagging fake bus (services/robot-arm/scripts/
 simulate_replay_settle.py); not yet run on the arm.
 
+Settle onto the TARGET, not the goal (2026-11-06, Alejandro: "poses are not
+consistent between runs ... the arm is consistently higher ... when it has
+to extend outward"): BIMS writes each frame's goal as pose + the pose's
+learned droop trim, and echoes the bare pose as `target`. The settle pass
+measured its residual against the GOAL, so it drove every joint to rest on
+pose + trim: above the pose by the whole trim, most on the loaded, extended
+joints. BIMS then learned the new trim as written − target = old trim + the
+sag it saw on top, so every play pushed the next one higher (the cap went
+50 → 300 on 2026-11-05, which gave the runaway room). Now the residual is
+target − present wherever a frame carries a target; the goal (with its
+trim) is still the first write, so a well-learned pose lands in one round,
+and written − target is then the trim the pose really needs.
+
 Ramp to the start (2026-11-05, Alejandro: "fix the 3 second delay"): the
 original always ramped to follower_neutral over a fixed 3.0 s, even when the
 arm was already there, so every Go To / Play sat still for 3 s before moving.
@@ -218,6 +231,22 @@ def load_frames(source: str, recordings_dir: Optional[Path] = None) -> list[dict
     return parse_frames(lines)
 
 
+def _target_of(frame: dict) -> Optional[dict[int, int]]:
+    """The frame's `target` (BIMS: the bare pose, six steps) as {sid: steps}; None when it has none."""
+    t = frame.get("target")
+    if not isinstance(t, list) or len(t) != SERVO_COUNT:
+        return None
+    out: dict[int, int] = {}
+    for i, v in enumerate(t):
+        if v is None:
+            continue
+        try:
+            out[i + 1] = _clamp(int(v), POS_MIN, POS_MAX)
+        except (TypeError, ValueError):
+            return None
+    return out or None
+
+
 def window_end_index(frames: list[dict], i: int) -> int:
     """First frame after `i` whose goal differs (len(frames) if none): the hold ends there."""
     j = i + 1
@@ -236,13 +265,21 @@ def settle(
     offset: dict[int, int],
     deadline: float,
     cancelled: Callable[[float], bool],
+    target: Optional[dict[int, int]] = None,
 ) -> dict[str, Any]:
     """
-    Nudge the follower onto `goal` (servos 1–5) before `deadline` (time.time()).
+    Nudge the follower onto `target` (servos 1–5) before `deadline`
+    (time.time()). `goal` is what the frame asked to write (BIMS: the pose plus
+    its learned droop trim); `target` is where the arm should REST (the bare
+    pose). Without a target (a plain Pi recording) the goal is the target.
     `offset` is the carried feed-forward; it is updated in place with what
-    this pose needed. `cancelled(seconds)` waits that long and returns True
-    if the session was cancelled meanwhile. Returns the round-by-round result.
+    this pose needed beyond its goal. `cancelled(seconds)` waits that long and
+    returns True if the session was cancelled meanwhile. Returns the
+    round-by-round result; `written` − `target` is the trim the pose needs.
     """
+    aim = {sid: target[sid] for sid in goal if target and sid in target and target[sid] is not None} if target else {}
+    for sid in goal:
+        aim.setdefault(sid, goal[sid])
     rounds = 0
     present: dict[int, int] = {}
     residual: dict[int, int] = {}
@@ -256,7 +293,7 @@ def settle(
             break
         rounds += 1
         present = read()
-        residual = {sid: goal[sid] - present[sid] for sid in SETTLE_SERVOS if sid in goal and sid in present}
+        residual = {sid: aim[sid] - present[sid] for sid in SETTLE_SERVOS if sid in aim and sid in present}
         ok = bool(residual) and all(abs(r) <= SETTLE_TOL for r in residual.values())
         if ok or not residual:
             break
@@ -453,7 +490,7 @@ def _replay_session_settling_unlocked(
                     deadline = time.time() + (frames[j]["t"] - (time.perf_counter() - t_loop_start)) - WINDOW_MARGIN_S
                 else:
                     deadline = time.time() + END_WINDOW_S
-                r = settle(read, write, goal, offset, deadline, cancelled)
+                r = settle(read, write, goal, offset, deadline, cancelled, _target_of(frame))
                 r.update({"frame": i, "t": frame["t"], "pose": frame.get("pose"), "target": frame.get("target"), "loop": loop_idx + 1})
                 results.append(r)
             # The path outlasts its last fire by that step's pulse + wait, so the

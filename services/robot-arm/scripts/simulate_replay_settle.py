@@ -95,19 +95,25 @@ class FakeArms:
                 self.follower.write(i + 1, "Goal_Position", int(v))
 
 
-def recording(path: Path, poses: list[tuple[list[int], float, bool, str | None]], rate_hz: float = 50.0, hold_at_end: bool = False) -> None:
-    """poses: (goal[6], hold_s, settle?, pose_id). Each pose holds for hold_s frames at rate_hz."""
-    header = {"event": "header", "version": "1", "rate_hz": rate_hz, "follower_neutral": poses[0][0]}
+def recording(path: Path, poses: list[tuple[list[int], float, bool, str | None]], rate_hz: float = 50.0, hold_at_end: bool = False, trim: dict[int, int] | None = None) -> None:
+    """
+    poses: (pose[6], hold_s, settle?, pose_id). Each pose holds for hold_s frames at rate_hz.
+    `trim` (BIMS droop trim, {sid: steps}) is added to every frame's goal, as BIMS does; the
+    settle frames echo the bare pose as `target`.
+    """
+    trimmed = lambda p: [v + (trim or {}).get(i + 1, 0) for i, v in enumerate(p)]  # noqa: E731
+    header = {"event": "header", "version": "1", "rate_hz": rate_hz, "follower_neutral": trimmed(poses[0][0])}
     if hold_at_end:
         header["hold_at_end"] = True
     lines = [header]
     t = 0.0
-    for goal, hold_s, flag, pose in poses:
+    for target, hold_s, flag, pose in poses:
+        goal = trimmed(target)
         n = max(1, int(hold_s * rate_hz))
         for k in range(n):
             rec: dict = {"event": "frame", "t": round(t, 4), "goal": goal}
             if flag and k == 0:
-                rec.update({"settle": True, "pose": pose, "target": goal})
+                rec.update({"settle": True, "pose": pose, "target": target})
             lines.append(rec)
             t += 1.0 / rate_hz
     lines.append({"event": "footer", "frames": len(lines) - 1})
@@ -177,6 +183,27 @@ def main() -> None:
     ev = dict(arms.logger.events)["replay.settle"]
     check(len(ev["settle"]) == 4 and [e["loop"] for e in ev["settle"]] == [1, 1, 2, 2], "loops: settle entries for both loops")
     check(ev["settle"][2]["rounds"] <= ev["settle"][0]["rounds"], "loops: carried offset makes the second pass no slower")
+
+    # 2c. BIMS frames carry a droop trim in the goal (2026-11-06): the arm must rest on the
+    #     TARGET (the pose), not on goal = pose + trim, and written - target is the true droop
+    #     — whether the stored trim is too small, right, or stale-and-too-big.
+    for label, trim in (("small", {2: 5, 3: 2, 4: 1}), ("exact", dict(droop)), ("stale", {2: 60, 3: 40, 4: 25})):
+        p = tmp / f"trim-{label}.jsonl"
+        recording(p, [(A, 0.5, True, "poseA"), (B, 0.5, True, "poseB")], trim=trim)
+        bus = FakeBus(droop)
+        arms = FakeArms(bus)
+        rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
+        ev = dict(arms.logger.events)["replay.settle"]
+        for e in ev["settle"]:
+            want = A if e["pose"] == "poseA" else B
+            check(e["ok"] is True, f"trim {label}: {e['pose']} ok after {e['rounds']} rounds, residual {e['residual']}")
+            check(all(abs(e["present"][s - 1] - want[s - 1]) <= rs.SETTLE_TOL for s in range(1, 6)), f"trim {label}: {e['pose']} rests on the pose, not pose + trim {e['present']} vs {want}")
+            learned = [e["written"][s - 1] - e["target"][s - 1] for s in range(1, 6)]
+            check(all(abs(learned[s - 1] - droop.get(s, 0)) <= rs.SETTLE_TOL for s in range(1, 6)), f"trim {label}: written - target is the true droop {learned}")
+        present_now = {s: bus.read(s, "Present_Position") for s in range(1, 6)}
+        check(all(abs(present_now[s] - B[s - 1]) <= rs.SETTLE_TOL for s in range(1, 6)), f"trim {label}: arm rests ON pose B at the end {present_now}")
+        if label == "exact":
+            check(ev["settle"][0]["rounds"] == 1, f"trim exact: a well-learned pose settles in one round ({ev['settle'][0]['rounds']})")
 
     # 3. stop mid-replay
     p = tmp / "long.jsonl"

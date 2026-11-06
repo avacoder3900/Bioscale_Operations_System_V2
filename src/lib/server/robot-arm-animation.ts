@@ -1024,6 +1024,22 @@ export async function holdAfterReplayStop(runId: string, stop: Record<string, un
 	await audit(user, 'robot_arm.animate.torque_after_replay_stop', 'robot_arm_runs', runId, { ok: t.ok, error: t.error, positions: now.positions });
 }
 
+/**
+ * Forget every pose's learned droop trim (live poses). For after a change that
+ * makes the old numbers wrong for every pose at once — the servo stiffness
+ * (P 6 → 16 on 2026-11-05/06) or the Pi settle fix of 2026-11-06, whose
+ * predecessor had inflated every trim it touched. Each pose relearns at its
+ * next Go To / Play. Returns how many poses had a trim.
+ */
+export async function clearAllPoseDroop(user: User): Promise<number> {
+	await connectDB();
+	const rows = (await RobotArmPose.find({ 'trim.0': { $exists: true }, archivedAt: null }).select('_id name trim').lean()) as any[];
+	if (!rows.length) return 0;
+	await RobotArmPose.updateMany({ _id: { $in: rows.map((r) => r._id) } }, { $set: { trim: [], trimMeasuredAt: null, trimMeasuredBy: null } });
+	await audit(user, 'robot_arm.animate.pose_droop_clear_all', 'robot_arm_poses', 'all', { count: rows.length, poses: rows.map((r) => ({ _id: String(r._id), name: r.name, before: r.trim })) });
+	return rows.length;
+}
+
 export async function clearPoseDroop(user: User, poseId: string): Promise<void> {
 	await connectDB();
 	const pose = (await RobotArmPose.findById(poseId).lean()) as any;
