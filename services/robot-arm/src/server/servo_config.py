@@ -1,6 +1,7 @@
 """
 GET  /servos/config — READ-ONLY: each follower servo's stiffness and torque settings.
 POST /servos/gains  — write P/D/I gains only; temporary (lost at power-off) unless persist.
+                      Every changed gain is reported to BIMS's Change Log (bims_changes.py).
 
 Why (2026-11-05): a loaded joint sits short of its goal because the STS3215's
 position loop is proportional — it pushes harder only as the error grows. On
@@ -44,6 +45,12 @@ from scservo_sdk import COMM_SUCCESS  # type: ignore[import-untyped]
 from src.hardware.dual_arm import JOINT_NAMES, NUM_MOTORS
 from src.server.bus_lock import BUS_LOCK
 from src.server.manual_control import _connected_arms
+
+try:
+    from src.server.bims_changes import report_gains  # the Change Log's Pi half (2026-11-06)
+except ImportError:  # a Pi without bims_changes.py next to app.py
+    def report_gains(*_a, **_k) -> None:
+        return None
 
 router = APIRouter(tags=["servos"])
 
@@ -171,7 +178,10 @@ def servos_gains(body: GainsRequest) -> dict[str, Any]:
         bus_free()
     try:
         with BUS_LOCK:
-            return {"servos": write_gains(body)}
+            written = write_gains(body)
+        # Every gain that changed goes to BIMS's Change Log (servo.p_coefficient servo:N old -> new).
+        report_gains(written, body.persist)
+        return {"servos": written}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:

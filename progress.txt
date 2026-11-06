@@ -26174,3 +26174,28 @@ Deployment: production — via Vercel GitHub integration on the push to master
 Source: branch master @ ed52bddd (340c8da2 + ed52bddd, rebased from feat/arm-maintenance-log onto 46fa64b6)
 Retrieve this exact code: git checkout ed52bddd
 What this deployment is for: Maintenance > Change Log (labelled, backfilled, 60 rows) and Maintenance > Tests with its own Test Log.
+================================================================================
+2026-11-06 — feat/arm-maintenance-log — Pi reports its own changes to the Change Log (gains, installs, service starts)
+================================================================================
+Alejandro: "make the proper changes and scripts to add to the Pi to report servo gain writes and Pi installs and
+whatever". The Change Log's Pi half:
+- BIMS: POST /api/robot-arm/changes (x-agent-api-key, the webhook's key; ≤ 50 rows). body.ts judges rows one by one
+  (hardware + key must be real labels; page defaults to pi; source pi / hand / code only; dates clamped to the last
+  30 days) and answers { written, rejected: [{index, reason}], failed }, so one bad label never blocks the rest.
+  changedBy is the Pi's hostname. 6 vitest cases.
+- Pi: services/robot-arm/src/server/bims_changes.py (stdlib only, never raises). Rows queue in
+  ~/.bims-arm/changes-pending.jsonl and are sent from there (retry; rejected rows dropped and printed, failed rows
+  kept), so an install done while BIMS is unreachable still arrives. URL = BIMS_CHANGES_URL, else BIMS_WEBHOOK_URL
+  with /webhook -> /changes; key = AGENT_API_KEY; scripts run by hand read the project .env.
+  * servo_config.py: POST /servos/gains reports every changed P/D/I as servo.p_coefficient servo:N old -> new,
+    note Saved to EEPROM / Temporary.
+  * every scripts/install_*.py (14 of them) calls report_install("<name>", [app.py]) after writing app.py ->
+    pi.router.<name> Installed with the file hash. scripts/bims_report.py is the import + a CLI (install, change,
+    flush, pending) for changes made by hand (Wi-Fi, limits, cables).
+  * scripts/install_change_reporter.py wires pi_bims_changes.service_started(app) into app.py: on every start a
+    daemon thread posts pi.service.start <version>, and against the previous start's snapshot pi.app_py old -> new
+    and pi.route <path> Added / Removed — install detection that works even when an installer's own report failed.
+- services/robot-arm/CHANGE_REPORTING.md: what reports itself and the arm-pi install steps (copy bims_changes.py +
+  servo_config.py next to app.py, run install_change_reporter.py, restart with no session).
+Not deployed to arm-pi: needs the Pi's Wi-Fi. Smoke-tested locally (gain rows, start diff, pending queue without a
+BIMS); py_compile with warnings as errors clean. npm run check 13 errors (baseline 13, none in touched files).

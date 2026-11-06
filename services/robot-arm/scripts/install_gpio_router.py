@@ -29,6 +29,12 @@ import re
 import sys
 from pathlib import Path
 
+try:
+    from bims_report import report_install  # scripts/bims_report.py: tells BIMS's Change Log about this install
+except ImportError:  # run from a copy without bims_report.py
+    def report_install(*_a, **_k) -> None:
+        return None
+
 APP = Path(__file__).resolve().parents[1] / "src" / "server" / "app.py"
 CHECK = "--check" in sys.argv
 
@@ -116,6 +122,7 @@ def main() -> int:
     backup = APP.with_suffix(".py.bak-gpio")
     backup.write_text(original, encoding="utf-8", newline="\n")
     APP.write_text(src, encoding="utf-8", newline="\n")
+    report_install("gpio", [APP])
     print(f"\nwrote {APP} (backup at {backup.name}). Now: sudo systemctl restart robot-arm")
     return 0
 

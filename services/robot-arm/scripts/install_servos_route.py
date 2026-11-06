@@ -17,6 +17,12 @@ Three idempotent edits (installed on arm-pi 2026-10-20, backups *.bak-pre-servos
 """
 from pathlib import Path
 
+try:
+    from bims_report import report_install  # scripts/bims_report.py: tells BIMS's Change Log about this install
+except ImportError:  # run from a copy without bims_report.py
+    def report_install(*_a, **_k) -> None:
+        return None
+
 bus = Path("src/hardware/_feetech_bus.py")
 mc = Path("src/server/manual_control.py")
 app = Path("src/server/app.py")
@@ -102,5 +108,6 @@ def list_servos() -> list[dict[str, Any]]:
 '''
     a = a.replace(anchor, route + anchor)
     app.write_text(a, encoding="utf-8")
+    report_install("servos", [app])
 
 print("patched")
