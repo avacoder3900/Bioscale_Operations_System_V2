@@ -17,6 +17,7 @@ const APPLY = process.argv.includes('--apply');
 
 type Row = [date: string, page: ArmPage, hardware: ArmHardware, key: string, target: string | null, oldValue: unknown, newValue: unknown, unit: string | null, source: ArmSource, note: string | null];
 
+// APPEND ONLY: ids are armchg-hist-<position>; a row inserted mid-list re-ids every row after it.
 const ROWS: Row[] = [
 	// Servos and motion
 	['2026-11-05', 'teach', 'servo', 'servo.p_coefficient', 'servo:2', 6, 16, null, 'pi', 'POST /servos/gains, saved to EEPROM'],
@@ -83,7 +84,9 @@ const ROWS: Row[] = [
 	// Hand
 	['2026-05-15', 'hand', 'servo', 'hardware.com_port', 'follower', null, 'Diagnosed', null, 'hand', null],
 	['2026-08-19', 'hand', 'leader-arm', 'hardware.com_port', 'leader', null, 'Re-registered', null, 'hand', 'BusLinker'],
-	['2026-10-15', 'hand', 'solenoid', 'hardware.wiring', null, null, 'Solenoid driver on the bench', null, 'hand', null]
+	['2026-10-15', 'hand', 'solenoid', 'hardware.wiring', null, null, 'Solenoid driver on the bench', null, 'hand', null],
+	// Append only below this line: a row's id is its position, so inserting above would shift every later id.
+	['2026-11-06', 'teach', 'servo', 'motion.max_steps_per_s', null, 7000, 'none', 'steps/s', 'code', 'No speed limit on a step (fc128ae1)']
 ];
 
 async function main() {
