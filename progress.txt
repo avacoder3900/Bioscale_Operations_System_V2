@@ -26072,3 +26072,15 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ f6b65087
 Retrieve this exact code: git checkout f6b65087
 What this deployment is for: Go To Pose / Play settle works again; Pi gains route in the repo.
+================================================================================
+2026-11-06 — master — arm-pi: wrist flex, wrist roll, gripper stiffness -> 16 (saved); tested with torque on
+================================================================================
+Alejandro asked for P 16 on servo 4 (wrist flex: carries the gripper + cartridge), 5 (wrist roll, was 15) and 6
+(gripper, was 10). POST /servos/gains temporary then persist. Gains now P [6,16,16,16,16,16], Lock [0,1,1,1,1,1];
+base (servo 1) stays 6. My first "holds steady" check was void: torque had been off since 14:57:38 UTC
+(robot_arm.torque.off from his account, before any write) and I reported it steady before checking torque. Re-run with
+torque on: (1) 5 s hold, all six torque on, positions and temps unchanged, 0 jitter; (2) BIMS goToPose (runner,
+trim cleared each time) Remove Home -> Shoulder Down -> Remove Home: every joint within 2 steps, 0 jitter over 3 s,
+temps 37-42 C flat; Shoulder Down's settle used all 6 rounds (residual within 2); (3) gripper (load 0 = empty) opened
+2143 -> 2500 in 60-step moves: rests at 2487, load 62; closed back: 2152, load -48; 0 jitter, 42 C. The gripper is not
+droop-corrected (by design), so it stays ~10 steps short of a commanded number; the closing load is the jaws pressing.
