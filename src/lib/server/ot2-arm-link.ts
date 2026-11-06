@@ -141,10 +141,12 @@ export async function ot2ViaArm(robot: any, method: 'GET' | 'POST' | 'DELETE', p
 	if (!link.usable) return null;
 	const timeoutMs = opts.timeoutMs ?? 12_000;
 	const sep = path.includes('?') ? '&' : '?';
+	// The Pi accepts timeout_s up to 60 (2026-11-06: Home Gantry asked for 80 and got a 422 from the Pi, so the home never ran).
+	const timeoutS = Math.min(60, Math.max(1, Math.round(timeoutMs / 1000)));
 	const t0 = Date.now();
 	let r;
 	try {
-		r = await robotArmFetchRaw(`/ot2/api${path}${sep}timeout_s=${Math.max(1, Math.round(timeoutMs / 1000))}`, { method, body, timeoutMs: timeoutMs + 3000 });
+		r = await robotArmFetchRaw(`/ot2/api${path}${sep}timeout_s=${timeoutS}`, { method, body, timeoutMs: timeoutS * 1000 + 3000 });
 	} catch (e) {
 		const why = e instanceof Error ? e.message : String(e);
 		markLinkDown(`arm Pi call failed: ${why}`);
@@ -154,19 +156,20 @@ export async function ot2ViaArm(robot: any, method: 'GET' | 'POST' | 'DELETE', p
 	const ms = Date.now() - t0;
 	const via = r.headers.get('x-ot2-link');
 	const robotMs = Number(r.headers.get('x-ot2-ms'));
-	// 502/503 WITHOUT a link header come from the Pi itself: it could not reach the robot. The queue may still.
-	if ((r.status === 502 || r.status === 503) && !via) {
+	// An answer WITHOUT a link header is the Pi's own, never the robot's: it could not reach the robot
+	// (502/503) or refused the request itself (422, 401, 404). The queue may still get through.
+	if (!via) {
 		let detail = r.text.slice(0, 200);
 		try {
 			detail = String(JSON.parse(r.text)?.detail ?? detail);
 		} catch {
 			/* keep the text */
 		}
-		markLinkDown(`the Pi cannot reach the OT-2: ${detail}`);
-		await logHop({ method, path, status: r.status, link: null, ms, robotMs: null, error: `Pi could not reach the OT-2, queue used: ${detail}`.slice(0, 300), robot });
+		if (r.status === 502 || r.status === 503) markLinkDown(`the Pi cannot reach the OT-2: ${detail}`);
+		await logHop({ method, path, status: r.status, link: null, ms, robotMs: null, error: `Pi refused (${r.status}), queue used: ${detail}`.slice(0, 300), robot });
 		return null;
 	}
-	if (opts.log !== false && (method !== 'GET' || !r.ok)) {
+	if (opts.log !== false && (method !== 'GET' || r.status >= 500)) {
 		await logHop({ method, path, status: r.status, link: via, ms, robotMs: Number.isFinite(robotMs) ? robotMs : null, error: r.ok ? null : r.text.slice(0, 200), robot });
 	}
 	return asResponse(r);
