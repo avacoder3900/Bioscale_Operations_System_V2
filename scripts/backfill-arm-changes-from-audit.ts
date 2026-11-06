@@ -10,7 +10,7 @@
  *
  * Idempotent: ids are armchg-audit-<audit id>-<n>, the ids the live routes
  * write, so a row is never written twice. A conveyor default the live hook
- * already logged (conveyor.default_ms within 10 s) is skipped.
+ * already logged (a conveyor.default_ms row without an audit id, within 10 s) is skipped.
  */
 import 'dotenv/config';
 import mongoose from 'mongoose';
@@ -58,7 +58,8 @@ async function main() {
 			}
 			const { source, note, ...label } = changes[i];
 			if (label.key === 'conveyor.default_ms') {
-				const near = await RobotArmChange.exists({ key: label.key, at: { $gte: new Date(at.getTime() - 10_000), $lte: new Date(at.getTime() + 10_000) } });
+				// Only a live-hook row counts (no auditId); a backfilled neighbour is another change.
+				const near = await RobotArmChange.exists({ key: label.key, 'details.auditId': { $exists: false }, at: { $gte: new Date(at.getTime() - 10_000), $lte: new Date(at.getTime() + 10_000) } });
 				if (near) {
 					skipped++;
 					continue;
