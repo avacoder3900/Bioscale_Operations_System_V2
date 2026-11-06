@@ -26273,3 +26273,26 @@ install_change_reporter.py and the 14 patched installers; appended BIMS_CHANGES_
 /sessions/active null. /health ok (the Pi reports version 0.1.0). Rows in BIMS from alejandrospi3:
 pi.router.change_reporter Installed, pi.service.start 0.1.0. Nothing pending on the Pi.
 Not exercised: a gain write (no gain was changed); the next POST /servos/gains is that check.
+
+================================================================================
+2026-11-06 — fix/arm-motion-lock — Return Home and the droop settle fought over the shoulder; one mover at a time
+================================================================================
+Seen 16:28 UTC: Return Home "kept going back and forth really quickly". Root cause from audit_log: the droop
+settle after Samantha's play of "first grab 2 FINAL" (ends on "16. retreat") was still running when Return Home
+started. Return Home jogged servo 2 toward home (875) while each settle round wrote the pose goal back (1867,
+then 2167 with trim): servo 2 read 1128, 1459, 1073, 1553, 1209, 1416 over six 1.2 s rounds. Return Home's only
+busy check is the Pi's getActive (a Pi play); the settle runs from BIMS, so nothing kept them apart. Not the
+P 16 stiffness change — Return Home at P 16 landed cleanly at 15:48 and 16:31 when nothing else moved the arm.
+Side effect, fixed by hand: the settle saved trim [-1,300,-13,-7,2,0] on "16. retreat" (SyZ1C2oDSBfm4nDd5B5qX);
+cleared to [] with a robot_arm.animate.pose_droop_clear audit row (by alejandro).
+Not explained: 16:21:41 Return Home made 61 jogs and servo 2 moved only 73 steps with no settle running — needs
+the Pi's log.
+Fix: new lease row robot_arm_motion/_id 'arm' (model robot-arm-motion.ts, helper $lib/server/robot-arm-motion.ts
+claimArmMotion/releaseArmMotion; ends on its own at `until`, so it cannot strand). Claimed by Return Home (each
+attempt and the claw close share the loop's runId; 35 s, 5 s linger after each request), settleAtPose (30 s,
+released at the end) and writeAndPlay (from the first read until the Pi run started; then the Pi's busy check
+takes over). Second claimer gets "The arm is busy (Return Home, <user>) — wait for it to finish or stop it
+first" (409). Maintenance test Return Home loop passes a runId too. No index needed (by _id only).
+- npm run check 14 errors (baseline 14, none in touched files). vitest robot-arm 297/298; the 1 failure
+  (url-invariant, RobotArmCameraPanel name mention) fails the same on origin/master. Lease semantics checked on a
+  scratch collection against Atlas (claim / busy / renew / linger / foreign release ignored). Not driven on the arm.
