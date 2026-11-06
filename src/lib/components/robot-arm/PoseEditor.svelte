@@ -80,8 +80,12 @@
 
 	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose, home = null, beforeLive }: Props = $props();
 
-	/** "The arm is at these values" — loaded joints sit a few tens of steps short of their goal. */
-	const AT_POSE_STEPS = 80;
+	/**
+	 * "The arm is at these values": Go To Pose hides inside this. 80 while loaded joints sat
+	 * tens of steps short; 20 (Short Move's limit) since stiffness 32 on 2026-11-06 lands every
+	 * joint within ~9, so a 60-step pose pair (5. Shoulder Down -> 6. Elbow) gets its button.
+	 */
+	const AT_POSE_STEPS = 20;
 	/** Live starts on the pose's numbers when every servo is this close. */
 	const LIVE_FROM_POSE_STEPS = 150;
 	// Fast enough that the New Pose sliders track an arm moved by hand (2026-11-04, was 1500).
