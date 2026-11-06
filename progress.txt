@@ -26636,7 +26636,12 @@ duplicated until restored. Each copy writes an audit entry (move_set_duplicate /
 Files: src/lib/server/robot-arm-animation.ts (duplicateMoveSet, duplicateSequence; freeCopyName takes
 the model), teach/+page.server.ts (two actions), teach/+page.svelte (the button).
 npm run check: 14 errors, none in touched files. vitest robot-arm 385/385.
-=======
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6ZG8yCZHCEWst8sRxtKj1fpiYvE1
+Source: branch master @ commit 01596b83 (also feat/arm-duplicate-moveset-sequence)
+Retrieve this exact code: git checkout 01596b83
+What this deployment is for: Duplicate button on Teach Move Set and Sequence rows (Vercel status success).
+
+================================================================================
 2026-11-06 — feat/ot2-movement-log — Cable link live on arm-pi; B07 bridge daemon fixed (dead iMac proxy)
 ================================================================================
 arm-pi (sudo, with Alejandro's OK): NM profile ot2-cable on eth1 = 169.254.42.1/16; robot-arm restarted (no session).
