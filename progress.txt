@@ -26712,3 +26712,19 @@ Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "feat(robot-arm): first grab waits for ARM CALIBRATED"
 What this deployment is for: the arm's first grab never starts while the OT-2 is still probing; with no tip on the
 OT-2 the run pauses and the arm stays put.
+
+================================================================================
+2026-11-06 — master — Rehearsal scan: any barcode passes, only an empty read fails
+================================================================================
+Alejandro: in rehearsal, scan the carts but disregard whether they are allowed; rehearsal must not change any
+state; just determine that a barcode is there and move on; nothing read at all = fail. Rehearsal only.
+cycleScanRead and the typed-barcode start (Start At: fill) in src/lib/server/arm-wax-fill.ts skip
+cartScanProblem when the protocol on the robot is the rehearsal (any barcode: unknown cart, bucket label, any
+status; nothing looked up, nothing written). An empty read still takes the fail route (fail animation, loop
+skipped). cycleDecide already only audits in rehearsal; loopFinish advances nothing. Readiness notes, the
+fail-route doc comment and the Run log line say so. Production fills unchanged. svelte-check 14 errors (baseline).
+Worktree Bioscale_V2-wt-rehearsal-scan (the arm-ui worktree was live with another session: New Tip Rack).
+Deployment: production — 
+Source: branch master @ commit 577bee64
+Retrieve this exact code: git checkout 577bee64
+What this deployment is for: rehearsal scan accepts any barcode, checks and changes nothing (Vercel status success).
