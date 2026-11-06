@@ -26353,8 +26353,7 @@ Source: branch feat/screen-gain8-era @ commit (this commit; see git log feat/scr
 Retrieve this exact code: git checkout feat/screen-gain8-era
 What this deployment is for: keep SCREEN optics trends valid across the v106 -> v107 gain change
 
-================================================================================
-2026-11-06 — feat/arm-motion-log — Robot arm Movement Log; Change Log its own bubble; unit test results on Tests
+=========================================================================2026-11-06 — feat/arm-motion-log — Robot arm Movement Log; Change Log its own bubble; unit test results on Tests
 ================================================================================
 Alejandro wanted every arm movement, for every servo, kept, so a vague "it kept going back and forth in the
 last hour" can be checked; the Change Log as its own Maintenance bubble like Tests; and the automated
@@ -26385,3 +26384,39 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 1a44ef99 (also feat/arm-motion-log; feature commit c73b87f9)
 Retrieve this exact code: git checkout 1a44ef99
 What this deployment is for: Maintenance Movement Log + Change Log bubble + unit test results on Tests (Vercel status success).
+=======
+================================================================================
+2026-11-06 — feat/dry-fill-jog-run — Stage Calibration: Dry Fill All Holes rebuilt in the Jog run; the tip stays on
+================================================================================
+Giovanni hit "Dry Fill: This cycle has no scanned barcode." twice on B07 and asked for a rebuild from scratch
+that does not drop the tip each time. Root cause of the error: the dev server on :5173 (wt-ui-redesign) had
+run since 2026-11-05 16:55, before Dry Fill existed. Hot reload took the new code, but Mongoose kept the
+cached ArmWaxFillRun / WaxFillingRun schemas, which silently dropped `dryFill` on save, so the fill step
+saw an ordinary loop with no barcode (loops 63cNlewYswlS25-M3ZMd_ and K9guwznfBugMvSb6ewE2X carry no flag).
+Production saved the flag; the old design was not the cause, but it also could never keep a tip: every
+OT-2 protocol run starts by picking up a new tip and the old Dry Fill ended by trashing it.
+Chosen design (asked, "Inside The Jog Run"): the Dry Fill plays in this page's own maintenance run on the
+tip already on the pipette. Nothing picks up or drops a tip, so it can run again on the same tip or keep
+jogging. The old loop-based Dry Fill is removed entirely (startLoop dryFill, dryFillEnd, refuseDryFill,
+the dryFill model fields, the finishConfirm exception, the eight dryFill* page actions).
+- src/lib/robot-arm/dry-fill-plan.ts (NEW): a pure port of the stage protocol's fill of one cart:
+  plan_batches (never across a row), the 2 mL tube table and tube_depth_for (bisect_left segment and floor
+  clamp kept exactly), aspirate_batch, settle_after_aspirate (2.3 mm, 3 s, touch tip, 0.25 uL drip at 0.5x),
+  dispense_batch (lift + planned arrive, 0.3 s, straight hops in a row, dispense at 0.325 x 7.56 uL/s),
+  blow out at the tube top; wax = True so the plunger moves on air. Ends all the way up.
+  dry-fill-plan.test.ts: 8 tests pinned to the protocol's own Python (37.1 / 36.8357 / 36.8805 mm on B07).
+- arm-wax-fill.ts: dryFillPlanFor builds the plan from the robot's protocol defaults (vol_gate1-4,
+  aspirate_remainder), the fixture's min_tip_clearance as a run start injects it, and the drybath tuberack
+  A3 depth; loadStageCalibration returns it as dryFill { plan, why, tube }. The p300 rehearsal is refused.
+  recordDryFill writes arm_wax_fill.dry_fill_start / done / stopped / failed audit rows (dryFillRecord action).
+- calibrate/stage/+page.svelte: Dry Fill All Holes plays the plan through the Jog run: move-to-well into the
+  wax tube (rack loaded in slot 10 with this robot's rack offset), mx.command prepareToAspirate /
+  aspirateInPlace / dispenseInPlace / blowOutInPlace / touchTip, holes via move-to with the tip's probe
+  adjust and the taught dispense depth. Needs an open Jog run with a picked-up, probed tip. Before any move
+  it checks the run models the tip (a hand-pushed tip would put every hole move a tip length low).
+  Pause / Resume / Stop (stop after the current step, then all the way up; tip kept).
+Live check (read-only, B07): Wax_Filling_GEN7_ArmStage.py, tube depth 38.6, 3 rows of 4, aspirate 17.9 uL
+at 37.1 / 36.836 / 36.881 mm below the rim, 85 steps. Not run on a robot yet.
+svelte-check 13 errors (baseline; none in touched files). vitest robot-arm + run-lifecycle-records +
+arm-wax-fill 278 pass.
+Worked in worktree ../Bioscale_V2-wt-dryfill-jog (node_modules junction).

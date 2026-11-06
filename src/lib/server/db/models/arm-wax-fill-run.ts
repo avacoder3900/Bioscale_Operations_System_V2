@@ -81,12 +81,6 @@ const armWaxFillRunSchema = new Schema(
 		stopRequested: { type: Boolean, default: false },
 		/** 2026-11-05: the step the first cart started at — grab, or scan / decide (fill, barcode typed) / withdraw with a cart already on the stage. */
 		startStep: { type: String, enum: ['grab', 'scan', 'decide', 'withdraw'], default: 'grab' },
-		/**
-		 * 2026-11-06: a Dry Fill from Stage Calibration — the loop's own run, one cart,
-		 * every hole, started at the fill with no cart record and no arm: the arm steps
-		 * (grab / withdraw / fail) refuse it, and nothing is attached to the wax run.
-		 */
-		dryFill: { type: Boolean, default: false },
 		grabAnimation: animationRefSchema,
 		withdrawAnimation: animationRefSchema,
 		failAnimation: animationRefSchema,

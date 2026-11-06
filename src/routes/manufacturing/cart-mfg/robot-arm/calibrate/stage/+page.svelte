@@ -759,123 +759,159 @@
 		fillPaused = false;
 	}
 
-	// ── Dry Fill: the wax fill's own OT-2 run, one cart, all 12 holes, no cart record, no arm ──
-	// The server starts it exactly as the Run page starts a loop (same protocol and
-	// parameters); this page then sends the fill and the end as the loop would.
-	let dryLoop = $state<any>(data.dryFill ?? null);
-	let dryPhase = $state<'starting' | 'running' | 'stopping' | null>(null);
+	// ── Dry Fill All Holes (rebuilt 2026-11-06) ──────────────────────────────
+	// The stage protocol's fill of one cart, step for step (data.dryFill.plan from
+	// $lib/robot-arm/dry-fill-plan: tube, aspirate, settle, touch tip, every hole at
+	// the dispense height, blow out), played in THIS page's Jog run on the tip
+	// already on the pipette. No tip is picked up or dropped, so the same tip runs
+	// it again or keeps jogging. Stop ends after the current step, all the way up.
+	const dryPlan = $derived(data.dryFill?.plan ?? null);
+	let dryRunning = $state(false);
+	let dryPaused = $state(false);
+	let dryStop = false;
 	let dryStatus = $state<string | null>(null);
-	let dryStopAsked = false;
-	async function dryPost(action: string, loopId?: string): Promise<any> {
-		const fd = new FormData();
-		if (loopId) fd.set('loopId', loopId);
-		const res = await fetch(`?/${action}`, { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
-		const result = deserialize(await res.text());
-		if (result.type === 'failure') throw new Error((result.data as any)?.error ?? 'Action failed');
-		if (result.type === 'error') throw new Error(result.error?.message ?? 'Action failed');
-		return (result as any).data ?? {};
+	let tubeLabware: { runId: string; labwareId: string } | null = null;
+	/** Why Dry Fill cannot run now, or null. */
+	const dryBlocked = $derived.by((): string | null => {
+		if (!dryPlan) return data.dryFill?.why ?? 'Dry Fill is not available.';
+		if (!taught) return 'Teach the first hole first.';
+		if (!runId || !pipetteId) return 'Open a Jog run first.';
+		if (pipetteMismatch) return `The run's pipette is ${pipetteName}, not the ${pip}.`;
+		if (!hasTip) return `Put a tip on first: Pick Up A ${pip} Tip And Calibrate.`;
+		if (!tipAdjust) return 'Calibrate the tip first: the holes use its probe adjust.';
+		return null;
+	});
+	/** One engine command in the Jog run (the shared mx.command verb, on the session's line). */
+	async function mxCommand(commandType: string, params: Record<string, unknown>): Promise<void> {
+		const args = { runId, commandType, params: { pipetteId, ...params }, timeoutMs: 60_000 };
+		const res = robotSession
+			? await robotSession.call('mx.command', args)
+			: await fetch(`/api/opentrons-lab/robots/${robotId}/verb?verb=mx.command&runId=${encodeURIComponent(String(runId))}`, {
+					method: 'POST',
+					credentials: 'same-origin',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ commandType: args.commandType, params: args.params, timeoutMs: args.timeoutMs })
+				});
+		const body = await res.json().catch(() => null);
+		if (!res.ok) throw new Error(body?.message ?? `${commandType}: HTTP ${res.status}`);
 	}
-	async function startDryFill() {
-		if (!confirm("Dry Fill All Holes?\n\nThe OT-2 runs the wax fill's own steps at all 12 holes: new tip, calibrate, wax tube, every hole, tip to the trash, home.")) return;
-		clearMsg();
-		dryPhase = 'starting';
-		dryStopAsked = false;
-		try {
-			// One run at a time on the OT-2: this page's maintenance run closes first.
-			if (runId) await stopMaintenance();
-			dryStatus = 'Starting The Run';
-			dryLoop = (await dryPost('dryFillStart')).loop;
-		} catch (e) {
-			errMsg = `Dry Fill did not start: ${e instanceof Error ? e.message : String(e)}`;
-			dryPhase = null;
-			dryStatus = null;
+	/** The wax tube's rack, loaded once per Jog run (slot 10, with this robot's rack offset, as a run loads it). */
+	async function tubeLabwareId(): Promise<string> {
+		if (tubeLabware && tubeLabware.runId === runId) return tubeLabware.labwareId;
+		const tube = data.dryFill!.tube;
+		const r = await api(mx('load-labware'), { method: 'POST', body: JSON.stringify({ loadName: tube.loadName, slot: tube.slot }) });
+		if (!r?.labwareId) throw new Error(`Could not load ${tube.loadName} in slot ${tube.slot}.`);
+		tubeLabware = { runId: String(runId), labwareId: r.labwareId };
+		return r.labwareId;
+	}
+	function recordDryFill(event: 'start' | 'done' | 'stopped' | 'failed', detail = '') {
+		const fd = new FormData();
+		fd.set('event', event);
+		fd.set('detail', detail);
+		void fetch('?/dryFillRecord', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } }).catch(() => null);
+	}
+	async function runDryFill() {
+		if (dryBlocked) {
+			errMsg = dryBlocked;
 			return;
 		}
-		await driveDryFill();
-	}
-	async function driveDryFill() {
-		if (!dryLoop) return;
-		dryPhase = 'running';
-		const id = String(dryLoop._id);
-		try {
-			while (dryLoop.status === 'running' && !dryStopAsked) {
-				const step = dryLoop.cycles?.[dryLoop.cycles.length - 1]?.step;
-				if (step === 'decide') {
-					dryStatus = 'Taking A Tip, Calibrating It, Parking In The Wax Tube';
-					const w = await dryPost('dryFillAwaitParked', id);
-					dryLoop = w.loop;
-					if (!w.done || dryLoop.status !== 'running' || dryStopAsked) continue;
-					dryLoop = (await dryPost('dryFillFill', id)).loop;
-				} else if (step === 'fill') {
-					dryStatus = 'Filling All 12 Holes';
-					dryLoop = (await dryPost('dryFillWait', id)).loop;
-				} else if (step === 'withdraw') {
-					dryStatus = 'Tip To The Trash, Home';
-					dryLoop = (await dryPost('dryFillEnd', id)).loop;
-				} else break;
-			}
-			if (dryStopAsked) return;
-			while (dryLoop.ending && !dryLoop.runFinished) {
-				const r = await dryPost('dryFillFinish', id);
-				dryLoop = r.loop;
-				if (r.done) break;
-			}
-			if (dryLoop.status === 'completed' && dryLoop.opentronsRunFinalStatus === 'succeeded' && !dryLoop.error) msg = 'Dry Fill complete: all 12 holes.';
-			else errMsg = `Dry Fill ended ${dryLoop.status}${dryLoop.opentronsRunFinalStatus ? ` (OT-2 run ${dryLoop.opentronsRunFinalStatus})` : ''}${dryLoop.error ? `: ${dryLoop.error}` : ''}`;
-		} catch (e) {
-			if (!dryStopAsked) errMsg = `Dry Fill: ${e instanceof Error ? e.message : String(e)}`;
-		} finally {
-			if (!dryStopAsked) {
-				dryPhase = null;
-				dryStatus = null;
-				dryLoop = null;
-				await invalidateAll();
-			}
+		if (locked) {
+			errMsg = 'A wax-fill loop is running on this robot.';
+			return;
 		}
-	}
-	/** Stop: the OT-2 run is stopped now (the Run page's STOP RUN), then homed; the pipette keeps its tip. */
-	async function stopDryFill() {
-		if (!dryLoop) return;
-		dryStopAsked = true;
-		dryPhase = 'stopping';
-		dryStatus = 'Stopping The OT-2';
-		const id = String(dryLoop._id);
+		const plan = dryPlan!;
+		const tube = data.dryFill!.tube;
 		clearMsg();
+		dryRunning = true;
+		dryPaused = false;
+		dryStop = false;
+		busy = true;
+		recordDryFill('start', `run ${runId}, ${plan.batches.length} rows, tip adjust ${tipAdjust!.x}, ${tipAdjust!.y}`);
+		let row = 0;
+		let outcome: 'done' | 'stopped' | 'failed' = 'done';
 		try {
-			await dryPost('dryFillHalt', id);
-			dryStatus = 'Homing The OT-2';
-			let lastErr: unknown = null;
-			for (let i = 0; i < 10; i++) {
-				try {
-					await dryPost('dryFillHome', id);
-					lastErr = null;
+			// The run must model the tip: one pushed on by hand is invisible to it, so
+			// every hole move would put the tip end a whole tip length low. The plunger
+			// prepare (all the way up, nothing moves but the plunger) refuses without one.
+			await lift();
+			try {
+				await mxCommand('prepareToAspirate', {});
+			} catch (e) {
+				throw new Error(`The Jog run does not know a tip is on, so it will not move to the holes. Pick Up A ${pip} Tip And Calibrate first. (${e instanceof Error ? e.message : String(e)})`);
+			}
+			const labwareId = await tubeLabwareId();
+			for (const step of plan.steps) {
+				while (dryPaused && !dryStop) await sleep(150);
+				if (dryStop) {
+					outcome = 'stopped';
 					break;
-				} catch (e) {
-					lastErr = e; // still stopping: try again shortly
-					await new Promise((r) => setTimeout(r, 3000));
+				}
+				switch (step.op) {
+					case 'lift':
+						await lift();
+						break;
+					case 'tube':
+						await api(mx('move-to-well'), { method: 'POST', body: JSON.stringify({ pipetteId, labwareId, wellName: tube.well, zOffsetMm: -step.belowRimMm }) });
+						break;
+					case 'prepare':
+						await mxCommand('prepareToAspirate', {});
+						break;
+					case 'aspirate':
+						row += 1;
+						dryStatus = `Aspirate, Row ${row} Of ${plan.batches.length}`;
+						await mxCommand('aspirateInPlace', { volume: step.volume, flowRate: step.flowRate });
+						break;
+					case 'dispense':
+						await mxCommand('dispenseInPlace', { volume: step.volume, flowRate: step.flowRate });
+						break;
+					case 'blowOut':
+						dryStatus = `Blow Out, Row ${row} Of ${plan.batches.length}`;
+						await mxCommand('blowOutInPlace', { flowRate: step.flowRate });
+						break;
+					case 'touchTip':
+						await mxCommand('touchTip', { labwareId, wellName: tube.well, wellLocation: { origin: 'top', offset: { x: 0, y: 0, z: -step.belowRimMm } }, radius: step.radius, speed: step.speed });
+						break;
+					case 'delay':
+						await sleep(step.seconds * 1000);
+						break;
+					case 'hole': {
+						const w = wellByName.get(step.name);
+						if (!w) throw new Error(`Unknown hole ${step.name}`);
+						const a = adj();
+						const z = step.at === 'prejump' ? w.z + STAGE_PREJUMP_MM : dispenseZ(w.z, depthMm);
+						if (step.at === 'dispense') {
+							selection = new Set([step.name]);
+							refWell = step.name;
+							dryStatus = `Hole ${step.name}`;
+						}
+						await moveAbs({ x: w.x + a.x, y: w.y + a.y, z }, { direct: !step.planned });
+						break;
+					}
 				}
 			}
-			if (lastErr) throw lastErr;
-			msg = 'Dry Fill stopped. The OT-2 is home; remove the tip from the pipette.';
+			if (outcome === 'stopped') {
+				await lift();
+				msg = 'Dry Fill stopped. The tip is still on.';
+			} else msg = 'Dry Fill complete: all 12 holes. The tip is still on.';
 		} catch (e) {
-			errMsg = `Dry Fill stop: ${e instanceof Error ? e.message : String(e)}`;
+			outcome = 'failed';
+			errMsg = `Dry Fill: ${e instanceof Error ? e.message : String(e)}`;
+			await lift().catch(() => null);
 		} finally {
-			dryPhase = null;
+			recordDryFill(outcome, outcome === 'failed' ? (errMsg ?? '') : '');
+			dryRunning = false;
+			dryPaused = false;
 			dryStatus = null;
-			dryLoop = null;
-			await invalidateAll();
+			busy = false;
+			await refreshPosition();
 		}
 	}
-	onMount(() => {
-		// A reload during a Dry Fill: the OT-2 waits on this page for its next instruction.
-		if (dryLoop && dryLoop.status === 'running') void driveDryFill();
-	});
 
 	// ── OT-2 robot bar (the Run page's, 2026-11-06) ──────────────────────────
 	// The same bar as on Wax Fill → Run: robot menu, bridge health (polled every
 	// 10 s), Identify, Lights, Home, Conveyor, Recover. No Stage Calibration link:
-	// this is that page. Home and the robot menu wait while this page's Jog run,
-	// a Dry Fill or a loop holds the robot; Recover ends all of them.
+	// this is that page. Home and the robot menu wait while this page's Jog run
+	// (a Dry Fill plays in it) or a loop holds the robot; Recover ends all of them.
 	let robotMenuOpen = $state(false);
 	let switchingRobot = $state(false);
 	let health = $state<RobotHealth | null>(data.health);
@@ -885,7 +921,7 @@
 	let robotBusy = $state<'restart' | 'reset' | 'home' | 'lights' | 'identify' | null>(null);
 	let robotMsg = $state<{ text: string; level: 'info' | 'warn' | 'error' } | null>(null);
 	let lightsOn = $state<boolean | null>(null);
-	const robotHeld = $derived(!!runId || !!dryLoop || locked);
+	const robotHeld = $derived(!!runId || locked);
 
 	async function pollHealth() {
 		if (!robotId) return;
@@ -963,7 +999,7 @@
 	}
 
 	/**
-	 * Recover, as on the Run page: a Dry Fill (or any running loop) ends now, the
+	 * Recover, as on the Run page: any running loop ends now, a Dry Fill stops, the
 	 * OT-2 force-reset aborts its run and clears any maintenance run (this page's
 	 * Jog run included), then the robot server is restarted only when it needs it
 	 * (hung, or force-reset could not reach it). Shift-click forces the restart.
@@ -974,7 +1010,7 @@
 		const lines = [
 			`Recover ${robotName}?`,
 			'',
-			"This ENDS any Dry Fill or loop on this robot, ABORTS its active run, closes this page's Jog run and clears its run state. Carts are left as-is.",
+			"This ENDS any loop or Dry Fill on this robot, ABORTS its active run, closes this page's Jog run and clears its run state. Carts are left as-is.",
 			willRestart
 				? 'The robot server will also be restarted (it boots for 2–3 min).'
 				: 'If the robot server turns out to be hung or unreachable, it will also be restarted (2–3 min boot).'
@@ -982,12 +1018,15 @@
 		if (!confirm(lines.join('\n'))) return;
 		robotBusy = 'reset';
 		robotMsg = null;
-		if (dryLoop) dryStopAsked = true;
+		dryStop = true;
 		const notes: string[] = [];
 		let reachable = true;
 		try {
 			try {
-				await dryPost('resetLoop');
+				const fd = new FormData();
+				const res = await fetch('?/resetLoop', { method: 'POST', body: fd, headers: { 'x-sveltekit-action': 'true' } });
+				const result = deserialize(await res.text());
+				if (result.type === 'failure') throw new Error((result.data as any)?.error ?? 'Action failed');
 			} catch (e) {
 				notes.push(`Run reset failed: ${e instanceof Error ? e.message : String(e)}`);
 			}
@@ -999,14 +1038,11 @@
 			} catch {
 				notes.push('Reset request failed — check the bridge.');
 			}
-			// Force-reset deletes the robot's maintenance run; forget this page's Jog run and Dry Fill.
+			// Force-reset deletes the robot's maintenance run; forget this page's Jog run.
 			runId = pipetteId = pipetteMount = pipetteName = null;
 			liveX = liveY = liveZ = null;
 			hasTip = false;
 			tipAdjust = null;
-			dryLoop = null;
-			dryPhase = null;
-			dryStatus = null;
 			if (willRestart || !reachable) {
 				if (health?.status === 'offline' && !forceRestart) {
 					notes.push('Bridge is offline, so the robot server can’t be restarted from here — check the robot’s power and network.');
@@ -1027,7 +1063,7 @@
 		}
 	}
 
-	/** Home the OT-2 gantry (not while this page's Jog run, a Dry Fill or a loop holds the robot). */
+	/** Home the OT-2 gantry (not while this page's Jog run or a loop holds the robot). */
 	async function homeGantry() {
 		if (!robotId || robotBusy) return;
 		if (!confirm(`Home all axes on ${robotName}? Make sure the deck is clear.`)) return;
@@ -1398,7 +1434,7 @@
 				<span class="h-2.5 w-2.5 shrink-0 rounded-full {healthDot(health?.status)}" title={health ? `${health.label}: ${health.detail}` : 'No health data'}></span>
 				<div class="relative" onfocusout={(e) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) robotMenuOpen = false; }}>
 					<button type="button" onclick={() => (robotMenuOpen = !robotMenuOpen)} disabled={robotHeld || switchingRobot}
-						title={locked || dryLoop ? 'Not while a run is on' : runId ? 'Close the Jog run to switch robots' : 'Switch Robot'} aria-haspopup="menu" aria-expanded={robotMenuOpen}
+						title={locked ? 'Not while a run is on' : runId ? 'Close the Jog run to switch robots' : 'Switch Robot'} aria-haspopup="menu" aria-expanded={robotMenuOpen}
 						class="flex items-center gap-1 rounded border border-transparent px-1 py-0.5 font-semibold hover:border-[var(--color-tron-border)] disabled:opacity-100 disabled:hover:border-transparent"
 						style="color: var(--color-tron-text)">
 						<span class="truncate">{robotId ? (data.robotName ?? robotId) : 'No OT-2 Chosen'}</span>
@@ -1433,12 +1469,12 @@
 					{lightsOn === null ? 'Lights' : lightsOn ? 'Lights On' : 'Lights Off'}
 				</button>
 				<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || robotHeld}
-					title={locked || dryLoop ? 'Not while a run is on' : runId ? 'Close the Jog run first' : 'Home all axes'} class={ctlPlain}>
+					title={locked ? 'Not while a run is on' : runId ? 'Close the Jog run first' : 'Home all axes'} class={ctlPlain}>
 					{robotBusy === 'home' ? 'Homing…' : 'Home'}
 				</button>
 				<a href="/manufacturing/cart-mfg/robot-arm/teach" title="Pulse the cooling belt (Teach tab)" class={ctlPlain}>Conveyor</a>
 				<button type="button" onclick={(e) => void recover(e.shiftKey)} disabled={!robotId || robotBusy !== null}
-					title="Ends any Dry Fill or loop, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"
+					title="Ends any loop or Dry Fill, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"
 					class="{ctl} {health?.status === 'hung' ? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50' : 'border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30'}">
 					{robotBusy === 'restart' ? 'Restarting…' : robotBusy === 'reset' ? 'Recovering…' : 'Recover'}
 				</button>
@@ -1783,9 +1819,16 @@
 		</section>
 		<section class="mb-3 break-inside-avoid rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Tour / Fill Motion</h2>
-			{#if dryPhase || dryLoop}
-				<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">Dry Fill{dryStatus ? `: ${dryStatus}` : ''}</div>
-				<button type="button" onclick={stopDryFill} disabled={dryPhase === 'stopping' || dryPhase === 'starting' || !dryLoop} class="w-full rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300 disabled:opacity-40">Stop</button>
+			{#if dryRunning}
+				<div class="mb-1 text-center text-[11px] {dryPaused ? 'text-amber-300' : ''}" style={dryPaused ? '' : 'color: var(--color-tron-cyan)'}>{dryPaused ? 'Paused' : `Dry Fill${dryStatus ? `: ${dryStatus}` : ''}`}</div>
+				<div class="grid grid-cols-2 gap-1">
+					{#if dryPaused}
+						<button type="button" onclick={() => (dryPaused = false)} class="rounded border border-[var(--color-tron-cyan)]/40 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10">Resume</button>
+					{:else}
+						<button type="button" onclick={() => (dryPaused = true)} class="rounded border border-amber-500/40 bg-amber-900/15 py-2 text-xs text-amber-300">Pause</button>
+					{/if}
+					<button type="button" onclick={() => { dryStop = true; dryPaused = false; }} class="rounded border border-red-500/40 bg-red-900/15 py-2 text-xs text-red-300">Stop</button>
+				</div>
 			{:else if touring}
 				<div class="mb-1 text-center text-[11px]" style="color: var(--color-tron-cyan)">{tourIndex + 1} / {tourWells.length} — {tourWells[tourIndex]}</div>
 				<div class="grid grid-cols-4 gap-1">
@@ -1812,7 +1855,7 @@
 				<div class="grid grid-cols-2 gap-1">
 					<button type="button" onclick={startTour} disabled={!pipetteId || busy || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Drive through all 12 holes in fill order">Run Through All Holes</button>
 					<button type="button" onclick={runFillMotion} disabled={!pipetteId || busy || selCount === 0 || !taught} class="rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The stage protocol's exact approach at the selected hole(s): all the way up → pre-jump → dispense depth → dwell → pre-jump → all the way up">▶ Fill Motion ({selCount} Selected)</button>
-					<button type="button" onclick={startDryFill} disabled={!robotId || busy || !taught || locked} class="col-span-2 rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="The wax fill's own OT-2 run at all 12 holes, with nothing in the wax tube: new tip, calibrate, wax tube, every hole, tip to the trash, home. No cart, no arm.">Dry Fill All Holes</button>
+					<button type="button" onclick={runDryFill} disabled={!robotId || busy || locked} class="col-span-2 rounded border border-[var(--color-tron-cyan)]/40 px-2 py-2 text-xs text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title={dryBlocked ?? "The wax fill's own steps at all 12 holes in this Jog run, on the tip already on: wax tube, aspirate, every hole, blow out. The tip stays on."}>Dry Fill All Holes</button>
 				</div>
 				<div class="mt-2 flex flex-wrap items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
 					<span class="opacity-70">Fill:</span>
