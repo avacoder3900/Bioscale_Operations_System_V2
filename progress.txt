@@ -26527,3 +26527,26 @@ All passed, 0 wobble, servos 38-44 C throughout. Miss at 50 / 100 steps: shoulde
 [1,1,1,1,0,0]. Change Log: per servo the Pi's own "Temporary" row plus a "Saved to EEPROM" row.
 31 test runs and 219 moves as "Claude (Servo Diagnosis)" in the Test and Movement Logs; motion lease
 held during each probe. Not verified across a power cycle. No code changed.
+
+================================================================================
+2026-11-06 — feat/movement-log-filters — Servo readings before/after each arm move; OT-2 home + lights
+================================================================================
+Alejandro asked for servo readings in the Movement Log before and after each servo move, and for the
+Opentron home and lights.
+- src/lib/server/robot-arm-client.ts: robotArmFetch reads GET /servos (1.5 s timeout) just before each
+  movement describeArmMove names, except Stop (never delayed). After the Pi answers, a background task
+  (Vercel request-context waitUntil) polls /servos every 250 ms until the watched servos read speed 0 and
+  the same position twice, 4 s cap. If a newer move starts first, its before read is used ("Next Move
+  Started"). Play, record, leader arm and task get a before read only (they run on).
+- src/lib/robot-arm/move-log.ts: servoReadings, isSettled, readingLine ("After  Servo 3  Position 2975
+  Goal 2947  Off 28  38 °C  Load -115  12.4 V  Torque On  Settled 1.2 s"); readings are not counted as moves.
+- src/lib/server/robot-arm-move-log.ts: recordArmReading (kinds reading_before / reading_after, moveId,
+  readings), recordOt2Action; recordArmMove takes the row id and returns the entry.
+- OT-2: robotPost in proxy.ts logs POST /robot/home and /robot/lights (BIMS routes, wax-fill homing, relay);
+  the browser's direct line sends those two bodies in its direct-calls trace and the route logs them.
+  Kinds home, lights_on, lights_off. Groups: arm Servo Reading, OT-2 Lights (setRailLights moved there).
+- Model robot_arm_moves: readings, moveId. No new indexes.
+Cost: one extra Pi round trip before every arm move (a jog chunk included), and settle polling on the bus.
+Not tested on the arm (no move was sent from here); unit tests only.
+npm run check 13 errors (baseline). vitest src/lib/robot-arm src/lib/opentrons src/lib/server 977 passed,
+1 failed: ot2-protocol.run.test.ts stale-bundle test, fails the same on master without these changes.
