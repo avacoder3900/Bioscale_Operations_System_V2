@@ -23,6 +23,7 @@ import { archiveSuperseded, listArchived, tagCalibrationMeta } from '$lib/server
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmTag, RobotArmTagCalibration } from '$lib/server/db/models';
 import { robotArm, type AprilTagDetectResponse } from './robot-arm-client';
+import { logArmChange } from './robot-arm-change-log';
 import {
 	assessTags,
 	describeVision,
@@ -751,6 +752,12 @@ export async function updateHoming(user: User, id: string, input: { baseRangeDeg
 	const after: HomingSettings = { baseRangeSteps: degToSteps(deg), gripperOpenSteps: open };
 	await RobotArmTagCalibration.updateOne({ _id: id }, { $set: { homing: after } });
 	await audit('robot_arm.vision.homing', 'robot_arm_tag_calibrations', id, user, { before, after });
+	if (before.baseRangeSteps !== after.baseRangeSteps) {
+		await logArmChange(user, { page: 'calibrate.arm', hardware: 'servo', key: 'home.base_range_steps', target: 'servo:1', oldValue: before.baseRangeSteps, newValue: after.baseRangeSteps, unit: 'steps', source: 'ui' });
+	}
+	if (before.gripperOpenSteps !== after.gripperOpenSteps) {
+		await logArmChange(user, { page: 'calibrate.arm', hardware: 'gripper', key: 'home.gripper_open_steps', target: 'servo:6', oldValue: before.gripperOpenSteps, newValue: after.gripperOpenSteps, unit: 'steps', source: 'ui' });
+	}
 	return after;
 }
 

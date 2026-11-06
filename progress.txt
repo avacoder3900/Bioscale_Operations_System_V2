@@ -26131,3 +26131,42 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit a4a6a618 (also feat/stage-dry-fill)
 Retrieve this exact code: git checkout a4a6a618
 What this deployment is for: Stage Calibration's Dry Fill All Holes (Vercel status success).
+================================================================================
+2026-11-06 — feat/arm-maintenance-log — Maintenance: Change Log + Tests page with its own log
+================================================================================
+Alejandro asked for two things on the arm's Maintenance page, modelled on the OT-2 logging (AuditLog rows per
+maintenance verb, written server-side by one helper; the OT-2 keeps no history of its daemon version): a log of every
+change to the robot arm including the Pi, and a set of physical tests that can be run by hand, each logged too.
+- Labels (src/lib/robot-arm/change-labels.ts): two vague labels (page: run / teach / calibrate.arm / calibrate.stage /
+  maintenance.* / arm-card / pi / hand; hardware: servo / gripper / leader-arm / camera / depth / vision / solenoid /
+  conveyor / stage / pi / network) and one precise label (key + target + old -> new + unit, e.g.
+  "servo.p_coefficient servo:2 6 -> 16", "conveyor.pulse_ms 600 ms"). Keys are lower-case dotted; changeLine() prints
+  the one-line form; source = ui / pi / code / hand / test.
+- Models: RobotArmChange (robot_arm_changes) and RobotArmTestRun (robot_arm_test_runs), both immutable, no TTL.
+  Indexes created with scripts/ensure-indexes.ts --apply (also created ArmWaxFillRun's two declared indexes, which were
+  missing).
+- Writer: src/lib/server/robot-arm-change-log.ts logArmChange() (validates the labels, never throws), listArmChanges,
+  lastLoggedValue. Hooked beside the existing AuditLog rows in: conveyor Save default (conveyor.default_ms), torque
+  on/off (servo.torque), depth config (depth.mode, only when the Pi restarted its stream), camera controls set/reset
+  (camera.<control> per applied control, camera.reset), preset apply (camera.preset), Return To Home settings
+  (home.base_range_steps, home.gripper_open_steps).
+- Backfill: scripts/seed-robot-arm-change-log.ts, 59 rows from git history and this file (gains 6 -> 16 on servos
+  2-6, teleop 10 -> 30 Hz, solenoid 1000 -> 100 ms, conveyor GPIO 22 / 600 ms, every Pi router install, Funnel
+  watchdog, tunnel, Wi-Fi, USB 3 cable, …), fixed ids armchg-hist-NNN, idempotent; applied to the shared DB.
+- Maintenance page: a Tests card and a Change Log section (When / Page / Hardware / Change / Source / By, newest
+  first, Show/Hide top right, shown by default).
+- Tests page (maintenance/tests): 18 tests from src/lib/robot-arm/arm-tests.ts (catalog + pure judges, 16 vitest
+  cases) run one at a time by src/lib/server/robot-arm-tests.ts: Bus Echo, Hold Without Jump, Short Move,
+  Repeatability, Droop, Return To Home, Camera Home Check, Depth Sanity, Camera Preset Readback (read-only: the camera
+  is never written), Gripper, Conveyor Pulse, Solenoid Pulse, Thermals At Rest, Supply Voltage, Servo Gains (P against
+  the last logged servo.p_coefficient per servo), Pi Routes Present (openapi.json against 18 required paths), Lines
+  Reachable (Funnel + registered tunnel + Wi-Fi), Replay (plays a picked move set with the normal play path, then
+  checks servos 1-5 landed within 20 steps of the last pose — Alejandro: no verified-run machinery). Limits in
+  ARM_TEST_LIMITS, taken from the existing constants (arrival 20, home 12, claw 40, load 600, 11.5-13 V, …). Moving
+  tests refuse on a session, a stop-hot servo or torque off. Every run writes a RobotArmTestRun row (the page's Test
+  Log, newest first, Show/Hide top right) and a Change Log row keyed test.<name> with Pass / Fail / Skipped / Error.
+  Route config maxDuration 120 for the long ones. A Pi route that is not installed reads Skipped, not Error.
+Not driven on the arm yet: every test is written against the Pi routes as the client declares them; the first run on
+arm-pi is the real check. vitest: 25 new cases pass; robot-arm suite 21 files pass, url-invariant (c) fails on
+origin/master too (pre-existing). npm run check 13 errors (baseline 13, none in touched files). Worked in
+../Bioscale_V2-wt-maint-log off origin/master fc6b0498.

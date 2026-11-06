@@ -24,6 +24,7 @@ import { error, json } from '@sveltejs/kit';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm, type CameraControlsResponse } from '$lib/server/robot-arm-client';
+import { logArmChange } from '$lib/server/robot-arm-change-log';
 import type { RequestHandler } from './$types';
 // Body parsing lives in ./body.ts: SvelteKit only allows request handlers
 // (and `_`-prefixed names) as exports from a +server.ts, and the production
@@ -96,6 +97,15 @@ export const POST: RequestHandler = async ({ locals, params, request }) => {
 			changedBy: locals.user.username,
 			changedAt: new Date()
 		});
+		// The Change Log: one row per control written (camera.<control>), or one for a reset.
+		const user = { _id: locals.user._id, username: locals.user.username };
+		if (body.reset) {
+			await logArmChange(user, { page: 'calibrate.arm', hardware: 'camera', key: 'camera.reset', target: `camera:${name}`, newValue: 'Defaults', source: 'ui' });
+		} else {
+			for (const id of r.applied ?? Object.keys(body.set ?? {})) {
+				await logArmChange(user, { page: 'calibrate.arm', hardware: 'camera', key: `camera.${id}`, target: `camera:${name}`, newValue: body.set?.[id], source: 'ui' });
+			}
+		}
 	} catch (err) {
 		console.warn('[arm-camera] controls change not audit-logged:', err instanceof Error ? err.message : err);
 	}

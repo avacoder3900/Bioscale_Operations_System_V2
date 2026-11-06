@@ -15,6 +15,7 @@ import { error, json } from '@sveltejs/kit';
 import { AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
+import { logArmChange } from '$lib/server/robot-arm-change-log';
 import type { RequestHandler } from './$types';
 
 async function readTorque(): Promise<{ torqueOn: boolean | null; servos: { id: number; torque: boolean | null }[] }> {
@@ -82,6 +83,7 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 		changedBy: locals.user.username,
 		changedAt: new Date()
 	});
+	await logArmChange({ _id: locals.user._id, username: locals.user.username }, { page: 'arm-card', hardware: 'servo', key: 'servo.torque', target: 'follower', newValue: enable, source: 'ui', note: warning });
 
 	let torqueOn: boolean | null = enable;
 	try {

@@ -217,3 +217,7 @@ export type { AppAccountType } from './app-account-setting.js';
 
 // Voice memos from the Voicenotes app (VOICE-01): records, Claude-written digests, step-0 raw capture.
 export { VoiceMemo, VoiceMemoDigest, VoiceMemoCapture } from './voice-memo.js';
+
+// Robot arm change log + Maintenance test runs (2026-11-06).
+export { RobotArmChange } from './robot-arm-change.js';
+export { RobotArmTestRun } from './robot-arm-test-run.js';

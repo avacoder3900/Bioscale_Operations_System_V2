@@ -10,6 +10,7 @@
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmCameraPreset } from '$lib/server/db/models';
 import { robotArm, type CameraControl, type CameraControlsResponse } from './robot-arm-client';
+import { logArmChange } from './robot-arm-change-log';
 
 interface User {
 	_id: string;
@@ -167,6 +168,7 @@ export async function applyPreset(user: User, cameraName: string, id: string): P
 	const result = await robotArm.setCameraControls(cameraName, values, true);
 	await RobotArmCameraPreset.updateOne({ _id: id }, { $set: { lastAppliedAt: new Date(), lastAppliedBy: { _id: user._id, username: user.username } } });
 	await audit('robot_arm.camera_preset.apply', id, user, { cameraName, name: (doc as any).name, applied: result.applied ?? [], rejected: result.rejected ?? {} });
+	await logArmChange(user, { page: 'calibrate.arm', hardware: 'camera', key: 'camera.preset', target: `camera:${cameraName}`, newValue: (doc as any).name, source: 'ui' });
 	const fresh = await RobotArmCameraPreset.findById(id).lean();
 	return { preset: summary(fresh), result };
 }

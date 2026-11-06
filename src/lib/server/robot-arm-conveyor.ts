@@ -14,6 +14,7 @@ import { AuditLog, generateId } from '$lib/server/db';
 import { ArmWaxFillSettings } from '$lib/server/db/models';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm, type ConveyorStatus } from '$lib/server/robot-arm-client';
+import { logArmChange } from '$lib/server/robot-arm-change-log';
 
 const ARM_DEVICE_ID = 'robot-arm-pi';
 // Mirrors conveyor.py; the Pi is the enforcement point.
@@ -169,6 +170,7 @@ export const conveyorActions = {
 			newData: { conveyorPulseMs: ms, userId: user._id },
 			changedBy: user.username
 		});
+		await logArmChange(user, { page: 'teach', hardware: 'conveyor', key: 'conveyor.default_ms', oldValue: before?.conveyorPulseMs ?? DEFAULT_PULSE_MS, newValue: ms, unit: 'ms', source: 'ui' });
 		return { savedDefaultMs: ms };
 	},
 

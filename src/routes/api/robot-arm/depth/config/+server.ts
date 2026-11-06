@@ -20,6 +20,7 @@ import { error, json } from '@sveltejs/kit';
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { robotArm } from '$lib/server/robot-arm-client';
+import { logArmChange } from '$lib/server/robot-arm-change-log';
 import type { RequestHandler } from './$types';
 // Body parsing and the mode/fps tables live in ./body.ts: SvelteKit only
 // allows request handlers (and `_`-prefixed names) as exports from a
@@ -68,6 +69,9 @@ export const POST: RequestHandler = async ({ locals, request }) => {
 			changedBy: locals.user.username,
 			changedAt: new Date()
 		});
+		if (r.changed) {
+			await logArmChange({ _id: locals.user._id, username: locals.user.username }, { page: 'calibrate.arm', hardware: 'depth', key: 'depth.mode', newValue: r.mode, source: 'ui', note: `${r.width}x${r.height} ${r.fps} fps` });
+		}
 	} catch (err) {
 		console.warn('[arm-depth] config change not audit-logged:', err instanceof Error ? err.message : err);
 	}
