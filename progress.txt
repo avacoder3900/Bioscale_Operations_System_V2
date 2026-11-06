@@ -26593,3 +26593,18 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit ca352106 (feature 19243518 + 27f7bd4f, also feat/ot2-movement-log)
 Retrieve this exact code: git checkout ca352106
 What this deployment is for: BIMS <-> OT-2 through the arm Pi's cable link, Setup switch, Run tab chip, Link rows (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/arm-motion-log — Go To Pose shows once any servo is over 20 steps off (was 80)
+================================================================================
+The user got no Go To Pose between 5. Shoulder Down and 6. Elbow: the two poses differ only by 60 steps
+on the elbow (2635 vs 2575), and PoseEditor hid the button while every servo was within 80 steps
+(AT_POSE_STEPS, from when loaded joints sat tens of steps short). With stiffness 32 every joint lands
+within ~9, so PoseEditor's window is now 20 (Short Move's limit). Only the button's visibility changes;
+the verified-pose / camera card "On Pose" window ($lib/robot-arm/verified-poses AT_POSE_STEPS) stays 80.
+File: src/lib/components/robot-arm/PoseEditor.svelte. npm run check: no errors in it; vitest robot-arm
+385/385 (stored as a unit run).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/3jNJGhRT1DgzxgeF8oiS6azwmBb6
+Source: branch master @ commit adb3b54f (also feat/arm-motion-log)
+Retrieve this exact code: git checkout adb3b54f
+What this deployment is for: Go To Pose between poses 20-80 steps apart (Vercel status success).
