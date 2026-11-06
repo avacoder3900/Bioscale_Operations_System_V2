@@ -26554,3 +26554,38 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 990e5941 (feature fb89d941, also feat/movement-log-filters)
 Retrieve this exact code: git checkout 990e5941
 What this deployment is for: servo readings before/after each arm move; OT-2 home and lights in the Movement Log (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — Arm Pi <-> OT-2 over the USB-B cable; the loop's handshake goes through it
+================================================================================
+Alejandro cabled B07's side USB-B port to arm-pi (it had been on the lab iMac, where its wired path showed 100 %
+loss). It is a USB Ethernet link: arm-pi eth1 (Realtek 0bda:8050), B07 eth0 169.254.199.218/16. Measured from
+arm-pi: ping 1.8 ms (max 2.0) vs Wi-Fi 8.0 ms (max 21.5); GET /health 58 vs 63 ms. He asked for the cable to carry
+the arm-pi <-> OT-2 traffic instead of BIMS + the Mongo queue (0.8-3 s a hop). Today's 2-cart loop (run 435a399e)
+sat paused 107 s of 278 s; AT_SCAN waits were 12.1 s and 8.3 s of pure handshake.
+Pi (services/robot-arm/src/server/ot2_link.py, scripts/install_ot2_link_router.py; installed on arm-pi, restart
+pending — sudo is blocked for me): finds the robot on the cable (known addr, IPv4/IPv6 neighbours,
+/networking/status), LAN fallback, background probe, state in ~/.bims-arm/ot2_link.json. Routes: GET /ot2/link,
+ANY /ot2/api/{path} (proxy, x-ot2-link / x-ot2-ms), GET /ot2/run/{id}/pause and /wait?fp= (150 ms long-poll on a
+fingerprint), POST/GET /ot2/loop/instruction (BIMS sets, the protocol long-polls; key-free from the robot's own
+addresses), POST /ot2/loop/announce, GET /ot2/calls, GET /ot2/loop/events. .env: OT2_LAN_ADDR, OT2_CABLE_ADDR.
+Needs once (sudo): nmcli con add ... ifname eth1 con-name ot2-cable ipv4.addresses 169.254.42.1/16 (the stock
+netplan-eth0 profile grabs eth1 and loops on DHCP).
+Protocol (both stage .py, tests updated): ArmLoopInstructions.next() long-polls the Pi (URLs from the start
+record's arm_pi_urls, default http://169.254.42.1:8000; 1 s TCP probe first; 10 s backoff) and reads the file
+between polls; arm_mark / arm_pause announce every ARM marker to the Pi (0.4 s, best effort). Analysis unchanged.
+NOT yet on B07 (see below).
+BIMS: src/lib/server/ot2-arm-link.ts — ot2Get/Post/Delete through the Pi when usable (Setup switch, Pi up, a path
+up, the right robot on it by its B07-style slot), else the queue; ot2WaitChange replaces awaitPause's queue polling
+with one long-poll per change; writeInstruction posts to the Pi first and mirrors the file without waiting (start
+record: file first, carrying the Pi's URLs). arm-wax-fill.ts: every robotGet/Post/Delete rerouted (5/4/1). Setup
+"Use Cable Link To The OT-2" (useArmLink, default on). Run tab chip Cable / Wi-Fi / Queue with the path's ms.
+Movement Log: device 'link' rows (kind ot2_call) for POSTs, waits and failures with the Pi's and the robot's ms;
+Link filter, Link timing group, link:hop type group. GET /api/robot-arm/ot2-link (link + Pi journal).
+Rebased over fb89d941 (servo readings / type groups, another session): Link re-applied on master's Movement Log.
+B07's bridge daemon (1.4.0) stopped claiming queue jobs at 18:24 UTC — the minute the cable moved — and
+POST /server/restart (19:01 UTC, robot back 19:03) did not bring it back; robot server fine on Wi-Fi/Tailscale.
+Needs SSH into B07 (key via POST /server/ssh_keys over the cable from arm-pi). Protocol deploy to B07 waits for it.
+npm run check 13 errors (baseline, none in touched files). vitest robot-arm + opentrons + invariants 403/403.
+protocols/tests: loop, rehearsal, geometry, rtp all ok.
+Worked in worktree ../Bioscale_V2-wt-ot2-movelog (node_modules junction).
