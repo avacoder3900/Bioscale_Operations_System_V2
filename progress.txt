@@ -26608,3 +26608,19 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit adb3b54f (also feat/arm-motion-log)
 Retrieve this exact code: git checkout adb3b54f
 What this deployment is for: Go To Pose between poses 20-80 steps apart (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/arm-motion-log — Go To checked on the arm; camera card Go To Pose also at 20 steps
+================================================================================
+The user could not go 7. Wrist Flex -> 8. Elbow and had trouble with 5 <-> 6. Their last Go To (19:33:48
+UTC) was before adb3b54f went live, so that page still hid both buttons inside 80 steps. The Move Set page
+has a second Go To Pose on PoseCameraCard, hidden while "On Pose" (80): 7 <-> 8 are 50 steps apart, so it
+stayed hidden there even after the fix. Checked on the arm with the page's own goToPose / afterPlay
+(Movement Log "Claude (Go To Check)", no Return To Home; a cartridge is in the way): 8 -> 7 -> 6 -> 5 ->
+6 -> 7, every hop played 1.2 s and landed within 14 steps (shoulder +14, gripper -8), temps 40-45 C.
+PoseCameraCard now shows Go To Pose once a servo is over 20 steps off; On Pose / Capture keep 80.
+npm run check: no errors in the file.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/BUT117nXJWvKXv9eGNFcQZZSrFsp
+Source: branch master @ commit 8e9ed69f (also feat/arm-motion-log)
+Retrieve this exact code: git checkout 8e9ed69f
+What this deployment is for: both Go To Pose buttons appear for poses 20-80 steps away (Vercel status success).
