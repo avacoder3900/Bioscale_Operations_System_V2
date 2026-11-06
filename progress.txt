@@ -26782,7 +26782,7 @@ What this deployment is for: the Barcode Present Only Setup box (Vercel status s
    criteria have none. v96+ prunes /validation to 50 files, so the device's "within 5 of the cap" warning
    fired on every healthy unit. Only a count above the cap warns now.
 New src/lib/server/screen/contract.test.ts (6 tests, pass). tsc: no errors in touched files.
-Pushed to branch only (preview build); production needs master pushed - awaiting Jacob's go-ahead.
+Deployed to production 11/6/26 with the v108 entry below (Jacob's go-ahead).
 
 ================================================================================
 2026-11-06 — feat/screen-gain8-era — SCREEN v108 tiered screen: Quick / Screen (tiered) / Full launch, quick-tier + per-well rows
@@ -26798,4 +26798,7 @@ firmware/Docs/V108_TIERED_SCREEN_SPEC.md.
    heat_uptime, q_stage_hits, tier_gate, q_* motion rows, {run N|q}_w{K}_err and _end; per-well ids keep
    their well number; heat_cold doc = info from v108; summary parses "gate" and "skipped"; heat-rate trends.
 contract.test.ts: 4 new tests (10 pass). svelte-check: no errors in the screen files.
-Pushed to branch only - production needs master pushed, awaiting Jacob's go-ahead (with the 8/9/10 fixes).
+Deployment: production - via push of master (Vercel GitHub integration), Jacob's go-ahead 11/6/26
+Source: branch feat/screen-gain8-era rebased onto master 0189dfc8, then master fast-forwarded
+Retrieve this exact code: git checkout feat/screen-gain8-era
+What this deployment is for: v108 tiered screen launch + rows, and the run-reuse / failed-request / fs_val fixes
