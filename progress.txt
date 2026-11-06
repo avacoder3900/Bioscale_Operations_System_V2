@@ -26466,3 +26466,8 @@ answers on Wi-Fi + Tailscale. The OT-2's USB-B port was cabled to arm-pi at 18:2
 USB vs Wi-Fi from arm-pi to B07: ping 1.8 ms (max 2.0) vs 8.0 ms (max 21.5); GET /health 58 ms vs 63 ms.
 npm run check 13 errors (baseline, none in touched files). vitest robot-arm 292/292.
 Worked in worktree ../Bioscale_V2-wt-ot2-movelog (node_modules junction).
+Feature commit after rebase is 43f2180a (the docs commit's subject names the pre-rebase cb2de07b).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/Dczgi7KanV9cVfk5YS7J228ACVB9
+Source: branch master @ commit 5c204cb1 (feature 43f2180a, also feat/ot2-movement-log)
+Retrieve this exact code: git checkout 5c204cb1
+What this deployment is for: Opentrons commands and measured arm loop steps in the Movement Log (Vercel status success).
