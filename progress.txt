@@ -26913,3 +26913,25 @@ code). Production runs 7a68f409; the follow-ups only change backfill scripts and
 Retrieve this exact code: git checkout feat/arm-log-coverage at commit 8533a4ed
   (or: git log feat/arm-log-coverage --oneline to find it if the branch has since moved on)
 What this deployment is for: Play frames and fires in the Movement Log; audited settings, deploys and code changes in the Change Log.
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — Barcode, instruction file, Jog/Teach/Calibrate/Dry Fill and uploads over the cable
+================================================================================
+Code 3be84c7b (on master). Daemon 1.7.0 (scripts/ot2-bridge.py): OPTIONAL arm-pi scan thread, on only with
+ARM_PI_URLS (set on B07 alone); every other robot = 1.6.0 behaviour. Pi ot2_link.py: scanner-hello, scan-request
+(daemon long-poll), scan (result + BIMS long-poll that raises the request at AT_SCAN), loop/file (SSH write of
+/data/arm_loop.json), multipart pass-through. BIMS: proxy.ts tries the arm Pi first for every server-side call to
+the robot on the cable (loop, Jog, Teach, Calibrate, Dry Fill, uploads, Movement Log reads); cycleScanStart/Read use
+the cable scan when the daemon is on the cable (scanVia 'arm-pi'), queue scan_at_pause as fallback; writeInstruction
+writes the file over the cable, queue write_file as fallback. Tests: 756 BIMS unit, 48 daemon, protocol suites ok.
+Deployed (Alejandro: "do it even if B07 does not say idle"; a Jog run was open, no protocol run, no arm session):
+- arm-pi: ot2_link.py copied, robot-arm restarted 21:30 UTC; SSH file write to B07 over the cable 595 ms (wrote a
+  dummy record with loop 'none' to /data/arm_loop.json; the next loop's start record replaces it).
+- B07: daemon 1.7.0 (backup ot2-bridge.py.bak-20261106-v1.6.0), ARM_PI_URLS=http://169.254.42.1:8000 in .env,
+  restarted 21:31:33 UTC; scanner hello reaches the Pi; dummy scan request round-tripped over the cable (refused:
+  not paused at AT_SCAN, as it should).
+- BIMS: Vercel REFUSED the build: "Deployment rate limited — retry in 24 hours" (account's daily build limit).
+  Production stays at 2fa99349 (includes the Home Gantry fix and the first cable link); it works with the new Pi
+  and daemon (the new routes are additive; the daemon still answers the queue's scan_at_pause / write_file).
+  The next push to master after the limit resets builds 3be84c7b and later. No local CLI deploy (CLAUDE.md).
+npm run check 13 errors (baseline).
