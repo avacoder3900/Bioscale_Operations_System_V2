@@ -43,6 +43,12 @@ A tag carries its own ID and, with its printed size and the camera intrinsics, g
    its depth (x/y keep the picture's precision, rotation untouched) before the camera-shift vote and the delta.
    Otherwise that tag is judged on the image on both sides — never mixed. Live Tags marks a depth-driven
    distance with `D`.
+9. **Return to home is paced** (2026-11-06, Alejandro: the servos snapping to each ≤300-step jog at full
+   speed was "kinda violent"): every jog carries `HOME_JOG_SPEED` (600 steps/s ≈ 53°/s, `home-calibration.ts`)
+   and the next jog waits for the travel time (`jogTravelMs`), since the Pi aims a jog from the present
+   position. The STS3215 keeps its Goal_Speed, and a Play writes goals only, so every request that capped a
+   servo ends by re-sending its last goal with speed 0 through `/servos/{id}/move` (`restoreFullSpeed`):
+   nothing moves, Plays stay fast. Failures there are warnings; the next Return to home resets it again.
 7. A registry size edit after calibration does not read as movement: detections are rescaled to the
    calibrated size before comparison (translation is linear in tag size).
 
