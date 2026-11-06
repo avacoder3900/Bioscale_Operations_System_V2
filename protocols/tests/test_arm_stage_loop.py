@@ -324,6 +324,14 @@ def check_surface(m, src, label):
     for bare in ("protocol.pause(f'ARM ", "protocol.comment('ARM CALIBRATED')", "protocol.comment(f'ARM CLEAR", "protocol.comment(f'ARM FILLED", "protocol.comment('ARM LOOP END')"):
         assert bare not in src, bare + ' must go through arm_mark / arm_pause'
     assert m.ARM_PI_URLS == ('http://169.254.42.1:8000',) and m.ARM_LOOP_HTTP_WAIT_S == 5.0
+    # CALIB-5 (2026-11-06): the per-robot rack offsets are declared (±10 mm, default 0) and applied per rack.
+    for rack in ('tiprack', 'tuberack'):
+        for ax in ('x', 'y', 'z'):
+            d = p.by_name[rack + '_offset_' + ax]
+            assert (d['default'], d['minimum'], d['maximum']) == (0.0, -10.0, 10.0), d
+    assert "tiprack.set_offset(x=tip_v['x'], y=tip_v['y'], z=tip_v['z'])" in src
+    assert "tuberack.set_offset(x=tube_v['x'], y=tube_v['y'], z=tube_v['z'])" in src
+    assert "tiprack.set_offset(x=robot_offsets['x']" not in src
     print(f'ok: {label} loop surface')
 
 

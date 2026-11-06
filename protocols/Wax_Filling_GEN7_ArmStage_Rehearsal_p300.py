@@ -646,7 +646,28 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_float(variable_name="z_cal_p300", display_name="Tip-calibrator Z (p300)",
         description="Tip-calibration probe Z for the p300 / 200 uL tip (the Stage Studio's probe Z p300, zCalReagent).",
         default=40.8, minimum=0.0, maximum=200.0, unit="mm")
-
+    # CALIB-5 (2026-11-06): per-robot rack offsets, taught in the Deck Calibration
+    # Studio and injected by BIMS like the carriage fill's. Before this the stage
+    # protocols declared none, so a taught tip rack offset never reached a stage
+    # run (B07: Studio offset (0, 5, 4) mm, the 21:56 UTC run picked up at 0).
+    parameters.add_float(variable_name="tiprack_offset_x", display_name="Tip rack offset X",
+        description="Per-robot offset for the slot-11 tip rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tiprack_offset_y", display_name="Tip rack offset Y",
+        description="Per-robot offset for the slot-11 tip rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tiprack_offset_z", display_name="Tip rack offset Z",
+        description="Per-robot offset for the slot-11 tip rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tuberack_offset_x", display_name="Tube rack offset X",
+        description="Per-robot offset for the slot-10 tube rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tuberack_offset_y", display_name="Tube rack offset Y",
+        description="Per-robot offset for the slot-10 tube rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
+    parameters.add_float(variable_name="tuberack_offset_z", display_name="Tube rack offset Z",
+        description="Per-robot offset for the slot-10 tube rack (BIMS CALIB-5): added to the shared labware definition.",
+        default=0.0, minimum=-10.0, maximum=10.0, unit="mm")
 
 def run(protocol: protocol_api.ProtocolContext):
     import socket
@@ -691,8 +712,14 @@ def run(protocol: protocol_api.ProtocolContext):
     lift = _resolve_lift(pipette)
 
     if bims_native:
-        tuberack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
-        tiprack.set_offset(x=robot_offsets['x'], y=robot_offsets['y'], z=robot_offsets['z'])
+        # CALIB-5 (2026-11-06): each rack's own per-robot offset from the Deck
+        # Calibration Studio, ON TOP of the global offset (0 on every BIMS run).
+        tip_v = {k: float(robot_offsets[k]) + float(getattr(protocol.params, 'tiprack_offset_' + k)) for k in ('x', 'y', 'z')}
+        tube_v = {k: float(robot_offsets[k]) + float(getattr(protocol.params, 'tuberack_offset_' + k)) for k in ('x', 'y', 'z')}
+        tuberack.set_offset(x=tube_v['x'], y=tube_v['y'], z=tube_v['z'])
+        tiprack.set_offset(x=tip_v['x'], y=tip_v['y'], z=tip_v['z'])
+        protocol.comment(f'Rack offsets (CALIB-5): tip rack (slot 11) x={tip_v["x"]} y={tip_v["y"]} z={tip_v["z"]} mm')
+        protocol.comment(f'Rack offsets (CALIB-5): tube rack (slot 10) x={tube_v["x"]} y={tube_v["y"]} z={tube_v["z"]} mm')
 
     # ── The taught cart ──────────────────────────────────────────────────────
     cart_x = float(protocol.params.arm_cart_x)

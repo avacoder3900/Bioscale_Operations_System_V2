@@ -485,6 +485,8 @@ describe('computeRunParameters — rack offsets (CALIB-5)', () => {
 
 	it('rackLoadNamesFor mirrors the .py load_labware calls, including the reagent tube-rack choice', () => {
 		expect(rackLoadNamesFor('wax', {})).toEqual({ '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' });
+		// The robot-arm rehearsal (declares z_cal_p300) loads the p300's 200 uL rack in slot 11 (2026-11-06).
+		expect(rackLoadNamesFor('wax', {}, new Set(['z_cal_p300']))).toEqual({ '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmas_and_damian_biotix_96_200ul_tiprack' });
 		expect(rackLoadNamesFor('reagent', {})).toEqual({ '10': 'custom_2ml_24_tube_rack', '11': 'cosmas_and_damian_biotix_96_200ul_tiprack' });
 		expect(rackLoadNamesFor('reagent', { tube_rack: 'incubator' })['10']).toBe('cosmas_and_damian_drybath_tuberack');
 	});

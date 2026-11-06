@@ -569,7 +569,7 @@ export async function computeRunParameters(
 	// set_offset). Keyed by the robot, not the deck. The reagent .py chooses its
 	// tube rack by the `tube_rack` RTP, so the load names follow the request.
 	// No-op for a protocol that does not declare these RTPs.
-	const rackLoadNames = rackLoadNamesFor(kind, runTimeParameterValues);
+	const rackLoadNames = rackLoadNamesFor(kind, runTimeParameterValues, new Set((paramSchema as any[]).map((d) => d.variableName)));
 	const rack = await rackOffsetRtpValues(String(robotId), paramSchema as any, rackLoadNames);
 	Object.assign(runTimeParameterValues, rack.rtp);
 	Object.assign(protocolParameters, rack.rtp);
@@ -577,9 +577,12 @@ export async function computeRunParameters(
 }
 
 /** Which rack each fill loads in slots 10 and 11 (mirrors the load_labware calls in the .py files). */
-export function rackLoadNamesFor(kind: FillKind, rtp: Record<string, unknown>): Partial<Record<RackSlot, string>> {
+export function rackLoadNamesFor(kind: FillKind, rtp: Record<string, unknown>, declared: ReadonlySet<string> = new Set()): Partial<Record<RackSlot, string>> {
 	if (kind === 'wax') {
-		return { '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' };
+		// The robot-arm rehearsal (Wax_Filling_GEN7_ArmStage_Rehearsal_p300.py, the only
+		// .py declaring z_cal_p300) loads the p300's 200 uL rack in slot 11 (2026-11-06).
+		const tip11 = declared.has('z_cal_p300') ? 'cosmas_and_damian_biotix_96_200ul_tiprack' : 'cosmasanddamian_96_tiprack_20ul';
+		return { '10': 'cosmas_and_damian_drybath_tuberack', '11': tip11 };
 	}
 	const incubator = String(rtp['tube_rack'] ?? 'standard') === 'incubator';
 	return {
