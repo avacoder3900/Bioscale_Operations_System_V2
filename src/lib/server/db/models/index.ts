@@ -221,3 +221,5 @@ export { VoiceMemo, VoiceMemoDigest, VoiceMemoCapture } from './voice-memo.js';
 // Robot arm change log + Maintenance test runs (2026-11-06).
 export { RobotArmChange } from './robot-arm-change.js';
 export { RobotArmTestRun } from './robot-arm-test-run.js';
+// One BIMS mover at a time: Return Home / droop settle / Play start (2026-11-06).
+export { RobotArmMotion } from './robot-arm-motion.js';

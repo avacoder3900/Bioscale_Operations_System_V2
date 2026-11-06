@@ -209,9 +209,12 @@ export const actions: Actions = {
 	closeClaw: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { error: 'Unauthorized' });
 		requirePermission(locals.user, 'manufacturing:write');
-		const cameraName = field(await request.formData(), 'camera');
+		const d = await request.formData();
+		const cameraName = field(d, 'camera');
+		// The Return Home loop's runId: the claw close shares that loop's hold on the arm.
+		const runId = field(d, 'runId');
 		try {
-			const r = await closeClaw(who(locals), { cameraName });
+			const r = await closeClaw(who(locals), { cameraName, runId });
 			return { clawResult: r, scope: 'home' };
 		} catch (err) {
 			const msg = (err as Error).message;

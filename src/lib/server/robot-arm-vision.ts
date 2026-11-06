@@ -24,6 +24,7 @@ import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmTag, RobotArmTagCalibration } from '$lib/server/db/models';
 import { robotArm, type AprilTagDetectResponse } from './robot-arm-client';
 import { logArmChange } from './robot-arm-change-log';
+import { claimArmMotion, releaseArmMotion } from './robot-arm-motion';
 import {
 	assessTags,
 	describeVision,
@@ -78,6 +79,10 @@ type User = { _id: string; username: string };
 const SETTLE_MS = 800;
 /** One attempt stops starting new jogs after this, leaving room for the camera check in Vercel's 30 s. */
 const ATTEMPT_MOVE_BUDGET_MS = 20_000;
+/** Return Home's hold on the arm-motion lease: one request (Vercel's 30 s) plus margin. */
+const RETURN_LEASE_MS = 35_000;
+/** Kept after each request so the tab's next attempt (or its claw close) follows on without a gap. */
+const RETURN_LINGER_MS = 5_000;
 /** Width of the stored thumbnails (data URLs in Mongo). */
 const THUMB_WIDTH = 480;
 
@@ -948,9 +953,33 @@ export async function checkHome(user: User, o: { cameraName?: string | null; kin
  * operator presses Stop, a freeze, or 90 s (shouldRetryHome).
  * Refused while a session holds the bus.
  */
+/** The arm-motion lease owner for one Return Home loop (its attempts and its claw close share it). */
+const returnOwner = (runId: string | null | undefined) => `return:${runId || generateId()}`;
+
+/**
+ * Run `fn` holding the arm-motion lease as Return Home, so a droop settle or a
+ * Play cannot drive the arm at the same time (and Return Home is refused while
+ * one of them does).
+ */
+async function asReturnHome<T>(user: User, owner: string, fn: () => Promise<T>): Promise<T> {
+	await claimArmMotion({ owner, label: 'Return Home', username: user.username, ttlMs: RETURN_LEASE_MS });
+	try {
+		return await fn();
+	} finally {
+		await releaseArmMotion(owner, RETURN_LINGER_MS);
+	}
+}
+
 export async function returnToHome(
 	user: User,
 	o: { cameraName?: string | null; attempt?: number; runId?: string | null } = {}
+): Promise<HomeCheckResult> {
+	return asReturnHome(user, returnOwner(o.runId), () => returnToHomeAttempt(user, o));
+}
+
+async function returnToHomeAttempt(
+	user: User,
+	o: { cameraName?: string | null; attempt?: number; runId?: string | null }
 ): Promise<HomeCheckResult> {
 	const t0 = Date.now();
 	const attempt = Number.isInteger(o.attempt) && o.attempt! > 0 ? o.attempt! : 1;
@@ -1152,13 +1181,15 @@ async function closeClawToStop(deadline: number): Promise<{ closed: boolean; jog
  * then torque stays off for the technician. Refused while a session holds
  * the bus. One request ≤ ~20 s; the tab repeats it until closed.
  */
-export async function closeClaw(user: User, o: { cameraName?: string | null } = {}): Promise<{ closed: boolean; jogs: number; message: string }> {
-	const doc = await loadActive(o.cameraName);
-	await requireArmFree();
-	await robotArm.setTorque(true);
-	const c = await closeClawToStop(Date.now() + ATTEMPT_MOVE_BUDGET_MS);
-	await audit('robot_arm.vision.close_claw', 'robot_arm_tag_calibrations', String(doc._id), user, { closed: c.closed, jogs: c.jogs, delta: c.delta });
-	return { ...c, message: c.closed ? 'Claw closed.' : 'Claw still closing…' };
+export async function closeClaw(user: User, o: { cameraName?: string | null; runId?: string | null } = {}): Promise<{ closed: boolean; jogs: number; message: string }> {
+	return asReturnHome(user, returnOwner(o.runId), async () => {
+		const doc = await loadActive(o.cameraName);
+		await requireArmFree();
+		await robotArm.setTorque(true);
+		const c = await closeClawToStop(Date.now() + ATTEMPT_MOVE_BUDGET_MS);
+		await audit('robot_arm.vision.close_claw', 'robot_arm_tag_calibrations', String(doc._id), user, { closed: c.closed, jogs: c.jogs, delta: c.delta });
+		return { ...c, message: c.closed ? 'Claw closed.' : 'Claw still closing…' };
+	});
 }
 
 function frozenMessage(f: BaseOutOfRange & { torqueOff: boolean }): string {

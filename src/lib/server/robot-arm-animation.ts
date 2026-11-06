@@ -34,6 +34,7 @@ import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, RobotArmSequence } from '$lib/server/db/models';
 import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
 import { forgetPreviewPath, lookUpPath, PreviewWriteError, writePreviewRecording } from './robot-arm-preview';
+import { ArmMotionBusy, claimArmMotion, releaseArmMotion } from './robot-arm-motion';
 import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2, whoUses } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -115,6 +116,19 @@ export class AnimateError extends Error {
 		readonly status = 400
 	) {
 		super(message);
+	}
+}
+
+/**
+ * Take the arm-motion lease (one BIMS mover at a time: Return Home, the droop
+ * settle, the start of a Play). Busy becomes a 409 for the page.
+ */
+async function holdArmMotion(user: User, owner: string, label: string, ttlMs: number): Promise<void> {
+	try {
+		await claimArmMotion({ owner, label, username: user.username, ttlMs });
+	} catch (err) {
+		if (err instanceof ArmMotionBusy) throw new AnimateError(err.message.charAt(0).toUpperCase() + err.message.slice(1) + '.', 409);
+		throw err;
 	}
 }
 
@@ -759,6 +773,8 @@ export async function goToPose(user: User, poseId: string): Promise<PlayResult> 
 const DROOP_NEAR_STEPS = 150;
 const DROOP_SETTLE_MS = 1200;
 const DROOP_MAX_ROUNDS = 6;
+/** The settle's hold on the arm-motion lease: six rounds of five writes + 1.2 s, with margin. */
+const DROOP_LEASE_MS = 30_000;
 
 export interface DroopResult {
 	trim: number[];
@@ -799,7 +815,18 @@ async function settleAtPose(user: User, pose: any, target: number[], now: ArmNow
 	if (now.torqueOn === false) throw new AnimateError('torque is off', 409);
 	const far = TRIM_SERVOS.filter((sid) => Math.abs(target[sid - 1] - now.positions[sid - 1]) > DROOP_NEAR_STEPS);
 	if (far.length) throw new AnimateError(`servo ${far.join(', ')} is more than ${DROOP_NEAR_STEPS} steps from "${pose.name}"`, 409);
+	// Held for the whole settle, so Return Home cannot jog the arm away while each round sends it back
+	// (2026-11-06 16:28: that fight swung the shoulder 300–480 steps a round and saved a +300 trim).
+	const owner = `settle:${generateId()}`;
+	await holdArmMotion(user, owner, `Settling "${pose.name}"`, DROOP_LEASE_MS);
+	try {
+		return await settleRounds(user, pose, target, now, reason);
+	} finally {
+		await releaseArmMotion(owner);
+	}
+}
 
+async function settleRounds(user: User, pose: any, target: number[], now: ArmNow, reason: 'go_to' | 'play_end'): Promise<DroopResult> {
 	const learned = Array.isArray(pose.trim) && pose.trim.length === SERVO_COUNT ? (pose.trim as number[]).map(Number) : null;
 	const estimated = learned ? null : estimateTrim(pose.positions.map(Number), await trimSamples(String(pose._id)));
 	let trim: number[] = learned ?? estimated ?? new Array(SERVO_COUNT).fill(0);
@@ -1398,6 +1425,9 @@ export type PlayKind = 'move_set' | 'sequence' | 'pose';
 const PLAY_MODEL = { move_set: RobotArmMoveSet, sequence: RobotArmSequence, pose: RobotArmPose } as Record<PlayKind, typeof RobotArmMoveSet>;
 const PLAY_TABLE: Record<PlayKind, string> = { move_set: 'robot_arm_move_sets', sequence: 'robot_arm_sequences', pose: 'robot_arm_poses' };
 
+/** A Play's hold on the arm-motion lease while it uploads its path and starts the Pi's run. */
+const PLAY_START_LEASE_MS = 30_000;
+
 /**
  * Render `keyframes` from where the arm is, write the path to the Pi and
  * start the replay. Play, Go to pose and (ARM-09) each chunk of a verified
@@ -1416,79 +1446,87 @@ export async function writeAndPlay(
 		await requireIdle();
 		return playFiresOnly(user, o, firesOnly);
 	}
-	const fireSteps = o.keyframes.filter((k) => k.fire);
-	const coilSteps = fireSteps.filter((k) => k.fire!.solenoid !== 'conveyor');
-	const gpio = coilSteps.length ? await requireReplayFire() : null;
-	if (fireSteps.length > coilSteps.length) await requireConveyorFire();
-	const now = await readArm();
-	if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
-	const warnings: string[] = requireCool(now);
-	if (gpio?.simulated) warnings.push('The Pi has no GPIO right now (simulated): the fire steps are timed but nothing is driven.');
-	const path = render(o.keyframes, now.positions, o.rateHz);
-	// No speed check (2026-11-06): the servo limits its own speed and still lands where it should.
-	const stats = pathStats(path);
-	const leadInS = path.markers[0]?.kind === 'lead-in' ? (path.markers[1]?.t ?? 0) : 0;
-	const out = composeAnimationJsonl(path, { jointNames: DEFAULT_JOINT_NAMES, title: o.title, extras: { animate_kind: o.kind, animate_id: o.id, operator: user.username } });
-	const meta: RecordingSidecar & Record<string, unknown> = {
-		schema_version: 1,
-		frame_count: out.frames,
-		operator: user.username,
-		started_at_iso: new Date().toISOString(),
-		rate_hz: o.rateHz,
-		animated: o.title
-	};
-	// Write the scratch recording (one replacing upload on an updated Pi; see robot-arm-preview.ts) and
-	// replay it by the path the Pi lists, exactly as the Control tab does: the live Pi's replay does not
-	// find a restored recording by bare name (seen 2026-10-21: "400: recording not found: animate-preview").
-	let source: string;
+	// Held from the first read until the Pi's run has started (from then the Pi's own busy check keeps
+	// Return Home off), so a Play cannot start under Return Home or a droop settle, nor they under it.
+	const owner = `play:${generateId()}`;
+	await holdArmMotion(user, owner, `Playing "${o.title}"`, PLAY_START_LEASE_MS);
 	try {
-		source = await writePreviewRecording(robotArm, PREVIEW_RECORDING, out.jsonl, meta);
-	} catch (err) {
-		if (err instanceof PreviewWriteError) throw new AnimateError(err.message, /session is active/i.test(err.message) ? 409 : 502);
-		throw err;
-	}
-	const replay = (src: string) =>
-		// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
-		robotArm.startReplay({ source: src, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
-	let runId: string;
-	try {
-		let started;
+		const fireSteps = o.keyframes.filter((k) => k.fire);
+		const coilSteps = fireSteps.filter((k) => k.fire!.solenoid !== 'conveyor');
+		const gpio = coilSteps.length ? await requireReplayFire() : null;
+		if (fireSteps.length > coilSteps.length) await requireConveyorFire();
+		const now = await readArm();
+		if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
+		const warnings: string[] = requireCool(now);
+		if (gpio?.simulated) warnings.push('The Pi has no GPIO right now (simulated): the fire steps are timed but nothing is driven.');
+		const path = render(o.keyframes, now.positions, o.rateHz);
+		// No speed check (2026-11-06): the servo limits its own speed and still lands where it should.
+		const stats = pathStats(path);
+		const leadInS = path.markers[0]?.kind === 'lead-in' ? (path.markers[1]?.t ?? 0) : 0;
+		const out = composeAnimationJsonl(path, { jointNames: DEFAULT_JOINT_NAMES, title: o.title, extras: { animate_kind: o.kind, animate_id: o.id, operator: user.username } });
+		const meta: RecordingSidecar & Record<string, unknown> = {
+			schema_version: 1,
+			frame_count: out.frames,
+			operator: user.username,
+			started_at_iso: new Date().toISOString(),
+			rate_hz: o.rateHz,
+			animated: o.title
+		};
+		// Write the scratch recording (one replacing upload on an updated Pi; see robot-arm-preview.ts) and
+		// replay it by the path the Pi lists, exactly as the Control tab does: the live Pi's replay does not
+		// find a restored recording by bare name (seen 2026-10-21: "400: recording not found: animate-preview").
+		let source: string;
 		try {
-			started = await replay(source);
+			source = await writePreviewRecording(robotArm, PREVIEW_RECORDING, out.jsonl, meta);
 		} catch (err) {
-			// A remembered path the Pi no longer knows: look it up once and retry.
-			if (!/recording not found/i.test((err as Error).message ?? '')) throw err;
-			forgetPreviewPath(PREVIEW_RECORDING);
-			try {
-				source = await lookUpPath(robotArm, PREVIEW_RECORDING);
-			} catch (lookErr) {
-				throw new AnimateError((lookErr as Error).message, 502);
-			}
-			started = await replay(source);
+			if (err instanceof PreviewWriteError) throw new AnimateError(err.message, /session is active/i.test(err.message) ? 409 : 502);
+			throw err;
 		}
-		runId = started.run_id;
-	} catch (err) {
-		if (err instanceof AnimateError) throw err;
-		const msg = (err as Error).message ?? String(err);
-		throw new AnimateError(msg.includes('409') ? `The Pi refused to start: ${msg}` : `Replay did not start: ${msg}`, 502);
+		const replay = (src: string) =>
+			// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
+			robotArm.startReplay({ source: src, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
+		let runId: string;
+		try {
+			let started;
+			try {
+				started = await replay(source);
+			} catch (err) {
+				// A remembered path the Pi no longer knows: look it up once and retry.
+				if (!/recording not found/i.test((err as Error).message ?? '')) throw err;
+				forgetPreviewPath(PREVIEW_RECORDING);
+				try {
+					source = await lookUpPath(robotArm, PREVIEW_RECORDING);
+				} catch (lookErr) {
+					throw new AnimateError((lookErr as Error).message, 502);
+				}
+				started = await replay(source);
+			}
+			runId = started.run_id;
+		} catch (err) {
+			if (err instanceof AnimateError) throw err;
+			const msg = (err as Error).message ?? String(err);
+			throw new AnimateError(msg.includes('409') ? `The Pi refused to start: ${msg}` : `Replay did not start: ${msg}`, 502);
+		}
+		// Where the play leaves the arm, so the page can settle it there afterwards
+		// (afterPlay): the last pose — fire steps after it do not move the arm.
+		const last = [...o.keyframes].reverse().find((k) => !k.fire);
+		const end = last ? { poseId: last.poseId, target: last.target ?? last.positions } : { poseId: '', target: [] as number[] };
+		if (o.lastPlay !== false) await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
+		await audit(user, o.auditAction ?? (o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`), PLAY_TABLE[o.kind], o.id, {
+			...(o.auditExtra ?? {}),
+			runId,
+			durationS: path.durationS,
+			leadInS,
+			frames: out.frames,
+			from: now.positions,
+			temps: now.temps,
+			maxStepsPerS: stats.maxStepsPerS,
+			...(out.fires ? { fires: fireFrames(path).map((f) => ({ t: f.t, solenoid: f.solenoid, pin: f.pin, ms: f.ms })), gpioSimulated: !!gpio?.simulated } : {})
+		});
+		return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
+	} finally {
+		await releaseArmMotion(owner);
 	}
-	// Where the play leaves the arm, so the page can settle it there afterwards
-	// (afterPlay): the last pose — fire steps after it do not move the arm.
-	const last = [...o.keyframes].reverse().find((k) => !k.fire);
-	const end = last ? { poseId: last.poseId, target: last.target ?? last.positions } : { poseId: '', target: [] as number[] };
-	if (o.lastPlay !== false) await PLAY_MODEL[o.kind].updateOne({ _id: o.id }, { $set: { lastPlay: { at: new Date(), by: opRef(user), runId, durationS: path.durationS, end, settledAt: null } } });
-	await audit(user, o.auditAction ?? (o.kind === 'pose' ? 'robot_arm.animate.go_to_pose' : `robot_arm.animate.play_${o.kind}`), PLAY_TABLE[o.kind], o.id, {
-		...(o.auditExtra ?? {}),
-		runId,
-		durationS: path.durationS,
-		leadInS,
-		frames: out.frames,
-		from: now.positions,
-		temps: now.temps,
-		maxStepsPerS: stats.maxStepsPerS,
-		...(out.fires ? { fires: fireFrames(path).map((f) => ({ t: f.t, solenoid: f.solenoid, pin: f.pin, ms: f.ms })), gpioSimulated: !!gpio?.simulated } : {})
-	});
-	return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
 }
 
 /** Fires-only runs from playFiresOnly carry this run-id prefix (the Pi's fires.py makes them). */

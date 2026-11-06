@@ -203,13 +203,15 @@ async function returnHome(user: User): Promise<Outcome> {
 	const away = await waitArrival(new Map([[sid, goal]]), L.arrivalSteps, L.moveTimeoutMs);
 	const t0 = Date.now();
 	let attempt = 1;
-	let last = await returnToHome(user, { attempt });
+	// One runId for the loop, so its attempts share one hold on the arm-motion lease.
+	const runId = crypto.randomUUID();
+	let last = await returnToHome(user, { attempt, runId });
 	let clawClosed = last.clawClosed ?? null;
 	for (;;) {
 		const r = shouldRetryHome({ verdict: last.home.verdict, elapsedMs: Date.now() - t0, residualMax: last.home.residualMax ?? null, clawClosed, limitMs: L.homeLoopMs });
 		if (!r.retry) break;
 		attempt++;
-		last = await returnToHome(user, { attempt });
+		last = await returnToHome(user, { attempt, runId });
 		if (last.clawClosed != null) clawClosed = last.clawClosed;
 	}
 	const elapsedMs = Date.now() - t0;

@@ -158,7 +158,7 @@ export class ReturnHome {
 		try {
 			// Each request closes for up to ~20 s; three is far more than a claw needs.
 			for (let i = 0; i < 3; i++) {
-				const r = await this.post('closeClaw', { camera });
+				const r = await this.post('closeClaw', { camera, runId: loop.runId });
 				if (r.type === 'failure') {
 					loop.clawError = String((r.data as { error?: string } | undefined)?.error ?? 'Closing the claw failed.');
 					return;
