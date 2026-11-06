@@ -1583,8 +1583,20 @@ export async function loadArmWaxFill() {
 
 // ── the loop ─────────────────────────────────────────────────────────────
 
-export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: unknown; barcode?: unknown } = {}): Promise<LoopView> {
+/**
+ * opts.tiprackRefilled (the Run card's New Tip Rack box, 2026-11-06): the
+ * protocol's `tiprack_refilled` run-time parameter — the same box the legacy
+ * wax-filling page has. The protocol then takes its tip from A1 and resets its
+ * tracker file (/data/tip_tracker_<hostname>.json) on the robot; the wax run's
+ * tip snapshot records the reset (run-lifecycle-records).
+ */
+export async function startLoop(
+	user: User,
+	rawRuns: unknown,
+	opts: { startAt?: unknown; barcode?: unknown; tiprackRefilled?: unknown } = {}
+): Promise<LoopView> {
 	await connectDB();
+	const tiprackRefilled = opts.tiprackRefilled === true || String(opts.tiprackRefilled ?? '') === 'true';
 	const requestedRuns = Math.round(num(rawRuns, 'Number of runs'));
 	const startAtRaw = String(opts.startAt ?? 'grab').trim() || 'grab';
 	if (!(START_STEPS as readonly string[]).includes(startAtRaw)) throw new ArmWaxFillError(`Start at must be one of ${START_STEPS.join(', ')}.`);
@@ -1677,7 +1689,7 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 
 	// 3. The ordinary start (freshness gate, create, play). The protocol homes,
 	//    takes its one tip, probes it, aspirates and parks → `ARM PARKED 1`.
-	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns, settings);
+	const loopForm = loopRunForm(waxRunId, protocol, calibration, requestedRuns, settings, tiprackRefilled);
 	await assertFormWithinSchema(String(robot._id), loopForm);
 	const started = await startRunQueue('wax', loopForm, user);
 	if (isActionFail(started)) {
@@ -1690,6 +1702,7 @@ export async function startLoop(user: User, rawRuns: unknown, opts: { startAt?: 
 	await audit(user, 'arm_wax_fill.loop_start', 'arm_wax_fill_runs', _id, {
 		startAt,
 		requestedRuns,
+		tiprackRefilled,
 		robotId: String(robot._id),
 		cartPosition: settings.cartPosition,
 		waxRunId,
@@ -2631,12 +2644,21 @@ async function assertFormWithinSchema(robotId: string, form: FormData): Promise<
 /**
  * The run-time parameters of the loop's one run: the taught, tip-neutral cart
  * location, the stage rotation, the dispense depth, the per-hole corrections,
- * the taught scan position (arm_scan_x/y/z) and how many carts the run serves
- * (cartridges). computeRunParameters only reads the RTPs the robot's schema
- * declares, so nothing else is sent.
+ * the taught scan position (arm_scan_x/y/z), how many carts the run serves
+ * (cartridges) and whether the tip rack is new (tiprack_refilled: the protocol
+ * starts from A1 and resets its tracker). computeRunParameters only reads the
+ * RTPs the robot's schema declares, so nothing else is sent.
  */
-function loopRunForm(waxRunId: string, protocol: ProtocolView, calibration: CalibrationView, requestedRuns: number, settings: SettingsView): FormData {
+function loopRunForm(
+	waxRunId: string,
+	protocol: ProtocolView,
+	calibration: CalibrationView,
+	requestedRuns: number,
+	settings: SettingsView,
+	tiprackRefilled = false
+): FormData {
 	const form = new FormData();
+	form.set('param_tiprack_refilled', tiprackRefilled ? 'true' : 'false');
 	// Which rows to fill (the carriage line's checkboxes, declared by the current stage .py).
 	for (const c of CHANNELS) form.set(`param_${c.rtp}`, settings.channels[c.key] ? 'true' : 'false');
 	form.set('runId', waxRunId);

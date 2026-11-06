@@ -174,7 +174,7 @@ export const actions: Actions = {
 	startLoop: async (ev) => {
 		const { d, user } = await writer(ev, true);
 		try {
-			return { loop: json(await startLoop(user, field(d, 'runs'), { startAt: field(d, 'startAt'), barcode: field(d, 'barcode') })) };
+			return { loop: json(await startLoop(user, field(d, 'runs'), { startAt: field(d, 'startAt'), barcode: field(d, 'barcode'), tiprackRefilled: field(d, 'tiprackRefilled') })) };
 		} catch (err) {
 			return failFrom(err);
 		}

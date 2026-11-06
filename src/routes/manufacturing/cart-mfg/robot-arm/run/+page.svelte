@@ -86,6 +86,8 @@
 	// Where the first cart starts (Start At): grab, or with a cart already on the stage.
 	let startAt = $state<'grab' | 'scan' | 'decide' | 'withdraw'>('grab');
 	let startBarcode = $state('');
+	// New Tip Rack: the protocol's tiprack_refilled — take the tip from A1 and reset the tracker on the robot.
+	let newTipRack = $state(false);
 	const START_AT_LABEL: Record<string, string> = {
 		grab: 'Grab',
 		scan: 'Scan (Cart On The Stage)',
@@ -573,13 +575,15 @@
 		pageError = null;
 		log = [];
 		try {
-			const r = await post('startLoop', { runs: String(runs), startAt, barcode: startAt === 'decide' ? startBarcode : '' });
+			const r = await post('startLoop', { runs: String(runs), startAt, barcode: startAt === 'decide' ? startBarcode : '', tiprackRefilled: newTipRack ? 'true' : 'false' });
 			if (!r.ok) {
 				pageError = r.error;
 				return;
 			}
 			loop = r.data.loop;
-			note(`Run started: ${loop!.requestedRuns} loop${loop!.requestedRuns === 1 ? '' : 's'} (carts) on ${loop!.robot.name}${loop!.startStep && loop!.startStep !== 'grab' ? ` — starting at the ${STEP_LABEL[loop!.startStep] ?? loop!.startStep}` : ''}.`);
+			note(`Run started: ${loop!.requestedRuns} loop${loop!.requestedRuns === 1 ? '' : 's'} (carts) on ${loop!.robot.name}${loop!.startStep && loop!.startStep !== 'grab' ? ` — starting at the ${STEP_LABEL[loop!.startStep] ?? loop!.startStep}` : ''}${newTipRack ? ' — new tip rack: the tip comes from A1' : ''}.`);
+			// The box is for this start only: the next run uses the tracker again.
+			newTipRack = false;
 		} finally {
 			busy = false;
 		}
@@ -1094,6 +1098,12 @@
 						<select bind:value={startAt} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-sm" style="color: var(--color-tron-text)">
 							{#each Object.entries(START_AT_LABEL) as [v, l] (v)}<option value={v}>{l}</option>{/each}
 						</select>
+					</label>
+					<label class="flex items-center gap-1.5 text-xs" style="color: var(--color-tron-text-secondary)"
+						title="Tick after putting a fresh rack on the robot: the protocol takes its tip from A1 and resets the tip tracker on the robot (the protocol's Tiprack Refilled parameter). Leave off to keep taking the next fresh tip.">
+						<input type="checkbox" bind:checked={newTipRack} class="rounded border-[var(--color-tron-border)] bg-black/40" />
+						New Tip Rack
+						{#if data.teach?.nextTipWell}<span class="font-mono" style="color: var(--color-tron-text)">{newTipRack ? 'A1' : data.teach.nextTipWell}</span>{/if}
 					</label>
 					{#if startAt === 'decide'}
 						<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
