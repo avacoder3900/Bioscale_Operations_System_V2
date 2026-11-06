@@ -26724,7 +26724,7 @@ status; nothing looked up, nothing written). An empty read still takes the fail 
 skipped). cycleDecide already only audits in rehearsal; loopFinish advances nothing. Readiness notes, the
 fail-route doc comment and the Run log line say so. Production fills unchanged. svelte-check 14 errors (baseline).
 Worktree Bioscale_V2-wt-rehearsal-scan (the arm-ui worktree was live with another session: New Tip Rack).
-Deployment: production — 
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/DQeZzJGwzrAVy7RLTizn1e8rfvhg (GitHub status success; the personal-project build DY82kpf8CA7G7MxXtRHZkFHVF33Y also succeeded)
 Source: branch master @ commit 577bee64
 Retrieve this exact code: git checkout 577bee64
 What this deployment is for: rehearsal scan accepts any barcode, checks and changes nothing (Vercel status success).
