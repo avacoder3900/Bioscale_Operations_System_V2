@@ -26495,3 +26495,18 @@ homes/lights sent outside a run. Arm rows only start 2026-11-06 (43 so far), so 
 npm run check 13 errors (baseline, none in touched files). vitest src/lib/robot-arm 269/269.
 Read-only DB check of the new queries: all 100 of 11,905; Opentron Liquid 100 of 2,644; Aspirate 100 of 247.
 Worked in worktree ../Bioscale_V2-wt-movelog-filters (node_modules junction).
+
+================================================================================
+2026-11-06 — feat/arm-motion-log — Short Move fix: elbow (servo 3) P 16 -> 32, saved
+================================================================================
+Giovanni's Short Move failed three times (18:50:24, 18:50:42, 18:52:44 UTC): "Did Not Land: Servo 3 Out
+(2975 For 2947)". Test Log + Movement Log showed the elbow 28 steps short on the move away from home
+(2997 -> 2947), timing out at 8 s, while the return landed within 3. Diagnosis (BIMS client from tsx,
+moves in the Movement Log as "Claude (Servo Diagnosis)", motion lease held): the miss was 28 steps for both
+a 50- and a 100-step move, load -115, no creep. A constant miss under load is the P-only position loop
+against gravity (I = 0), not a snag. P 32 (factory) temporary: miss 9 / 4 steps, load -79 / -44, 38 C, no
+wobble. Short Move then passed 3/3; saved with persist (Change Log row JGc9FuTHOFyJ8fL7FryvQ; the Pi's
+own row says Temporary because the persist call changed no value). P now [6,16,32,16,16,16].
+Seen, not changed: servo 4 (wrist) ends each Short Move ~6 steps further out (915 -> 921 -> 927);
+servo 1 at P 6 misses 12-15 (passes). Camera Home Check fails: the arm is not parked at home, and camera
+'external' gave no frame ("no colour capture node found matching 'RealSense'"). No code changed.
