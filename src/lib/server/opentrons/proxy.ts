@@ -15,6 +15,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { connectDB, OpentronsRobot, Ot2BridgeCommand, ScannerEvent, generateId, LabwareDefinition } from '$lib/server/db';
 import { labwareNamesReferencedBy } from './labware-refs';
+import { recordOt2Action } from '$lib/server/robot-arm-move-log';
 import { isHardenedRobot, rolloutNote } from '$lib/server/services/deck-calibration/rollout';
 import { runVerb, PRE_ANALYZED_FIELD, type ProtocolUploadBundle } from '$lib/opentrons/ot2-protocol';
 
@@ -157,6 +158,24 @@ export async function robotGet(robot: any, path: string): Promise<Response> {
 /** Proxy a POST request to the robot. opts.timeoutMs overrides the 30s default
  *  for slow commands (e.g. home, which can take 30-60s). */
 export async function robotPost(robot: any, path: string, body?: unknown, opts: { timeoutMs?: number } = {}): Promise<Response> {
+	// Home and rail lights outside a run go in the Movement Log (2026-11-06); anything else is not logged here.
+	const at = Date.now();
+	try {
+		const res = await robotPostRaw(robot, path, body, opts);
+		await recordOt2Action({ robot, method: 'POST', path, body, ok: res.ok, error: res.ok ? null : `HTTP ${res.status}`, at, durationMs: Date.now() - at, user: requesterUser() });
+		return res;
+	} catch (e) {
+		await recordOt2Action({ robot, method: 'POST', path, body, ok: false, error: e instanceof Error ? e.message : String(e), at, durationMs: Date.now() - at, user: requesterUser() });
+		throw e;
+	}
+}
+
+const requesterUser = () => {
+	const username = currentRequester();
+	return username ? { username } : null;
+};
+
+async function robotPostRaw(robot: any, path: string, body: unknown, opts: { timeoutMs?: number }): Promise<Response> {
 	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'POST', path, body);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {

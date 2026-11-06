@@ -13,6 +13,7 @@ import { json, error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, OpentronsRobot, Ot2DirectCall, generateId } from '$lib/server/db';
+import { recordOt2Action } from '$lib/server/robot-arm-move-log';
 
 const MAX_ROWS = 50;
 const str = (v: unknown, max = 500) => (typeof v === 'string' ? v.slice(0, max) : undefined);
@@ -27,8 +28,8 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!calls.length) return json({ written: 0 });
 
 	await connectDB();
-	const exists = await OpentronsRobot.exists({ _id: params.id });
-	if (!exists) error(404, 'Robot not found');
+	const robot = (await OpentronsRobot.findById(params.id).select('name').lean()) as { _id: string; name?: string } | null;
+	if (!robot) error(404, 'Robot not found');
 
 	const now = Date.now();
 	const rows = calls.map((c: any) => {
@@ -51,6 +52,24 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		};
 	});
 	await Ot2DirectCall.insertMany(rows, { ordered: false });
+	// Home and rail lights the browser sent straight to the robot go in the Movement Log too (2026-11-06).
+	const user = { _id: locals.user._id, username: locals.user.username };
+	await Promise.all(
+		calls.map((c: any, i: number) =>
+			recordOt2Action({
+				robot,
+				method: rows[i].method ?? '',
+				path: rows[i].path ?? '',
+				body: str(c?.body, 200),
+				ok: rows[i].ok,
+				error: rows[i].error ?? (rows[i].ok ? null : `HTTP ${rows[i].status}`),
+				at: rows[i].at.getTime(),
+				durationMs: rows[i].latencyMs ?? 0,
+				from: 'Tailscale Line',
+				user
+			})
+		)
+	);
 	return json({ written: rows.length });
 };
 

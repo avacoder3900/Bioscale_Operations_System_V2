@@ -25,7 +25,9 @@ export type ArmMoveKind =
 	| 'record'
 	| 'task'
 	| 'stop'
-	| 'loop_step';
+	| 'loop_step'
+	| 'reading_before'
+	| 'reading_after';
 
 export interface ArmMoveEntry {
 	kind: ArmMoveKind;
@@ -53,7 +55,9 @@ const KIND_TITLES: Record<ArmMoveKind, string> = {
 	record: 'Record',
 	task: 'Task',
 	stop: 'Stop',
-	loop_step: 'Loop Step'
+	loop_step: 'Loop Step',
+	reading_before: 'Reading Before',
+	reading_after: 'Reading After'
 };
 
 /** Arm kinds by name; an OT-2 row's kind is its commandType ("moveToWell" → "Move To Well"). */
@@ -151,7 +155,7 @@ type SummaryRow = Pick<ArmMoveEntry, 'servo' | 'goal' | 'delta' | 'goals'> & { k
  * present, so it is where the servo is, not a move.
  */
 export function summarizeServoMoves(rows: SummaryRow[], servoCount = 6): ServoMoveSummary[] {
-	const sorted = rows.filter((r) => r.ok !== false && r.device !== 'ot2').sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+	const sorted = rows.filter((r) => r.ok !== false && r.device !== 'ot2' && !READING_KINDS.has(r.kind)).sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
 	const state = new Map<number, { moves: number; reversals: number; last: number | null; dir: number }>();
 	for (let s = 1; s <= servoCount; s++) state.set(s, { moves: 0, reversals: 0, last: null, dir: 0 });
 	const step = (sid: number, goal: number | null, delta: number | null) => {
@@ -177,4 +181,97 @@ export function summarizeServoMoves(rows: SummaryRow[], servoCount = 6): ServoMo
 		} else if (r.goals) for (const [k, v] of Object.entries(r.goals)) step(Number(k), v, null);
 	}
 	return [...state.entries()].map(([servo, s]) => ({ servo, moves: s.moves, reversals: s.reversals }));
+}
+
+/*
+ * Servo readings around each move (2026-11-06). robotArmFetch reads GET
+ * /servos just before it sends a movement and again once the arm has
+ * settled, and each read is its own row (kind reading_before /
+ * reading_after) linked to the move by moveId. A per-servo move's rows name
+ * that servo; a whole-arm command's rows carry all six.
+ */
+export const READING_KINDS = new Set(['reading_before', 'reading_after']);
+
+export interface ServoReading {
+	id: number;
+	position: number | null;
+	speed: number | null;
+	load: number | null;
+	voltage: number | null;
+	temperature: number | null;
+	torque: boolean | null;
+}
+
+const real = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** The Pi's GET /servos answer, cleaned to the fields the log keeps. */
+export function servoReadings(raw: unknown): ServoReading[] | null {
+	if (!Array.isArray(raw)) return null;
+	const out: ServoReading[] = [];
+	for (const s of raw) {
+		const o = obj(s);
+		const id = num(o?.id);
+		if (!o || id == null) continue;
+		out.push({
+			id,
+			position: num(o.position),
+			speed: num(o.speed),
+			load: num(o.load),
+			voltage: real(o.voltage),
+			temperature: real(o.temperature),
+			torque: typeof o.torque === 'boolean' ? o.torque : null
+		});
+	}
+	return out.length ? out : null;
+}
+
+/** Kinds that end on their own soon after the Pi answers; sessions (play, record, leader arm, task) do not. */
+export const SETTLING_KINDS = new Set<string>(['move', 'jog', 'jog_cartesian', 'hold', 'torque_on', 'torque_off', 'stop']);
+
+/** Still when every watched servo reports speed 0 and the same position as the read before. */
+export function isSettled(prev: ServoReading[] | null, cur: ServoReading[], servos: number[] | null): boolean {
+	const watch = cur.filter((r) => !servos || servos.includes(r.id));
+	if (!watch.length) return true;
+	return watch.every((r) => {
+		if (r.speed != null && r.speed !== 0) return false;
+		const p = prev?.find((x) => x.id === r.id);
+		return !p || p.position == null || r.position == null || Math.abs(p.position - r.position) <= 1;
+	});
+}
+
+const one = (r: ServoReading) =>
+	[
+		r.position != null ? `Position ${r.position}` : null,
+		r.temperature != null ? `${r.temperature} °C` : null,
+		r.load != null ? `Load ${r.load}` : null,
+		r.voltage != null ? `${r.voltage} V` : null,
+		r.torque == null ? null : r.torque ? 'Torque On' : 'Torque Off'
+	]
+		.filter(Boolean)
+		.join('  ');
+
+/**
+ * "Before  Servo 3  Position 2997  38 °C  Load 0  12.4 V  Torque On",
+ * "After  Servo 3  Position 2975  Goal 2947  Off 28  …  Settled 1.2 s",
+ * "Before  1: 2049 42 °C  2: 863 40 °C  …" for a whole-arm command.
+ */
+export function readingLine(
+	phase: 'before' | 'after',
+	readings: ServoReading[],
+	o: { servo?: number | null; goal?: number | null; settledMs?: number | null; note?: string | null } = {}
+): string {
+	const parts = [phase === 'before' ? 'Before' : 'After'];
+	const r = o.servo != null ? readings.find((x) => x.id === o.servo) : null;
+	if (o.servo != null && r) {
+		parts.push(`Servo ${o.servo}`);
+		const body = one(r);
+		if (phase === 'after' && o.goal != null && r.position != null) {
+			parts.push(body.replace(/^(Position -?\d+)/, `$1  Goal ${o.goal}  Off ${r.position - o.goal}`));
+		} else parts.push(body);
+	} else {
+		parts.push(readings.map((x) => `${x.id}: ${x.position ?? '?'} ${x.temperature != null ? `${x.temperature} °C` : ''}`.trim()).join('  '));
+	}
+	if (o.settledMs != null) parts.push(`Settled ${(o.settledMs / 1000).toFixed(1)} s`);
+	if (o.note) parts.push(o.note);
+	return parts.join('  ');
 }

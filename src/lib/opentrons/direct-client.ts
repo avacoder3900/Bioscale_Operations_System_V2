@@ -122,6 +122,15 @@ export interface DirectCallRow {
 	latencyMs: number;
 	error?: string;
 	at: string;
+	/** The request body, only for POST /robot/home and /robot/lights (the Movement Log, 2026-11-06). */
+	body?: string;
+}
+
+/** Home and rail lights carry their body to the trace, so the Movement Log knows which lights state or axis. */
+function loggedBody(method: string, path: string, body: unknown): { body?: string } {
+	if (method !== 'POST' || typeof body !== 'string') return {};
+	const p = path.split('?')[0];
+	return p === '/robot/home' || p === '/robot/lights' ? { body: body.slice(0, 200) } : {};
 }
 
 export interface SessionOptions {
@@ -768,13 +777,13 @@ export class RobotSession {
 					signal: withCallerSignal(AbortSignal.timeout(timeoutMs ?? RAW_DEFAULT_TIMEOUT_MS), caller)
 				});
 				const latencyMs = Date.now() - t0;
-				this.record({ verb, method, path, status: res.status, ok: res.ok, latencyMs, at });
+				this.record({ verb, method, path, status: res.status, ok: res.ok, latencyMs, at, ...loggedBody(method, path, rest.body) });
 				if (res.ok) this.set({ latencyMs });
 				this.noteLine(verb, 'tailscale');
 				return res;
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);
-				this.record({ verb, method, path, status: 0, ok: false, latencyMs: Date.now() - t0, error: msg, at });
+				this.record({ verb, method, path, status: 0, ok: false, latencyMs: Date.now() - t0, error: msg, at, ...loggedBody(method, path, rest.body) });
 				// The caller's own timeout/abort is not a line failure — surface it as-is.
 				if (caller?.aborted) throw caller.reason ?? e;
 				let lineDown = await this.lineReallyDown();

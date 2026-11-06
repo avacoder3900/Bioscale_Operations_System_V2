@@ -221,3 +221,31 @@ export function loopStepLine(step: LoopStep, cart: number, plannedS: number | nu
 	const carts = step === 'withdraw_grab' ? `Cart ${cart} To ${cart + 1}` : `Cart ${cart}`;
 	return join(`${STEP_TITLES[step]} ${carts}`, animation, plannedS != null && Number.isFinite(plannedS) ? `Planned ${plannedS.toFixed(1)} s` : null);
 }
+
+/**
+ * An OT-2 home or rail-lights request outside a run (2026-11-06) — the kind
+ * and line its Movement Log row gets, or null for anything else. `body` may be
+ * the JSON object or its text (the browser's direct line reports the text).
+ */
+export function ot2ActionOf(method: string, path: string, body: unknown): { kind: string; line: string } | null {
+	if (method.toUpperCase() !== 'POST') return null;
+	const p = path.split('?')[0];
+	let b: any = body;
+	if (typeof b === 'string') {
+		try {
+			b = JSON.parse(b);
+		} catch {
+			b = null;
+		}
+	}
+	if (p === '/robot/home') {
+		const target = typeof b?.target === 'string' ? b.target : 'robot';
+		if (target === 'pipette') return { kind: 'home', line: join('Home', b?.mount ? camelTitle(String(b.mount)) : null, 'Pipette') };
+		return { kind: 'home', line: 'Home All' };
+	}
+	if (p === '/robot/lights') {
+		if (typeof b?.on !== 'boolean') return { kind: 'lights', line: 'Rail Lights' };
+		return { kind: b.on ? 'lights_on' : 'lights_off', line: `Rail Lights ${b.on ? 'On' : 'Off'}` };
+	}
+	return null;
+}

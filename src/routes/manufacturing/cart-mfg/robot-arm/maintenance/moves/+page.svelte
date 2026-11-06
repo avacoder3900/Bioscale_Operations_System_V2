@@ -11,6 +11,9 @@
 	 * Filters (2026-11-06): device, a broad type group or one exact type
 	 * ($lib/robot-arm/move-types), time, servo, and the newest N rows (100
 	 * unless changed; All for every row), with "Showing N Of Total".
+	 *
+	 * Servo readings (2026-11-06): a Reading Before and Reading After row
+	 * around each arm move; OT-2 home and rail lights outside a run.
 	 */
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { goto } from '$app/navigation';
@@ -318,7 +321,7 @@
 									<td class="whitespace-nowrap pr-3 font-mono">{took(m)}</td>
 									<td class="pr-3">
 										{#if m.ok}
-											<span class="text-green-300">{m.device === 'ot2' ? 'Done' : 'Sent'}</span>
+											<span class="text-green-300">{m.device === 'ot2' ? 'Done' : m.kind.startsWith('reading_') ? 'Read' : 'Sent'}</span>
 										{:else}
 											<span class="text-red-300">Failed</span>
 											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>

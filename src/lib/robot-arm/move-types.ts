@@ -23,6 +23,7 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	{ id: 'arm:playback', device: 'arm', title: 'Playback', kinds: ['play', 'record', 'leader', 'task'] },
 	{ id: 'arm:loop', device: 'arm', title: 'Loop Step', kinds: ['loop_step'] },
 	{ id: 'arm:stop', device: 'arm', title: 'Stop', kinds: ['stop'] },
+	{ id: 'arm:reading', device: 'arm', title: 'Servo Reading', kinds: ['reading_before', 'reading_after'] },
 	{
 		id: 'ot2:movement',
 		device: 'ot2',
@@ -41,8 +42,9 @@ export const MOVE_GROUPS: MoveGroup[] = [
 		id: 'ot2:setup',
 		device: 'ot2',
 		title: 'Setup',
-		kinds: ['loadLabware', 'reloadLabware', 'loadPipette', 'loadModule', 'loadLiquid', 'configureForVolume', 'configureNozzleLayout', 'setRailLights']
+		kinds: ['loadLabware', 'reloadLabware', 'loadPipette', 'loadModule', 'loadLiquid', 'configureForVolume', 'configureNozzleLayout']
 	},
+	{ id: 'ot2:lights', device: 'ot2', title: 'Lights', kinds: ['setRailLights', 'lights_on', 'lights_off', 'lights'] },
 	{ id: 'ot2:comment', device: 'ot2', title: 'Comment', kinds: ['comment'] },
 	{ id: 'ot2:other', device: 'ot2', title: 'Other', kinds: [] }
 ];

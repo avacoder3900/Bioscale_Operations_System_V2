@@ -15,6 +15,10 @@ import { applyImmutableMiddleware } from '../middleware/immutable.js';
  * and the arm's loop steps (kind 'loop_step', play sent → arrival checked),
  * so the two machines' timing sits on one timeline. Rows from before have no
  * device and are the arm's.
+ *
+ * 2026-11-06: servo readings before and after each arm move (kinds
+ * reading_before / reading_after, linked by moveId), and the OT-2's home and
+ * rail lights sent outside a run (kinds home, lights_on, lights_off).
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 const robotRef = new Schema({ _id: { type: String }, name: { type: String } }, { _id: false });
@@ -50,7 +54,10 @@ const robotArmMoveSchema = new Schema(
 		params: { type: Schema.Types.Mixed, default: undefined },
 		/** Arm loop steps: the wax-fill loop and cart. */
 		loopId: { type: String, default: undefined },
-		cart: { type: Number, default: undefined }
+		cart: { type: Number, default: undefined },
+		/** Reading rows (reading_before / reading_after): the servos as GET /servos gave them, and the move they bracket. */
+		readings: { type: Schema.Types.Mixed, default: undefined },
+		moveId: { type: String, default: undefined }
 	},
 	{ timestamps: false, minimize: false, collection: 'robot_arm_moves' }
 );

@@ -13,7 +13,9 @@
 import { env } from '$env/dynamic/private';
 import { connectDB } from './db/connection';
 import { RobotArmEndpoint } from './db/models';
-import { recordArmMove } from './robot-arm-move-log';
+import { recordArmMove, recordArmReading } from './robot-arm-move-log';
+import { generateId } from './db/utils';
+import { SETTLING_KINDS, describeArmMove, isSettled, servoReadings, type ArmMoveEntry, type ServoReading } from '$lib/robot-arm/move-log';
 
 interface FetchOptions {
 	method?: 'GET' | 'POST' | 'DELETE';
@@ -160,10 +162,45 @@ async function armRequest(
  * Every Pi call goes through here. A POST that moves the arm is written to
  * the Movement Log (robot_arm_moves) once the Pi answers or fails; reads go
  * straight through.
+ *
+ * Readings around each move (2026-11-06): the servos are read (GET /servos)
+ * just before the move is sent — except Stop, which never waits — and again
+ * once the arm has settled, each read its own log row. The before read costs
+ * one Pi round trip per move; the after read runs once the answer is back,
+ * so the caller does not wait for it.
  */
 export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
 	const method = opts.method ?? 'GET';
 	if (method === 'GET') return armFetchJson<T>(path, opts);
+	const planned = process.env.VITEST ? null : describeArmMove(method, path, opts.body, null);
+	if (!planned) return sendArmCommand<T>(path, method, opts);
+
+	const moveId = generateId();
+	const seq = ++moveSeq;
+	let before: Promise<TimedReading> | null = null;
+	if (planned.kind !== 'stop') {
+		before = readServosTimed();
+		latestBefore = { seq, reading: before };
+		await before;
+	}
+	const startedAt = Date.now();
+	let entry: ArmMoveEntry | null = null;
+	let failure: unknown = null;
+	try {
+		const data = await armFetchJson<T>(path, opts);
+		entry = await recordArmMove(method, path, opts.body, data, null, startedAt, moveId);
+		return data;
+	} catch (err) {
+		failure = err;
+		entry = await recordArmMove(method, path, opts.body, null, err, startedAt, moveId);
+		throw err;
+	} finally {
+		const e = entry ?? planned;
+		afterResponse(readingsAround(e, moveId, seq, before, startedAt, !failure));
+	}
+}
+
+async function sendArmCommand<T>(path: string, method: string, opts: FetchOptions): Promise<T> {
 	const startedAt = Date.now();
 	try {
 		const data = await armFetchJson<T>(path, opts);
@@ -173,6 +210,102 @@ export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): P
 		await recordArmMove(method, path, opts.body, null, err, startedAt);
 		throw err;
 	}
+}
+
+interface TimedReading {
+	at: number;
+	ms: number;
+	readings: ServoReading[] | null;
+	error: string | null;
+}
+
+const READ_TIMEOUT_MS = 1500;
+/** The after read gives up waiting for the arm to stop after this long. */
+const SETTLE_BUDGET_MS = 4000;
+const SETTLE_POLL_MS = 250;
+
+// Moves this instance has sent, and the newest one's before read: when a new
+// move starts while the last is still settling (a held jog), the new move's
+// before read is the last one's after read, so the bus is not read twice.
+let moveSeq = 0;
+let latestBefore: { seq: number; reading: Promise<TimedReading> } | null = null;
+
+async function readServosTimed(): Promise<TimedReading> {
+	const at = Date.now();
+	try {
+		const raw = await armFetchJson<unknown>('/servos', { timeoutMs: READ_TIMEOUT_MS });
+		const readings = servoReadings(raw);
+		return { at, ms: Date.now() - at, readings, error: readings ? null : 'GET /servos gave no servos' };
+	} catch (err) {
+		return { at, ms: Date.now() - at, readings: null, error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+/** Keep a promise running after the response on Vercel (its request context's waitUntil); elsewhere it just runs. */
+function afterResponse(p: Promise<unknown>): void {
+	const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[
+		Symbol.for('@vercel/request-context')
+	]?.get?.();
+	ctx?.waitUntil?.(p);
+	p.catch(() => {});
+}
+
+async function readingsAround(
+	e: ArmMoveEntry,
+	moveId: string,
+	seq: number,
+	before: Promise<TimedReading> | null,
+	sentAt: number,
+	sent: boolean
+): Promise<void> {
+	const servo = e.servo;
+	const watch = servo != null ? [servo] : e.goals ? Object.keys(e.goals).map(Number) : null;
+	if (before) {
+		const b = await before;
+		await recordArmReading({ phase: 'before', moveId, at: b.at, durationMs: b.ms, readings: b.readings, error: b.error, servo });
+	}
+	if (!SETTLING_KINDS.has(e.kind)) return;
+	let prev: ServoReading[] | null = null;
+	let last: TimedReading | null = null;
+	let note: string | null = null;
+	let settledMs: number | null = null;
+	// A refused command moved nothing: one read is the after.
+	if (!sent) last = await readServosTimed();
+	else {
+		while (Date.now() - sentAt < SETTLE_BUDGET_MS) {
+			await new Promise((r) => setTimeout(r, SETTLE_POLL_MS));
+			if (moveSeq !== seq && latestBefore && latestBefore.seq > seq) {
+				last = await latestBefore.reading;
+				note = 'Next Move Started';
+				break;
+			}
+			const r = await readServosTimed();
+			if (!r.readings) {
+				last ??= r;
+				continue;
+			}
+			last = r;
+			if (prev && isSettled(prev, r.readings, watch)) {
+				settledMs = r.at - sentAt;
+				break;
+			}
+			prev = r.readings;
+		}
+		if (settledMs == null && !note && last?.readings) note = 'Still Moving';
+	}
+	if (!last) return;
+	await recordArmReading({
+		phase: 'after',
+		moveId,
+		at: last.at,
+		durationMs: last.ms,
+		readings: last.readings,
+		error: last.error,
+		servo,
+		goal: e.goal,
+		settledMs,
+		note
+	});
 }
 
 async function armFetchJson<T>(path: string, opts: FetchOptions): Promise<T> {
