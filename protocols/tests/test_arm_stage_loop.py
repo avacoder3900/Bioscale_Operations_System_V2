@@ -219,6 +219,18 @@ def check_reader_pi(m, label):
         rec = r.next()
         assert rec['action'] == 'end' and r.served_by == 'http://pi-a:8000'
 
+        # A Pi whose port does not even open (cable out) is backed off after the probe, no long-poll.
+        probes = []
+        write(path, {'seq': 0, 'loop': 'L2', 'action': 'start', 'arm_pi_urls': ['http://pi-a:8000', 'http://pi-b:8000']})
+        r3 = m.ArmLoopInstructions(path=path, sleep=clock.sleep, clock=clock.now, http=pi, probe=lambda url: probes.append(url) or False)
+        r3.start()
+        n_calls = len(pi.calls)
+        t0 = clock.now()
+        assert r3.next(timeout_s=2.0) is None
+        assert len(pi.calls) == n_calls and probes == ['http://pi-a:8000', 'http://pi-b:8000'], (probes, len(pi.calls) - n_calls)
+        assert clock.now() - t0 >= 2.0
+        assert m._tcp_reachable('http://127.0.0.1:1', timeout_s=0.2) is False
+
         # Without a URL list in the start record the default cable address is used.
         write(path, {'seq': 0, 'loop': 'L3', 'action': 'start'})
         r2 = m.ArmLoopInstructions(path=path, sleep=clock.sleep, clock=clock.now, http=FakePi(clock, fail=True))

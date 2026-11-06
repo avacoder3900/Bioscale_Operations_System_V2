@@ -110,6 +110,7 @@ ARM_PI_URLS = ('http://169.254.42.1:8000',)
 ARM_LOOP_HTTP_WAIT_S = 5.0       # one long-poll on the Pi; the file is checked between polls
 ARM_LOOP_HTTP_BACKOFF_S = 10.0   # a Pi URL that failed is left alone this long
 ARM_LOOP_ANNOUNCE_TIMEOUT_S = 0.4
+ARM_LOOP_PROBE_TIMEOUT_S = 1.0   # a TCP connect before each long-poll: an unplugged cable costs 1 s, not the poll's timeout
 # Analysis / simulation: the robot's analysis has no instruction file and no taught
 # cart, so the loop is walked once per cart on these stand-in points (well inside
 # the deck; nothing real is at them) with synthesised scan → fill → … → end records.
@@ -151,6 +152,18 @@ def _http_json(method, url, body=None, timeout_s=5.0):
     return status, parsed if isinstance(parsed, dict) else None
 
 
+def _tcp_reachable(url, timeout_s=ARM_LOOP_PROBE_TIMEOUT_S):
+    """Can a TCP connection to the URL's host:port be opened within timeout_s?"""
+    import socket
+    from urllib.parse import urlsplit
+    u = urlsplit(url)
+    try:
+        with socket.create_connection((u.hostname, u.port or 80), timeout=timeout_s):
+            return True
+    except Exception:
+        return False
+
+
 class ArmLoopInstructions:
     """BIMS → protocol instructions (contract §5.1).
 
@@ -164,13 +177,15 @@ class ArmLoopInstructions:
     A stale or foreign record never acts. announce(): tells the Pi a marker was
     reached (best effort). simulate=True reads nothing: scan, fill per cart, end."""
 
-    def __init__(self, path=ARM_LOOP_FILE, simulate=False, cartridges=1, sleep=None, clock=None, urls=None, http=None):
+    def __init__(self, path=ARM_LOOP_FILE, simulate=False, cartridges=1, sleep=None, clock=None, urls=None, http=None, probe=None):
         self.path = path
         self.simulate = bool(simulate)
         self.cartridges = max(1, int(cartridges))
         self._sleep = sleep or time.sleep
         self._clock = clock or time.time
         self._http = http or _http_json
+        # The real probe only with the real HTTP; a test's fake HTTP answers for both.
+        self._probe = probe or (_tcp_reachable if http is None else (lambda url: True))
         self.urls = list(urls) if urls is not None else list(ARM_PI_URLS)
         self._down_until = {}
         self.loop = None
@@ -219,6 +234,8 @@ class ArmLoopInstructions:
         for url in self._live_urls():
             q = '?loop=%s&after=%d&wait_s=%.1f' % (self.loop, self.seen_seq, wait_s)
             try:
+                if not self._probe(url):
+                    raise OSError('unreachable')
                 status, rec = self._http('GET', url + '/ot2/loop/instruction' + q, timeout_s=wait_s + 3.0)
             except Exception:
                 self._down_until[url] = self._clock() + ARM_LOOP_HTTP_BACKOFF_S
