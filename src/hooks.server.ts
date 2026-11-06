@@ -5,6 +5,7 @@ import * as auth from '$lib/server/auth';
 import { applyRoutePolicy } from '$lib/server/route-policy';
 import { uploadFile } from '$lib/server/box';
 import { env } from '$env/dynamic/private';
+import { withArmActor } from '$lib/server/robot-arm-move-log';
 
 const PUBLIC_PATHS = ['/login', '/invite/accept'];
 
@@ -97,4 +98,10 @@ const handleFormActionJson: Handle = async ({ event, resolve }) => {
 	return resolve(event);
 };
 
-export const handle: Handle = sequence(handleAuth, handleFormActionJson);
+// The robot arm Movement Log reads who moved the arm, and from which page, from here.
+const handleArmActor: Handle = ({ event, resolve }) => {
+	const u = event.locals.user;
+	return withArmActor({ user: u ? { _id: u._id, username: u.username } : null, from: event.url.pathname }, () => resolve(event));
+};
+
+export const handle: Handle = sequence(handleAuth, handleArmActor, handleFormActionJson);

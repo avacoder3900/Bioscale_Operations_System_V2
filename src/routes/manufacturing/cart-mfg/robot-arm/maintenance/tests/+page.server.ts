@@ -1,13 +1,15 @@
 /**
  * Maintenance → Tests (2026-11-06): the physical tests from
  * $lib/robot-arm/arm-tests, run one at a time against the real arm, with the
- * newest result per test and the Test Log. A run is logged whatever it finds
+ * newest result per test and the Test Log. Above them, the newest run of the
+ * automated unit tests (scripts/report-arm-unit-tests.ts), which also shows
+ * in the Test Log. A run is logged whatever it finds
  * (robot_arm_test_runs + a test.* change row).
  */
 import { fail, redirect } from '@sveltejs/kit';
 import { hasPermission, requirePermission } from '$lib/server/permissions';
 import { ARM_TESTS } from '$lib/robot-arm/arm-tests';
-import { latestArmTestRuns, listArmTestRuns, runArmTest, type ArmTestRunRow } from '$lib/server/robot-arm-tests';
+import { latestArmTestRuns, listArmTestRuns, listArmUnitRuns, runArmTest, unitRunLogRow, type ArmTestRunRow, type ArmUnitRunRow } from '$lib/server/robot-arm-tests';
 import { listMoveSets } from '$lib/server/robot-arm-animation';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -20,9 +22,14 @@ export const load: PageServerLoad = async ({ locals }) => {
 	let latest: Record<string, ArmTestRunRow> = {};
 	let runs: ArmTestRunRow[] = [];
 	let moveSets: { _id: string; name: string }[] = [];
+	let unit: ArmUnitRunRow | null = null;
 	let logError: string | null = null;
 	try {
-		[latest, runs] = await Promise.all([latestArmTestRuns(), listArmTestRuns({ limit: 200 })]);
+		let unitRuns: ArmUnitRunRow[];
+		[latest, runs, unitRuns] = await Promise.all([latestArmTestRuns(), listArmTestRuns({ limit: 200 }), listArmUnitRuns({ limit: 50 })]);
+		// The Test Log holds both: physical runs and the automated unit runs, newest first.
+		unit = unitRuns[0] ?? null;
+		runs = [...runs, ...unitRuns.map(unitRunLogRow)].sort((a, b) => b.at.localeCompare(a.at));
 	} catch (err) {
 		logError = err instanceof Error ? err.message : String(err);
 	}
@@ -31,7 +38,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 	} catch {
 		moveSets = [];
 	}
-	return { tests: ARM_TESTS, latest, runs, moveSets, logError, canRun: hasPermission(locals.user, 'manufacturing:write') };
+	return { tests: ARM_TESTS, latest, runs, unit, moveSets, logError, canRun: hasPermission(locals.user, 'manufacturing:write') };
 };
 
 export const actions: Actions = {

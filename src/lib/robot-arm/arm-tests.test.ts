@@ -15,7 +15,8 @@ import {
 	judgeThermals,
 	judgeVoltage,
 	maxDelta,
-	spreadPerJoint
+	spreadPerJoint,
+	unitFileTitle
 } from './arm-tests';
 
 describe('catalog', () => {
@@ -126,5 +127,14 @@ describe('judgeDepth', () => {
 		expect(judgeDepth([{ name: 'Left', calibrationMm: 500, nowMm: 530 }]).message).toBe('Off Left 30 mm (Limit 20)');
 		expect(judgeDepth([{ name: 'Left', calibrationMm: 500, nowMm: null }]).pass).toBe(false);
 		expect(judgeDepth([]).pass).toBe(false);
+	});
+});
+
+describe('unitFileTitle', () => {
+	it('keeps the part after robot-arm, title-cased', () => {
+		expect(unitFileTitle('src/lib/robot-arm/move-log.test.ts')).toBe('Move Log');
+		expect(unitFileTitle('src/lib/server/robot-arm-client.routes.test.ts')).toBe('Client Routes');
+		expect(unitFileTitle('src/routes/api/robot-arm/cameras/[name]/controls/server.test.ts')).toBe('Cameras Controls');
+		expect(unitFileTitle('src/routes/api/robot-arm/changes/body.test.ts')).toBe('Changes Body');
 	});
 });

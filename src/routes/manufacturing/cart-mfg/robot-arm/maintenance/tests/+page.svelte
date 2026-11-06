@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
 	import { labelTitle } from '$lib/robot-arm/change-labels';
-	import { statusTitle, type ArmTestStatus } from '$lib/robot-arm/arm-tests';
+	import { statusTitle, unitFileTitle, type ArmTestStatus } from '$lib/robot-arm/arm-tests';
 
 	let { data, form } = $props();
 
@@ -37,6 +37,37 @@
 	{#if form?.error}
 		<div class="rounded border border-red-500/40 bg-red-900/10 p-3 text-sm text-red-300">{form.error}</div>
 	{/if}
+
+	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
+		<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Unit Tests</h3>
+		{#if !data.unit}
+			<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">Not Run</p>
+		{:else}
+			{@const u = data.unit}
+			<div class="mt-2 flex flex-wrap items-baseline gap-3">
+				<span class="text-2xl font-semibold {u.failed ? 'text-red-300' : 'text-green-300'}">{u.passed}/{u.total} Passed</span>
+				<span class="text-xs" style="color: var(--color-tron-text-secondary)">
+					{when(u.at)}{u.commit ? ` · ${u.commit}` : ''}{u.branch ? ` · ${u.branch}` : ''}
+				</span>
+			</div>
+			<table class="mt-2 w-full text-left text-xs">
+				<thead style="color: var(--color-tron-text-secondary)">
+					<tr><th class="py-1 pr-3">Area</th><th class="pr-3">Passed</th><th class="pr-3">Failed</th></tr>
+				</thead>
+				<tbody>
+					{#each u.files as f (f.file)}
+						<tr class="border-t border-[var(--color-tron-border)] align-top" style="color: var(--color-tron-text)">
+							<td class="whitespace-nowrap py-1 pr-3">{unitFileTitle(f.file)}</td>
+							<td class="pr-3 font-mono {f.passed === f.total ? 'text-green-300' : 'text-red-300'}">{f.passed}/{f.total}</td>
+							<td class="pr-3 text-red-300">
+								{#each f.failures as name (name)}<div>{name}</div>{/each}
+							</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
+		{/if}
+	</section>
 
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<table class="w-full text-left text-xs">

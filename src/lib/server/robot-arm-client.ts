@@ -13,6 +13,7 @@
 import { env } from '$env/dynamic/private';
 import { connectDB } from './db/connection';
 import { RobotArmEndpoint } from './db/models';
+import { recordArmMove } from './robot-arm-move-log';
 
 interface FetchOptions {
 	method?: 'GET' | 'POST' | 'DELETE';
@@ -155,7 +156,26 @@ async function armRequest(
 	throw lastErr;
 }
 
+/**
+ * Every Pi call goes through here. A POST that moves the arm is written to
+ * the Movement Log (robot_arm_moves) once the Pi answers or fails; reads go
+ * straight through.
+ */
 export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
+	const method = opts.method ?? 'GET';
+	if (method === 'GET') return armFetchJson<T>(path, opts);
+	const startedAt = Date.now();
+	try {
+		const data = await armFetchJson<T>(path, opts);
+		await recordArmMove(method, path, opts.body, data, null, startedAt);
+		return data;
+	} catch (err) {
+		await recordArmMove(method, path, opts.body, null, err, startedAt);
+		throw err;
+	}
+}
+
+async function armFetchJson<T>(path: string, opts: FetchOptions): Promise<T> {
 	const apiKey = env.ROBOT_ARM_API_KEY;
 	if (!apiKey) throw new Error('ROBOT_ARM_API_KEY not set in env');
 

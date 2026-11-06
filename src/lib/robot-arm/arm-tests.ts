@@ -229,3 +229,18 @@ export function judgeDepth(pairs: { name: string; calibrationMm: number; nowMm: 
 	const list = pairs.map((p) => `${p.name} ${p.nowMm == null ? '?' : Math.round(p.nowMm - p.calibrationMm)}`).join(', ');
 	return bad.length ? { pass: false, message: `Off ${list} mm (Limit ${limit})` } : { pass: true, message: `${list} mm` };
 }
+
+// ── automated unit tests (2026-11-06) ───────────────────────────────────────
+
+/**
+ * A unit test file as a short title: "src/lib/robot-arm/move-log.test.ts" →
+ * "Move Log", "src/routes/api/robot-arm/cameras/[name]/controls/server.test.ts"
+ * → "Cameras Controls". The path after robot-arm, without "server" leaves.
+ */
+export function unitFileTitle(file: string): string {
+	const rest = file.replace(/\\/g, '/').replace(/^.*robot-arm[-/]/, '').replace(/\.test\.ts$/, '');
+	const words = rest
+		.split(/[/._-]+/)
+		.filter((w) => w && w !== 'server' && !/^\[.*\]$/.test(w));
+	return words.map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(' ') || file;
+}

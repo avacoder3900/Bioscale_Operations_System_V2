@@ -14,7 +14,7 @@
  */
 import { env } from '$env/dynamic/private';
 import { connectDB } from './db/connection';
-import { ArmWaxFillSettings, RobotArmCameraPreset, RobotArmEndpoint, RobotArmPose, RobotArmTagCalibration, RobotArmTestRun } from './db/models';
+import { ArmWaxFillSettings, RobotArmCameraPreset, RobotArmEndpoint, RobotArmPose, RobotArmTagCalibration, RobotArmTestRun, RobotArmUnitRun } from './db/models';
 import { robotArm, robotArmFetch, type ServoState } from './robot-arm-client';
 import { afterPlay, getMoveSet, playMoveSet, playbackActive, readArm, requireCool, requireIdle, type ArmNow } from './robot-arm-animation';
 import { checkHome, returnToHome } from './robot-arm-vision';
@@ -537,4 +537,47 @@ export async function latestArmTestRuns(): Promise<Record<string, ArmTestRunRow>
 	const out: Record<string, ArmTestRunRow> = {};
 	for (const r of rows) out[r._id] = JSON.parse(JSON.stringify(r.doc));
 	return out;
+}
+
+// ── automated unit test runs (2026-11-06; written by scripts/report-arm-unit-tests.ts) ──
+
+export interface ArmUnitRunRow {
+	_id: string;
+	at: string;
+	total: number;
+	passed: number;
+	failed: number;
+	skipped: number;
+	durationMs: number | null;
+	files: { file: string; total: number; passed: number; failures: string[] }[];
+	branch: string | null;
+	commit: string | null;
+	ranBy: string | null;
+}
+
+/** Newest first. */
+export async function listArmUnitRuns(o: { limit?: number } = {}): Promise<ArmUnitRunRow[]> {
+	await connectDB();
+	const rows = await RobotArmUnitRun.find({})
+		.sort({ at: -1 })
+		.limit(Math.min(Math.max(o.limit ?? 50, 1), 500))
+		.lean();
+	return JSON.parse(JSON.stringify(rows));
+}
+
+/** A unit run as a Test Log row beside the physical tests. */
+export function unitRunLogRow(u: ArmUnitRunRow): ArmTestRunRow {
+	return {
+		_id: u._id,
+		at: u.at,
+		key: 'unit',
+		title: 'Unit Tests',
+		hardware: 'code',
+		status: u.failed > 0 ? 'fail' : 'pass',
+		message: `${u.passed}/${u.total} Passed`,
+		expected: '',
+		measured: null,
+		durationMs: u.durationMs,
+		ranBy: u.ranBy ? { username: u.ranBy } : null
+	};
 }

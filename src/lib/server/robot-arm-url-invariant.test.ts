@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative, sep, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -360,23 +360,20 @@ describe('ARM-01 §7.6.1 — the private Pi origin never reaches the client', ()
 		).toEqual([]);
 	});
 
-	it('(c) the three operator-facing NAME mentions in the tree today are allowed', () => {
-		// These print the bare name in error copy so an operator knows what to fix.
-		// They read no value. If any of these starts failing, the matcher has
-		// regressed into a dumb grep.
-		const mentions = [
-			'src/lib/components/RobotArmCameraPanel.svelte',
-			'src/lib/components/RobotArmConnectionPanel.svelte',
-			'src/routes/manufacturing/cart-mfg/robot-arm/+layout.svelte'
-		];
-		for (const rel of mentions) {
-			const abs = join(REPO_ROOT, rel);
-			expect(statSync(abs).isFile(), `${rel} moved — update this list`).toBe(true);
-			const src = readFileSync(abs, 'utf8');
-			// Precondition: the file really does still contain the name as text.
-			expect(src.includes('ROBOT_ARM_BASE_URL'), `${rel} no longer mentions the name`).toBe(true);
-			expect(findViolations('.svelte', src)).toEqual([]);
-		}
+	it('(c) the NAME printed to an operator in markup text or a comment is allowed', () => {
+		// The camera panel, connection panel and arm layout used to print the bare
+		// name in error copy; the 2026-11-04 no-explanatory-text pass removed all
+		// three, so this keeps the same check on a fixture. If it starts failing,
+		// the matcher has regressed into a dumb grep.
+		const src = [
+			'<script lang="ts">',
+			'\t// ROBOT_ARM_BASE_URL is read server-side only.',
+			'\tlet { data } = $props();',
+			'</script>',
+			'<p>Set ROBOT_ARM_BASE_URL on the server.</p>',
+			'<!-- ROBOT_ARM_BASE_URL -->'
+		].join('\n');
+		expect(findViolations('.svelte', src)).toEqual([]);
 	});
 });
 

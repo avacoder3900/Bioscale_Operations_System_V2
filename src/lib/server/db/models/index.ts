@@ -223,3 +223,6 @@ export { RobotArmChange } from './robot-arm-change.js';
 export { RobotArmTestRun } from './robot-arm-test-run.js';
 // One BIMS mover at a time: Return Home / droop settle / Play start (2026-11-06).
 export { RobotArmMotion } from './robot-arm-motion.js';
+// Every arm movement BIMS sends, and the automated arm unit test runs (2026-11-06).
+export { RobotArmMove } from './robot-arm-move.js';
+export { RobotArmUnitRun } from './robot-arm-unit-run.js';
