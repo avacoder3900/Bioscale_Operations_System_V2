@@ -26471,3 +26471,27 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 5c204cb1 (feature 43f2180a, also feat/ot2-movement-log)
 Retrieve this exact code: git checkout 5c204cb1
 What this deployment is for: Opentrons commands and measured arm loop steps in the Movement Log (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/movement-log-filters — Movement Log filters by device and type; Newest N, Showing X Of Y
+================================================================================
+Alejandro asked for the Movement Log to hold the arm and the usual Opentron movements together, with a
+Robot Arm or Opentron label on each row, filters by device and by type (broad or exact), the newest N rows
+(100 by default, any number, or All) and a "Showing This Of That" count.
+- src/lib/robot-arm/move-types.ts (new, pure): MOVE_GROUPS. Arm: Servo Move (move, jog), Whole Arm Move
+  (jog_cartesian, hold), Torque, Playback (play, record, leader, task), Loop Step, Stop. Opentron: Movement,
+  Liquid, Tips, Wait, Setup, Comment, Other (every OT-2 kind no group names). groupOfKind, groupKindQuery.
+  Tests: move-types.test.ts.
+- src/lib/server/robot-arm-move-log.ts: shared moveQuery (device, group, kind, window, servo);
+  listArmMoves limit null = every row; countArmMoves for the total; listMoveKinds for the Exact Type list.
+- Movement Log page: every active OT-2 is read in on load (was only the arm line's robot), in parallel, 6 s
+  each. Filter panel: Device (All / Robot Arm / Opentron), Type groups (only groups with rows), Exact Type
+  dropdown with counts, Time (default now All Time; the window "All" is renamed "All Time"), Servo, Newest
+  number box + All, "Showing N Of Total". Rows get a Robot Arm / Opentron badge (robot short name beside it)
+  and the group after the exact type. Servo and Timing tables summarize the rows shown.
+- GET /api/robot-arm/moves takes group= and kind= and returns total.
+Not logged (unchanged): servo temperature and position reads (GETs, polled every few seconds); OT-2
+homes/lights sent outside a run. Arm rows only start 2026-11-06 (43 so far), so the arm side is thin.
+npm run check 13 errors (baseline, none in touched files). vitest src/lib/robot-arm 269/269.
+Read-only DB check of the new queries: all 100 of 11,905; Opentron Liquid 100 of 2,644; Aspirate 100 of 247.
+Worked in worktree ../Bioscale_V2-wt-movelog-filters (node_modules junction).
