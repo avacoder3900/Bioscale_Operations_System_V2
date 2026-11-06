@@ -26437,3 +26437,32 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit ef228634 (also feat/arm-motion-log)
 Retrieve this exact code: git checkout ef228634
 What this deployment is for: Show/Hide on the Change Log and Movement Log; Replay test removed (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/ot2-movement-log — Opentrons commands + measured arm loop steps in the Movement Log
+================================================================================
+Alejandro wants in-depth OT-2 timing next to the arm's in Maintenance -> Movement Log.
+- src/lib/robot-arm/ot2-move-log.ts (pure): one line per OT-2 command (aspirate/dispense with volume,
+  labware slot + name, well, origin offset, flow; moveToCoordinates XYZ; moveRelative; homes by axis;
+  pauses/comments with their text; legacy 'custom' commands use their own text), pickLoggable (log ended
+  commands in order, stop at the first one still running), summarizeTiming (count/total/avg/max per device
+  and type, only rows with a measured end), loopStepLine. Tests: ot2-move-log.test.ts.
+- src/lib/server/ot2-move-log.ts: syncOt2Robot reads GET /runs (last 7 days, current run first) and each
+  run's command log from ot2_move_syncs.cursor; rows are robot_arm_moves with device 'ot2', _id
+  ot2-<runId>-<index> (repeat reads never double). Time budget per call. recordArmLoopStep writes one
+  'loop_step' arm row per Grab / Withdraw / Withdraw + Grab / Fail (play sent -> arrival check passed).
+- Models: robot_arm_moves gains device, endAt, robot, runId, seq, commandId, intent, params, loopId, cart
+  (old rows have no device = arm). New ot2_move_syncs (one row per run: cursor, done). ArmWaxFillRun cycles
+  gain grab/withdraw/failPlayedAt + PlannedS. No new indexes.
+- arm-wax-fill.ts: plays stamp PlayedAt/PlannedS; *Done functions log the step; loopFinish reads the run's
+  commands in (10 s budget). Movement Log page reads the arm line's robot on load (6 s budget).
+- Movement Log page: Both / Robot Arm / Opentrons filter, Device + Took columns, ms on When, Timing card.
+  GET /api/robot-arm/moves takes device= and returns timing.
+- First read of B07 done from this PC directly over Tailscale (bridge daemon was not claiming jobs, see
+  below): 20 runs, 11,862 commands logged, all 20 runs marked done.
+B07 bridge: no queue job claimed since about 18:18 UTC (two http jobs expired at 18:40/18:43); robot server
+answers on Wi-Fi + Tailscale. The OT-2's USB-B port was cabled to arm-pi at 18:25 UTC (arm-pi eth1, Realtek
+0bda:8050, OT-2 eth0 169.254.199.218). Cause not confirmed; daemon log needs SSH.
+USB vs Wi-Fi from arm-pi to B07: ping 1.8 ms (max 2.0) vs 8.0 ms (max 21.5); GET /health 58 ms vs 63 ms.
+npm run check 13 errors (baseline, none in touched files). vitest robot-arm 292/292.
+Worked in worktree ../Bioscale_V2-wt-ot2-movelog (node_modules junction).
