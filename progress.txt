@@ -26241,3 +26241,17 @@ Deployment: production — via Vercel GitHub integration on the push to master (
 Source: branch master @ (this commit)
 Retrieve this exact code: git log master --oneline, the commit titled "fix(robot-arm): Pi settle aims at the pose, not the trimmed goal"
 What this deployment is for: poses land on their numbers again and stay there between plays; Clear All Droop to reset the inflated trims.
+
+================================================================================
+2026-11-06 — feat/stage-cal-robot-bar — Stage Calibration page gets the Run page's OT-2 robot bar
+================================================================================
+The robot bar from Wax Fill → Run (health dot + bridge health label, robot menu, Identify, Lights On/Off,
+Home, Conveyor, Recover) now sits at the top of Robot Arm → Calibrate → Stage. Its Stage Calibration link
+is left out (it is this page). Files: robot-arm/calibrate/stage/+page.svelte (bar + its functions, copied
+from run/+page.svelte), calibrate/stage/+page.server.ts (switchRobot and resetLoop actions, same as Run),
+$lib/server/arm-wax-fill.ts loadStageCalibration (now returns robots[] and health, like loadArmWaxFill).
+Differences from Run: the robot menu and Home are disabled while this page's Jog (maintenance) run, a Dry
+Fill or a loop holds the robot; Recover ends a Dry Fill / loop (resetLoop), force-resets the OT-2 (which
+deletes the maintenance run, so the page forgets its Jog run and tip state), restarts the server only when
+hung/unreachable (shift-click forces). The old static Robot box in the Pickers row is still there.
+- svelte-check 14 errors (baseline, none in touched files). Not driven against a robot yet.

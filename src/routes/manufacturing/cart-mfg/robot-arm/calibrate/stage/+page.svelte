@@ -33,9 +33,11 @@
 	 * stay direct.
 	 */
 	import { onDestroy, onMount } from 'svelte';
-	import { deserialize } from '$app/forms';
+	import { enhance, deserialize } from '$app/forms';
 	import { invalidateAll } from '$app/navigation';
-	import { RobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { RobotSession, openRobotSession, type RobotSessionState } from '$lib/opentrons/direct-client';
+	import { restartServerOverBridge } from '$lib/opentrons/fill-bridge-jobs';
+	import type { RobotHealth } from '$lib/server/opentrons/health';
 	import TransportPill from '$lib/components/opentrons/TransportPill.svelte';
 	import type { CalibrationView } from '$lib/server/arm-wax-fill';
 	import {
@@ -869,6 +871,214 @@
 		if (dryLoop && dryLoop.status === 'running') void driveDryFill();
 	});
 
+	// ── OT-2 robot bar (the Run page's, 2026-11-06) ──────────────────────────
+	// The same bar as on Wax Fill → Run: robot menu, bridge health (polled every
+	// 10 s), Identify, Lights, Home, Conveyor, Recover. No Stage Calibration link:
+	// this is that page. Home and the robot menu wait while this page's Jog run,
+	// a Dry Fill or a loop holds the robot; Recover ends all of them.
+	let robotMenuOpen = $state(false);
+	let switchingRobot = $state(false);
+	let health = $state<RobotHealth | null>(data.health);
+	$effect(() => {
+		health = data.health;
+	});
+	let robotBusy = $state<'restart' | 'reset' | 'home' | 'lights' | 'identify' | null>(null);
+	let robotMsg = $state<{ text: string; level: 'info' | 'warn' | 'error' } | null>(null);
+	let lightsOn = $state<boolean | null>(null);
+	const robotHeld = $derived(!!runId || !!dryLoop || locked);
+
+	async function pollHealth() {
+		if (!robotId) return;
+		try {
+			const res = await fetch('/api/opentrons-lab/robots/health', { credentials: 'same-origin' });
+			if (!res.ok) return;
+			const body = await res.json();
+			const h = body?.health?.[robotId];
+			if (h) health = h;
+		} catch {
+			/* transient — keep the last reading */
+		}
+	}
+
+	async function readLights() {
+		if (!robotId) return;
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/lights`, { credentials: 'same-origin' });
+			if (res.ok) lightsOn = !!(await res.json())?.on;
+		} catch {
+			/* unknown until the next toggle */
+		}
+	}
+
+	onMount(() => {
+		void pollHealth();
+		const t = setInterval(pollHealth, 10_000);
+		return () => clearInterval(t);
+	});
+	$effect(() => {
+		if (robotId) void readLights();
+		else lightsOn = null;
+	});
+
+	function say(text: string, level: 'info' | 'warn' | 'error' = 'info') {
+		robotMsg = { text, level };
+	}
+
+	function healthDot(status?: string | null): string {
+		switch (status) {
+			case 'ready': return 'bg-green-400';
+			case 'busy': return 'bg-amber-400';
+			case 'hung': return 'bg-red-500 animate-pulse';
+			case 'offline': return 'bg-gray-500';
+			default: return 'bg-gray-600';
+		}
+	}
+	function healthText(status?: string | null): string {
+		switch (status) {
+			case 'ready': return 'text-green-300';
+			case 'busy': return 'text-amber-300';
+			case 'hung': return 'text-red-300';
+			case 'offline': return 'text-gray-400';
+			default: return 'text-[var(--color-tron-text-secondary)]';
+		}
+	}
+
+	/** Restart the OT-2 robot server (clears a hung engine, ~90 s); the Recover step that needs it. */
+	async function restartServerNow(): Promise<string> {
+		if (!robotId) return 'No robot chosen.';
+		// Tailnet line: the restart is a daemon job over /bridge (BIMS audits it first). Otherwise the queue POST.
+		const session = await openRobotSession(robotId);
+		try {
+			const bridge = session.bridge();
+			if (bridge) {
+				const r = await restartServerOverBridge(bridge, robotId);
+				return r.ok ? r.message : r.error;
+			}
+		} finally {
+			session.close();
+		}
+		const res = await fetch(`/api/opentrons-lab/robots/${robotId}/restart-server`, { method: 'POST', credentials: 'same-origin' });
+		const body = await res.json().catch(() => ({}));
+		return res.ok ? (body.message ?? 'Restart sent.') : (body.message ?? body.error ?? 'Restart failed.');
+	}
+
+	/**
+	 * Recover, as on the Run page: a Dry Fill (or any running loop) ends now, the
+	 * OT-2 force-reset aborts its run and clears any maintenance run (this page's
+	 * Jog run included), then the robot server is restarted only when it needs it
+	 * (hung, or force-reset could not reach it). Shift-click forces the restart.
+	 */
+	async function recover(forceRestart: boolean) {
+		if (!robotId || robotBusy) return;
+		const willRestart = forceRestart || health?.status === 'hung';
+		const lines = [
+			`Recover ${robotName}?`,
+			'',
+			"This ENDS any Dry Fill or loop on this robot, ABORTS its active run, closes this page's Jog run and clears its run state. Carts are left as-is.",
+			willRestart
+				? 'The robot server will also be restarted (it boots for 2–3 min).'
+				: 'If the robot server turns out to be hung or unreachable, it will also be restarted (2–3 min boot).'
+		];
+		if (!confirm(lines.join('\n'))) return;
+		robotBusy = 'reset';
+		robotMsg = null;
+		if (dryLoop) dryStopAsked = true;
+		const notes: string[] = [];
+		let reachable = true;
+		try {
+			try {
+				await dryPost('resetLoop');
+			} catch (e) {
+				notes.push(`Run reset failed: ${e instanceof Error ? e.message : String(e)}`);
+			}
+			try {
+				const res = await fetch(`/api/opentrons-lab/robots/${robotId}/force-reset`, { method: 'POST', credentials: 'same-origin' });
+				const body = await res.json().catch(() => ({}));
+				notes.push(res.ok ? (body.message ?? 'Reset to idle.') : (body.message ?? body.error ?? 'Reset failed.'));
+				if (body?.robotReachable === false) reachable = false;
+			} catch {
+				notes.push('Reset request failed — check the bridge.');
+			}
+			// Force-reset deletes the robot's maintenance run; forget this page's Jog run and Dry Fill.
+			runId = pipetteId = pipetteMount = pipetteName = null;
+			liveX = liveY = liveZ = null;
+			hasTip = false;
+			tipAdjust = null;
+			dryLoop = null;
+			dryPhase = null;
+			dryStatus = null;
+			if (willRestart || !reachable) {
+				if (health?.status === 'offline' && !forceRestart) {
+					notes.push('Bridge is offline, so the robot server can’t be restarted from here — check the robot’s power and network.');
+				} else {
+					robotBusy = 'restart';
+					try {
+						notes.push(await restartServerNow());
+					} catch {
+						notes.push('Restart request failed — check the bridge.');
+					}
+				}
+			}
+			await invalidateAll();
+		} finally {
+			say(notes.join(' '), 'warn');
+			robotBusy = null;
+			setTimeout(pollHealth, 3000);
+		}
+	}
+
+	/** Home the OT-2 gantry (not while this page's Jog run, a Dry Fill or a loop holds the robot). */
+	async function homeGantry() {
+		if (!robotId || robotBusy) return;
+		if (!confirm(`Home all axes on ${robotName}? Make sure the deck is clear.`)) return;
+		robotBusy = 'home';
+		robotMsg = null;
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/home`, { method: 'POST', credentials: 'same-origin' });
+			const body = await res.json().catch(() => ({}));
+			say(res.ok ? 'Homed.' : (body.message ?? body.error ?? 'Home failed.'), res.ok ? 'info' : 'error');
+		} catch (e) {
+			say(`Home failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
+		} finally {
+			robotBusy = null;
+		}
+	}
+
+	async function toggleLights() {
+		if (!robotId || robotBusy) return;
+		robotBusy = 'lights';
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/lights`, {
+				method: 'POST',
+				credentials: 'same-origin',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ on: !lightsOn })
+			});
+			if (res.ok) lightsOn = !lightsOn;
+			else say('Could not switch the rail lights.', 'error');
+		} catch {
+			say('Could not reach the robot for the lights.', 'error');
+		} finally {
+			robotBusy = null;
+		}
+	}
+
+	async function identify() {
+		if (!robotId || robotBusy) return;
+		robotBusy = 'identify';
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/identify`, { method: 'POST', credentials: 'same-origin' });
+			if (!res.ok) say('Could not reach the robot to blink its lights.', 'error');
+		} catch {
+			say('Could not reach the robot to blink its lights.', 'error');
+		} finally {
+			robotBusy = null;
+		}
+	}
+
+	const ctl = 'rounded border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50';
+	const ctlPlain = `${ctl} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]`;
+
 	// ── Tip: pick up, probe on the calibrator, swap, drop; fixture teach ─────
 	let hasTip = $state(false);
 	let tipAdjust = $state<{ x: number; y: number } | null>(null);
@@ -1179,6 +1389,64 @@
 	<div class="flex flex-wrap items-center justify-between gap-2">
 		<h1 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Stage</h1>
 		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax Fill →</a>
+	</div>
+
+	<!-- The OT-2 robot bar, as on Wax Fill → Run: health, robot menu, Identify, Lights, Home, Conveyor, Recover. -->
+	<div class="rounded border px-3 py-2 text-xs {health?.status === 'hung' ? 'border-red-500/50 bg-red-900/10' : 'border-[var(--color-tron-border)] bg-black/30'}" aria-label="Robot controls">
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<div class="flex min-w-0 items-center gap-2">
+				<span class="h-2.5 w-2.5 shrink-0 rounded-full {healthDot(health?.status)}" title={health ? `${health.label}: ${health.detail}` : 'No health data'}></span>
+				<div class="relative" onfocusout={(e) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node | null)) robotMenuOpen = false; }}>
+					<button type="button" onclick={() => (robotMenuOpen = !robotMenuOpen)} disabled={robotHeld || switchingRobot}
+						title={locked || dryLoop ? 'Not while a run is on' : runId ? 'Close the Jog run to switch robots' : 'Switch Robot'} aria-haspopup="menu" aria-expanded={robotMenuOpen}
+						class="flex items-center gap-1 rounded border border-transparent px-1 py-0.5 font-semibold hover:border-[var(--color-tron-border)] disabled:opacity-100 disabled:hover:border-transparent"
+						style="color: var(--color-tron-text)">
+						<span class="truncate">{robotId ? (data.robotName ?? robotId) : 'No OT-2 Chosen'}</span>
+						<svg class="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="color: var(--color-tron-text-secondary)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" /></svg>
+					</button>
+					{#if robotMenuOpen}
+						<form method="POST" action="?/switchRobot" role="menu" use:enhance={() => { switchingRobot = true; return async ({ result, update }) => { switchingRobot = false; robotMenuOpen = false; if (result.type === 'failure') say(String((result.data as any)?.error ?? 'Switch failed.'), 'error'); else if (result.type === 'success') { await update(); health = data.health ?? null; say(`Robot: ${data.robotName ?? robotId}.`); } else await update(); }; }}
+							class="absolute left-0 top-full z-20 mt-1 min-w-40 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-1 shadow-lg">
+							{#each data.robots as r (r._id)}
+								<button type="submit" name="robotId" value={r._id} role="menuitem" disabled={switchingRobot}
+									class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-[var(--color-tron-bg-tertiary)] {r._id === robotId ? 'text-[var(--color-tron-cyan)]' : ''}"
+									style={r._id === robotId ? '' : 'color: var(--color-tron-text)'}>
+									<span class="w-3 shrink-0">{r._id === robotId ? '•' : ''}</span>
+									<span class="truncate">{r.name}</span>
+								</button>
+							{/each}
+						</form>
+					{/if}
+				</div>
+				{#if robotId}
+					<span class="truncate {healthText(health?.status)}" title={health?.detail ?? ''}>
+						{health?.label ?? 'No Health Data'}
+					</span>
+				{/if}
+			</div>
+			<div class="flex flex-wrap items-center gap-1">
+				<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
+					{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
+				</button>
+				<button type="button" onclick={toggleLights} disabled={!robotId || robotBusy !== null} title="Toggle the rail lights"
+					class="{ctl} {lightsOn ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
+					{lightsOn === null ? 'Lights' : lightsOn ? 'Lights On' : 'Lights Off'}
+				</button>
+				<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || robotHeld}
+					title={locked || dryLoop ? 'Not while a run is on' : runId ? 'Close the Jog run first' : 'Home all axes'} class={ctlPlain}>
+					{robotBusy === 'home' ? 'Homing…' : 'Home'}
+				</button>
+				<a href="/manufacturing/cart-mfg/robot-arm/teach" title="Pulse the cooling belt (Teach tab)" class={ctlPlain}>Conveyor</a>
+				<button type="button" onclick={(e) => void recover(e.shiftKey)} disabled={!robotId || robotBusy !== null}
+					title="Ends any Dry Fill or loop, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"
+					class="{ctl} {health?.status === 'hung' ? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50' : 'border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30'}">
+					{robotBusy === 'restart' ? 'Restarting…' : robotBusy === 'reset' ? 'Recovering…' : 'Recover'}
+				</button>
+			</div>
+		</div>
+		{#if robotMsg}
+			<p class="mt-1.5 text-[11px] {robotMsg.level === 'error' ? 'text-red-300' : robotMsg.level === 'warn' ? 'text-amber-300' : ''}" style={robotMsg.level === 'info' ? 'color: var(--color-tron-text-secondary)' : ''}>{robotMsg.text}</p>
+		{/if}
 	</div>
 
 	<!-- Pickers -->

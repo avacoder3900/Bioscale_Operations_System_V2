@@ -1399,18 +1399,24 @@ export async function loadStageCalibration() {
 	await connectDB();
 	const settings = await getSettings();
 	const robotId = settings.robotId;
-	const [robot, calibration, protocol, active] = await Promise.all([
-		robotId ? (OpentronsRobot.findById(robotId).select('_id name').lean() as Promise<any>) : Promise.resolve(null),
+	const [robots, calibration, protocol, active] = await Promise.all([
+		OpentronsRobot.find({ isActive: { $ne: false } }).select('_id name').sort({ name: 1 }).lean(),
 		getCalibration(robotId),
 		protocolFor(robotId).catch(() => null),
 		activeLoop()
 	]);
 	// The teach aid follows the protocol on the robot (p20 for the fill, p300 for the rehearsal).
 	const teach: TeachAid | null = robotId ? await teachAid(robotId, stageTipProfile(protocol), calibration).catch((): TeachAid | null => null) : null;
-	const robotName: string | null = robot?.name ?? null;
+	const robotName: string | null = (robots as any[]).find((r) => String(r._id) === robotId)?.name ?? null;
+	// The Run page's robot bar (menu, health, Identify / Lights / Home / Recover) sits on this page too.
+	const health: RobotHealth | null = robotId
+		? ((await getRobotsHealth([{ _id: robotId, name: robotName }]).catch(() => ({}) as Record<string, RobotHealth>))[robotId] ?? null)
+		: null;
 	return {
 		robotId,
 		robotName,
+		health,
+		robots: (robots as any[]).map((r) => ({ _id: String(r._id), name: r.name ?? String(r._id) })),
 		scannerDeviceId: scannerDeviceIdForRobot(robotName),
 		calibration,
 		protocol,

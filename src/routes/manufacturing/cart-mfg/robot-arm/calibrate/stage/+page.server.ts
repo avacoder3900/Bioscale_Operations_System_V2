@@ -39,12 +39,14 @@ import {
 	haltLoop,
 	loadStageCalibration,
 	loopFinish,
+	resetLoop,
 	saveCartLocation,
 	saveDispenseDepth,
 	saveScanPosition,
 	saveStageCalibrator,
 	saveStageGeometry,
-	startLoop
+	startLoop,
+	switchRobot
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -97,6 +99,27 @@ async function dryStep(ev: { request: Request; locals: App.Locals }, step: (user
 }
 
 export const actions: Actions = {
+	// The robot bar's menu (as on the Run page): only the robot changes, the rest of Setup stays.
+	switchRobot: async (ev) => {
+		const { d, user } = await writer(ev);
+		try {
+			const settings = await switchRobot(user, field(d, 'robotId'));
+			return { success: 'Robot switched.', settings: json(settings) };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The robot bar's Recover: end the running loop (a Dry Fill) now; the page then forces the OT-2 back to idle.
+	resetLoop: async (ev) => {
+		const { user } = await writer(ev);
+		try {
+			return json(await resetLoop(user));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
 	saveScanPosition: async (ev) => {
 		const { d, user, robotId } = await writer(ev);
 		try {
