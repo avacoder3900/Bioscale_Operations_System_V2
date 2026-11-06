@@ -26670,3 +26670,20 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 2fb5a7cc (also feat/ot2-movement-log)
 Retrieve this exact code: git checkout 2fb5a7cc
 What this deployment is for: the cable link chip on Stage Calibration (Vercel status success).
+2026-11-06 — master — Run tab: New Tip Rack box (the stage protocol's tiprack_refilled) (d16b4a02)
+================================================================================
+Alejandro: integrate the legacy wax filling's "new tip rack" option into the robot wax-fill protocol — a box to
+reset the tip rack. Both stage protocols already declare tiprack_refilled (Tiprack Refilled: start from A1 and
+reset /data/tip_tracker_<hostname>.json); the robot-arm loop just never sent it, so a fresh rack still took
+its tip from wherever the tracker pointed. Changes: a New Tip Rack checkbox on the Run card next to Start At,
+with the next fresh well beside it (A1 while ticked, from the teach aid's nextTipWell otherwise); startLoop
+takes opts.tiprackRefilled, loopRunForm sends param_tiprack_refilled (always, true/false, like the channel
+RTPs; computeRunParameters only reads what the robot's schema declares); the wax run's tip snapshot records
+the reset exactly as for the legacy page (run-lifecycle-records); loop_start audit carries tiprackRefilled.
+The box clears after each start. First attempt conflicted with the Dry Fill move into the Jog run (dryFill
+left startLoop); redone on top of c6328891. svelte-check 14 errors (baseline); vitest robot-arm + lifecycle
+24 files / 359 tests green.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ d16b4a02
+Retrieve this exact code: git checkout d16b4a02
+What this deployment is for: a New Tip Rack box on the robot-arm Run card that resets the OT-2's tip tracker to A1.
