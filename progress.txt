@@ -26728,3 +26728,25 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 577bee64
 Retrieve this exact code: git checkout 577bee64
 What this deployment is for: rehearsal scan accepts any barcode, checks and changes nothing (Vercel status success).
+2026-11-06 — master — Return to home: servos jog at a capped speed, full speed put back after (4accb024)
+================================================================================
+Alejandro: "can we make the tension on the servos for 'return to home' a little less tight, right now its kinda
+violent". Cause: Return Home sent every ≤300-step jog with no speed, so each one snapped at the servo's full
+speed (stiffness P 16 makes that a punch). Fix (BIMS only, no Pi change): every Return Home jog — joints,
+mouth open, claw close — carries HOME_JOG_SPEED = 600 steps/s (≈53°/s; a max-size jog takes ~0.5 s; one
+constant in src/lib/robot-arm/home-calibration.ts), and the next jog waits for the travel time (jogTravelMs)
+because the Pi aims a jog from the PRESENT position — two quick jogs on one joint at a capped speed would
+collapse into one. The STS3215 keeps its Goal_Speed until rewritten and a Play writes Goal_Position only, so
+a Play after a Return Home would crawl: every request that capped a servo ends (finally — done, Stop, out of
+time, failed jog) by re-sending that servo's LAST goal with speed 0 through /servos/{id}/move
+(restoreFullSpeed; robotArm.moveJoint gained an optional speed). Same goal, nothing moves; a 0-step jog would
+instead re-aim a loaded joint at its sagged position. Restore failures are warnings in the result; the next
+Return Home resets it again. Checked on arm-pi over ssh first: the live jog route writes Goal_Speed when
+given, move.py writes it only when asked, _feetech_bus maps no Acceleration register (so speed is the only
+lever without a Pi deploy). PRD ARM-05 §2.9. vitest robot-arm 23 files / 327 tests green; svelte-check 14
+errors (baseline). Not yet watched on the arm (a replay session was running on the Pi): if 600 still feels
+sharp, lower HOME_JOG_SPEED; if a Return Home now runs out of its 20 s slice more often, raise it.
+Deployment: production — via Vercel GitHub integration on the push to master (build not watched)
+Source: branch master @ 4accb024 (PRD note 40d58b39)
+Retrieve this exact code: git checkout 4accb024
+What this deployment is for: a gentler Return to home — capped servo speed on every jog, full speed restored after.
