@@ -26127,3 +26127,7 @@ Files: src/lib/server/arm-wax-fill.ts, db/models/arm-wax-fill-run.ts (dryFill), 
 (armWaxFill.dryFill), opentrons/run-lifecycle-records.ts, robot-arm/calibrate/stage/+page.server.ts + +page.svelte.
 Not run on a robot yet. svelte-check 14 errors = clean master's 14 (none in touched files). vitest
 run-lifecycle-records + robot-arm 262 pass.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CWyMEtni1AiXmKf2GPvDYBTwCHsJ
+Source: branch master @ commit a4a6a618 (also feat/stage-dry-fill)
+Retrieve this exact code: git checkout a4a6a618
+What this deployment is for: Stage Calibration's Dry Fill All Holes (Vercel status success).
