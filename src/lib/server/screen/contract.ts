@@ -28,6 +28,21 @@
  * An abort appends a row id "abort" (F, note = reason) to the level that was
  * running; the lvl 9 summary then carries "aborted":"<reason>".
  *
+ * v108 (brevitest-device Docs/V108_TIERED_SCREEN_SPEC.md): run_screen levels may carry
+ * letters. "Q" = quick tier only; "T" = quick tier, then a gate, then the full levels
+ * ("T" alone = T0123). The quick tier publishes as lvl 4: q_heat_uptime / q_heat_rate
+ * (°C/min ×10, 10-90 s after heater-on; S "warm" when it started near target) /
+ * q_heat_t90 / q_heat_start, one rep of the level 1 stage + optics rows with no rep digit
+ * (wake, home, homerep, travel, lsrA, lsrA_c, ...), q_stage_hits, then the Sonic
+ * Fingerprint moves as q_* motion rows, and with the gate tier_gate (I, 1 = continued,
+ * 0 = stopped, note = first failing row). The summary adds "gate" ("" | "pass" | <row id>)
+ * and "skipped" (1 when the gate stopped the full levels).
+ * Every motion run (q_*, run{N}_*) homes after each oscillation block: {p}_w{K}_err
+ * per block (warn > 500 µm), {p}_end (the final home, info) and {p}_err = their sum
+ * (warn band 150 + 50 µm per extra home). Level 1 heater: heat_uptime, heat_rate and
+ * heat_t90 on a cold start; heat_cold is info from v108 (no unit reached target in 240 s
+ * from room temperature).
+ *
  * Nothing here touches the DB; ingest.ts does.
  */
 
@@ -78,6 +93,10 @@ export interface ScreenSummaryEvent {
 	reps: number;
 	assay: string | null;
 	aborted: string | null;
+	/** v108 tiered screen: "" (no gate), "pass", or the first failing quick-tier row id. */
+	gate: string | null;
+	/** v108: true when the gate stopped the screen before the full levels. */
+	skipped: boolean;
 	/** A refused start writes {"lvl":9,"error":…} to the variable only; kept for completeness. */
 	error: string | null;
 }
@@ -88,12 +107,14 @@ export const SCREEN_LEVEL_NAMES: Record<number, string> = {
 	0: 'Static',
 	1: 'Actuators & sensors',
 	2: 'Assay motion ×N',
-	3: 'Cloud path'
+	3: 'Cloud path',
+	4: 'Quick tier'
 };
 
 /** Strip a trailing rep digit: "homerep2" → "homerep", "lsrA_f7_3"? no — ids end in the digit directly. */
 export function baseTestId(id: string): string {
 	if (/^run\d+_/.test(id)) return id; // run rows keep their run number
+	if (/_w\d+_err$/.test(id)) return id; // v108 per-well rows keep their well number
 	return id.replace(/(\D)\d$/, '$1');
 }
 
@@ -159,6 +180,16 @@ export const SCREEN_TEST_LABELS: Record<string, string> = {
 	heat_hold: 'Heater hold deviation (°C×10, warm)',
 	heat_duty: 'Heater hold duty (%)',
 	heat_off: 'Heater off (temperature falls)',
+	heat_uptime: 'Uptime at heater check (s)',
+	heat_rate: 'Heater heat-up rate (°C/min ×10)',
+	heat_t90: 'Heater temperature 90 s after on (°C×10)',
+	// v108 quick tier (level 4)
+	q_heat_uptime: 'Quick: uptime at heater-on (s)',
+	q_heat_rate: 'Quick: heater heat-up rate (°C/min ×10)',
+	q_heat_t90: 'Quick: heater 90 s after on (°C×10)',
+	q_heat_start: 'Quick: heater start temperature (°C×10)',
+	q_stage_hits: 'Quick: limit hits (stage checks)',
+	tier_gate: 'Tier gate (1 = continued to full screen)',
 	buzz: 'Buzzer',
 	led: 'Status LED',
 	// level 3
@@ -171,13 +202,26 @@ export const SCREEN_TEST_LABELS: Record<string, string> = {
 	abort: 'ABORTED'
 };
 
-export function screenTestLabel(id: string): string {
+/** "run2_err" → {who: 'Run 2', part: 'err'}; v108 quick-tier motion rows "q_err" → {who: 'Quick run'}. */
+function motionRow(id: string): { who: string; part: string } | null {
 	const m = /^run(\d+)_(.+)$/.exec(id);
+	if (m) return { who: `Run ${m[1]}`, part: m[2] };
+	const q = /^q_(.+)$/.exec(id);
+	if (q && q[1] in RUN_ROW_DOCS_KEYS) return { who: 'Quick run', part: q[1] };
+	if (q && /^w\d+_err$/.test(q[1])) return { who: 'Quick run', part: q[1] };
+	return null;
+}
+
+export function screenTestLabel(id: string): string {
+	const m = motionRow(id);
 	if (m) {
+		const w = /^w(\d+)_err$/.exec(m.part);
+		if (w) return `${m.who} well block ${w[1]} home error (µm)`;
 		const part: Record<string, string> = {
 			heat: 'heater wait (s)',
 			assay: 'assay load',
-			err: 'end-of-test home error (µm)',
+			err: 'home error, summed over the run (µm)',
+			end: 'final home error (µm)',
 			hits: 'limit hits',
 			first: 'first hit (µm)',
 			home_ms: 'home time (ms)',
@@ -188,7 +232,7 @@ export function screenTestLabel(id: string): string {
 			reads: 'readings taken',
 			done: 'run completed'
 		};
-		return `Run ${m[1]} ${part[m[2]] ?? m[2]}`;
+		return `${m.who} ${part[m.part] ?? m.part}`;
 	}
 	const base = baseTestId(id);
 	const rep = base !== id ? id.slice(base.length) : '';
@@ -256,7 +300,16 @@ export const SCREEN_TEST_DOCS: Record<string, { what: string; rule: string }> = 
 	hits: { what: 'Mid-move limit-switch hits during the level', rule: 'fail if any' },
 	hits_first: { what: 'Position of the first mid-move hit, µm (only when hits > 0)', rule: 'info' },
 	travel_um: { what: 'Stage travel during this level (odometer), µm', rule: 'info' },
-	heat_cold: { what: 'Cold start: seconds to reach the target (only when the heater started > 5 °C below it)', rule: 'fail if not reached in 240 s' },
+	heat_cold: { what: 'Cold start: seconds to reach the target (only when the heater started > 3 °C below it)', rule: 'v108: info (before v108: fail if not reached in 240 s; no unit managed it from room temperature)' },
+	heat_uptime: { what: 'Seconds since boot when the heater check started', rule: 'info' },
+	heat_rate: { what: 'Cold start: heat-up rate from 10 to 90 s after heater-on, least squares, °C/min ×10; compare units at similar start temperatures', rule: 'info' },
+	heat_t90: { what: 'Cold start: heater temperature 90 s after heater-on, °C×10', rule: 'info' },
+	q_heat_uptime: { what: 'Quick tier: seconds since boot at heater-on', rule: 'info' },
+	q_heat_rate: { what: 'Quick tier: heat-up rate 10-90 s after heater-on, °C/min ×10 (skipped when the heater was already near target)', rule: 'info' },
+	q_heat_t90: { what: 'Quick tier: heater temperature 90 s after heater-on, °C×10', rule: 'info' },
+	q_heat_start: { what: 'Quick tier: heater temperature at heater-on, °C×10', rule: 'info' },
+	q_stage_hits: { what: 'Quick tier: mid-move limit-switch hits during the home / repeat / travel checks', rule: 'fail if any' },
+	tier_gate: { what: 'Tiered screen gate: 1 = quick tier passed, full screen continued; 0 = stopped (note = first failing row)', rule: 'info' },
 	heat_start: { what: 'Heater temperature at the start of the hold, °C×10', rule: 'info' },
 	heat_over: { what: 'Overshoot above target on a cold start, °C×10', rule: 'info' },
 	heat_hold: { what: 'Max deviation from target over a 60 s hold, °C×10', rule: 'warn above 20 (2 °C)' },
@@ -277,7 +330,8 @@ export const SCREEN_TEST_DOCS: Record<string, { what: string; rule: string }> = 
 const RUN_ROW_DOCS: Record<string, { what: string; rule: string }> = {
 	heat: { what: 'Seconds waited for the heater before the run', rule: 'warn if not ready within 300 s' },
 	assay: { what: 'Assay BCODE missing from disk', rule: 'fail' },
-	err: { what: 'End-of-test home error: expected − measured after the final home, µm', rule: 'fail not found, warn beyond ±150' },
+	err: { what: 'Home error, expected − measured, µm. v108: the sum of the per-well-block homes and the final home (the whole run\'s lost travel); before v108 the final home only', rule: 'fail not found; warn beyond ±150 (v108: ±150 + 50 per extra home)' },
+	end: { what: 'v108: final home error alone, µm', rule: 'info' },
 	hits: { what: 'Limit-switch hits during the run', rule: 'fail if any' },
 	first: { what: 'Position of the first hit, µm (−1 = none)', rule: 'info' },
 	home_ms: { what: 'Time of the final home, ms', rule: 'info' },
@@ -288,11 +342,17 @@ const RUN_ROW_DOCS: Record<string, { what: string; rule: string }> = {
 	reads: { what: 'Readings taken', rule: 'info' },
 	done: { what: 'Run completed (not cancelled)', rule: 'fail if cancelled' }
 };
+/** Motion-row suffixes, for telling a q_ motion row from another q_ id. */
+const RUN_ROW_DOCS_KEYS: Record<string, true> = Object.fromEntries(Object.keys(RUN_ROW_DOCS).map((k) => [k, true]));
 
 /** {what, rule} for any emitted id; unknown ids get an empty doc. */
 export function screenTestDoc(id: string): { what: string; rule: string } {
-	const m = /^run(\d+)_(.+)$/.exec(id);
-	if (m) return RUN_ROW_DOCS[m[2]] ?? { what: '', rule: '' };
+	const m = motionRow(id);
+	if (m) {
+		if (/^w\d+_err$/.test(m.part))
+			return { what: 'v108: home error after this well\'s oscillation block alone, expected − measured, µm', rule: 'fail not found, warn beyond ±500' };
+		return RUN_ROW_DOCS[m.part] ?? { what: '', rule: '' };
+	}
 	return SCREEN_TEST_DOCS[baseTestId(id)] ?? SCREEN_TEST_DOCS[id] ?? { what: '', rule: '' };
 }
 
@@ -337,6 +397,8 @@ export function parseScreenEvent(data: unknown): ScreenEvent | null {
 			reps: Number(obj.reps) || 0,
 			assay: typeof obj.assay === 'string' && obj.assay ? obj.assay : null,
 			aborted: typeof obj.aborted === 'string' && obj.aborted ? obj.aborted : null,
+			gate: typeof obj.gate === 'string' && obj.gate ? obj.gate : null,
+			skipped: Number(obj.skipped) === 1,
 			error: typeof obj.error === 'string' && obj.error ? obj.error : null
 		};
 	}
@@ -466,6 +528,8 @@ export const SCREEN_TREND_IDS: Array<{ id: string; label: string; unit: string }
 	{ id: 'lsrC', label: 'Laser C pd', unit: '' },
 	{ id: 'lsrA_f1', label: 'Laser A F1', unit: '' },
 	{ id: 'heat_cold', label: 'Heater time to target', unit: 's' },
+	{ id: 'heat_rate', label: 'Heater heat-up rate', unit: '°C/min×10' },
+	{ id: 'q_heat_rate', label: 'Quick: heater heat-up rate', unit: '°C/min×10' },
 	{ id: 'heat_hold', label: 'Heater hold deviation', unit: '°C×10' },
 	{ id: 'heat_duty', label: 'Heater hold duty', unit: '%' },
 	{ id: 'radio', label: 'RSSI', unit: 'dBm' },

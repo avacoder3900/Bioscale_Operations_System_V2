@@ -10,14 +10,22 @@
 
 	let spuId = $state('');
 	let levels = $state<Record<string, boolean>>({ '0': true, '1': true, '2': true, '3': true });
+	// v108: tiered = quick tier, then the full levels unless it fails; quick = quick tier only;
+	// full = the levels below only. Full stays the default until the fleet runs v108.
+	let mode = $state<'tiered' | 'quick' | 'full'>('full');
 	let reps = $state(data.defaults.reps);
 	let running = $state(false);
 	let showCriteria = $state(false);
 	let criteriaText = $state(JSON.stringify(data.criteria ?? {}, null, 2));
 	let expanded = $state<string | null>(null);
 
-	const levelString = $derived(Object.entries(levels).filter(([, on]) => on).map(([k]) => k).sort().join(''));
-	const estMinutes = $derived((levels['0'] ? 0.4 : 0) + (levels['1'] ? 4 : 0) + (levels['2'] ? 21 * reps : 0) + (levels['3'] ? 0.7 : 0));
+	const digitString = $derived(Object.entries(levels).filter(([, on]) => on).map(([k]) => k).sort().join(''));
+	const levelString = $derived(mode === 'quick' ? 'Q' : mode === 'tiered' ? 'T' + digitString : digitString);
+	const quickMinutes = 10; // estimate: heater rate 1.5 min + stage/optics + Sonic moves ~5 min
+	const estMinutes = $derived(
+		(mode !== 'full' ? quickMinutes : 0) +
+			(mode === 'quick' ? 0 : (levels['0'] ? 0.4 : 0) + (levels['1'] ? 4 : 0) + (levels['2'] ? 21 * reps : 0) + (levels['3'] ? 0.7 : 0))
+	);
 
 	const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
 	function badge(status: string | null | undefined): 'success' | 'error' | 'warning' | 'neutral' {
@@ -121,7 +129,19 @@
 					{/each}
 				</select>
 			</div>
-			<div>
+			<div class="md:col-span-3">
+				<span class="tron-label">Screen type</span>
+				<div class="flex flex-wrap gap-2">
+					{#each [['tiered', 'Screen (quick, then full if it passes)'], ['quick', 'Quick only'], ['full', 'Full only']] as [k, label] (k)}
+						<label class="flex cursor-pointer items-center gap-2 rounded border px-3 py-2 text-sm {mode === k ? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] tron-text-muted'}">
+							<input type="radio" name="mode-pick" value={k} bind:group={mode} class="hidden" />
+							{label}
+						</label>
+					{/each}
+				</div>
+				<p class="tron-text-muted mt-1 text-xs">Quick and tiered need firmware v108. The quick tier: heater heat-up rate, one stage + optics check, then the Sonic moves (the assay motion at the same speeds, fewer cycles) with a home after every well. A FAIL in it stops a tiered screen before the full levels.</p>
+			</div>
+			<div class={mode === 'quick' ? 'opacity-40' : ''}>
 				<span class="tron-label">Levels</span>
 				<div class="flex flex-wrap gap-2">
 					{#each [['0', 'Static'], ['1', 'Actuators & sensors'], ['2', 'Assay motion'], ['3', 'Cloud']] as [k, label] (k)}
@@ -139,7 +159,7 @@
 			</div>
 		</div>
 		<p class="tron-text-muted text-xs">About {Math.round(estMinutes)} min on the unit. The slot must be empty; the unit refuses otherwise.</p>
-		<button type="submit" disabled={!spuId || running || !levelString} class="w-full rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50" style="min-height: 44px">
+		<button type="submit" disabled={!spuId || running || (mode !== 'quick' && !digitString)} class="w-full rounded-lg bg-[var(--color-tron-orange)] px-6 py-4 text-lg font-semibold text-[var(--color-tron-bg-primary)] hover:bg-[var(--color-tron-orange)]/90 disabled:cursor-not-allowed disabled:opacity-50" style="min-height: 44px">
 			{running ? 'Asking the unit…' : 'Screen'}
 		</button>
 	</form>

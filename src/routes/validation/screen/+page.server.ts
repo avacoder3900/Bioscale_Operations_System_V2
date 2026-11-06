@@ -31,8 +31,8 @@ const REPS_DEFAULT = 3;
 function describeReturn(v: number): string | null {
 	if (v === -1) return 'The unit is busy (not idle). Wait for it to finish and try again.';
 	if (v === -2) return 'A cartridge is inserted. The screen needs an empty slot.';
-	if (v === -3) return 'The production assay is not on the device — load it (Load Assay) and try again.';
-	if (v === -4) return 'The unit rejected the arguments (levels must be a subset of 0123, repeats 1–9).';
+	if (v === -3) return 'An assay the screen needs is not on the device (the production assay, or for Quick / tiered the Sonic Fingerprint moves A78C7989) — load it (Load Assay) and try again.';
+	if (v === -4) return 'The unit rejected the arguments (levels must be a subset of 0123, repeats 1–9; Quick and tiered screens need firmware v108).';
 	if (v === -5) return 'The unit is still uploading the previous screen or sweep. Wait a minute and try again.';
 	if (v < 0) return `The unit returned ${v}.`;
 	return null;
@@ -109,8 +109,11 @@ export const actions: Actions = {
 		await connectDB();
 		const form = await request.formData();
 		const spuId = form.get('spuId')?.toString() ?? '';
-		let levels = (form.get('levels')?.toString() ?? LEVELS_DEFAULT).replace(/[^0-3]/g, '');
-		levels = [...new Set(levels.split(''))].sort().join('') || LEVELS_DEFAULT;
+		// v108: "T" = quick tier, gate, then the full levels; "Q" = quick tier only; digits = full levels.
+		const rawLevels = (form.get('levels')?.toString() ?? LEVELS_DEFAULT).toUpperCase();
+		const tier = rawLevels.includes('T') ? 'T' : rawLevels.includes('Q') ? 'Q' : '';
+		const digits = [...new Set(rawLevels.replace(/[^0-3]/g, '').split(''))].sort().join('');
+		const levels = tier === 'Q' ? 'Q' : tier + (digits || LEVELS_DEFAULT);
 		const repsRaw = Number(form.get('reps')?.toString() ?? REPS_DEFAULT);
 		const reps = Number.isInteger(repsRaw) && repsRaw >= 1 && repsRaw <= 9 ? repsRaw : REPS_DEFAULT;
 		if (!spuId) return fail(400, { error: 'Pick a unit' });
