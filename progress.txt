@@ -26259,3 +26259,17 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 2de8a5c5
 Retrieve this exact code: git checkout 2de8a5c5 (also branch feat/stage-cal-robot-bar)
 What this deployment is for: Identify / Lights / Home / Recover and the robot menu on the Stage Calibration page.
+================================================================================
+2026-11-06 — master — arm-pi: change reporter installed; the Pi now writes its own Change Log rows (7f7218ad)
+================================================================================
+Alejandro asked me to install the Pi half over SSH (Tailscale 100.103.204.105, no Wi-Fi switch; the Pi is on
+Aquinas_Townpark, 69 %, as expected). Found: the Pi's .env has no AGENT_API_KEY and an empty BIMS_WEBHOOK_URL, so
+the planned agent-key auth could never work. Fix 7f7218ad: POST /api/robot-arm/changes also accepts x-api-key =
+ROBOT_ARM_API_KEY (timing-safe, same as the tunnel route), and bims_changes.py sends that key first.
+On the Pi: backups in ~/bak-change-reporter-20261106 (servo_config.py, app.py, .env, all install_*.py); copied
+bims_changes.py, servo_config.py (the Pi's copy matched the repo's pre-edit md5 0d4124e4), bims_report.py,
+install_change_reporter.py and the 14 patched installers; appended BIMS_CHANGES_URL=<prod>/api/robot-arm/changes to
+~/robot-arm/.env; ran install_change_reporter.py (backup app.py.bak-change-reporter); restarted robot-arm with
+/sessions/active null. /health ok (the Pi reports version 0.1.0). Rows in BIMS from alejandrospi3:
+pi.router.change_reporter Installed, pi.service.start 0.1.0. Nothing pending on the Pi.
+Not exercised: a gain write (no gain was changed); the next POST /servos/gains is that check.
