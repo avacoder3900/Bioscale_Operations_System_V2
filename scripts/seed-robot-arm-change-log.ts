@@ -86,7 +86,20 @@ const ROWS: Row[] = [
 	['2026-08-19', 'hand', 'leader-arm', 'hardware.com_port', 'leader', null, 'Re-registered', null, 'hand', 'BusLinker'],
 	['2026-10-15', 'hand', 'solenoid', 'hardware.wiring', null, null, 'Solenoid driver on the bench', null, 'hand', null],
 	// Append only below this line: a row's id is its position, so inserting above would shift every later id.
-	['2026-11-06', 'teach', 'servo', 'motion.max_steps_per_s', null, 7000, 'none', 'steps/s', 'code', 'No speed limit on a step (fc128ae1)']
+	['2026-11-06', 'teach', 'servo', 'motion.max_steps_per_s', null, 7000, 'none', 'steps/s', 'code', 'No speed limit on a step (fc128ae1)'],
+	// Code changes after the first backfill (2026-11-06; times are the commits', UTC). A date with a time is used as is.
+	['2026-11-05T22:31:00Z', 'teach', 'servo', 'motion.droop_correction', null, false, true, null, 'code', 'Every pose is droop-corrected (530a24d5)'],
+	['2026-11-06T16:16:00Z', 'teach', 'servo', 'motion.droop_settle_target', null, 'trimmed goal', 'pose', null, 'code', 'Pi settle aims at the pose; Clear All Droop added (d604c46a)'],
+	['2026-11-06T16:45:00Z', 'teach', 'servo', 'motion.movers', null, 'any', 'one at a time', null, 'code', 'Return Home, droop settle and Play share one lease (e3d5b45b)'],
+	['2026-11-06T17:14:00Z', 'teach', 'servo', 'motion.droop_correction', null, true, false, null, 'code', 'Plays send the Live-posing numbers exactly; stored trims purged (2df2d785)'],
+	['2026-11-06T18:45:00Z', 'maintenance.tests', 'servo', 'tests.replay', null, 'In Tests', 'Removed', null, 'code', 'No Replay test on Maintenance -> Tests (7f494b73)'],
+	['2026-11-06T19:20:00Z', 'run', 'network', 'link.ot2_path', null, 'BIMS queue', 'USB-B cable', null, 'code', 'Arm Pi <-> OT-2 over the cable; the loop handshake goes through it (19243518)'],
+	['2026-11-06T19:29:00Z', 'teach', 'servo', 'teach.goto_show_steps', 'pose-editor', 80, 20, 'steps', 'code', 'Go To Pose shows once a servo is over 20 steps off (adb3b54f)'],
+	['2026-11-06T19:38:00Z', 'teach', 'servo', 'teach.goto_show_steps', 'camera-card', 80, 20, 'steps', 'code', 'Camera card Go To Pose, same rule (8e9ed69f)'],
+	['2026-11-06T20:32:00Z', 'run', 'gripper', 'loop.first_grab_waits_for', null, null, 'ARM CALIBRATED', null, 'code', 'No tip on the OT-2, no arm motion (c4da8059)'],
+	['2026-11-06T20:39:00Z', 'calibrate.arm', 'servo', 'home.jog_speed', null, 'full', 600, 'steps/s', 'code', 'Return To Home jogs at a capped speed, full speed put back after (4accb024)'],
+	['2026-11-06T20:47:00Z', 'run', 'stage', 'setup.scan_presence_only', null, null, 'Added', null, 'code', 'Setup box Barcode Present Only (26ea0d2b)'],
+	['2026-11-06T21:07:00Z', 'run', 'network', 'link.home_timeout_s', null, 80, 60, 's', 'code', "Home Gantry through the cable link: the Pi's limit is 60 s (a073ed2d)"]
 ];
 
 async function main() {
@@ -105,7 +118,7 @@ async function main() {
 		}
 		console.log(`${APPLY ? 'write' : 'would write'}  ${date}  ${page} / ${hardware}  ${line}`);
 		if (!APPLY) continue;
-		await RobotArmChange.create({ _id, at: new Date(`${date}T12:00:00Z`), page, hardware, key, target, oldValue, newValue, unit, source, line, note, details: { backfill: true }, changedBy: null });
+		await RobotArmChange.create({ _id, at: new Date(date.includes('T') ? date : `${date}T12:00:00Z`), page, hardware, key, target, oldValue, newValue, unit, source, line, note, details: { backfill: true }, changedBy: null });
 		written++;
 	}
 	console.log(`${ROWS.length} rows: ${present} already present, ${written} written${APPLY ? '' : ' (dry run; add --apply)'}.`);

@@ -19,6 +19,11 @@ import { applyImmutableMiddleware } from '../middleware/immutable.js';
  * 2026-11-06: servo readings before and after each arm move (kinds
  * reading_before / reading_after, linked by moveId), and the OT-2's home and
  * rail lights sent outside a run (kinds home, lights_on, lights_off).
+ *
+ * 2026-11-06: a play keeps every frame the Pi was given (frames, with
+ * frameCount and per-servo frameStats for the summary), and the Conveyor
+ * Belt and Trapdoor Solenoid fires are rows too (kinds fire, fire_sequence,
+ * conveyor, conveyor_stop, fires_play, fires_stop).
  */
 const operatorRef = new Schema({ _id: { type: String }, username: { type: String } }, { _id: false });
 const robotRef = new Schema({ _id: { type: String }, name: { type: String } }, { _id: false });
@@ -57,7 +62,11 @@ const robotArmMoveSchema = new Schema(
 		cart: { type: Number, default: undefined },
 		/** Reading rows (reading_before / reading_after): the servos as GET /servos gave them, and the move they bracket. */
 		readings: { type: Schema.Types.Mixed, default: undefined },
-		moveId: { type: String, default: undefined }
+		moveId: { type: String, default: undefined },
+		/** Play rows: { rateHz, t[], goals[][], fires[] } ($lib/robot-arm/move-log PlayFrames). Left out of list reads. */
+		frames: { type: Schema.Types.Mixed, default: undefined },
+		frameCount: { type: Number, default: undefined },
+		frameStats: { type: Schema.Types.Mixed, default: undefined }
 	},
 	{ timestamps: false, minimize: false, collection: 'robot_arm_moves' }
 );

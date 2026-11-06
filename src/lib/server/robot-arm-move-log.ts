@@ -7,11 +7,27 @@
  * hooks.server.ts wraps every request in, so no route has to pass the user
  * down. Never throws: a move that happened must not fail because its log
  * row did not.
+ *
+ * A play's row keeps its frames (2026-11-06): a BIMS-built play hands its
+ * JSONL over with withPlayRecording(); a play of a Pi recording by name has
+ * it read back from the Pi once the play has started (robot-arm-client).
  */
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { connectDB } from './db/connection';
 import { RobotArmMove } from './db/models';
-import { describeArmMove, moveLine, readingLine, type ArmMoveEntry, type ArmMoveKind, type ServoReading } from '$lib/robot-arm/move-log';
+import {
+	describeArmMove,
+	FIRE_KINDS,
+	frameStats,
+	moveLine,
+	playFramesFromJsonl,
+	readingLine,
+	type ArmMoveEntry,
+	type ArmMoveKind,
+	type FrameServoStats,
+	type PlayFrames,
+	type ServoReading
+} from '$lib/robot-arm/move-log';
 import { ot2ActionOf } from '$lib/robot-arm/ot2-move-log';
 import { generateId } from './db/utils';
 import { groupKindQuery, moveGroup } from '$lib/robot-arm/move-types';
@@ -19,6 +35,8 @@ import { groupKindQuery, moveGroup } from '$lib/robot-arm/move-types';
 interface ArmActor {
 	user: { _id: string; username: string } | null;
 	from: string | null;
+	/** The recording a Play inside withPlayRecording() is starting. */
+	play?: { title: string; jsonl: string } | null;
 }
 
 const actorStore = new AsyncLocalStorage<ArmActor>();
@@ -26,6 +44,12 @@ const actorStore = new AsyncLocalStorage<ArmActor>();
 /** Run a request with its user and path on hand for the Movement Log. */
 export function withArmActor<T>(actor: ArmActor, fn: () => T): T {
 	return actorStore.run(actor, fn);
+}
+
+/** Start a Play with the JSONL it plays on hand, so its Movement Log row keeps every frame. */
+export function withPlayRecording<T>(play: { title: string; jsonl: string }, fn: () => T): T {
+	const cur = actorStore.getStore();
+	return actorStore.run({ user: cur?.user ?? null, from: cur?.from ?? null, play }, fn);
 }
 
 /** The user and page of the request being handled, when there is one. */
@@ -57,6 +81,9 @@ export interface ArmMoveRow {
 	cart?: number | null;
 	readings?: ServoReading[] | null;
 	moveId?: string | null;
+	/** Play rows: how many frames, and per servo its travel and turns (the frames themselves load on demand). */
+	frameCount?: number | null;
+	frameStats?: Record<string, FrameServoStats> | null;
 }
 
 export async function recordArmMove(
@@ -66,19 +93,25 @@ export async function recordArmMove(
 	response: unknown,
 	error: unknown,
 	startedAt: number,
-	id: string = generateId()
+	id: string = generateId(),
+	/** A play's frames when they did not come through withPlayRecording (a Pi recording read back). */
+	given: PlayFrames | null = null
 ): Promise<ArmMoveEntry | null> {
 	const e = describeArmMove(method, path, body, response);
 	// Unit tests drive mocked Pi calls; they must never write to the shared DB.
 	if (!e || process.env.VITEST) return e;
 	const actor = actorStore.getStore();
+	const play = e.kind === 'play' ? (actor?.play ?? null) : null;
+	if (play) e.what = play.title;
+	const frames = e.kind === 'play' ? (play ? playFramesFromJsonl(play.jsonl) : given) : null;
 	try {
 		await connectDB();
 		await RobotArmMove.create({
 			_id: id,
 			at: new Date(startedAt),
 			...e,
-			line: moveLine(e),
+			line: frames ? `${moveLine(e)}  ${frames.t.length} Frames` : moveLine(e),
+			...(frames ? { frames, frameCount: frames.t.length, frameStats: frameStats(frames) } : {}),
 			ok: !error,
 			error: error ? (error instanceof Error ? error.message : String(error)).slice(0, 300) : null,
 			durationMs: Date.now() - startedAt,
@@ -196,7 +229,8 @@ function moveQuery(o: ArmMoveFilter): Record<string, unknown> {
 	if (o.kind) q.kind = o.kind;
 	else if (g) q.kind = groupKindQuery(g);
 	if (o.sinceMinutes && o.sinceMinutes > 0) q.at = { $gte: new Date(Date.now() - o.sinceMinutes * 60_000) };
-	if (o.servo) q.$or = [{ servo: o.servo }, { [`goals.${o.servo}`]: { $exists: true } }, { servo: null, goals: null }];
+	// Conveyor Belt and Trapdoor Solenoid rows drive no servo, so a servo filter leaves them out.
+	if (o.servo) q.$or = [{ servo: o.servo }, { [`goals.${o.servo}`]: { $exists: true } }, { servo: null, goals: null, kind: { $nin: [...FIRE_KINDS] } }];
 	return q;
 }
 
@@ -212,9 +246,16 @@ export async function listArmMoves(o: ArmMoveFilter & { limit?: number | null } 
 	let find = RobotArmMove.find(moveQuery(o)).sort({ at: -1 });
 	if (o.limit !== null) find = find.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000));
 	const rows = await find
-		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart readings moveId')
+		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart readings moveId frameCount frameStats')
 		.lean();
 	return JSON.parse(JSON.stringify(rows));
+}
+
+/** One play's frames, for the log's Show Frames. Null when the row has none. */
+export async function getArmMoveFrames(id: string): Promise<PlayFrames | null> {
+	await connectDB();
+	const row = (await RobotArmMove.findById(id).select('frames').lean()) as { frames?: PlayFrames } | null;
+	return row?.frames ?? null;
 }
 
 /** How many rows match, for "Showing 100 of 4210". */

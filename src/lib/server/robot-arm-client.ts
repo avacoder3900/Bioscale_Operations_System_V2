@@ -13,9 +13,18 @@
 import { env } from '$env/dynamic/private';
 import { connectDB } from './db/connection';
 import { RobotArmEndpoint } from './db/models';
-import { recordArmMove, recordArmReading } from './robot-arm-move-log';
+import { currentArmActor, recordArmMove, recordArmReading } from './robot-arm-move-log';
 import { generateId } from './db/utils';
-import { SETTLING_KINDS, describeArmMove, isSettled, servoReadings, type ArmMoveEntry, type ServoReading } from '$lib/robot-arm/move-log';
+import {
+	FIRE_KINDS,
+	SETTLING_KINDS,
+	describeArmMove,
+	isSettled,
+	playFramesFromJsonl,
+	servoReadings,
+	type ArmMoveEntry,
+	type ServoReading
+} from '$lib/robot-arm/move-log';
 
 interface FetchOptions {
 	method?: 'GET' | 'POST' | 'DELETE';
@@ -168,12 +177,17 @@ async function armRequest(
  * once the arm has settled, each read its own log row. The before read costs
  * one Pi round trip per move; the after read runs once the answer is back,
  * so the caller does not wait for it.
+ *
+ * Conveyor Belt and Trapdoor Solenoid fires are logged without readings (no
+ * servo moves). A play of a Pi recording by name (not one BIMS built, which
+ * comes with its JSONL) has its row written once the recording is read back,
+ * after the answer, so the row keeps every frame.
  */
 export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): Promise<T> {
 	const method = opts.method ?? 'GET';
 	if (method === 'GET') return armFetchJson<T>(path, opts);
 	const planned = process.env.VITEST ? null : describeArmMove(method, path, opts.body, null);
-	if (!planned) return sendArmCommand<T>(path, method, opts);
+	if (!planned || FIRE_KINDS.has(planned.kind)) return sendArmCommand<T>(path, method, opts);
 
 	const moveId = generateId();
 	const seq = ++moveSeq;
@@ -188,7 +202,10 @@ export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): P
 	let failure: unknown = null;
 	try {
 		const data = await armFetchJson<T>(path, opts);
-		entry = await recordArmMove(method, path, opts.body, data, null, startedAt, moveId);
+		if (planned.kind === 'play' && !currentArmActor()?.play) {
+			entry = describeArmMove(method, path, opts.body, data);
+			afterResponse(recordPiRecordingPlay(method, path, opts.body, data, startedAt, moveId));
+		} else entry = await recordArmMove(method, path, opts.body, data, null, startedAt, moveId);
 		return data;
 	} catch (err) {
 		failure = err;
@@ -198,6 +215,22 @@ export async function robotArmFetch<T>(path: string, opts: FetchOptions = {}): P
 		const e = entry ?? planned;
 		afterResponse(readingsAround(e, moveId, seq, before, startedAt, !failure));
 	}
+}
+
+/** A play of a recording on the Pi: read it back and log the play with its frames (without them if the read fails). */
+async function recordPiRecordingPlay(method: string, path: string, body: unknown, data: unknown, startedAt: number, moveId: string): Promise<void> {
+	const source = (body as { source?: unknown } | null)?.source;
+	let frames = null;
+	if (typeof source === 'string' && source) {
+		try {
+			const stem = recordingStem(source.split('/').pop() ?? source);
+			const exp = await armFetchJson<RecordingExport>(`/recordings/${encodeURIComponent(stem)}/export`, { timeoutMs: 20000 });
+			frames = typeof exp?.jsonl === 'string' ? playFramesFromJsonl(exp.jsonl) : null;
+		} catch (err) {
+			console.warn('[arm-move-log] recording read-back failed:', err instanceof Error ? err.message : err);
+		}
+	}
+	await recordArmMove(method, path, body, data, null, startedAt, moveId, frames);
 }
 
 async function sendArmCommand<T>(path: string, method: string, opts: FetchOptions): Promise<T> {

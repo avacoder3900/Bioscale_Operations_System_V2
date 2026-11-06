@@ -24,6 +24,7 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	{ id: 'arm:loop', device: 'arm', title: 'Loop Step', kinds: ['loop_step'] },
 	{ id: 'arm:stop', device: 'arm', title: 'Stop', kinds: ['stop'] },
 	{ id: 'arm:reading', device: 'arm', title: 'Servo Reading', kinds: ['reading_before', 'reading_after'] },
+	{ id: 'arm:fire', device: 'arm', title: 'Conveyor Belt And Trapdoor Solenoids', kinds: ['fire', 'fire_sequence', 'conveyor', 'conveyor_stop', 'fires_play', 'fires_stop'] },
 	{
 		id: 'ot2:movement',
 		device: 'ot2',

@@ -25,6 +25,8 @@ import {
 	type ProtocolUploadBundle,
 	type UploadedProtocolResult
 } from '$lib/opentrons/ot2-protocol';
+import { logChangesFromAudit } from '$lib/server/robot-arm-change-log';
+import { currentArmActor } from '$lib/server/robot-arm-move-log';
 
 // Over the queue the upload + on-robot analysis round trip takes up to ~110 s.
 export const config = { maxDuration: 120 };
@@ -124,15 +126,16 @@ async function recordDeployment(
 	};
 
 	await OpentronProtocol.updateOne({ _id: protocol._id }, { $push: { deployments: deployment } });
-	await AuditLog.create({
+	const deployAudit = {
 		_id: generateId(),
 		tableName: 'opentrons_protocols',
 		recordId: String(protocol._id),
 		action: 'deploy',
-		newData: { robotId, opentronsProtocolId: uploaded.opentronsProtocolId, analysisStatus, line },
-		changedAt: new Date(),
-		changedBy: username
-	});
+		newData: { robotId, opentronsProtocolId: uploaded.opentronsProtocolId, analysisStatus, line }
+	};
+	await AuditLog.create({ ...deployAudit, changedAt: new Date(), changedBy: username });
+	// Every OT-2 protocol deploy is in the robot arm Change Log too (2026-11-06).
+	await logChangesFromAudit(currentArmActor()?.user ?? null, deployAudit);
 
 	return json(
 		{

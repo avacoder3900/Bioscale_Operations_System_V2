@@ -6,9 +6,16 @@
  * so the Maintenance page's Change Log fills itself. Labels are checked here
  * (page, hardware, key) so a typo cannot get into the log. Never throws: a
  * change that happened must not fail because its log row did not.
+ *
+ * From the audit trail (2026-11-06): settings that were only audited (Run
+ * Setup, Stage Calibration, protocol deploys, the tunnel address) go through
+ * logChangesFromAudit() beside their AuditLog row; the labels come from
+ * $lib/robot-arm/change-from-audit, and row ids from the audit id, so the
+ * backfill of past rows never writes one twice.
  */
 import { connectDB } from './db/connection';
-import { RobotArmChange } from './db/models';
+import { OpentronProtocol, OpentronsRobot, RobotArmChange } from './db/models';
+import { AUDIT_CHANGE_ACTIONS, changesFromAudit, type AuditNames, type AuditRowLike } from '$lib/robot-arm/change-from-audit';
 import {
 	changeLine,
 	isArmHardware,
@@ -106,4 +113,39 @@ export async function lastLoggedValue(key: string, target: string | null = null)
 		.select('newValue at')
 		.lean()) as { newValue?: unknown; at?: Date } | null;
 	return row ? { newValue: row.newValue ?? null, at: new Date(row.at ?? 0) } : null;
+}
+
+/** OT-2 names, and the protocol's file name for a library deploy: what changesFromAudit labels with. */
+export async function auditNames(rows: AuditRowLike[]): Promise<AuditNames> {
+	await connectDB();
+	const robots = (await OpentronsRobot.find({}).select('_id name').lean()) as { _id: string; name?: string }[];
+	const protocolIds = [...new Set(rows.filter((r) => r.action === 'deploy').map((r) => r.recordId))];
+	const protocols = protocolIds.length ? ((await OpentronProtocol.find({ _id: { $in: protocolIds } }).select('_id fileName').lean()) as { _id: string; fileName?: string }[]) : [];
+	return {
+		robots: Object.fromEntries(robots.map((r) => [String(r._id), r.name ?? ''])),
+		protocols: Object.fromEntries(protocols.map((p) => [String(p._id), p.fileName ?? String(p._id)]))
+	};
+}
+
+/**
+ * The Change Log rows for one audit row (ids armchg-audit-<audit id>-<n>; one
+ * already there is skipped). Returns how many were written. Never throws.
+ */
+export async function logChangesFromAudit(user: ArmUser, a: AuditRowLike, o: { at?: Date; names?: AuditNames } = {}): Promise<number> {
+	if (!AUDIT_CHANGE_ACTIONS.has(a.action)) return 0;
+	try {
+		const names = o.names ?? (await auditNames([a]));
+		const changes = changesFromAudit(a, names);
+		let written = 0;
+		for (let i = 0; i < changes.length; i++) {
+			const id = `armchg-audit-${a._id}-${i + 1}`;
+			if (await RobotArmChange.exists({ _id: id })) continue;
+			const { source, note, ...label } = changes[i];
+			if (await logArmChange(user, { ...label, source, note: note ?? null, details: { auditId: a._id, auditAction: a.action }, at: o.at }, { id })) written++;
+		}
+		return written;
+	} catch (err) {
+		console.warn('[arm-change-log] audit row not logged:', err instanceof Error ? err.message : err);
+		return 0;
+	}
 }

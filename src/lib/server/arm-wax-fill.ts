@@ -108,6 +108,8 @@ import {
 import { CAL_Z_LIMITS } from '$lib/server/services/deck-calibration/tip-calibrator';
 import { DRY_FILL_TUBE, planDryFill, type DryFillPlan } from '$lib/robot-arm/dry-fill-plan';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
+import { logChangesFromAudit } from '$lib/server/robot-arm-change-log';
+import { AUDIT_CHANGE_ACTIONS } from '$lib/robot-arm/change-from-audit';
 import { resolveLabwareForRobot } from '$lib/server/opentrons/maintenance-records';
 import {
 	isActionFail,
@@ -210,8 +212,9 @@ export interface AnimationRef {
 const opRef = (u: User) => ({ _id: u._id, username: u.username });
 
 async function audit(user: User, action: string, tableName: string, recordId: string, newData: Record<string, unknown>) {
+	const _id = generateId();
 	await AuditLog.create({
-		_id: generateId(),
+		_id,
 		tableName,
 		recordId,
 		action,
@@ -219,6 +222,8 @@ async function audit(user: User, action: string, tableName: string, recordId: st
 		changedAt: new Date(),
 		changedBy: user.username
 	});
+	// Setup, Stage Calibration and protocol deploys are arm changes too (2026-11-06): the Change Log gets them.
+	if (AUDIT_CHANGE_ACTIONS.has(action)) await logChangesFromAudit({ _id: user._id, username: user.username }, { _id, action, tableName, recordId, newData });
 }
 
 /** Scanner deviceId convention shared with the scanner pages: ot2-<slot>-scanner. */

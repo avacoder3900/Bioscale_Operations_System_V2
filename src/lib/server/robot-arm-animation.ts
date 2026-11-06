@@ -35,6 +35,7 @@ import { RobotArmMoveSet, RobotArmPose, RobotArmPoseCalibration, RobotArmRun, Ro
 import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from './robot-arm-client';
 import { forgetPreviewPath, lookUpPath, PreviewWriteError, writePreviewRecording } from './robot-arm-preview';
 import { ArmMotionBusy, claimArmMotion, releaseArmMotion } from './robot-arm-motion';
+import { withPlayRecording } from './robot-arm-move-log';
 import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2, whoUses } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -1301,7 +1302,10 @@ export async function writeAndPlay(
 		}
 		const replay = (src: string) =>
 			// The path starts where the arm is, so preflight (±50 steps of frame 0) passes by construction.
-			robotArm.startReplay({ source: src, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 });
+			// The JSONL rides along so the Movement Log row keeps every frame.
+			withPlayRecording({ title: o.title, jsonl: out.jsonl }, () =>
+				robotArm.startReplay({ source: src, loops: 1, triggered_by: opRef(user), enforce_preflight: true, preflight_tolerance_steps: 50 })
+			);
 		let runId: string;
 		try {
 			let started;

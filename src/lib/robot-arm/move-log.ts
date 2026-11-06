@@ -6,12 +6,16 @@
  * the method, path, body and the Pi's answer to describeArmMove(), and a
  * non-null result becomes one robot_arm_moves row. One row per servo command
  * (a slider move, each jog chunk), one row for a whole-arm command (hold,
- * Cartesian jog, torque, a play, the leader arm, a task, Stop). A play's own
- * frames are driven by the Pi from the recording, so the row names the
- * recording rather than each frame.
+ * Cartesian jog, torque, a play, the leader arm, a task, Stop).
+ *
+ * 2026-11-06: a play's row keeps every frame the Pi was given (the goal of
+ * each servo at each frame time, and the fire steps), read from the same
+ * JSONL the Pi replays; and the Conveyor Belt and Trapdoor Solenoid fires
+ * are rows of their own.
  */
 import { DEFAULT_JOINT_NAMES } from './recording-cleanup';
 import { camelTitle } from './ot2-move-log';
+import { FIRE_TARGETS } from './animation';
 
 export type ArmMoveKind =
 	| 'move'
@@ -27,7 +31,13 @@ export type ArmMoveKind =
 	| 'stop'
 	| 'loop_step'
 	| 'reading_before'
-	| 'reading_after';
+	| 'reading_after'
+	| 'fire'
+	| 'fire_sequence'
+	| 'conveyor'
+	| 'conveyor_stop'
+	| 'fires_play'
+	| 'fires_stop';
 
 export interface ArmMoveEntry {
 	kind: ArmMoveKind;
@@ -57,8 +67,20 @@ const KIND_TITLES: Record<ArmMoveKind, string> = {
 	stop: 'Stop',
 	loop_step: 'Loop Step',
 	reading_before: 'Reading Before',
-	reading_after: 'Reading After'
+	reading_after: 'Reading After',
+	fire: 'Trapdoor Solenoid Fire',
+	fire_sequence: 'Trapdoor Solenoid Sequence',
+	conveyor: 'Conveyor Belt Fire',
+	conveyor_stop: 'Conveyor Belt Stop',
+	fires_play: 'Fire Steps',
+	fires_stop: 'Fire Steps Stop'
 };
+
+/** Conveyor Belt and Trapdoor Solenoid rows: GPIO, no servo moves, so no servo readings around them. */
+export const FIRE_KINDS = new Set<string>(['fire', 'fire_sequence', 'conveyor', 'conveyor_stop', 'fires_play', 'fires_stop']);
+
+/** "Solenoid A" for BCM 17, "Conveyor Belt" for 22, "GPIO 5" for anything else. */
+const pinLabel = (pin: unknown): string => FIRE_TARGETS.find((t) => t.pin === pin)?.label ?? `GPIO ${String(pin)}`;
 
 /** Arm kinds by name; an OT-2 row's kind is its commandType ("moveToWell" → "Move To Well"). */
 export const kindTitle = (k: string): string => KIND_TITLES[k as ArmMoveKind] ?? camelTitle(k);
@@ -123,7 +145,133 @@ export function describeArmMove(method: string, path: string, body: unknown, res
 	if (p === '/record/start') return entry('record', { what: typeof b.name === 'string' ? b.name : null });
 	if ((m = /^\/tasks\/([^/]+)\/run$/.exec(p))) return entry('task', { what: decodeURIComponent(m[1]) });
 	if (p === '/sessions/stop') return entry('stop');
+	if (p === '/gpio/pulse') return entry('fire', { what: `${pinLabel(b.pin)} ${String(b.ms ?? '?')} ms` });
+	if (p === '/gpio/sequence') {
+		const pins = Array.isArray(b.pins) ? b.pins.map(pinLabel).join(', ') : '';
+		return entry('fire_sequence', { what: `${pins} ${String(b.ms ?? '?')} ms, Gap ${String(b.gap_ms ?? '?')} ms` });
+	}
+	if (p === '/conveyor/pulse') {
+		const delay = num(b.delay_ms);
+		return entry('conveyor', { what: `${String(b.ms ?? '?')} ms${delay ? ` After ${delay} ms` : ''}` });
+	}
+	if (p === '/conveyor/stop' || p === '/conveyor/off') return entry('conveyor_stop', { what: p === '/conveyor/off' ? 'Force Off' : null });
+	if (p === '/fires/play') {
+		const fires = Array.isArray(b.fires) ? (b.fires as Record<string, unknown>[]) : [];
+		const list = fires.slice(0, 6).map((f) => `${pinLabel(f.pin)} ${String(f.ms)} ms At ${String(f.t)} s`);
+		if (fires.length > 6) list.push(`+${fires.length - 6} More`);
+		return entry('fires_play', { what: [typeof b.title === 'string' ? b.title : null, list.join(', ')].filter(Boolean).join('  ') || null });
+	}
+	if (p === '/fires/stop') return entry('fires_stop');
 	return null;
+}
+
+/*
+ * A play's frames (2026-11-06). Every play is a JSONL recording the Pi
+ * replays frame by frame; the row keeps those frames so a play can be read
+ * frame by frame, and the per-servo summary counts direction changes inside
+ * it. These are the goals the Pi was given; where the arm really ended up is
+ * the Reading After row.
+ */
+export interface PlayFire {
+	t: number;
+	pin: number;
+	ms: number;
+	label: string;
+}
+
+export interface PlayFrames {
+	rateHz: number | null;
+	/** Seconds from the play's start, one per frame. */
+	t: number[];
+	/** goals[i][s] = servo s + 1's goal at frame i, steps. */
+	goals: (number | null)[][];
+	fires: PlayFire[];
+}
+
+/** Per servo over one play: where it started and ended, its travel and its direction changes. */
+export interface FrameServoStats {
+	first: number;
+	last: number;
+	min: number;
+	max: number;
+	/** Sum of |step| over the frames. */
+	travel: number;
+	reversals: number;
+	/** Direction of the first and last real move (-1, 0, 1). */
+	firstDir: number;
+	lastDir: number;
+}
+
+/** A turn only counts once the servo has gone this far the other way (recorded frames jitter by a step or two). */
+export const REVERSAL_DEADBAND_STEPS = 3;
+
+/** The frames of a recording as the Pi writes or replays it (header / frame / footer JSONL). Null when it has none. */
+export function playFramesFromJsonl(jsonl: string): PlayFrames | null {
+	let rateHz: number | null = null;
+	const t: number[] = [];
+	const goals: (number | null)[][] = [];
+	const fires: PlayFire[] = [];
+	for (const line of jsonl.split(/\r?\n/)) {
+		if (!line.trim()) continue;
+		let rec: Record<string, unknown>;
+		try {
+			rec = JSON.parse(line);
+		} catch {
+			continue;
+		}
+		if (rec.event === 'header') {
+			rateHz = typeof rec.rate_hz === 'number' ? rec.rate_hz : null;
+			continue;
+		}
+		if ((rec.event !== undefined && rec.event !== 'frame') || typeof rec.t !== 'number') continue;
+		let g: (number | null)[] | null = null;
+		if (Array.isArray(rec.goal)) g = rec.goal.map((v) => num(v));
+		else if (obj(rec.positions)) {
+			const byId = goalsById(rec.positions) ?? {};
+			g = Array.from({ length: 6 }, (_, i) => byId[String(i + 1)] ?? null);
+		}
+		if (!g) continue;
+		const ft = Math.round(rec.t * 1000) / 1000;
+		t.push(ft);
+		goals.push(g);
+		const f = obj(rec.fire);
+		if (f && typeof f.pin === 'number') fires.push({ t: ft, pin: f.pin, ms: num(f.ms) ?? 0, label: pinLabel(f.pin) });
+	}
+	return t.length ? { rateHz, t, goals, fires } : null;
+}
+
+/** Per servo id ("1".."6"): travel and direction changes over the frames. */
+export function frameStats(f: PlayFrames): Record<string, FrameServoStats> {
+	const out: Record<string, FrameServoStats> = {};
+	const n = Math.max(0, ...f.goals.map((g) => g.length));
+	for (let s = 0; s < n; s++) {
+		const vals = f.goals.map((g) => g[s]).filter((v): v is number => v != null);
+		if (!vals.length) continue;
+		let travel = 0;
+		let reversals = 0;
+		let dir = 0;
+		let firstDir = 0;
+		// The extreme reached in the current direction; a turn counts once the servo is DEADBAND back from it.
+		let peak = vals[0];
+		for (let i = 1; i < vals.length; i++) {
+			const v = vals[i];
+			travel += Math.abs(v - vals[i - 1]);
+			if (dir === 0) {
+				if (Math.abs(v - peak) >= REVERSAL_DEADBAND_STEPS) {
+					dir = Math.sign(v - peak);
+					firstDir = dir;
+					peak = v;
+				}
+			} else if ((v - peak) * dir > 0) peak = v;
+			else if (Math.abs(v - peak) >= REVERSAL_DEADBAND_STEPS) {
+				reversals++;
+				dir = -dir;
+				peak = v;
+			}
+		}
+		out[String(s + 1)] = { first: vals[0], last: vals[vals.length - 1], min: Math.min(...vals), max: Math.max(...vals), travel, reversals, firstDir, lastDir: dir };
+	}
+	return out;
 }
 
 /** One line for the log: "Servo 2 -> 2048", "Servo 3 +40 -> 1990", "Play pick_a". */
@@ -146,7 +294,14 @@ export interface ServoMoveSummary {
 	reversals: number;
 }
 
-type SummaryRow = Pick<ArmMoveEntry, 'servo' | 'goal' | 'delta' | 'goals'> & { kind: string; at: string | Date; ok?: boolean; device?: string | null };
+type SummaryRow = Pick<ArmMoveEntry, 'servo' | 'goal' | 'delta' | 'goals'> & {
+	kind: string;
+	at: string | Date;
+	ok?: boolean;
+	device?: string | null;
+	/** A play's per-servo frame stats: the play counts as one move of each servo it moved, and its turns count. */
+	frameStats?: Record<string, FrameServoStats> | null;
+};
 
 /**
  * Per servo: how many commands drove it and how many times it reversed —
@@ -172,7 +327,17 @@ export function summarizeServoMoves(rows: SummaryRow[], servoCount = 6): ServoMo
 		else if (st.last != null && delta != null) st.last += delta;
 	};
 	for (const r of sorted) {
-		if (r.servo != null) step(r.servo, r.goal, r.delta);
+		if (r.frameStats) {
+			for (const [k, fs] of Object.entries(r.frameStats)) {
+				const st = state.get(Number(k));
+				if (!st || fs.travel === 0) continue;
+				st.moves++;
+				if (st.dir !== 0 && fs.firstDir !== 0 && fs.firstDir !== st.dir) st.reversals++;
+				st.reversals += fs.reversals;
+				if (fs.lastDir !== 0) st.dir = fs.lastDir;
+				st.last = fs.last;
+			}
+		} else if (r.servo != null) step(r.servo, r.goal, r.delta);
 		else if (r.kind === 'hold' && r.goals) {
 			for (const [k, v] of Object.entries(r.goals)) {
 				const st = state.get(Number(k));

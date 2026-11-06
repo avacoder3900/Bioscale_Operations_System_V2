@@ -17,6 +17,7 @@ import { AuditLog, generateId } from '$lib/server/db';
 import { RobotArmEndpoint } from '$lib/server/db/models';
 import { invalidateTunnelCache } from '$lib/server/robot-arm-client';
 import type { RequestHandler } from './$types';
+import { logChangesFromAudit } from '$lib/server/robot-arm-change-log';
 
 const TUNNEL_URL_RE = /^https:\/\/[a-z0-9]+(?:-[a-z0-9]+)*\.trycloudflare\.com$/;
 
@@ -58,15 +59,17 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	// Heartbeats with an unchanged URL only bump registeredAt; audit the changes.
 	if (changed) {
-		await AuditLog.create({
+		const audit = {
 			_id: generateId(),
 			tableName: 'robot_arm_endpoints',
 			recordId: 'tunnel',
 			action: 'UPDATE',
 			oldData: { url: previous?.url ?? null },
-			newData: { url },
-			changedBy: 'robot-arm-pi'
-		});
+			newData: { url }
+		};
+		await AuditLog.create({ ...audit, changedBy: 'robot-arm-pi' });
+		// A new tunnel address is a network change on the arm Pi (Change Log, 2026-11-06).
+		await logChangesFromAudit(null, audit);
 	}
 	invalidateTunnelCache();
 

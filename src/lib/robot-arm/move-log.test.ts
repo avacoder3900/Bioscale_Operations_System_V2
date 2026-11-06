@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeArmMove, goalsById, moveLine, summarizeServoMoves } from './move-log';
+import { describeArmMove, FIRE_KINDS, frameStats, goalsById, moveLine, playFramesFromJsonl, summarizeServoMoves } from './move-log';
 
 describe('describeArmMove', () => {
 	it('a slider move is one servo with its goal', () => {
@@ -34,12 +34,73 @@ describe('describeArmMove', () => {
 		expect(e?.goals).toEqual({ '1': 2010, '3': 1800 });
 		expect(e?.what).toBe('dx 5 dy 0 dz -2 mm');
 	});
-	it('reads and non-arm commands are not movements', () => {
+	it('reads and settings are not movements', () => {
 		expect(describeArmMove('GET', '/servos', null, [])).toBeNull();
-		expect(describeArmMove('POST', '/gpio/pulse', { pin: 17, ms: 100 }, null)).toBeNull();
-		expect(describeArmMove('POST', '/conveyor/pulse', { ms: 600 }, null)).toBeNull();
+		expect(describeArmMove('GET', '/gpio/status', null, {})).toBeNull();
 		expect(describeArmMove('POST', '/servos/gains', {}, null)).toBeNull();
 		expect(describeArmMove('POST', '/cameras/top/controls', {}, null)).toBeNull();
+	});
+});
+
+describe('Conveyor Belt and Trapdoor Solenoid fires', () => {
+	it('each fire is a row naming what fired and for how long', () => {
+		expect(describeArmMove('POST', '/gpio/pulse', { pin: 17, ms: 100 }, null)).toMatchObject({ kind: 'fire', what: 'Solenoid A 100 ms' });
+		expect(describeArmMove('POST', '/gpio/sequence', { pins: [17, 27], ms: 100, gap_ms: 500 }, null)?.what).toBe('Solenoid A, Solenoid B 100 ms, Gap 500 ms');
+		expect(describeArmMove('POST', '/conveyor/pulse', { ms: 600, delay_ms: 0 }, null)).toMatchObject({ kind: 'conveyor', what: '600 ms' });
+		expect(describeArmMove('POST', '/conveyor/pulse', { ms: 600, delay_ms: 250 }, null)?.what).toBe('600 ms After 250 ms');
+		expect(describeArmMove('POST', '/conveyor/stop', undefined, null)?.kind).toBe('conveyor_stop');
+		expect(describeArmMove('POST', '/conveyor/off', undefined, null)?.what).toBe('Force Off');
+		expect(describeArmMove('POST', '/fires/stop', undefined, null)?.kind).toBe('fires_stop');
+	});
+	it('a fires-only play lists its fires', () => {
+		const e = describeArmMove('POST', '/fires/play', { title: 'Drop', fires: [{ t: 0, pin: 22, ms: 600 }, { t: 0.7, pin: 27, ms: 100 }] }, null);
+		expect(e?.kind).toBe('fires_play');
+		expect(e?.what).toBe('Drop  Conveyor Belt 600 ms At 0 s, Solenoid B 100 ms At 0.7 s');
+	});
+	it('fires are their own kinds (no servo readings around them)', () => {
+		for (const k of ['fire', 'fire_sequence', 'conveyor', 'conveyor_stop', 'fires_play', 'fires_stop']) expect(FIRE_KINDS.has(k)).toBe(true);
+		expect(FIRE_KINDS.has('play')).toBe(false);
+	});
+});
+
+describe('play frames', () => {
+	const jsonl = [
+		JSON.stringify({ event: 'header', rate_hz: 30, joint_names: [] }),
+		JSON.stringify({ event: 'frame', t: 0, goal: [2000, 1000, 3000, 900, 550, 2100] }),
+		JSON.stringify({ event: 'frame', t: 0.0333, goal: [2010, 1000, 2990, 900, 550, 2100], fire: { pin: 17, ms: 100, solenoid: 'A' } }),
+		JSON.stringify({ event: 'frame', t: 0.0667, goal: [2020, 1000, 2980, 901, 550, 2100] }),
+		JSON.stringify({ event: 'footer', duration_s: 0.0667, frames: 3 })
+	].join('\n');
+	it('reads every frame, its time and each servo goal, and the fires', () => {
+		const f = playFramesFromJsonl(jsonl)!;
+		expect(f.rateHz).toBe(30);
+		expect(f.t).toEqual([0, 0.033, 0.067]);
+		expect(f.goals[2]).toEqual([2020, 1000, 2980, 901, 550, 2100]);
+		expect(f.fires).toEqual([{ t: 0.033, pin: 17, ms: 100, label: 'Solenoid A' }]);
+	});
+	it('the older positions{} format, and junk lines skipped', () => {
+		const f = playFramesFromJsonl('not json\n{"t":0,"positions":{"1":5,"3":7}}\n')!;
+		expect(f.goals[0]).toEqual([5, null, 7, null, null, null]);
+		expect(playFramesFromJsonl('{"event":"header"}')).toBeNull();
+	});
+	it('direction changes inside a play, past a 3-step jitter', () => {
+		const goals = [100, 110, 120, 119, 121, 130, 110, 90, 95, 80].map((v) => [v]);
+		const s = frameStats({ rateHz: 30, t: goals.map((_, i) => i), goals, fires: [] })['1'];
+		// Up to 130, down to 90, up to 95, down to 80: three turns. The 120 -> 119 wobble is not one.
+		expect(s.reversals).toBe(3);
+		expect([s.first, s.last, s.min, s.max, s.firstDir, s.lastDir]).toEqual([100, 80, 80, 130, 1, -1]);
+	});
+	it('the summary counts a play once per servo it moved, with its turns', () => {
+		const fs = frameStats({ rateHz: 30, t: [0, 1, 2], goals: [[100, 50], [200, 50], [150, 50]], fires: [] });
+		const rows = [
+			{ kind: 'move', at: '2026-11-06T00:00:00Z', servo: 1, goal: 50, delta: null, goals: null },
+			{ kind: 'play', at: '2026-11-06T00:00:01Z', servo: null, goal: null, delta: null, goals: null, frameStats: fs }
+		];
+		// Servo 1: the move, then the play (up, then down: one turn). Servo 2 never moved.
+		expect(summarizeServoMoves(rows, 2)).toEqual([
+			{ servo: 1, moves: 2, reversals: 1 },
+			{ servo: 2, moves: 0, reversals: 0 }
+		]);
 	});
 });
 

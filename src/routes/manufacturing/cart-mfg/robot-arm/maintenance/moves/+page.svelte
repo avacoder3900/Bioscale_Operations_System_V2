@@ -16,15 +16,39 @@
 	 *
 	 * Servo readings (2026-11-06): a Reading Before and Reading After row
 	 * around each arm move; OT-2 home and rail lights outside a run.
+	 *
+	 * Frames (2026-11-06): a play's row opens to every frame the Pi was given
+	 * (time, each servo's goal, fire steps), read on demand from ./frames.
 	 */
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { goto } from '$app/navigation';
-	import { kindTitle } from '$lib/robot-arm/move-log';
+	import { kindTitle, type PlayFrames } from '$lib/robot-arm/move-log';
 	import { MOVE_GROUPS, groupOfKind, moveGroup } from '$lib/robot-arm/move-types';
 
 	let { data } = $props();
 
 	let logHidden = $state(false);
+
+	/** Opened plays: their frames, or the read's error. */
+	let openFrames = $state<Record<string, { frames: PlayFrames | null; error: string | null; loading: boolean }>>({});
+
+	async function toggleFrames(id: string) {
+		if (openFrames[id]) {
+			delete openFrames[id];
+			return;
+		}
+		openFrames[id] = { frames: null, error: null, loading: true };
+		try {
+			const res = await fetch(`${BASE}/frames?id=${encodeURIComponent(id)}`);
+			if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+			const body = (await res.json()) as { frames: PlayFrames | null };
+			if (openFrames[id]) openFrames[id] = { frames: body.frames, error: body.frames ? null : 'No Frames Kept', loading: false };
+		} catch (err) {
+			if (openFrames[id]) openFrames[id] = { frames: null, error: err instanceof Error ? err.message : String(err), loading: false };
+		}
+	}
+
+	const fireAt = (f: PlayFrames, t: number) => f.fires.filter((x) => x.t === t).map((x) => `${x.label} ${x.ms} ms`).join(', ');
 
 	const BASE = '/manufacturing/cart-mfg/robot-arm/maintenance/moves';
 	const windows = [
@@ -323,7 +347,20 @@
 										{kindTitle(m.kind)}
 										{#if groupOfKind(m.device, m.kind)}<span class="ml-1" style="color: var(--color-tron-text-secondary)">{groupOfKind(m.device, m.kind)?.title}</span>{/if}
 									</td>
-									<td class="pr-3 font-mono">{m.line}</td>
+									<td class="pr-3 font-mono">
+										{m.line}
+										{#if m.frameCount}
+											<button
+												type="button"
+												onclick={() => toggleFrames(m._id)}
+												class="ml-2 rounded border px-1.5 py-px font-sans text-[10px]"
+												style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+												aria-expanded={!!openFrames[m._id]}
+											>
+												{openFrames[m._id] ? 'Hide Frames' : 'Show Frames'}
+											</button>
+										{/if}
+									</td>
 									<td class="whitespace-nowrap pr-3 font-mono">{took(m)}</td>
 									<td class="pr-3">
 										{#if m.ok}
@@ -336,6 +373,41 @@
 									<td class="whitespace-nowrap pr-3" style="color: var(--color-tron-text-secondary)">{m.from ?? ''}</td>
 									<td class="whitespace-nowrap pr-3">{m.movedBy?.username ?? ''}</td>
 								</tr>
+								{#if openFrames[m._id]}
+									{@const o = openFrames[m._id]}
+									<tr>
+										<td colspan="8" class="pb-2 pl-6">
+											{#if o.loading}
+												<p class="text-xs" style="color: var(--color-tron-text-secondary)">Loading Frames</p>
+											{:else if o.error || !o.frames}
+												<p class="text-xs text-red-300">{o.error ?? 'No Frames Kept'}</p>
+											{:else}
+												{@const f = o.frames}
+												<div class="max-h-96 overflow-auto rounded border border-[var(--color-tron-border)]">
+													<table class="w-full text-left font-mono text-[11px]">
+														<thead class="sticky top-0 bg-[var(--color-tron-surface)]" style="color: var(--color-tron-text-secondary)">
+															<tr>
+																<th class="px-2 py-1">Frame</th><th class="pr-3">Time</th>
+																{#each servos as s (s)}<th class="pr-3">Servo {s}</th>{/each}
+																<th class="pr-3">Fire</th>
+															</tr>
+														</thead>
+														<tbody>
+															{#each f.t as t, i (i)}
+																<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
+																	<td class="px-2">{i + 1}</td>
+																	<td class="pr-3">{t.toFixed(3)} s</td>
+																	{#each servos as s (s)}<td class="pr-3">{f.goals[i]?.[s - 1] ?? ''}</td>{/each}
+																	<td class="pr-3">{fireAt(f, t)}</td>
+																</tr>
+															{/each}
+														</tbody>
+													</table>
+												</div>
+											{/if}
+										</td>
+									</tr>
+								{/if}
 							{/each}
 						</tbody>
 					</table>

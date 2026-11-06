@@ -27,6 +27,8 @@ export const ARM_PAGES = [
 	'maintenance.tests',
 	/** The ARM card in the right rail, on every tab. */
 	'arm-card',
+	/** The Opentrons lab pages (a protocol deployed from the library), 2026-11-06. */
+	'opentrons',
 	/** Done on the Pi itself (installs, restarts, Wi-Fi). */
 	'pi',
 	/** Physical work with no page (cables, wiring, ports). */
@@ -45,7 +47,9 @@ export const ARM_HARDWARE = [
 	'conveyor',
 	'stage',
 	'pi',
-	'network'
+	'network',
+	/** The OT-2 the arm feeds: its protocol, which robot (2026-11-06). */
+	'ot2'
 ] as const;
 export type ArmHardware = (typeof ARM_HARDWARE)[number];
 
