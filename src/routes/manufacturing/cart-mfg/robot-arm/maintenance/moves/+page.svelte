@@ -9,6 +9,8 @@
 
 	let { data } = $props();
 
+	let logHidden = $state(false);
+
 	const BASE = '/manufacturing/cart-mfg/robot-arm/maintenance/moves';
 	const windows = [
 		{ minutes: 60, title: 'Last Hour' },
@@ -84,36 +86,50 @@
 		</section>
 
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
-			{#if !data.moves.length}
-				<p class="text-xs" style="color: var(--color-tron-text-secondary)">No Movements Logged</p>
-			{:else}
-				{#if data.capped}
-					<p class="mb-2 text-xs" style="color: var(--color-tron-text-secondary)">Newest {data.limit}</p>
+			<div class="flex items-center justify-between gap-2">
+				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Movement Log</h3>
+				<button
+					type="button"
+					onclick={() => (logHidden = !logHidden)}
+					class="rounded border px-2 py-0.5 text-xs"
+					style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+					aria-expanded={!logHidden}
+				>
+					{logHidden ? 'Show' : 'Hide'}
+				</button>
+			</div>
+			{#if !logHidden}
+				{#if !data.moves.length}
+					<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">No Movements Logged</p>
+				{:else}
+					{#if data.capped}
+						<p class="mt-2 text-xs" style="color: var(--color-tron-text-secondary)">Newest {data.limit}</p>
+					{/if}
+					<table class="mt-2 w-full text-left text-xs">
+						<thead style="color: var(--color-tron-text-secondary)">
+							<tr><th class="py-1 pr-3">When</th><th class="pr-3">Type</th><th class="pr-3">Movement</th><th class="pr-3">Result</th><th class="pr-3">From</th><th class="pr-3">By</th></tr>
+						</thead>
+						<tbody>
+							{#each data.moves as m (m._id)}
+								<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
+									<td class="whitespace-nowrap py-1 pr-3" style="color: var(--color-tron-text-secondary)">{when(m.at)}</td>
+									<td class="whitespace-nowrap pr-3">{kindTitle(m.kind)}</td>
+									<td class="pr-3 font-mono">{m.line}</td>
+									<td class="pr-3">
+										{#if m.ok}
+											<span class="text-green-300">Sent</span>
+										{:else}
+											<span class="text-red-300">Failed</span>
+											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>
+										{/if}
+									</td>
+									<td class="whitespace-nowrap pr-3" style="color: var(--color-tron-text-secondary)">{m.from ?? ''}</td>
+									<td class="whitespace-nowrap pr-3">{m.movedBy?.username ?? ''}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
 				{/if}
-				<table class="w-full text-left text-xs">
-					<thead style="color: var(--color-tron-text-secondary)">
-						<tr><th class="py-1 pr-3">When</th><th class="pr-3">Type</th><th class="pr-3">Movement</th><th class="pr-3">Result</th><th class="pr-3">From</th><th class="pr-3">By</th></tr>
-					</thead>
-					<tbody>
-						{#each data.moves as m (m._id)}
-							<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
-								<td class="whitespace-nowrap py-1 pr-3" style="color: var(--color-tron-text-secondary)">{when(m.at)}</td>
-								<td class="whitespace-nowrap pr-3">{kindTitle(m.kind)}</td>
-								<td class="pr-3 font-mono">{m.line}</td>
-								<td class="pr-3">
-									{#if m.ok}
-										<span class="text-green-300">Sent</span>
-									{:else}
-										<span class="text-red-300">Failed</span>
-										<span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>
-									{/if}
-								</td>
-								<td class="whitespace-nowrap pr-3" style="color: var(--color-tron-text-secondary)">{m.from ?? ''}</td>
-								<td class="whitespace-nowrap pr-3">{m.movedBy?.username ?? ''}</td>
-							</tr>
-						{/each}
-					</tbody>
-				</table>
 			{/if}
 		</section>
 	{/if}
