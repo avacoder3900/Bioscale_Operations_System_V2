@@ -13,6 +13,8 @@ import {
 	createMoveSet,
 	createSequence,
 	deleteArchivedPoses,
+	duplicateMoveSet,
+	duplicateSequence,
 	listMoveSets,
 	listPoses,
 	listSequences,
@@ -220,6 +222,31 @@ export const actions: Actions = {
 			return failFrom(err);
 		}
 		redirect(303, `/manufacturing/cart-mfg/robot-arm/teach/sequence/${id}`);
+	},
+
+	// Duplicate: the copy lands in the library as "<name> Copy"; the page stays on the list.
+	duplicateMoveSet: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const id = field(await request.formData(), 'id');
+		if (!id) return fail(400, { error: 'Move set id missing.' });
+		try {
+			return { success: `Duplicated as "${friendlyName((await duplicateMoveSet(who(locals), id)).name)}".` };
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	duplicateSequence: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { error: 'Unauthorized' });
+		requirePermission(locals.user, 'manufacturing:write');
+		const id = field(await request.formData(), 'id');
+		if (!id) return fail(400, { error: 'Sequence id missing.' });
+		try {
+			return { success: `Duplicated as "${friendlyName((await duplicateSequence(who(locals), id)).name)}".` };
+		} catch (err) {
+			return failFrom(err);
+		}
 	},
 
 	// Delete = the 30-day R2 trash. `poses=1`: its poses go too (delete: those no other move set

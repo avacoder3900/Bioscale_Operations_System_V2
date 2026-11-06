@@ -621,6 +621,10 @@
 										: `Verified run with ${camera}: ${cov.ok} of ${cov.total} poses have a reference${cov.stale ? `, ${cov.stale} stale (pose edited since; retake)` : ''}. Steps without one are played unchecked.`}
 									disabled={blocked || !camera || !!heat?.tooHot.length || cov.ok + cov.stale === 0}
 									onclick={() => verified(isSets ? 'move_set' : 'sequence', r._id, r.name)}>◎ {cov.ok}/{cov.total}</button>
+								<form method="POST" action={isSets ? '?/duplicateMoveSet' : '?/duplicateSequence'} use:enhance class="shrink-0">
+									<input type="hidden" name="id" value={r._id} />
+									<button type="submit" class="rounded px-2 py-0.5 text-xs font-semibold" style={cyan} title={isSets ? 'Copy this move set; the copy uses the same poses' : 'Copy this sequence; the copy uses the same move sets'}>Duplicate</button>
+								</form>
 								<button type="button" class="rounded px-2 py-0.5 text-xs font-semibold" style={red} title="Restorable for 30 days"
 									onclick={() => void (ms ? archiveMoveSet(ms) : deleteSequence(sq!))}>Delete</button>
 							</li>

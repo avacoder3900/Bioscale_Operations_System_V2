@@ -615,7 +615,7 @@ export async function duplicatePose(user: User, id: string): Promise<PoseSummary
 	const src = (await RobotArmPose.findById(id).lean()) as any;
 	if (!src) throw new AnimateError('Pose not found.', 404);
 	if (src.archivedAt) throw new AnimateError('That pose is archived — restore it first.');
-	const name = await freeCopyName(String(src.name));
+	const name = await freeCopyName(RobotArmPose, String(src.name));
 	const _id = generateId();
 	await RobotArmPose.create({
 		_id,
@@ -629,8 +629,9 @@ export async function duplicatePose(user: User, id: string): Promise<PoseSummary
 	return poseSummary(await RobotArmPose.findById(_id).lean());
 }
 
-async function freeCopyName(name: string): Promise<string> {
-	const taken = new Set(((await RobotArmPose.find({ archivedAt: null }).select('name').lean()) as any[]).map((p) => String(p.name).toLowerCase()));
+/** The first free "<name> Copy", "<name> Copy 2", … among the live rows of `model`. */
+async function freeCopyName(model: typeof RobotArmPose, name: string): Promise<string> {
+	const taken = new Set(((await model.find({ archivedAt: null }).select('name').lean()) as any[]).map((p) => String(p.name).toLowerCase()));
 	for (let n = 1; n < 1000; n++) {
 		const suffix = n === 1 ? ' Copy' : ` Copy ${n}`;
 		const candidate = name.slice(0, 80 - suffix.length).trimEnd() + suffix;
@@ -938,6 +939,24 @@ export async function createMoveSet(user: User, input: { name: unknown; notes?: 
 	return moveSetSummary(await RobotArmMoveSet.findById(_id).lean());
 }
 
+/**
+ * Duplicate (Teach library, 2026-11-06): a new move set with the same steps,
+ * notes and rate under the first free "<name> Copy". The steps point at the
+ * same poses (no pose is copied); the play history is not copied.
+ */
+export async function duplicateMoveSet(user: User, id: string): Promise<MoveSetSummary> {
+	await connectDB();
+	const src = (await RobotArmMoveSet.findById(id).lean()) as any;
+	if (!src) throw new AnimateError('Move set not found.', 404);
+	if (src.archivedAt) throw new AnimateError('That move set is deleted — restore it first.');
+	const { keyframes, rateHz } = moveSetSummary(src);
+	const name = await freeCopyName(RobotArmMoveSet, String(src.name));
+	const _id = generateId();
+	await RobotArmMoveSet.create({ _id, name, notes: src.notes ?? null, keyframes, rateHz, createdBy: opRef(user), updatedBy: opRef(user) });
+	await audit(user, 'robot_arm.animate.move_set_duplicate', 'robot_arm_move_sets', _id, { name, from: { _id: id, name: src.name }, keyframes: keyframes.length });
+	return moveSetSummary(await RobotArmMoveSet.findById(_id).lean());
+}
+
 export async function updateMoveSet(user: User, id: string, input: { name: unknown; notes?: unknown; keyframes: unknown }): Promise<MoveSetSummary> {
 	await connectDB();
 	const before = (await RobotArmMoveSet.findById(id).lean()) as any;
@@ -1116,6 +1135,24 @@ export async function createSequence(user: User, input: { name: unknown; notes?:
 	const _id = generateId();
 	await RobotArmSequence.create({ _id, name, notes: cleanNotes(input.notes), items: [], createdBy: opRef(user), updatedBy: opRef(user) });
 	await audit(user, 'robot_arm.animate.sequence_create', 'robot_arm_sequences', _id, { name });
+	return sequenceSummary(await RobotArmSequence.findById(_id).lean());
+}
+
+/**
+ * Duplicate (Teach library, 2026-11-06): a new sequence with the same move sets
+ * and joins under the first free "<name> Copy". The move sets are shared, not
+ * copied; the play history and Save To Pi records are not copied.
+ */
+export async function duplicateSequence(user: User, id: string): Promise<SequenceSummary> {
+	await connectDB();
+	const src = (await RobotArmSequence.findById(id).lean()) as any;
+	if (!src) throw new AnimateError('Sequence not found.', 404);
+	if (src.archivedAt) throw new AnimateError('That sequence is deleted — restore it first.');
+	const { items } = sequenceSummary(src);
+	const name = await freeCopyName(RobotArmSequence, String(src.name));
+	const _id = generateId();
+	await RobotArmSequence.create({ _id, name, notes: src.notes ?? null, items, createdBy: opRef(user), updatedBy: opRef(user) });
+	await audit(user, 'robot_arm.animate.sequence_duplicate', 'robot_arm_sequences', _id, { name, from: { _id: id, name: src.name }, items: items.length });
 	return sequenceSummary(await RobotArmSequence.findById(_id).lean());
 }
 

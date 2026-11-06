@@ -26624,3 +26624,16 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 8e9ed69f (also feat/arm-motion-log)
 Retrieve this exact code: git checkout 8e9ed69f
 What this deployment is for: both Go To Pose buttons appear for poses 20-80 steps away (Vercel status success).
+
+================================================================================
+2026-11-06 — feat/arm-duplicate-moveset-sequence — Duplicate button for Move Sets and Sequences
+================================================================================
+Teach library: every Move Set and Sequence row has a Duplicate button beside Delete. The copy is
+named with the first free "<name> Copy", "<name> Copy 2", ... (the same rule as Duplicate Pose) and the
+page stays on the list with a "Duplicated as ..." message. A move set copy keeps the steps, notes and
+rate and points at the same poses (no pose is copied). A sequence copy keeps its move sets and joins
+(shared, not copied). Play history and Save To Pi records are not copied. A deleted row cannot be
+duplicated until restored. Each copy writes an audit entry (move_set_duplicate / sequence_duplicate).
+Files: src/lib/server/robot-arm-animation.ts (duplicateMoveSet, duplicateSequence; freeCopyName takes
+the model), teach/+page.server.ts (two actions), teach/+page.svelte (the button).
+npm run check: 14 errors, none in touched files. vitest robot-arm 385/385.
