@@ -26589,3 +26589,7 @@ Needs SSH into B07 (key via POST /server/ssh_keys over the cable from arm-pi). P
 npm run check 13 errors (baseline, none in touched files). vitest robot-arm + opentrons + invariants 403/403.
 protocols/tests: loop, rehearsal, geometry, rtp all ok.
 Worked in worktree ../Bioscale_V2-wt-ot2-movelog (node_modules junction).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/BdA2kkKPeS5e1psvekq8Zr6inFVn
+Source: branch master @ commit ca352106 (feature 19243518 + 27f7bd4f, also feat/ot2-movement-log)
+Retrieve this exact code: git checkout ca352106
+What this deployment is for: BIMS <-> OT-2 through the arm Pi's cable link, Setup switch, Run tab chip, Link rows (Vercel status success).
