@@ -5,7 +5,7 @@ import { callFunction } from '$lib/server/particle';
 import { appendSpuJournal } from '$lib/server/spu-journal';
 import { loadScreenCriteria } from '$lib/server/screen/ingest';
 import { summarizeSession } from '$lib/server/screen/summarize';
-import { SCREEN_TREND_IDS, SCREEN_TEST_LABELS, screenTestLabel, trendValue, type ScreenCriteria } from '$lib/server/screen/contract';
+import { SCREEN_TREND_IDS, SCREEN_TEST_LABELS, screenTestLabel, trendValue, onCurrentGainScale, type ScreenCriteria } from '$lib/server/screen/contract';
 import { openJobs } from '$lib/server/chunks';
 import type { Actions, PageServerLoad } from './$types';
 
@@ -65,6 +65,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		trends = SCREEN_TREND_IDS.map((t) => ({
 			...t,
 			points: ordered.flatMap((h) => {
+				if (!onCurrentGainScale(t.id, h.fw)) return [];
 				const v = trendValue(h.rows, t.id);
 				return v != null ? [{ at: h.startedAt ?? h.lastEventAt ?? '', value: v, sessionId: h.id }] : [];
 			})
@@ -78,7 +79,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const compare = [...latestPerUnit.values()]
 		.map((h) => {
 			const row = h.rows.find((r) => r.id === metric) ?? h.rows.find((r) => r.id === `${metric}1`);
-			return { spuUdi: h.spuUdi, spuId: h.spuId, at: h.startedAt, value: trendValue(h.rows, metric), status: row?.status ?? null, sessionId: h.id };
+			const value = onCurrentGainScale(metric, h.fw) ? trendValue(h.rows, metric) : null;
+			return { spuUdi: h.spuUdi, spuId: h.spuId, at: h.startedAt, value, status: row?.status ?? null, sessionId: h.id };
 		})
 		.filter((c) => c.value != null)
 		.sort((a, b) => (a.value as number) - (b.value as number));

@@ -234,18 +234,18 @@ export const SCREEN_TEST_DOCS: Record<string, { what: string; rule: string }> = 
 	lsrA: { what: 'Laser A into the photodiode at the bench position: pd − pd0', rule: 'fail below 50 or on sensor error' },
 	lsrB: { what: 'Laser B into the photodiode at the bench position: pd − pd0', rule: 'fail below 50 or on sensor error' },
 	lsrC: { what: 'Laser C into the photodiode at the bench position: pd − pd0', rule: 'fail below 50 or on sensor error' },
-	lsrA_c: { what: 'Spectrometer A clear band, laser on', rule: 'warn at 62000 (saturation)' },
-	lsrB_c: { what: 'Spectrometer B clear band, laser on', rule: 'warn at 62000 (saturation)' },
-	lsrC_c: { what: 'Spectrometer C clear band, laser on', rule: 'warn at 62000 (saturation)' },
-	lsrA_f1: { what: 'Spectrometer A F1 (405 nm), laser on', rule: 'info' },
-	lsrB_f1: { what: 'Spectrometer B F1 (405 nm), laser on', rule: 'info' },
-	lsrC_f1: { what: 'Spectrometer C F1 (405 nm), laser on', rule: 'info' },
-	lsrA_f7: { what: 'Spectrometer A F7, laser on', rule: 'info' },
-	lsrB_f7: { what: 'Spectrometer B F7, laser on', rule: 'info' },
-	lsrC_f7: { what: 'Spectrometer C F7, laser on', rule: 'info' },
-	drkA: { what: 'Clear band A, laser off, bench gain', rule: 'fail on sensor error' },
-	drkB: { what: 'Clear band B, laser off, bench gain', rule: 'fail on sensor error' },
-	drkC: { what: 'Clear band C, laser off, bench gain', rule: 'fail on sensor error' },
+	lsrA_c: { what: 'Spectrometer A clear band, laser on (gain 8 from fw 107; gain 1 before, not comparable)', rule: 'warn at 62000 (saturation)' },
+	lsrB_c: { what: 'Spectrometer B clear band, laser on (gain 8 from fw 107; gain 1 before, not comparable)', rule: 'warn at 62000 (saturation)' },
+	lsrC_c: { what: 'Spectrometer C clear band, laser on (gain 8 from fw 107; gain 1 before, not comparable)', rule: 'warn at 62000 (saturation)' },
+	lsrA_f1: { what: 'Spectrometer A F1 (405 nm), laser on (gain 8 from fw 107; gain 1 before)', rule: 'info' },
+	lsrB_f1: { what: 'Spectrometer B F1 (405 nm), laser on (gain 8 from fw 107; gain 1 before)', rule: 'info' },
+	lsrC_f1: { what: 'Spectrometer C F1 (405 nm), laser on (gain 8 from fw 107; gain 1 before)', rule: 'info' },
+	lsrA_f7: { what: 'Spectrometer A F7, laser on (gain 8 from fw 107; gain 1 before)', rule: 'info' },
+	lsrB_f7: { what: 'Spectrometer B F7, laser on (gain 8 from fw 107; gain 1 before)', rule: 'info' },
+	lsrC_f7: { what: 'Spectrometer C F7, laser on (gain 8 from fw 107; gain 1 before)', rule: 'info' },
+	drkA: { what: 'Clear band A, laser off, bench gain (8 from fw 107, 1 before)', rule: 'fail on sensor error' },
+	drkB: { what: 'Clear band B, laser off, bench gain (8 from fw 107, 1 before)', rule: 'fail on sensor error' },
+	drkC: { what: 'Clear band C, laser off, bench gain (8 from fw 107, 1 before)', rule: 'fail on sensor error' },
 	bgA: { what: 'Empty-slot background A: clear band at assay gain, laser off', rule: 'fail on sensor error' },
 	bgB: { what: 'Empty-slot background B: clear band at assay gain, laser off', rule: 'fail on sensor error' },
 	bgC: { what: 'Empty-slot background C: clear band at assay gain, laser off', rule: 'fail on sensor error' },
@@ -467,6 +467,25 @@ export const SCREEN_TREND_IDS: Array<{ id: string; label: string; unit: string }
 	{ id: 'run1_dur_s', label: 'Run 1 duration', unit: 's' },
 	{ id: 'run1_temp', label: 'Run 1 heater at end', unit: '°C×10' }
 ];
+
+/**
+ * Rows read at the SCREEN's bench gain. Firmware v102-v106 used gain 1; v107
+ * raised it to 8 (SCREEN_LASER_GAIN, ~128x more counts), so values from the
+ * two eras must never share a trend line or a fleet ranking.
+ */
+export const SCREEN_BENCH_GAIN8_FW = 107;
+const GAIN_DEPENDENT_IDS = new Set([
+	'lsrA_c', 'lsrB_c', 'lsrC_c',
+	'lsrA_f1', 'lsrB_f1', 'lsrC_f1',
+	'lsrA_f7', 'lsrB_f7', 'lsrC_f7',
+	'drkA', 'drkB', 'drkC'
+]);
+
+/** True when this id's value from a screen on firmware `fw` is on the current (gain 8) scale. */
+export function onCurrentGainScale(id: string, fw: number | null | undefined): boolean {
+	if (!GAIN_DEPENDENT_IDS.has(baseTestId(id)) && !GAIN_DEPENDENT_IDS.has(id)) return true;
+	return (fw ?? 0) >= SCREEN_BENCH_GAIN8_FW;
+}
 
 /** Numeric value of a trend id in one screen: the exact row, or the mean over its reps. */
 export function trendValue(rows: Array<{ id: string; value: number | string | null }>, id: string): number | null {
