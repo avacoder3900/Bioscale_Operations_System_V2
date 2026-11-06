@@ -26381,3 +26381,7 @@ last hour" can be checked; the Change Log as its own Maintenance bubble like Tes
 Not covered: movements the Pi makes on its own (Pi-local scripts, the leader arm's frames) beyond the start row.
 npm run check: 13 errors, none in touched files (master baseline). vitest robot-arm 358/358.
 Worked in worktree ../Bioscale_V2-wt-motion-log.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/yu4g8DpL5q9LD1Q3yzTz2c1QzoRB
+Source: branch master @ commit 1a44ef99 (also feat/arm-motion-log; feature commit c73b87f9)
+Retrieve this exact code: git checkout 1a44ef99
+What this deployment is for: Maintenance Movement Log + Change Log bubble + unit test results on Tests (Vercel status success).
