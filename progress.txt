@@ -26867,3 +26867,7 @@ Diagnosis for the day (BIMS audit + B07 journal): the stage calibration values h
 the 12:13 PM and 2:50 PM runs received identical RTPs (only channel A→C). Calibrate Tip fails since 2:57 PM with
 "X, Y limit switch not reached within 5mm — tip didn't contact the fixture" (5 attempts); the lever tests on B07 at
 15:10 local saw no bytes from a hand press — the calibrator fixture's switches, not BIMS.
+Deployment: production — via push of master (Vercel GitHub integration)
+Source: branch master @ commit e4393434
+Retrieve this exact code: git checkout master at commit e4393434
+What this deployment is for: Deck Studio rack Set position in deck mm (slot origin), so a typed jog position on the tip rack no longer saves as a one-slot offset
