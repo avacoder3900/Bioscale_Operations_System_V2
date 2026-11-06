@@ -1,12 +1,13 @@
 /**
  * One mover at a time (2026-11-06).
  *
- * Return Home, the droop settle that runs after a play, and a Play / Go to
- * pose all move the arm from BIMS, and none of them is a run on the Pi for
- * the whole time it moves, so the Pi's busy check (getActive) cannot keep
- * them apart. At 16:28 UTC that day Return Home jogged the shoulder toward
- * home while the settle kept writing the pose's goal back: the shoulder swung
- * 300–480 steps every 1.2 s round, and the settle saved that as a +300 trim.
+ * Return Home and a Play / Go to pose both move the arm from BIMS, and
+ * neither is a run on the Pi for the whole time it moves, so the Pi's busy
+ * check (getActive) cannot keep them apart. Born at 16:28 UTC that day, when
+ * Return Home jogged the shoulder toward home while the (since removed) droop
+ * settle kept writing the pose's goal back and the shoulder swung 300–480
+ * steps every 1.2 s round. The settle is gone (2df2d785, no droop
+ * correction); the lease stays, since two BIMS movers can still overlap.
  *
  * Each mover claims this lease first; a second one is refused with "the arm
  * is busy (…)". The lease lives in Mongo (Vercel runs every request in its
