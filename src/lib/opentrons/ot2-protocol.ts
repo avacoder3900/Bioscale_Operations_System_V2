@@ -464,6 +464,16 @@ export async function openMaintenanceRun(t: Ot2Transport): Promise<{ runId: stri
 	// `Field required` at /data.
 	const open = async () => t.post('/maintenance_runs', { data: {} });
 	let res = await open();
+	if (res.status >= 500) {
+		// B07 2026-11-06: the robot server crashed on the create (500, "unhandled errors in a
+		// TaskGroup": its notifier still pointed at a deleted run) and the same request worked
+		// seconds later. One retry; first take a run the failed attempt may have opened anyway.
+		await new Promise((r) => setTimeout(r, 1500));
+		const cur = await t.get('/maintenance_runs/current_run').catch(() => null);
+		const curId = cur?.ok ? ((await cur.json().catch(() => ({}))) as any)?.data?.id : null;
+		if (curId) return { runId: String(curId) };
+		res = await open();
+	}
 	if (!res.ok) {
 		const body = (await res.json().catch(() => ({}))) as any;
 		const detail = body?.errors?.[0]?.detail ?? `Robot returned ${res.status} on /maintenance_runs`;
