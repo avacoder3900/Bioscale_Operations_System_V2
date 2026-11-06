@@ -26550,3 +26550,7 @@ Cost: one extra Pi round trip before every arm move (a jog chunk included), and 
 Not tested on the arm (no move was sent from here); unit tests only.
 npm run check 13 errors (baseline). vitest src/lib/robot-arm src/lib/opentrons src/lib/server 977 passed,
 1 failed: ot2-protocol.run.test.ts stale-bundle test, fails the same on master without these changes.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6wvephmUCtssrPMZhHKKPTWAYj5h
+Source: branch master @ commit 990e5941 (feature fb89d941, also feat/movement-log-filters)
+Retrieve this exact code: git checkout 990e5941
+What this deployment is for: servo readings before/after each arm move; OT-2 home and lights in the Movement Log (Vercel status success).
