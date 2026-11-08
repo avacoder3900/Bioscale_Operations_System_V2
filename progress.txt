@@ -26979,3 +26979,15 @@ Retrieve this exact code: git checkout 630e0ebb
 What this deployment is for: arm-Pi loop driver (off by default), live OT-2 timing; first build since the rate limit (Vercel status success).
 Local live server (bims-live-updater): its updater stopped with the 11-06 session (last update b130a649); restart
 with Start BIMS Live.cmd if wanted.
+
+================================================================================
+2026-11-08 — feat/ot2-movement-log — arm-pi side of 630e0ebb installed (no motion)
+================================================================================
+With Alejandro's OK (arm not in use), copied services/robot-arm/src/server/ot2_link.py (new) and
+loop_driver.py (first install) to arm-pi ~/robot-arm/src/server/ (backup ot2_link.py.bak-20261108),
+checked /sessions/active == null, `systemctl restart robot-arm`. Verified: /health ok; /ot2/link
+active "cable" to OT2CEP20200217B07 (rtt 70 ms); clock offset measured over the cable = 0.0 ms
+(rtt 23 ms; B07 and the Pi both NTP-synced, checked by hand against /system/time); /ot2/stream
+pushing to production BIMS (82 commands of run f90ca68c, no error); /ot2/loop-driver/status idle.
+The driver only acts when Setup "Arm Pi Drives The Loop" is on (off); first driven loop waits for
+Alejandro to be at the robots. No code change; npm run check not rerun (no source change).
