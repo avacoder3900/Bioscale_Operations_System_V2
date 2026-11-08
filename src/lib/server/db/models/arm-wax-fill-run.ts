@@ -114,6 +114,9 @@ const armWaxFillRunSchema = new Schema(
 		 * because the robot keeps only its most recent runs.
 		 */
 		fillProfile: Schema.Types.Mixed,
+		/** 2026-11-06: who drives the steps — 'browser' (the Run tab) or 'arm-pi' (Setup "Arm Pi Drives The Loop"); why not the Pi, when it could not. */
+		driver: { type: String, default: 'browser' },
+		driverNote: String,
 		error: String,
 		startedBy: { _id: String, username: String },
 		startedAt: Date,

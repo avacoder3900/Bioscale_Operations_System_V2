@@ -62,6 +62,12 @@ const armWaxFillSettingsSchema = new Schema(
 		 */
 		useArmLink: { type: Boolean, default: true },
 		/**
+		 * The arm Pi drives the loop (2026-11-06, OPTIONAL, off by default): it runs the
+		 * Run tab's steps itself through /api/robot-arm/wax-fill/drive and the browser only
+		 * watches ($lib/server/arm-loop-drive). Off = the browser drives, as before.
+		 */
+		armPiDrives: { type: Boolean, default: false },
+		/**
 		 * Barcode present only (Alejandro, 2026-11-06): the scan only asks whether a
 		 * barcode is there. Any barcode passes — unknown cart, bucket label, any
 		 * status — nothing is looked up, the cart is not put on the wax run and

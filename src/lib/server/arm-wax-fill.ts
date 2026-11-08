@@ -265,6 +265,8 @@ export interface SettingsView {
 	chainGrab: boolean;
 	/** Robot calls and the loop's instructions go through the arm Pi's cable link when it is up (2026-11-06). */
 	useArmLink: boolean;
+	/** The arm Pi drives the loop's steps; the browser only watches (2026-11-06, off by default). */
+	armPiDrives: boolean;
 	/**
 	 * Barcode present only (2026-11-06): the scan only asks whether a barcode is
 	 * there — nothing is looked up, no cart is put on the wax run or advanced;
@@ -292,6 +294,7 @@ function settingsView(d: any): SettingsView {
 		channels: { c: d?.channels?.c === true, b: d?.channels?.b === true, a: d?.channels?.a !== false },
 		chainGrab: d?.chainGrab !== false,
 		useArmLink: d?.useArmLink !== false,
+		armPiDrives: d?.armPiDrives === true,
 		scanPresenceOnly: d?.scanPresenceOnly === true,
 		grabAnimation: animRef(d?.grabAnimation),
 		withdrawAnimation: animRef(d?.withdrawAnimation),
@@ -327,6 +330,7 @@ export async function saveSetup(
 		chainGrab?: boolean;
 		useArmLink?: boolean;
 		scanPresenceOnly?: boolean;
+		armPiDrives?: boolean;
 	}
 ): Promise<SettingsView> {
 	await connectDB();
@@ -338,6 +342,7 @@ export async function saveSetup(
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
 	const chainGrab = input.chainGrab !== false;
 	const useArmLink = input.useArmLink !== false;
+	const armPiDrives = input.armPiDrives === true;
 	const presenceOnly = input.scanPresenceOnly === true;
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);
@@ -347,7 +352,7 @@ export async function saveSetup(
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, chainGrab, useArmLink, scanPresenceOnly: presenceOnly, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, chainGrab, useArmLink, scanPresenceOnly: presenceOnly, armPiDrives, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -360,6 +365,7 @@ export async function saveSetup(
 		chainGrab,
 		useArmLink,
 		scanPresenceOnly: presenceOnly,
+		armPiDrives,
 		before: {
 			robotId: before.robotId,
 			cartPosition: before.cartPosition,
@@ -368,7 +374,8 @@ export async function saveSetup(
 			channels: before.channels,
 			chainGrab: before.chainGrab,
 			useArmLink: before.useArmLink,
-			scanPresenceOnly: before.scanPresenceOnly
+			scanPresenceOnly: before.scanPresenceOnly,
+			armPiDrives: before.armPiDrives
 		}
 	});
 	return settingsView(await ArmWaxFillSettings.findById('default').lean());
@@ -987,6 +994,9 @@ export interface LoopView {
 	pendingInstruction: { seq: number; cart: number; action: string; barcode: string | null } | null;
 	ending: boolean;
 	runFinished: boolean;
+	/** Who drives the steps: 'browser' (the Run tab) or 'arm-pi'; driverNote = why not the Pi when it could not take it. */
+	driver: 'browser' | 'arm-pi';
+	driverNote: string | null;
 	opentronsRunFinalStatus: string | null;
 	error: string | null;
 	startedBy: string | null;
@@ -1010,6 +1020,8 @@ export function loopView(d: any): LoopView {
 		grabAnimation: animRef(d.grabAnimation),
 		withdrawAnimation: animRef(d.withdrawAnimation),
 		failAnimation: animRef(d.failAnimation),
+		driver: d.driver === 'arm-pi' ? 'arm-pi' : 'browser',
+		driverNote: d.driverNote ?? null,
 		cycles: (d.cycles ?? []).map(
 			(c: any): LoopCycleView => ({
 				index: Number(c.index),

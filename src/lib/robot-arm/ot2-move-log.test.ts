@@ -76,3 +76,15 @@ describe('titles', () => {
 		expect(loopStepLine('withdraw_grab', 1, 38, 'withdraw + grab')).toBe('Withdraw + Grab Cart 1 To 2  withdraw + grab  Planned 38.0 s');
 	});
 });
+
+describe('onPiClock', () => {
+	it("moves the robot's times onto the Pi's clock by the measured offset", async () => {
+		const { onPiClock } = await import('./ot2-move-log');
+		const t = { at: new Date('2026-11-06T18:00:01.500Z'), endAt: new Date('2026-11-06T18:00:02.000Z'), durationMs: 500 };
+		const s = onPiClock(t, 1500);
+		expect(s.at.toISOString()).toBe('2026-11-06T18:00:00.000Z');
+		expect(s.endAt?.toISOString()).toBe('2026-11-06T18:00:00.500Z');
+		expect(s.durationMs).toBe(500);
+		expect(onPiClock(t, null)).toBe(t);
+	});
+});

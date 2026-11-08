@@ -52,6 +52,7 @@ import {
 	switchRobot
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
+import { armPiDrives, startArmDriver, stopArmDriver } from '$lib/server/arm-loop-drive';
 
 // startLoop runs the whole OT-2 start (freshness gate, create, play) in one
 // action, and the wait actions (awaitParked, cycleScanRead, cycleFillWait,
@@ -107,7 +108,8 @@ export const actions: Actions = {
 				channels: { c: checked(d, 'channelC'), b: checked(d, 'channelB'), a: checked(d, 'channelA') },
 				chainGrab: checked(d, 'chainGrab'),
 				useArmLink: checked(d, 'useArmLink'),
-				scanPresenceOnly: checked(d, 'scanPresenceOnly')
+				scanPresenceOnly: checked(d, 'scanPresenceOnly'),
+				armPiDrives: checked(d, 'armPiDrives')
 			});
 			return { success: 'Setup saved.' };
 		} catch (err) {
@@ -174,10 +176,26 @@ export const actions: Actions = {
 	startLoop: async (ev) => {
 		const { d, user } = await writer(ev, true);
 		try {
-			return { loop: json(await startLoop(user, field(d, 'runs'), { startAt: field(d, 'startAt'), barcode: field(d, 'barcode'), tiprackRefilled: field(d, 'tiprackRefilled') })) };
+			const started = await startLoop(user, field(d, 'runs'), { startAt: field(d, 'startAt'), barcode: field(d, 'barcode'), tiprackRefilled: field(d, 'tiprackRefilled') });
+			// Setup "Arm Pi Drives The Loop" (off by default): the Pi runs the steps; else, or when it cannot, the browser does.
+			if (await armPiDrives()) {
+				await startArmDriver(started._id);
+				return { loop: json(await getLoop(started._id)) };
+			}
+			return { loop: json(started) };
 		} catch (err) {
 			return failFrom(err);
 		}
+	},
+
+	// Resume with the arm Pi driving (a loop it drove stopped at an arrival miss, or the Pi restarted).
+	resumeArmDriver: async (ev) => {
+		const { d } = await writer(ev, true);
+		const id = field(d, 'loopId');
+		if (!id) return fail(400, { error: 'loopId missing.' });
+		const r = await startArmDriver(id);
+		const loop = await getLoop(id);
+		return r.driver === 'arm-pi' ? { loop: json(loop) } : fail(409, { error: `The arm Pi did not take the loop: ${r.reason}`, loop: json(loop) });
 	},
 
 	loopState: async (ev) => {
@@ -375,6 +393,7 @@ export const actions: Actions = {
 		const id = field(d, 'loopId');
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
+			await stopArmDriver(id);
 			return json(await haltLoop(user, id));
 		} catch (err) {
 			return failFrom(err);
@@ -399,6 +418,7 @@ export const actions: Actions = {
 	resetLoop: async (ev) => {
 		const { user } = await writer(ev);
 		try {
+			await stopArmDriver(null);
 			return json(await resetLoop(user));
 		} catch (err) {
 			return failFrom(err);

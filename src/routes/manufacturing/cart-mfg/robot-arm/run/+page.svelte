@@ -273,7 +273,55 @@
 		if (r.ok) loop = r.data.loop;
 	}
 
+	/**
+	 * The arm Pi drives this loop (Setup "Arm Pi Drives The Loop", 2026-11-06): the
+	 * page only watches — the loop's state every second and the Pi driver's notes.
+	 * When the Pi stops driving a running loop (an arrival miss, an error), Resume
+	 * hands it back to the Pi.
+	 */
+	async function watch() {
+		if (driving || !loop) return;
+		driving = true;
+		pageError = null;
+		note('The arm Pi drives this loop — this page only watches.');
+		let lastNote: string | null = null;
+		try {
+			while (loop && (loop.status === 'running' || (loop.ending && !loop.runFinished))) {
+				await new Promise((r) => setTimeout(r, 1000));
+				const r = await post('loopState', { loopId: loop._id });
+				if (r.ok) loop = r.data.loop;
+				const st = await fetch('/api/robot-arm/wax-fill/driver')
+					.then((x) => x.json())
+					.then((x) => x.status as { running?: boolean; note?: string | null; error?: string | null } | null)
+					.catch(() => null);
+				if (st?.note && st.note !== lastNote) {
+					note(`Arm Pi: ${st.note}`, st.error ? 'warn' : 'info');
+					lastNote = st.note;
+				}
+				if (st && !st.running && loop?.status === 'running') {
+					note(`The arm Pi stopped driving${st.error ? `: ${st.error}` : ''}. Resume hands the loop back to it.`, 'warn');
+					break;
+				}
+			}
+		} finally {
+			driving = false;
+			await invalidateAll();
+		}
+	}
+
+	async function resumeArmDriver() {
+		if (!loop) return;
+		const r = await post('resumeArmDriver', { loopId: loop._id });
+		if (!r.ok) {
+			pageError = r.error;
+			return;
+		}
+		loop = r.data.loop;
+		void watch();
+	}
+
 	async function drive() {
+		if (loop?.driver === 'arm-pi') return watch();
 		if (driving || !loop) return;
 		driving = true;
 		pageError = null;
@@ -1068,7 +1116,7 @@
 			{#if loop && loop.status === 'running'}
 				<div class="flex items-center gap-2">
 					{#if !driving}
-						<button type="button" onclick={() => void drive()} disabled={busy}
+						<button type="button" onclick={() => void (loop?.driver === 'arm-pi' ? resumeArmDriver() : drive())} disabled={busy}
 							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
 							Resume
 						</button>
@@ -1325,6 +1373,10 @@
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="useArmLink" checked={data.settings.useArmLink} class="mt-0.5" />
 					<span>Use Cable Link To The OT-2</span>
+				</label>
+				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
+					<input type="checkbox" name="armPiDrives" checked={data.settings.armPiDrives} class="mt-0.5" />
+					<span>Arm Pi Drives The Loop</span>
 				</label>
 				<div class="flex items-center justify-between gap-3">
 					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">

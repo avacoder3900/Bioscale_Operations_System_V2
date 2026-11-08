@@ -57,6 +57,8 @@ const robotArmMoveSchema = new Schema(
 		commandId: { type: String, default: undefined },
 		intent: { type: String, default: undefined },
 		params: { type: Schema.Types.Mixed, default: undefined },
+		/** OT-2 rows: the robot's clock − the arm Pi's, ms, subtracted from at / endAt (2026-11-06); null = not measured. */
+		clockOffsetMs: { type: Number, default: undefined },
 		/** Arm loop steps: the wax-fill loop and cart. */
 		loopId: { type: String, default: undefined },
 		cart: { type: Number, default: undefined },

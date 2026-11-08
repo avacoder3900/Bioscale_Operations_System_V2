@@ -36,6 +36,14 @@ scripts/install_ot2_link_router.py so this module never imports app.py):
     GET  /ot2/loop/scan?run_id=&cart=&wait_s=  (key)     BIMS's long-poll for that result; while it waits the
                                                  request is raised the moment the run reaches ARM AT_SCAN <cart>
                                                  (the protocol's announcement, or this module's own run read)
+  Live timing (2026-11-06):
+    the robot's clock is measured against ours every 60 s over the cable (GET /system/time,
+    offset = robot − midpoint of our send/receive): GET /ot2/link → clock {offset_ms, rtt_ms, at}.
+    While a protocol run is current, its ended commands are pushed to BIMS every ~1 s
+    (POST {BIMS}/api/robot-arm/ot2-commands, key ROBOT_ARM_API_KEY) so the Movement Log
+    fills in live; BIMS derives from BIMS_CHANGES_URL. GET /ot2/stream shows its state.
+  The loop driver (OPTIONAL, BIMS Setup "Arm Pi Drives The Loop"): /ot2/loop-driver/* —
+    see loop_driver.py.
   The instruction file over the cable (2026-11-06):
     POST /ot2/loop/file {json}           (key)  write /data/arm_loop.json on the robot over SSH (cable first)
 
@@ -201,6 +209,7 @@ class Link:
         self.lan: dict = {"addr": os.environ.get("OT2_LAN_ADDR") or saved.get("lan_addr"), "up": False, "rtt_ms": None, "checked_at": None, "error": None}
         self.robot: dict = {"name": saved.get("robot_name"), "serial": saved.get("robot_serial")}
         self.self_addrs: dict = {"cable": None, "lan": None}
+        self.clock: Optional[dict] = None
         self.client = httpx.Client(headers=HEADERS, timeout=PROBE_TIMEOUT_S)
         self._wake = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="ot2-link", daemon=True)
@@ -218,6 +227,7 @@ class Link:
                 "self": dict(self.self_addrs),
                 "port": PORT,
                 "scanner": SCANS.scanner_view(),
+                "clock": dict(self.clock) if self.clock else None,
             }
 
     def _persist(self) -> None:
@@ -345,10 +355,44 @@ class Link:
             self.lan.update(addr=lan, up=bool(lok), rtt_ms=round(lms, 2) if lms else None, checked_at=now, error=None if lok else (lerr or "no address"))
         self._persist()
 
+    def measure_clock(self) -> None:
+        """The robot's clock against ours over the best path: offset = robot − midpoint (ms)."""
+        try:
+            name, base = self.base()
+        except HTTPException:
+            return
+        best = None
+        for _ in range(3):
+            t0 = time.time()
+            try:
+                r = self.client.get(base + "/system/time", timeout=2.0)
+            except Exception:
+                continue
+            t1 = time.time()
+            if r.status_code != 200:
+                continue
+            iso = ((r.json() or {}).get("data") or {}).get("systemTime")
+            if not iso:
+                continue
+            from datetime import datetime
+            robot = datetime.fromisoformat(str(iso).replace("Z", "+00:00")).timestamp()
+            rtt = (t1 - t0) * 1000
+            off = (robot - (t0 + t1) / 2) * 1000
+            if best is None or rtt < best[1]:
+                best = (off, rtt)
+        if best:
+            with self.lock:
+                self.clock = {"offset_ms": round(best[0], 1), "rtt_ms": round(best[1], 1), "at": _now(), "via": name}
+
     def _loop(self) -> None:
+        last_clock = 0.0
         while True:
             try:
                 self.check()
+                if self.cable["up"] or self.lan["up"]:
+                    if _now() - last_clock >= 60:
+                        self.measure_clock()
+                        last_clock = _now()
             except Exception:
                 pass
             self._wake.wait(CHECK_UP_S if self.cable["up"] else CHECK_DOWN_S)
@@ -809,3 +853,133 @@ async def loop_file(body: LoopFile) -> dict:
     out = await run_in_threadpool(write_robot_file, body.json_body)
     BROKER.event("file_written", ms=out["ms"], host=out["host"], seq=body.json_body.get("seq"), action=body.json_body.get("action"))
     return out
+
+
+# ---------------------------------------------------------------- live command stream to BIMS
+
+STREAM_PAGE = 100
+
+
+def _bims_base() -> Optional[str]:
+    u = os.environ.get("BIMS_BASE_URL") or os.environ.get("BIMS_CHANGES_URL") or ""
+    if not u:
+        return None
+    for tail in ("/api/robot-arm/changes",):
+        if u.endswith(tail):
+            u = u[: -len(tail)]
+    return u.rstrip("/") or None
+
+
+class Streamer:
+    """While a protocol run is current on the robot, push its ended commands to BIMS (~1 s behind)."""
+
+    def __init__(self) -> None:
+        self.state: dict = {"run_id": None, "cursor": 0, "pushed": 0, "last_push": None, "error": None, "bims": None}
+        self.finished: set = set()
+        self.http = httpx.Client(timeout=10.0)
+        threading.Thread(target=self._loop, name="ot2-stream", daemon=True).start()
+
+    def _current_run(self) -> Optional[dict]:
+        r, _l, _m = LINK.request("GET", "/runs", by="stream", timeout_s=6)
+        if r.status_code != 200:
+            return None
+        cur = [x for x in (r.json() or {}).get("data") or [] if x.get("current")]
+        return cur[0] if cur else None
+
+    def _push(self, run: dict, start_seq: int, commands: list) -> bool:
+        base = _bims_base()
+        self.state["bims"] = base
+        if not base:
+            self.state["error"] = "no BIMS_CHANGES_URL / BIMS_BASE_URL in .env"
+            return False
+        body = {"robotName": LINK.snapshot()["robot"]["name"], "run": run, "startSeq": start_seq, "commands": commands,
+                "clockOffsetMs": (LINK.clock or {}).get("offset_ms")}
+        try:
+            res = self.http.post(base + "/api/robot-arm/ot2-commands", json=body, headers={"x-api-key": os.environ.get("ROBOT_ARM_API_KEY", "")})
+            if res.status_code >= 400:
+                self.state["error"] = f"BIMS {res.status_code}: {res.text[:160]}"
+                return False
+            self.state.update(error=None, last_push=_now())
+            self.state["pushed"] += len(commands)
+            return True
+        except Exception as e:
+            self.state["error"] = f"{type(e).__name__}: {e}"[:200]
+            return False
+
+    def _loop(self) -> None:
+        backoff = 1.0
+        while True:
+            time.sleep(backoff)
+            try:
+                if not (LINK.cable["up"] or LINK.lan["up"]):
+                    backoff = 5.0
+                    continue
+                cur = self._current_run()
+                # Nothing current, a run fully pushed already, or one that ended before we saw it run: idle.
+                if not cur or str(cur.get("id")) in self.finished or (cur.get("status") in TERMINAL and self.state["run_id"] != cur.get("id")):
+                    backoff = 3.0
+                    continue
+                rid = str(cur["id"])
+                if self.state["run_id"] != rid:
+                    self.state.update(run_id=rid, cursor=0)
+                rr, _l, _m = LINK.request("GET", f"/runs/{rid}", by="stream", timeout_s=6)
+                run = (rr.json() or {}).get("data") or {} if rr.status_code == 200 else {}
+                pr, _l, _m = LINK.request("GET", f"/runs/{rid}/commands?cursor={self.state['cursor']}&pageLength={STREAM_PAGE}", by="stream", timeout_s=8)
+                page = pr.json() if pr.status_code == 200 else {}
+                cmds = page.get("data") or []
+                ended = []
+                for c in cmds:
+                    if c.get("status") in ("succeeded", "failed"):
+                        ended.append(c)
+                    elif not (run.get("status") in TERMINAL and c.get("status") != "running"):
+                        break
+                run_slim = {k: run.get(k) for k in ("id", "status", "createdAt", "protocolId", "labware", "pipettes")}
+                if ended and self._push(run_slim, self.state["cursor"], ended):
+                    self.state["cursor"] += len(ended)
+                done = run.get("status") in TERMINAL and self.state["cursor"] >= int((page.get("meta") or {}).get("totalLength") or 0)
+                if done or (run.get("status") in TERMINAL and not ended and not cmds):
+                    self.finished.add(rid)
+                backoff = 0.2 if len(ended) == STREAM_PAGE else (3.0 if done else 1.0)
+            except Exception as e:
+                self.state["error"] = f"{type(e).__name__}: {e}"[:200]
+                backoff = 5.0
+
+
+STREAM = Streamer()
+
+
+@router.get("/stream", dependencies=[Depends(_key)])
+async def stream_state() -> dict:
+    return dict(STREAM.state)
+
+
+# ---------------------------------------------------------------- the loop driver (optional)
+
+from . import loop_driver as _loop_driver  # noqa: E402
+
+
+class DriverStart(BaseModel):
+    loop_id: str = Field(min_length=1, max_length=64)
+    bims_url: str = Field(min_length=8, max_length=300)
+
+
+class DriverStop(BaseModel):
+    loop_id: Optional[str] = None
+
+
+@router.post("/loop-driver/start", dependencies=[Depends(_key)])
+async def loop_driver_start(body: DriverStart) -> dict:
+    try:
+        return await run_in_threadpool(_loop_driver.DRIVER.start, body.loop_id, body.bims_url)
+    except RuntimeError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+
+
+@router.post("/loop-driver/stop", dependencies=[Depends(_key)])
+async def loop_driver_stop(body: DriverStop) -> dict:
+    return _loop_driver.DRIVER.stop(body.loop_id)
+
+
+@router.get("/loop-driver/status", dependencies=[Depends(_key)])
+async def loop_driver_status() -> dict:
+    return _loop_driver.DRIVER.status()

@@ -178,6 +178,16 @@ export function commandTiming(c: Ot2CommandSummary): { at: Date; endAt: Date | n
 	return { at: new Date(a), endAt: b != null ? new Date(b) : null, durationMs: b != null && b >= a ? b - a : null };
 }
 
+/**
+ * The robot's timestamps put on the arm Pi's (NTP) clock: the Pi measures
+ * offset = robot clock − its own over the cable (2026-11-06), so the true time
+ * is the robot's minus the offset. No offset known = unchanged.
+ */
+export function onPiClock<T extends { at: Date; endAt: Date | null }>(t: T, offsetMs: number | null | undefined): T {
+	if (offsetMs == null || !Number.isFinite(offsetMs) || offsetMs === 0) return t;
+	return { ...t, at: new Date(t.at.getTime() - offsetMs), endAt: t.endAt ? new Date(t.endAt.getTime() - offsetMs) : null };
+}
+
 export interface TimingRow {
 	device: MoveDevice;
 	kind: string;

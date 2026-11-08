@@ -18,16 +18,20 @@
 import { connectDB } from './db/connection';
 import { Ot2MoveSync, RobotArmMove } from './db/models';
 import { getRobot, robotGet } from './opentrons/proxy';
+import { armLinkStatus, robotSlot } from './ot2-arm-link';
 import {
 	commandTiming,
 	isRunEnded,
+	onPiClock,
 	keptParams,
 	loopStepLine,
 	ot2CommandError,
 	ot2CommandLine,
 	pickLoggable,
 	runNames,
-	type LoopStep
+	type LoopStep,
+	type Ot2RowDraft,
+	type Ot2RunNames
 } from '$lib/robot-arm/ot2-move-log';
 import type { Ot2CommandSummary } from '$lib/robot-arm/run-profile';
 
@@ -70,6 +74,63 @@ async function protocolName(robot: any, protocolId: unknown, deadline: number): 
 	}
 }
 
+/** Movement Log rows for ended OT-2 commands; times on the arm Pi's clock when its offset is known. */
+export function ot2Docs(robotRef: { _id: string; name: string }, runId: string, from: string, names: Ot2RunNames, rows: Ot2RowDraft[], clockOffsetMs: number | null) {
+	return rows.flatMap(({ seq, command: c }) => {
+		const raw = commandTiming(c);
+		if (!raw) return [];
+		const t = onPiClock(raw, clockOffsetMs);
+		return [
+			{
+				_id: `ot2-${runId}-${seq}`,
+				device: 'ot2',
+				...t,
+				kind: c.commandType,
+				servo: null,
+				goal: null,
+				delta: null,
+				goals: null,
+				what: null,
+				line: ot2CommandLine(c, names).slice(0, 500),
+				ok: c.status === 'succeeded',
+				error: ot2CommandError(c),
+				from,
+				movedBy: null,
+				robot: robotRef,
+				runId,
+				seq,
+				commandId: c.id ?? null,
+				intent: c.intent ?? null,
+				params: keptParams(c.params),
+				clockOffsetMs: clockOffsetMs ?? null
+			}
+		];
+	});
+}
+
+/** Insert rows; a repeated row (same run + index) is skipped, the rest go in. Returns how many went in. */
+export async function insertOt2Docs(docs: unknown[]): Promise<number> {
+	if (!docs.length) return 0;
+	try {
+		await RobotArmMove.insertMany(docs, { ordered: false });
+		return docs.length;
+	} catch (e: any) {
+		if (e?.code !== 11000 && !e?.writeErrors?.every?.((w: any) => (w.code ?? w.err?.code) === 11000)) throw e;
+		return Number(e?.insertedDocs?.length ?? e?.result?.insertedCount ?? 0);
+	}
+}
+
+/** The robot's clock offset the arm Pi measured over the cable, when the Pi's link is to THIS robot. */
+async function piClockOffset(robot: any): Promise<number | null> {
+	try {
+		const { status } = await armLinkStatus();
+		const off = (status as any)?.clock?.offset_ms;
+		return status && robotSlot(status.robot?.name) === robotSlot(robot?.name) && Number.isFinite(off) ? Number(off) : null;
+	} catch {
+		return null;
+	}
+}
+
 async function syncRun(robot: any, runId: string, deadline: number): Promise<{ logged: number; pending: boolean }> {
 	const state = ((await Ot2MoveSync.findById(runId).lean()) as any) ?? null;
 	if (state?.done) return { logged: 0, pending: false };
@@ -79,6 +140,7 @@ async function syncRun(robot: any, runId: string, deadline: number): Promise<{ l
 	const proto = state?.protocolName ?? (await protocolName(robot, run.protocolId, deadline));
 	const from = proto ? `Run ${proto}` : `Run ${runId.slice(0, 8)}`;
 	const robotRef = { _id: String(robot._id), name: String(robot.name ?? '') };
+	const clockOffsetMs = await piClockOffset(robot);
 
 	let cursor = Number(state?.cursor ?? 0);
 	let logged = 0;
@@ -97,44 +159,7 @@ async function syncRun(robot: any, runId: string, deadline: number): Promise<{ l
 			total = Number(page?.meta?.totalLength ?? cursor + cmds.length);
 			if (!cmds.length) break;
 			const pick = pickLoggable(cmds, cursor, runStatus);
-			const docs = pick.rows.flatMap(({ seq, command: c }) => {
-				const t = commandTiming(c);
-				if (!t) return [];
-				return [
-					{
-						_id: `ot2-${runId}-${seq}`,
-						device: 'ot2',
-						...t,
-						kind: c.commandType,
-						servo: null,
-						goal: null,
-						delta: null,
-						goals: null,
-						what: null,
-						line: ot2CommandLine(c, names).slice(0, 500),
-						ok: c.status === 'succeeded',
-						error: ot2CommandError(c),
-						from,
-						movedBy: null,
-						robot: robotRef,
-						runId,
-						seq,
-						commandId: c.id ?? null,
-						intent: c.intent ?? null,
-						params: keptParams(c.params)
-					}
-				];
-			});
-			if (docs.length) {
-				try {
-					await RobotArmMove.insertMany(docs, { ordered: false });
-					logged += docs.length;
-				} catch (e: any) {
-					// A repeated read: the rows already there are duplicates, the rest went in.
-					if (e?.code !== 11000 && !e?.writeErrors?.every?.((w: any) => (w.code ?? w.err?.code) === 11000)) throw e;
-					logged += Number(e?.insertedDocs?.length ?? e?.result?.insertedCount ?? 0);
-				}
-			}
+			logged += await insertOt2Docs(ot2Docs(robotRef, runId, from, names, pick.rows, clockOffsetMs));
 			cursor = pick.cursor;
 			blocked = pick.blocked;
 		}
