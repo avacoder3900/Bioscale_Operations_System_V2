@@ -26951,3 +26951,31 @@ Also 8b8fbda2: openMaintenanceRun retries once after a robot-server 500 (B07 21:
 TaskGroup', its runs notifier pointed at the deleted run f96b4c4e; same request worked 5 s later).
 Local live server (localhost:5176, bims-live-updater) follows master; Vercel still rate-limited.
 npm run check 13 errors (baseline). vitest server + robot-arm 771 pass; protocol suites ok.
+
+================================================================================
+2026-11-08 — feat/ot2-movement-log — Arm Pi can drive the loop (OFF by default); live OT-2 timing on the Pi's clock
+================================================================================
+Alejandro (away from the robots): build option 1 (the arm Pi reacts on its own) without running anything physical,
+plus the live-timing items. 630e0ebb:
+- Setup "Arm Pi Drives The Loop" (armPiDrives, default false). With it on, startLoop hands the loop to the Pi's
+  loop_driver.py (POST /ot2/loop-driver/start), which runs the Run tab's drive() steps through
+  POST /api/robot-arm/wax-fill/drive (Pi key, maxDuration 120). runDriveStep (src/lib/server/arm-loop-drive.ts)
+  maps only the loop's steps to the same arm-wax-fill.ts functions — every gate unchanged — and refuses loops whose
+  driver is not 'arm-pi'. The Pi sees a play end locally (/sessions/active every 0.1 s), settles, asks the next step
+  at once. Refused step -> failLoop (not if the loop was already stopped); arrival miss -> stops driving only.
+  STOP RUN / Reset stop the Pi driver first. Run tab: watch-only when the Pi drives; Resume hands it back.
+  If the Pi cannot take a loop the browser drives (loop.driverNote says why).
+- Pi measures B07's clock vs its own every 60 s over the cable (best of 3 GET /system/time); /ot2/link clock.
+- Pi streams the current run's ended commands to POST /api/robot-arm/ot2-commands (~1 s behind).
+- BIMS ot2Docs: one row builder for the push and the page-load read; OT-2 times on the Pi's clock (clockOffsetMs).
+NOT installed on arm-pi yet (ot2_link.py + loop_driver.py; needs a robot-arm restart, no motion). Never exercised
+on hardware: first use only with Alejandro present.
+Tests: loop_driver 6 (python), arm-loop-drive 5, onPiClock 1; vitest server + robot-arm 777 pass; check 13 (baseline).
+Vercel builds again (the 24 h build limit reset): production 630e0ebb includes 3be84c7b (cable scan/file/jog/uploads),
+8b8fbda2 (Jog-run open retry) and 09d0bd35 (stage rack offsets).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/vZUfrgQ1WsiHXoZCzJyfroNQ3HJS
+Source: branch master @ commit 630e0ebb (also feat/ot2-movement-log)
+Retrieve this exact code: git checkout 630e0ebb
+What this deployment is for: arm-Pi loop driver (off by default), live OT-2 timing; first build since the rate limit (Vercel status success).
+Local live server (bims-live-updater): its updater stopped with the 11-06 session (last update b130a649); restart
+with Start BIMS Live.cmd if wanted.
