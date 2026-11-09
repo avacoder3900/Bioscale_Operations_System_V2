@@ -27011,3 +27011,26 @@ Also found this session (no code): B07 ran the stage .py from 27f7bd4f until 09:
 tip-rack offset (0, 5, 4) was never sent; Alejandro added 87b22737 (09d0bd35's .py) to the library and deployed it;
 the 09:38 and 09:42 runs carry tiprack_offset_y 5 / z 4.
 Tests: arm-loop-protocol 13 pass (1 new); npm run check 14 errors (baseline), none in these files.
+
+================================================================================
+2026-11-09 — master — Arm wax fill Run tab: Cancel This Run on the "active wax run" blocking line
+================================================================================
+Alejandro: add the ability to cancel on the robot-arm page for the blocking line "Robot already has an active wax
+run (Running). Finish or cancel it first. (Robots page)". Until now the Run tab only showed the text; the ways out
+were the Robots page or Recover (force-reset: aborts the run but leaves its carts as they are). A loop that ends
+through failLoop leaves its wax run Running, and STOP RUN is only offered while the loop is running.
+- resource-locks.ts: findRobotConflict(robotId) -> { kind, runId, status, message }; checkRobotConflict wraps it
+  (same strings, every other caller unchanged).
+- arm-wax-fill.ts: loadArmWaxFill returns blockingRun (the WAX run holding the robot, only when no loop is running:
+  run id, status, operator, start, cart count, whether a loop of this line left it). cancelBlockingRun(user, runId):
+  refuses with a loop running, with a reagent run, or when a different run holds the robot now; then the Robots
+  page's own cancel, stopRunQueue('wax', 'cancel') — the robot run is stopped, carts the robot log shows filled are
+  recorded wax_filled, the rest go back to backed. The loop that left the run open is marked ending / runFinished /
+  final status stopped, as after a halt. Audit arm_wax_fill.blocking_run_cancel.
+- run/+page.server.ts: ?/cancelBlockingRun (manufacturing:write + waxFilling:write).
+- run/+page.svelte: "Cancel This Run" on that blocking line, behind a confirm that names the run, who started it
+  and whether it came from the Robots page. A reagent run holding the robot keeps the text only.
+Commit: these four files went out inside ddbd6bb7 — a concurrent session's commit in the shared worktree picked up
+the uncommitted edits, and that commit's message does not mention them. Nothing else changed in them.
+Tests: none added; not exercised against a live stuck run (no robot / Mongo from this machine).
+npm run check 14 errors (baseline), none in these files.
