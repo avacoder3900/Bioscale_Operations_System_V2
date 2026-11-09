@@ -27062,3 +27062,34 @@ cart-status write.
 Tests: wax-filled-scrap.test.ts 7 pass (the parser and the plan). The DB path is not exercised: no Mongo from this
 machine, and the action has not been run against production by me — Alejandro runs the preview and confirms.
 npm run check 14 errors (baseline), none in these files.
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/H698cD4hrViEuxDX19MXZDVuBSdV
+Source: branch master @ commit cd530967
+Retrieve this exact code: git checkout cd530967
+What this deployment is for: Scrap Wax Filled Except on the Scrap page (Vercel status success 2026-11-09 17:46 UTC).
+
+================================================================================
+2026-11-09 — master — Arm wax fill Setup: Wax Per Gate (µL); the arm line now fills the carriage line's volumes
+================================================================================
+Alejandro asked what volume the arm fills use: today's arm runs sent vol_gate1..4 = 1.6 (the stage .py's defaults —
+the arm line sent none of them) while the 17:12 carriage run sent 1.8 / 2.2 / 2.2 / 2.2 (the wax wizard's
+WAX_PARAM_DEFAULTS). He asked for a volume setting in Setup and for the arm fill to match the carriage.
+- robot-arm/gate-volumes.ts (new, pure): the four gates (g1..g4 -> vol_gate1..4), GATE_VOLUME_DEFAULTS 1.8 / 2.2 /
+  2.2 / 2.2 (the carriage's; a row is 8.4 µL, inside the 8.5 µL one p20 aspiration holds over the 11.5 µL remainder),
+  the protocol's 0.1-20 µL range, gateVolumesFrom (a settings document saved before this reads as the defaults),
+  parseGateVolumes (to 0.01 µL, names the gate it refuses), rowTotalUl, tripsPerRow (the protocol's plan_batches for
+  one row: gates 4 -> 1, a new trip when the next hole does not fit).
+- arm-wax-fill-settings.ts: gateVolumes { g1, g2, g3, g4 }, defaults as above.
+- arm-wax-fill.ts: SettingsView.gateVolumes; saveSetup takes the four boxes (left out = the saved volumes stay),
+  audits them with the before values; loopRunForm sends param_vol_gate1..4 on every loop, except to the p300 rehearsal
+  (it keeps its own air volumes). ProtocolView gains declaresGateVolumes and aspirateRemainder (the schema default;
+  the arm line sends no remainder). A gate larger than one aspiration holds (20 - remainder) would stop the protocol
+  at its first batch (plan_batches raises), so saveSetup refuses it and readiness blocks the start with the gate
+  named. Readiness notes print the volumes, the row total and the trips per row when a row no longer fits one
+  aspiration. Stage Calibration's Dry Fill All Holes plans with the same volumes a loop sends.
+- run/+page.server.ts, run/+page.svelte: Setup's "Wax Per Gate (µL)" fieldset, Gate 1..4.
+- change-from-audit.ts: setup.gate_volumes in the Change Log ("1.6 / 1.6 / 1.6 / 1.6 µL -> 1.8 / 2.2 / 2.2 / 2.2 µL").
+Effect on deploy: no one has to save Setup — the next arm loop sends 1.8 / 2.2 / 2.2 / 2.2 instead of running on
+1.6 each. Dispense depth is untouched (the arm line teaches it per robot on Stage Calibration; the carriage run
+used -1, the arm runs 0).
+Tests: gate-volumes.test.ts 8 pass (new), change-from-audit 9 pass (1 new); src/lib/robot-arm + src/lib/server/arm*
+310 pass. Not run on a robot. npm run check 14 errors (baseline), none in these files.

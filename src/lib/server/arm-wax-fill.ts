@@ -107,6 +107,7 @@ import {
 } from '$lib/robot-arm/stage-geometry';
 import { CAL_Z_LIMITS } from '$lib/server/services/deck-calibration/tip-calibrator';
 import { DRY_FILL_TUBE, planDryFill, type DryFillPlan } from '$lib/robot-arm/dry-fill-plan';
+import { GATES, MAX_PER_ASPIRATION_UL, gateVolumesFrom, gateVolumesText, parseGateVolumes, rowTotalUl, tripsPerRow, type GateKey, type GateVolumes } from '$lib/robot-arm/gate-volumes';
 import { calibrationRtpValues } from '$lib/server/opentrons/calibration-rtps';
 import { logChangesFromAudit } from '$lib/server/robot-arm-change-log';
 import { AUDIT_CHANGE_ACTIONS } from '$lib/robot-arm/change-from-audit';
@@ -261,6 +262,8 @@ export interface SettingsView {
 	testMode: boolean;
 	/** Which channels (rows of four holes) the stage fill does: C = row X, B = row W, A = row V. */
 	channels: Record<ChannelKey, boolean>;
+	/** Wax per gate, µL, sent as vol_gate1…4 (2026-11-09; defaults are the carriage line's). */
+	gateVolumes: GateVolumes;
 	/** The withdraw of a cart and the grab of the next play as ONE arm path. */
 	chainGrab: boolean;
 	/** Robot calls and the loop's instructions go through the arm Pi's cable link when it is up (2026-11-06). */
@@ -292,6 +295,7 @@ function settingsView(d: any): SettingsView {
 		testMode: !!d?.testMode,
 		// Default channel A only (Alejandro, 2026-11-04): C and B are on only when saved so.
 		channels: { c: d?.channels?.c === true, b: d?.channels?.b === true, a: d?.channels?.a !== false },
+		gateVolumes: gateVolumesFrom(d?.gateVolumes),
 		chainGrab: d?.chainGrab !== false,
 		useArmLink: d?.useArmLink !== false,
 		armPiDrives: d?.armPiDrives === true,
@@ -327,6 +331,8 @@ export async function saveSetup(
 		waxSourceLot: unknown;
 		testMode: boolean;
 		channels?: Record<ChannelKey, boolean>;
+		/** Setup's four volume boxes; left out = the saved volumes stay. */
+		gateVolumes?: Partial<Record<GateKey, unknown>>;
 		chainGrab?: boolean;
 		useArmLink?: boolean;
 		scanPresenceOnly?: boolean;
@@ -340,6 +346,16 @@ export async function saveSetup(
 	if (!robotId) throw new ArmWaxFillError('Pick the OT-2 the arm feeds from the robot menu on the Run card.');
 	const channels: Record<ChannelKey, boolean> = { c: input.channels?.c === true, b: input.channels?.b === true, a: input.channels?.a !== false };
 	if (!channels.c && !channels.b && !channels.a) throw new ArmWaxFillError('Tick at least one channel (C, B or A) to fill.');
+	let gateVolumes = current.gateVolumes;
+	if (input.gateVolumes) {
+		try {
+			gateVolumes = parseGateVolumes(input.gateVolumes);
+		} catch (e) {
+			throw new ArmWaxFillError(e instanceof Error ? e.message : String(e));
+		}
+		const tooBig = gateTooBig(gateVolumes, await protocolFor(robotId).catch(() => null));
+		if (tooBig) throw new ArmWaxFillError(tooBig);
+	}
 	const chainGrab = input.chainGrab !== false;
 	const useArmLink = input.useArmLink !== false;
 	const armPiDrives = input.armPiDrives === true;
@@ -352,7 +368,7 @@ export async function saveSetup(
 	const before = settingsView(await ArmWaxFillSettings.findById('default').lean());
 	await ArmWaxFillSettings.updateOne(
 		{ _id: 'default' },
-		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, chainGrab, useArmLink, scanPresenceOnly: presenceOnly, armPiDrives, updatedBy: opRef(user) } },
+		{ $set: { robotId, cartPosition, waxSourceLot, testMode: !!input.testMode, channels, gateVolumes, chainGrab, useArmLink, scanPresenceOnly: presenceOnly, armPiDrives, updatedBy: opRef(user) } },
 		{ upsert: true }
 	);
 	await audit(user, 'arm_wax_fill.setup', 'arm_wax_fill_settings', 'default', {
@@ -362,6 +378,7 @@ export async function saveSetup(
 		waxSourceLot,
 		testMode: !!input.testMode,
 		channels,
+		gateVolumes,
 		chainGrab,
 		useArmLink,
 		scanPresenceOnly: presenceOnly,
@@ -372,6 +389,7 @@ export async function saveSetup(
 			waxSourceLot: before.waxSourceLot,
 			testMode: before.testMode,
 			channels: before.channels,
+			gateVolumes: before.gateVolumes,
 			chainGrab: before.chainGrab,
 			useArmLink: before.useArmLink,
 			scanPresenceOnly: before.scanPresenceOnly,
@@ -915,6 +933,10 @@ export interface ProtocolView {
 	declaresCartLocation: boolean;
 	/** The protocol declares the channel checkboxes (row_pattern_0/1/2), so Setup's channels are sent to it. */
 	declaresChannels: boolean;
+	/** The protocol declares vol_gate1…4, so Setup's gate volumes are sent to it. */
+	declaresGateVolumes: boolean;
+	/** Its aspirate_remainder default, µL (the arm line sends none, so this is what runs); null when it declares none. */
+	aspirateRemainder: number | null;
 	/** The p300 / air REHEARSAL of the stage fill (declares z_cal_p300): walks every station, dispenses nothing. */
 	rehearsal: boolean;
 	/** The protocol serves a whole loop in one run (declares cartridges + arm_scan_x/y/z — ARM-WAX-LOOP-B §5.3). */
@@ -1084,6 +1106,8 @@ async function protocolFor(robotId: string | null): Promise<ProtocolView | null>
 	const entry = await currentProtocolEntry(robotId, 'wax-filling');
 	if (!entry) return null;
 	const declared = new Set(((entry.parametersSchema ?? []) as any[]).map((p) => p?.variableName));
+	const remainderDefault = ((entry.parametersSchema ?? []) as any[]).find((p) => p?.variableName === 'aspirate_remainder')?.default;
+	const remainder = remainderDefault === null || remainderDefault === undefined ? NaN : Number(remainderDefault);
 	const protocolName = entry.protocolName ?? 'wax-filling';
 	return {
 		opentronsProtocolId: String(entry.opentronsProtocolId),
@@ -1091,8 +1115,24 @@ async function protocolFor(robotId: string | null): Promise<ProtocolView | null>
 		declaresCartLocation: CART_LOCATION_RTPS.every((k) => declared.has(k)),
 		rehearsal: declared.has(REHEARSAL_RTP) || /rehearsal/i.test(protocolName),
 		declaresLoop: declared.has('cartridges') && ['arm_scan_x', 'arm_scan_y', 'arm_scan_z'].every((k) => declared.has(k)),
-		declaresChannels: CHANNELS.every((c) => declared.has(c.rtp))
+		declaresChannels: CHANNELS.every((c) => declared.has(c.rtp)),
+		declaresGateVolumes: GATES.every((g) => declared.has(g.rtp)),
+		aspirateRemainder: Number.isFinite(remainder) ? remainder : null
 	};
+}
+
+/**
+ * A gate no single aspiration can hold stops the stage protocol at its first
+ * batch (plan_batches raises). The sentence to show, or null when every gate
+ * fits — or when the protocol's remainder is not known, or it is the rehearsal
+ * (which keeps its own air volumes).
+ */
+function gateTooBig(v: GateVolumes, protocol: Pick<ProtocolView, 'aspirateRemainder' | 'rehearsal'> | null): string | null {
+	if (!protocol || protocol.rehearsal || protocol.aspirateRemainder === null) return null;
+	const usable = Math.round((MAX_PER_ASPIRATION_UL - protocol.aspirateRemainder) * 100) / 100;
+	const big = GATES.find((g) => v[g.key] > usable + 1e-9);
+	if (!big) return null;
+	return `${big.label} is ${v[big.key]} µL, more than the ${usable} µL one aspiration holds (${MAX_PER_ASPIRATION_UL} µL pipette less the ${protocol.aspirateRemainder} µL remainder). Lower it in Setup.`;
 }
 
 /**
@@ -1371,6 +1411,16 @@ export function readiness(
 			notes.push(`Channels ${on.map((c) => c.label).join(', ')}: ${on.length} row${on.length === 1 ? '' : 's'} of 4 holes per cart${on.length < 3 ? ` — the other row${on.length === 2 ? '' : 's'} skipped, ${on.length} tube trip${on.length === 1 ? '' : 's'} instead of 3` : ''}.`);
 		else if (protocol && on.length < 3)
 			notes.push(`Channels: the protocol on the robot predates the channel checkboxes and fills all 3 rows; add the current stage .py to the library and deploy it to fill only ${on.map((c) => c.label).join(', ')}.`);
+		if (protocol && !protocol.rehearsal) {
+			const tooBig = gateTooBig(settings.gateVolumes, protocol);
+			if (tooBig) blocking.push(`Setup: ${tooBig}`);
+			else if (protocol.declaresGateVolumes) {
+				const trips = protocol.aspirateRemainder === null ? 1 : tripsPerRow(settings.gateVolumes, protocol.aspirateRemainder);
+				notes.push(
+					`Wax per gate (1 to 4): ${gateVolumesText(settings.gateVolumes)} µL — ${rowTotalUl(settings.gateVolumes)} µL per row${trips > 1 ? `, more than one aspiration holds: ${trips} tube trips per row` : ''}.`
+				);
+			} else notes.push('Wax per gate: the protocol on the robot does not declare the gate volumes and fills with its own.');
+		}
 		notes.push(
 			'The arm\'s FIRST grab waits for the OT-2 to report a successful tip calibration (ARM CALIBRATED). A probe that finds no tip pauses the run (NO TIP DETECTED) and the arm stays where it is until a tip is on and calibrated.'
 		);
@@ -1541,7 +1591,9 @@ async function dryFillPlanFor(robotId: string, protocol: ProtocolView | null, ca
 			return Number.isFinite(v) ? v : null;
 		};
 		const injected = await calibrationRtpValues(robotId, 'wax-filling', schema);
-		const gates = [def('vol_gate1'), def('vol_gate2'), def('vol_gate3'), def('vol_gate4')];
+		// The volumes a loop sends (Setup's); the .py's own when it declares none to send.
+		const sent = protocol.declaresGateVolumes ? (await getSettings()).gateVolumes : null;
+		const gates = sent ? GATES.map((g) => sent[g.key]) : [def('vol_gate1'), def('vol_gate2'), def('vol_gate3'), def('vol_gate4')];
 		const remainder = def('aspirate_remainder');
 		const clearance = typeof injected.min_tip_clearance === 'number' ? injected.min_tip_clearance : def('min_tip_clearance');
 		if (gates.some((g) => g === null) || remainder === null || clearance === null) {
@@ -2827,6 +2879,8 @@ function loopRunForm(
 	form.set('param_tiprack_refilled', tiprackRefilled ? 'true' : 'false');
 	// Which rows to fill (the carriage line's checkboxes, declared by the current stage .py).
 	for (const c of CHANNELS) form.set(`param_${c.rtp}`, settings.channels[c.key] ? 'true' : 'false');
+	// Wax per gate (Setup, 2026-11-09). The p300 rehearsal keeps its own air volumes.
+	if (!protocol.rehearsal) for (const g of GATES) form.set(`param_${g.rtp}`, String(settings.gateVolumes[g.key]));
 	form.set('runId', waxRunId);
 	form.set('opentronsProtocolId', protocol.opentronsProtocolId);
 	const cl = calibration.cartLocation!;

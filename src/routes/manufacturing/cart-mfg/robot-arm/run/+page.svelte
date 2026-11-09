@@ -104,6 +104,13 @@
 	const currentCycle = $derived<LoopCycleView | null>(loop ? (loop.cycles[loop.cycles.length - 1] ?? null) : null);
 	const robotId = $derived(data.settings.robotId);
 	const anim = $derived(data.settings);
+	// Setup's Wax Per Gate boxes (sent to the stage protocol as vol_gate1…4).
+	const gateBoxes = $derived([
+		{ name: 'volGate1', label: 'Gate 1', value: data.settings.gateVolumes.g1 },
+		{ name: 'volGate2', label: 'Gate 2', value: data.settings.gateVolumes.g2 },
+		{ name: 'volGate3', label: 'Gate 3', value: data.settings.gateVolumes.g3 },
+		{ name: 'volGate4', label: 'Gate 4', value: data.settings.gateVolumes.g4 }
+	]);
 	// The robot runs the stage protocol (Wax_Filling_GEN7_ArmStage.py: fills the taught,
 	// tip-neutral cart location, loads no deck) rather than the legacy carriage protocol.
 	const stage = $derived(!!data.protocol?.declaresCartLocation);
@@ -1408,6 +1415,21 @@
 					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot fills all three rows; deploy the current stage .py.</span>{/if}
 					</p>
+				</fieldset>
+				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
+					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Wax Per Gate (µL)</legend>
+					<div class="grid grid-cols-4 gap-2">
+						{#each gateBoxes as box (box.name)}
+							<label class="block">
+								<span style="color: var(--color-tron-text-secondary)">{box.label}</span>
+								<input name={box.name} type="number" min="0.1" max="20" step="0.01" value={box.value} required
+									class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
+							</label>
+						{/each}
+					</div>
+					{#if data.protocol && !data.protocol.rehearsal && !data.protocol.declaresGateVolumes}
+						<p class="mt-1 text-[11px] text-amber-300">The protocol on the robot fills with its own volumes; deploy the current stage .py.</p>
+					{/if}
 				</fieldset>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
 					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />

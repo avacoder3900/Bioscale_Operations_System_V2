@@ -107,6 +107,8 @@ export const actions: Actions = {
 				waxSourceLot: field(d, 'waxSourceLot'),
 				testMode: checked(d, 'testMode'),
 				channels: { c: checked(d, 'channelC'), b: checked(d, 'channelB'), a: checked(d, 'channelA') },
+				// A form without the volume boxes leaves the saved volumes as they are.
+				gateVolumes: d.has('volGate1') ? { g1: field(d, 'volGate1'), g2: field(d, 'volGate2'), g3: field(d, 'volGate3'), g4: field(d, 'volGate4') } : undefined,
 				chainGrab: checked(d, 'chainGrab'),
 				useArmLink: checked(d, 'useArmLink'),
 				scanPresenceOnly: checked(d, 'scanPresenceOnly'),

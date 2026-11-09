@@ -54,6 +54,17 @@ const armWaxFillSettingsSchema = new Schema(
 			b: { type: Boolean, default: false },
 			a: { type: Boolean, default: true }
 		},
+		/**
+		 * Wax per gate, µL (2026-11-09), sent to the stage protocol as vol_gate1…4.
+		 * Defaults are the carriage line's ($lib/robot-arm/gate-volumes); a document
+		 * saved before this reads as those defaults.
+		 */
+		gateVolumes: {
+			g1: { type: Number, default: 1.8 },
+			g2: { type: Number, default: 2.2 },
+			g3: { type: Number, default: 2.2 },
+			g4: { type: Number, default: 2.2 }
+		},
 		/** Between carts the withdraw and the next grab play as ONE arm path (one play, no tail between them). */
 		chainGrab: { type: Boolean, default: true },
 		/**

@@ -23,6 +23,19 @@ describe('changesFromAudit', () => {
 		});
 		expect(rows).toEqual(['setup.test_mode On -> Off', 'setup.channels A -> C']);
 	});
+	it('Setup: the wax per gate, gates 1 to 4', () => {
+		const rows = lines({
+			_id: 'a',
+			action: 'arm_wax_fill.setup',
+			tableName: 'arm_wax_fill_settings',
+			recordId: 'default',
+			newData: {
+				gateVolumes: { g1: 1.8, g2: 2.2, g3: 2.2, g4: 2.2 },
+				before: { gateVolumes: { g1: 1.6, g2: 1.6, g3: 1.6, g4: 1.6 } }
+			}
+		});
+		expect(rows).toEqual(['setup.gate_volumes 1.6 / 1.6 / 1.6 / 1.6 µL -> 1.8 / 2.2 / 2.2 / 2.2 µL']);
+	});
 	it('robot switch, by slot', () => {
 		expect(lines({ _id: 'a', action: 'arm_wax_fill.switch_robot', tableName: 't', recordId: 'default', newData: { robotId: 'r7', before: { robotId: 'r14' } } })).toEqual([
 			'setup.robot B14 -> B07'

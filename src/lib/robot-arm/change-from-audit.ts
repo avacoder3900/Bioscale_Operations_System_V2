@@ -79,6 +79,13 @@ const channelsText = (v: unknown): string | null => {
 	return (['c', 'b', 'a'] as const).filter((k) => o[k] === true).map((k) => k.toUpperCase()).join(', ') || 'None';
 };
 
+/** "1.8 / 2.2 / 2.2 / 2.2 µL" (gates 1 to 4) from { g1, g2, g3, g4 }. */
+const gateVolumesShow = (v: unknown): string | null => {
+	const o = obj(v);
+	if (!o) return null;
+	return `${(['g1', 'g2', 'g3', 'g4'] as const).map((k) => r2(o[k]) ?? '?').join(' / ')} µL`;
+};
+
 const host = (url: unknown): string | null => {
 	if (typeof url !== 'string' || !url) return null;
 	try {
@@ -97,6 +104,7 @@ const SETUP_FIELDS: { field: string; key: string; hardware: 'ot2' | 'stage' | 'n
 	{ field: 'waxSourceLot', key: 'setup.wax_source_lot', hardware: 'stage' },
 	{ field: 'testMode', key: 'setup.test_mode', hardware: 'stage' },
 	{ field: 'channels', key: 'setup.channels', hardware: 'stage', show: channelsText },
+	{ field: 'gateVolumes', key: 'setup.gate_volumes', hardware: 'ot2', show: gateVolumesShow },
 	{ field: 'chainGrab', key: 'setup.chain_grab', hardware: 'gripper' },
 	{ field: 'grabDuringProbe', key: 'setup.grab_during_probe', hardware: 'gripper' },
 	{ field: 'useArmLink', key: 'setup.use_arm_link', hardware: 'network' },
