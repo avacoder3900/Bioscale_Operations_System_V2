@@ -27093,3 +27093,7 @@ Effect on deploy: no one has to save Setup — the next arm loop sends 1.8 / 2.2
 used -1, the arm runs 0).
 Tests: gate-volumes.test.ts 8 pass (new), change-from-audit 9 pass (1 new); src/lib/robot-arm + src/lib/server/arm*
 310 pass. Not run on a robot. npm run check 14 errors (baseline), none in these files.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/7SJp9cJN8X78KU59XAjeGYxoTJqP
+Source: branch master @ commit 585ec45f
+Retrieve this exact code: git checkout 585ec45f
+What this deployment is for: Wax Per Gate in the arm wax fill Setup, carriage volumes by default (Vercel status success 2026-11-09 18:11 UTC).
