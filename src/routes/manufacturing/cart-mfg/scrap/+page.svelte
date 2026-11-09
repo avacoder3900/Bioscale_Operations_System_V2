@@ -11,11 +11,18 @@
 		operatorUsername: string;
 		removedAt: string;
 	}
+	interface WaxExceptPreview {
+		keep: string[];
+		scrap: string[];
+		notWaxFilled: Array<{ id: string; status: string }>;
+		checkedOut: number;
+	}
 	interface Props {
 		data: { removalHistory: RemovalHistoryEntry[] };
 		form: {
 			removeWaxStored?: { error?: string; success?: boolean; removalId?: string; count?: number };
 			removeBackingLot?: { error?: string; success?: boolean; removalId?: string; lotBarcode?: string; count?: number; remaining?: number; consumed?: boolean };
+			waxExcept?: { error?: string; preview?: WaxExceptPreview; success?: boolean; scrapped?: number; skipped?: number };
 		} | null;
 	}
 	let { data, form }: Props = $props();
@@ -34,6 +41,17 @@
 	let blReason = $state('');
 	let blSubmitting = $state(false);
 	let blLotInputEl: HTMLInputElement | undefined = $state();
+
+	// Wax-filled reconciliation: scrap every wax-filled cart except the listed ones
+	let weKeep = $state('');
+	let weReason = $state('');
+	let weSubmitting = $state(false);
+	let wePreview = $state<WaxExceptPreview | null>(null);
+	// The list the preview was made from: editing it afterwards asks for a new preview.
+	let wePreviewedKeep = $state('');
+	let wePreviewCurrent = $derived(!!wePreview && wePreviewedKeep === weKeep);
+	// Sent comma-joined: a hidden input is no place for line breaks.
+	let weKeepCsv = $derived(weKeep.split(/[\s,;]+/).filter(Boolean).join(','));
 
 	function addScan() {
 		const v = scanInput.trim();
@@ -91,6 +109,32 @@
 				blReason = '';
 				await invalidateAll();
 				blLotInputEl?.focus();
+			}
+		};
+	}
+
+	function submitWaxExceptPreview() {
+		const keepAtSubmit = weKeep;
+		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => {
+			weSubmitting = true;
+			await update({ reset: false });
+			weSubmitting = false;
+			wePreview = form?.waxExcept?.preview ?? null;
+			wePreviewedKeep = keepAtSubmit;
+		};
+	}
+
+	function submitWaxExceptScrap() {
+		return async ({ update }: { update: (o?: { reset?: boolean }) => Promise<void> }) => {
+			weSubmitting = true;
+			await update({ reset: false });
+			weSubmitting = false;
+			if (form?.waxExcept?.success) {
+				weKeep = '';
+				weReason = '';
+				wePreview = null;
+				wePreviewedKeep = '';
+				await invalidateAll();
 			}
 		};
 	}
@@ -329,6 +373,108 @@
 				</button>
 			</div>
 		</form>
+	</div>
+
+	<!-- Wax-filled reconciliation: every wax-filled cart NOT listed is scrapped. Preview first; the
+	     scrap only touches carts the preview listed. -->
+	<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-6">
+		<h2 class="mb-4 text-xl font-semibold text-[var(--color-tron-text)]">Scrap Wax Filled Except</h2>
+
+		<div class="grid gap-4 lg:grid-cols-[1fr_1fr]">
+			<div class="flex flex-col gap-3">
+				<div>
+					<label for="wax-except-keep" class="block text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wider">
+						Cartridges To Keep
+					</label>
+					<textarea
+						id="wax-except-keep"
+						bind:value={weKeep}
+						rows="8"
+						placeholder="Cartridge IDs, One Per Line"
+						class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 font-mono text-xs text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+						autocomplete="off"
+						spellcheck="false"
+					></textarea>
+				</div>
+				<form method="POST" action="?/previewWaxFilledScrap" use:enhance={submitWaxExceptPreview}>
+					<input type="hidden" name="keepIds" value={weKeepCsv} />
+					<button
+						type="submit"
+						disabled={weSubmitting || !weKeep.trim()}
+						class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-4 py-2 text-sm font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 disabled:opacity-40 disabled:cursor-not-allowed"
+					>
+						Preview
+					</button>
+				</form>
+			</div>
+
+			<div class="flex flex-col gap-3">
+				{#if form?.waxExcept?.error}
+					<div class="rounded border border-[var(--color-tron-red)]/50 bg-red-900/20 px-3 py-2 text-xs text-red-300">
+						{form.waxExcept.error}
+					</div>
+				{:else if form?.waxExcept?.success}
+					<div class="rounded border border-emerald-500/50 bg-emerald-900/20 px-3 py-2 text-xs text-emerald-300">
+						Scrapped {form.waxExcept.scrapped} cartridge{form.waxExcept.scrapped === 1 ? '' : 's'}.
+						{#if form.waxExcept.skipped}{form.waxExcept.skipped} skipped: no longer wax filled.{/if}
+					</div>
+				{/if}
+
+				{#if wePreview && wePreviewCurrent}
+					<div class="flex flex-wrap gap-2 text-xs">
+						<span class="rounded border border-emerald-500/40 bg-emerald-900/20 px-2 py-1 text-emerald-300">Keep {wePreview.keep.length}</span>
+						<span class="rounded border border-[var(--color-tron-red)]/50 bg-red-900/20 px-2 py-1 text-red-300">Scrap {wePreview.scrap.length}</span>
+						{#if wePreview.checkedOut > 0}
+							<span class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-[var(--color-tron-text-secondary)]">Checked Out {wePreview.checkedOut}</span>
+						{/if}
+					</div>
+
+					{#if wePreview.notWaxFilled.length > 0}
+						<div class="rounded border border-amber-500/40 bg-amber-900/20 px-3 py-2 text-xs text-amber-300">
+							<div class="font-medium">⚠ Listed But Not Wax Filled</div>
+							{#each wePreview.notWaxFilled as c (c.id)}
+								<div class="font-mono">{c.id} · {c.status}</div>
+							{/each}
+						</div>
+					{/if}
+
+					{#if wePreview.scrap.length > 0}
+						<div>
+							<span class="text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wider">To Scrap</span>
+							<div class="mt-1 flex max-h-48 flex-wrap gap-1 overflow-y-auto rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] p-2">
+								{#each wePreview.scrap as cid (cid)}
+									<span class="rounded border border-[var(--color-tron-border)] px-2 py-0.5 font-mono text-[11px] text-[var(--color-tron-text-secondary)]">{cid}</span>
+								{/each}
+							</div>
+						</div>
+
+						<form method="POST" action="?/scrapWaxFilledExcept" use:enhance={submitWaxExceptScrap} class="flex flex-col gap-3">
+							<input type="hidden" name="keepIds" value={weKeepCsv} />
+							<input type="hidden" name="scrapIds" value={JSON.stringify(wePreview.scrap)} />
+							<div>
+								<label for="wax-except-reason" class="block text-xs font-medium text-[var(--color-tron-text-secondary)] uppercase tracking-wider">
+									Reason
+								</label>
+								<textarea
+									id="wax-except-reason"
+									name="reason"
+									bind:value={weReason}
+									rows="2"
+									class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-3 py-2 text-sm text-[var(--color-tron-text)] focus:border-[var(--color-tron-cyan)] focus:outline-none"
+								></textarea>
+							</div>
+							<button
+								type="submit"
+								disabled={weSubmitting || !weReason.trim()}
+								class="rounded border border-[var(--color-tron-red)]/50 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-300 hover:bg-red-900/40 disabled:opacity-40 disabled:cursor-not-allowed"
+							>
+								{weSubmitting ? 'Scrapping…' : `Scrap ${wePreview.scrap.length} Cartridge${wePreview.scrap.length === 1 ? '' : 's'}`}
+							</button>
+						</form>
+					{/if}
+				{/if}
+			</div>
+		</div>
 	</div>
 
 	<div>

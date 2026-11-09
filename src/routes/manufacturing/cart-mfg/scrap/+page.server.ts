@@ -3,6 +3,7 @@ import {
 	connectDB, CartridgeRecord, ManualCartridgeRemoval, BackingLot, AuditLog, generateId
 } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { parseCartIdList, previewWaxFilledScrap, scrapWaxFilledExcept } from '$lib/server/services/wax-filled-scrap';
 import type { PageServerLoad, Actions } from './$types';
 
 export const config = { maxDuration: 60 };
@@ -267,5 +268,64 @@ export const actions: Actions = {
 				consumed: remainingAfter <= 0
 			}
 		};
+	},
+
+	/**
+	 * Wax-filled reconciliation, step 1: list what scrapping every wax_filled
+	 * cart EXCEPT the named ones would do. Writes nothing.
+	 */
+	previewWaxFilledScrap: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:release');
+		await connectDB();
+
+		const data = await request.formData();
+		const keepIds = parseCartIdList(data.get('keepIds'));
+		if (keepIds.length === 0) {
+			return fail(400, { waxExcept: { error: 'List the cartridges to keep' } });
+		}
+
+		const preview = await previewWaxFilledScrap(keepIds);
+		// A list that matches nothing is a wrong paste, not a request to scrap the whole stage.
+		if (preview.keep.length === 0) {
+			return fail(400, { waxExcept: { error: 'None of the listed cartridges is wax filled' } });
+		}
+		return { waxExcept: { preview } };
+	},
+
+	/**
+	 * Step 2: scrap the carts the preview listed. Only carts that were in that
+	 * list and are still wax_filled are touched, so a cart filled since the
+	 * preview stays.
+	 */
+	scrapWaxFilledExcept: async ({ request, locals }) => {
+		if (!locals.user) redirect(302, '/login');
+		requirePermission(locals.user, 'manufacturing:release');
+		await connectDB();
+
+		const data = await request.formData();
+		const keepIds = parseCartIdList(data.get('keepIds'));
+		const reason = ((data.get('reason') as string) ?? '').trim();
+		let scrapIds: string[] = [];
+		try { scrapIds = JSON.parse((data.get('scrapIds') as string) ?? ''); } catch { /* ignore */ }
+		scrapIds = Array.isArray(scrapIds) ? scrapIds.map((s) => String(s).trim()).filter(Boolean) : [];
+
+		if (keepIds.length === 0) {
+			return fail(400, { waxExcept: { error: 'List the cartridges to keep' } });
+		}
+		if (scrapIds.length === 0) {
+			return fail(400, { waxExcept: { error: 'Preview first' } });
+		}
+		if (!reason) {
+			return fail(400, { waxExcept: { error: 'Reason is required' } });
+		}
+
+		const r = await scrapWaxFilledExcept({
+			keepIds,
+			scrapIds,
+			reason,
+			user: { _id: locals.user._id, username: locals.user.username }
+		});
+		return { waxExcept: { success: true, scrapped: r.scrapped.length, skipped: r.skipped.length } };
 	}
 };

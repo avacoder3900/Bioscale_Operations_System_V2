@@ -27038,3 +27038,27 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit ddbd6bb7
 Retrieve this exact code: git checkout ddbd6bb7
 What this deployment is for: the torn pause read fix above (Vercel status success 2026-11-09 15:53 UTC).
+
+================================================================================
+2026-11-09 — master — Scrap page: Scrap Wax Filled Except (bulk reconciliation of the wax-filled stage)
+================================================================================
+Alejandro: the wax-filled count should be only the 24 carts of today's carriage run (wax run XV2mLhxdJm4WFWHW_p11l,
+finished 17:24 UTC); every other cart still at wax_filled goes to scrapped. Nothing in BIMS did that in bulk: the
+QA/QC page scraps one cart at a time, the Scrap page's checkout does not change status, and the BIMS connector has no
+cart-status write.
+- services/wax-filled-scrap.ts (new): parseCartIdList, planWaxFilledScrap (pure: keep / scrap / listed-but-not-wax-
+  filled / checked-out count), previewWaxFilledScrap, scrapWaxFilledExcept. A scrapped cart gets what the QA/QC scrap
+  gives it: status scrapped + voidedAt + voidReason "Scrapped: other — <reason>", a scrap InventoryTransaction
+  (category other) and an AuditLog UPDATE row (wax_filled -> scrapped). Only status wax_filled is in scope (not
+  wax_ready); checked-out carts are left alone (already out of every count). Writes run 5 carts at a time, each
+  guarded on status wax_filled, so a cart reagent filling took in the meantime is skipped and reported.
+- scrap/+page.server.ts: ?/previewWaxFilledScrap (writes nothing; refuses an empty list and a list in which no cart
+  is wax filled, so a wrong paste cannot scrap the whole stage) and ?/scrapWaxFilledExcept (reason required; acts only
+  on carts the preview listed that are still wax filled, so a cart filled after the preview stays). Both
+  manufacturing:release, like the other scrap dispositions.
+- scrap/+page.svelte: "Scrap Wax Filled Except" panel: Cartridges To Keep, Preview, then Keep / Scrap / Checked Out
+  counts, the listed-but-not-wax-filled warning, the To Scrap list, Reason and the Scrap N Cartridges button. Editing
+  the keep list after a preview hides it until the next preview.
+Tests: wax-filled-scrap.test.ts 7 pass (the parser and the plan). The DB path is not exercised: no Mongo from this
+machine, and the action has not been run against production by me — Alejandro runs the preview and confirms.
+npm run check 14 errors (baseline), none in these files.
