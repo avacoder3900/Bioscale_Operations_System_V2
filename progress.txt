@@ -27034,3 +27034,7 @@ Commit: these four files went out inside ddbd6bb7 — a concurrent session's com
 the uncommitted edits, and that commit's message does not mention them. Nothing else changed in them.
 Tests: none added; not exercised against a live stuck run (no robot / Mongo from this machine).
 npm run check 14 errors (baseline), none in these files.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/GFkWwFwdREZPLGQH4efrM9HUydYV
+Source: branch master @ commit ddbd6bb7
+Retrieve this exact code: git checkout ddbd6bb7
+What this deployment is for: the torn pause read fix above (Vercel status success 2026-11-09 15:53 UTC).
