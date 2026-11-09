@@ -6,7 +6,16 @@ import {
 	OpentronsRobot, Ot2BridgeCommand
 } from '$lib/server/db';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
-import { ReagentSetLot, FillLot, fillLotNumber, NON_CALIBRATED_REAGENT_LOT, NON_CALIBRATED_LOT_LABEL } from '$lib/server/db';
+import { ReagentSetLot, FillLot, findOrOpenDayFillLot, NON_CALIBRATED_REAGENT_LOT, NON_CALIBRATED_LOT_LABEL } from '$lib/server/db';
+
+/** The day's fill lot for a reagent lot id (or 'non-calibrated' + the run's assay), opened on the first deck. */
+async function openDayFillLot(reagentLotId: string, assayId: string, name: string, actor: string): Promise<{ fillLot: Record<string, any>; reused: boolean } | { error: string }> {
+	if (!reagentLotId) return { error: 'Pick a reagent lot, or "Non-calibrated reagent lot chemicals"' };
+	if (reagentLotId === NON_CALIBRATED_REAGENT_LOT) return findOrOpenDayFillLot({ nonCalibrated: true, assayId }, { name, actor });
+	const reagentLot = await ReagentSetLot.findById(reagentLotId).lean() as any;
+	if (!reagentLot || reagentLot.status !== 'active') return { error: 'Reagent lot not found or retired' };
+	return findOrOpenDayFillLot({ reagentLotId: String(reagentLot._id), reagentLotNumber: reagentLot.lotNumber, assayId: reagentLot.assayId ?? '' }, { name, actor });
+}
 
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
@@ -163,8 +172,10 @@ export const actions: Actions = {
 
 	/**
 	 * Record the fill-lot decision for this run (replaces the old "reagent preparation" tube step,
-	 * retired 2026-10-13 — per-well tube records were vestigial; the fill lot carries the reagent
-	 * lineage). The DEFAULT is no fill lot (empty fillLotId): tying a run to a fill lot is opt-in.
+	 * retired 2026-10-13). The DEFAULT is no fill lot: tying a run to a fill lot is opt-in.
+	 * A fill lot is one reagent lot on one (Central) day (2026-11-09): the operator picks the REAGENT LOT
+	 * (`reagentLotId`, or 'non-calibrated') and the run joins that day's fill lot, opening it on the first
+	 * deck. `fillLotId` (an explicit open lot) is still accepted for callers that pick a lot directly.
 	 * fillLotSelectedAt marks the step as done either way.
 	 */
 	selectFillLot: async ({ request, locals }) => {
@@ -173,8 +184,15 @@ export const actions: Actions = {
 
 		const data = await request.formData();
 		const runId = data.get('runId') as string;
-		const fillLotId = ((data.get('fillLotId') as string | null) ?? '').trim();
+		const reagentLotId = ((data.get('reagentLotId') as string | null) ?? '').trim();
+		let fillLotId = ((data.get('fillLotId') as string | null) ?? '').trim();
 		if (!runId) return fail(400, { error: 'Missing runId' });
+		if (reagentLotId) {
+			const run = await ReagentBatchRecord.findById(runId).select('assayType').lean() as any;
+			const opened = await openDayFillLot(reagentLotId, run?.assayType?._id ? String(run.assayType._id) : '', '', locals.user.username ?? String(locals.user._id));
+			if ('error' in opened) return fail(400, { error: opened.error });
+			fillLotId = String(opened.fillLot._id);
+		}
 		if (!fillLotId) {
 			await ReagentBatchRecord.findByIdAndUpdate(runId, {
 				$set: { status: 'Loading', fillLotId: '', fillLotNumber: '', reagentLotId: '', reagentLotNumber: '', fillLotSelectedAt: new Date() }
@@ -198,13 +216,14 @@ export const actions: Actions = {
 			}
 		});
 
-		return { success: true };
+		return { success: true, fillLot: { _id: fillLotId, fillLotNumber: fillLot.fillLotNumber, decksSoFar: (fillLot.runIds ?? []).length } };
 	},
 
 	/**
-	 * DOMAIN-32: open a fill lot from the fill screen — a reagent lot plus a name (FL-YYYYMMDD-NNN).
-	 * reagentLotId 'non-calibrated' opens one with NO reagent lot ("non-calibrated reagent lot
-	 * chemicals"): the normal case for fills done before a calibrated reagent lot exists.
+	 * DOMAIN-32: the day's fill lot for a reagent lot (FL-YYYYMMDD-NNN), opened if this is the first deck.
+	 * reagentLotId 'non-calibrated' means NO reagent lot ("non-calibrated reagent lot chemicals"): the
+	 * normal case for fills done before a calibrated reagent lot exists. Never opens a second lot for the
+	 * same reagent lot on the same day — that returns the existing one (reused: true).
 	 */
 	createFillLot: async ({ request, locals }) => {
 		if (!locals.user) redirect(302, '/login');
@@ -212,30 +231,10 @@ export const actions: Actions = {
 		const data = await request.formData();
 		const reagentLotId = ((data.get('reagentLotId') as string | null) ?? '').trim();
 		const name = ((data.get('name') as string | null) ?? '').trim().slice(0, 200);
-		if (!reagentLotId) return fail(400, { error: 'Pick a reagent lot, or "Non-calibrated reagent lot chemicals"' });
-		const nonCalibrated = reagentLotId === NON_CALIBRATED_REAGENT_LOT;
-		const reagentLot = nonCalibrated ? null : await ReagentSetLot.findById(reagentLotId).lean() as any;
-		if (!nonCalibrated && (!reagentLot || reagentLot.status !== 'active')) return fail(400, { error: 'Reagent lot not found or retired' });
-		const now = new Date();
-		const prefix = fillLotNumber(now, 0).slice(0, -3);
-		const todays = await FillLot.countDocuments({ fillLotNumber: { $regex: `^${prefix}` } });
-		const doc = {
-			_id: generateId(),
-			fillLotNumber: fillLotNumber(now, todays + 1),
-			name,
-			status: 'open',
-			assayId: reagentLot?.assayId ?? '',
-			assayName: '',
-			fillDate: now.toISOString(),
-			runIds: [],
-			reagentLotId: reagentLot ? String(reagentLot._id) : '',
-			reagentLotNumber: reagentLot ? reagentLot.lotNumber : '',
-			reagentLotSource: reagentLot ? 'bims' : 'non-calibrated',
-			curveSetId: '', curveSetSource: '', assignedBy: '', assignedAt: '', assignmentNote: '', notes: '',
-			createdBy: locals.user.username ?? String(locals.user._id)
-		};
-		await FillLot.create(doc);
-		return { success: true, fillLot: JSON.parse(JSON.stringify(doc)) };
+		const assayId = ((data.get('assayId') as string | null) ?? '').trim();
+		const opened = await openDayFillLot(reagentLotId, assayId, name, locals.user.username ?? String(locals.user._id));
+		if ('error' in opened) return fail(400, { error: opened.error });
+		return { success: true, fillLot: JSON.parse(JSON.stringify(opened.fillLot)), reused: opened.reused };
 	},
 
 	/**

@@ -70,6 +70,8 @@ const reagentBatchRecordSchema = new Schema({
 	// curve set. fillLotSelectedAt records that the step was decided, lot or none.
 	fillLotId: String,
 	fillLotNumber: String,
+	// 1-based deck within the fill lot (a fill lot = one reagent lot on one day), set on finalize
+	deckNumber: Number,
 	reagentLotId: String,
 	reagentLotNumber: String,
 	fillLotSelectedAt: Date,

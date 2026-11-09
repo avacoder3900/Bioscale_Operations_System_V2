@@ -311,6 +311,15 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 			});
 		}
 		const noPositions = (run.cartridgesFilled as any[]).every((cf: any) => !(Number(cf.deckPosition) >= 1));
+		// DOMAIN-32: the fill lot remembers its runs (the research app lists lots by them), in the order
+		// they finish — a run's place in that list is its deck number within the fill lot (deck 1, 2, …).
+		let deckNumber: number | null = null;
+		if (run.fillLotId) {
+			const lot = await FillLot.findOneAndUpdate({ _id: run.fillLotId }, { $addToSet: { runIds: String(run._id) } }, { new: true }).lean().catch(() => null) as any;
+			const at = ((lot?.runIds ?? []) as string[]).indexOf(String(run._id));
+			deckNumber = at >= 0 ? at + 1 : null;
+			if (deckNumber) await ReagentBatchRecord.updateOne({ _id: run._id }, { $set: { deckNumber } }).catch(() => undefined);
+		}
 		const bulkOps = run.cartridgesFilled.flatMap((cf: any, i: number) => {
 			const stamp = {
 				'reagentFilling.runId': run._id,
@@ -323,6 +332,7 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 				'reagentFilling.deckPosition': cf.deckPosition,
 				'reagentFilling.fillLotId': run.fillLotId ?? '',
 				'reagentFilling.fillLotNumber': run.fillLotNumber ?? '',
+				'reagentFilling.deckNumber': deckNumber,
 				'reagentFilling.reagentLotId': run.reagentLotId ?? '',
 				'reagentFilling.reagentLotNumber': run.reagentLotNumber ?? '',
 				'reagentFilling.operator': run.operator,
@@ -356,16 +366,12 @@ export async function finalizeReagentRun(runId: string, user: User, trigger: str
 			];
 		});
 		await CartridgeRecord.bulkWrite(bulkOps);
-		// DOMAIN-32: the fill lot remembers its runs (the research app lists lots by them). A fill
-		// lot opened without an assay (non-calibrated, no reagent lot) takes the run's.
-		if (run.fillLotId) {
-			await FillLot.updateOne({ _id: run.fillLotId }, { $addToSet: { runIds: String(run._id) } }).catch(() => undefined);
-			if (fillAssay) {
-				await FillLot.updateOne(
-					{ _id: run.fillLotId, $or: [{ assayId: '' }, { assayId: null }, { assayId: { $exists: false } }] },
-					{ $set: fillAssay }
-				).catch(() => undefined);
-			}
+		// A fill lot opened without an assay (non-calibrated, no reagent lot) takes the run's.
+		if (run.fillLotId && fillAssay) {
+			await FillLot.updateOne(
+				{ _id: run.fillLotId, $or: [{ assayId: '' }, { assayId: null }, { assayId: { $exists: false } }] },
+				{ $set: fillAssay }
+			).catch(() => undefined);
 		}
 
 		// Consume 2ml tubes (PT-CT-107) — FLAT 4 TUBES PER RUN regardless of

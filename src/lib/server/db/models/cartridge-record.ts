@@ -92,6 +92,8 @@ const cartridgeRecordSchema = new Schema({
 		// DOMAIN-32: research fill lot (fill_lots) and reagent lot (reagent_set_lots) this cartridge was filled with
 		fillLotId: String,
 		fillLotNumber: String,
+		// 1-based deck (robot run) within the fill lot, in the order the runs finished (2026-11-09)
+		deckNumber: Number,
 		reagentLotId: String,
 		reagentLotNumber: String,
 		// Historical only (retired 2026-10-13) — fills since then stamp no tube records; see fillLotId/reagentLotId.

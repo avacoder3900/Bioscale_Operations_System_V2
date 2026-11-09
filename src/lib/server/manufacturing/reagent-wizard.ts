@@ -7,7 +7,7 @@
 import { redirect } from '@sveltejs/kit';
 import {
 	connectDB, ReagentBatchRecord, AssayDefinition, ManufacturingSettings, WaxFillingRun,
-	Equipment, EquipmentLocation, ReagentLot, OpentronsRobot, ReagentSetLot, FillLot
+	Equipment, EquipmentLocation, ReagentLot, OpentronsRobot, ReagentSetLot, FillLot, fillLotDay, NON_CALIBRATED_REAGENT_LOT
 } from '$lib/server/db';
 import { WAX_PAGE_OWNED } from './run-statuses';
 import { getRobot, robotGet } from '$lib/server/opentrons/proxy';
@@ -52,6 +52,7 @@ function emptyReagentState(robotId: string, loadError?: string) {
 		researchReagentLots: [] as any[],
 		openFillLots: [] as any[],
 		defaultFillLotId: '',
+		defaultReagentLotId: '',
 		fillLotNumber: null as string | null,
 		reagentLotNumber: null as string | null,
 		assayTypes: [] as { id: string; name: string; skuCode: string | null; isActive: boolean; reagents: { wellPosition: number; reagentName: string }[] }[],
@@ -337,10 +338,15 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			.catch(() => []);
 		// DOMAIN-32: research reagent lots (reagent_set_lots) — needed to open a new fill lot.
 		const researchReagentLots = await ReagentSetLot.find({ status: 'active' }).select('_id lotNumber name assayId components createdAt').sort({ createdAt: -1 }).lean();
-		// Open fill lots (fill_lots): opt-in per run (default: none); the one used last is flagged in the list.
-		const openFillLots = await FillLot.find({ status: 'open', fillLotNumber: { $nin: [null, ''] } }).select('_id fillLotNumber name reagentLotId reagentLotNumber reagentLotSource runIds fillDate updatedAt').sort({ updatedAt: -1 }).lean();
-		const lastWithFillLot = await ReagentBatchRecord.findOne({ fillLotId: { $nin: [null, ''] } }).select('fillLotId').sort({ createdAt: -1 }).lean() as any;
-		const defaultFillLotId = (activeRun as any)?.fillLotId ?? lastWithFillLot?.fillLotId ?? (openFillLots[0] as any)?._id ?? '';
+		// A fill lot is one reagent lot on one day (2026-11-09): the picker asks for the reagent lot and the
+		// run joins today's lot for it. Only today's lots matter here. Opt-in per run (default: none) — but
+		// once a deck today has joined a fill lot, its reagent lot is preselected for the next deck.
+		const todayPrefix = `FL-${fillLotDay(new Date())}-`;
+		const openFillLots = await FillLot.find({ status: 'open', fillLotNumber: { $regex: `^${todayPrefix}` } }).select('_id fillLotNumber name reagentLotId reagentLotNumber reagentLotSource runIds fillDate updatedAt').sort({ fillLotNumber: 1 }).lean();
+		const lastTodayOnLot = await ReagentBatchRecord.findOne({ fillLotNumber: { $regex: `^${todayPrefix}` } }).select('fillLotId reagentLotId fillLotNumber').sort({ createdAt: -1 }).lean() as any;
+		const defaultFillLotId = (activeRun as any)?.fillLotId ?? lastTodayOnLot?.fillLotId ?? '';
+		const defaultLot = (openFillLots as any[]).find((f) => String(f._id) === String(defaultFillLotId));
+		const defaultReagentLotId = defaultLot ? (defaultLot.reagentLotId || (defaultLot.reagentLotSource === 'non-calibrated' ? NON_CALIBRATED_REAGENT_LOT : '')) : '';
 		const activeReagentLots: Record<string, any[]> = {};
 		for (const l of finalizedLots as any[]) {
 			const slug = l.templateSlug ?? 'unknown';
@@ -431,6 +437,7 @@ export async function loadReagentWizard(locals: App.Locals, robotId: string) {
 			researchReagentLots: JSON.parse(JSON.stringify(researchReagentLots)),
 			openFillLots: JSON.parse(JSON.stringify(openFillLots)),
 			defaultFillLotId: String(defaultFillLotId ?? ''),
+			defaultReagentLotId,
 			fillLotNumber: (activeRun as any)?.fillLotNumber ?? null,
 			reagentLotNumber: (activeRun as any)?.reagentLotNumber ?? null,
 			// --- OT-2 Start Run panel inputs (same shape as wax-filling) ---

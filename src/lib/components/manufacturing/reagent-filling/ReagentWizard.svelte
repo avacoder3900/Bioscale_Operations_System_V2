@@ -1040,24 +1040,15 @@
 		<ReagentPreparation
 			reagentLots={(data.researchReagentLots ?? []) as any}
 			fillLots={(data.openFillLots ?? []) as any}
-			defaultFillLotId={data.defaultFillLotId ?? ''}
-			onCreateFillLot={async (reagentLotId, name) => {
-				const fd = new FormData();
-				fd.set('reagentLotId', reagentLotId);
-				fd.set('name', name);
-				const res = await fetch(act('createFillLot'), { method: 'POST', body: fd });
-				const result = deserialize(await res.text());
-				if (result.type === 'success') return { ok: true, fillLot: (result.data as any)?.fillLot };
-				return { ok: false, error: result.type === 'failure' ? ((result.data as any)?.error ?? 'Failed') : 'Failed' };
-			}}
-			onComplete={async (fillLotId, reagentLotLabel) => {
+			defaultReagentLotId={data.defaultReagentLotId ?? ''}
+			onComplete={async (reagentLotId, reagentLotLabel) => {
 				reagentBatchBarcodeLocal = reagentLotLabel || null;
 				reagentBatchConfirmedLocal = true;
-				// Persist the fill-lot decision — a lot, or none (the default; opt-in). Writes to the
-				// run record only, no cartridge dependency.
+				// Persist the fill-lot decision — the reagent lot (the run joins today's fill lot for it,
+				// opening it on the first deck), or none (the default; opt-in). Writes to the run record only.
 				// Do NOT start the run yet: the deck hasn't been scanned. The deck-scan
 				// step auto-starts once cartridges are on.
-				await submitForm('selectFillLot', { fillLotId });
+				await submitForm('selectFillLot', { reagentLotId });
 			}}
 			onSaveNote={handleSaveBatchNote}
 			readonly={isViewingPast}
