@@ -19,8 +19,16 @@ import {
 	WAX_NON_TERMINAL, REAGENT_NON_TERMINAL
 } from './run-statuses';
 
-/** Is any wax OR reagent run on this robot in a page-owned stage? */
-export async function checkRobotConflict(robotId: string): Promise<string | null> {
+/** The run holding a robot: which collection, which run, and the message checkRobotConflict gives for it. */
+export interface RobotConflict {
+	kind: 'wax' | 'reagent';
+	runId: string;
+	status: string;
+	message: string;
+}
+
+/** The wax OR reagent run holding this robot in a page-owned stage, if any (wax first). */
+export async function findRobotConflict(robotId: string): Promise<RobotConflict | null> {
 	if (!robotId) return null;
 	const [wax, reagent] = await Promise.all([
 		WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: WAX_PAGE_OWNED } })
@@ -28,9 +36,14 @@ export async function checkRobotConflict(robotId: string): Promise<string | null
 		ReagentBatchRecord.findOne({ 'robot._id': robotId, status: { $in: REAGENT_PAGE_OWNED } })
 			.select('_id status').lean() as any
 	]);
-	if (wax) return `Robot already has an active wax run (${wax.status}). Finish or cancel it first.`;
-	if (reagent) return `Robot already has an active reagent run (${reagent.status}). Finish or cancel it first.`;
+	if (wax) return { kind: 'wax', runId: String(wax._id), status: wax.status, message: `Robot already has an active wax run (${wax.status}). Finish or cancel it first.` };
+	if (reagent) return { kind: 'reagent', runId: String(reagent._id), status: reagent.status, message: `Robot already has an active reagent run (${reagent.status}). Finish or cancel it first.` };
 	return null;
+}
+
+/** Is any wax OR reagent run on this robot in a page-owned stage? */
+export async function checkRobotConflict(robotId: string): Promise<string | null> {
+	return (await findRobotConflict(robotId))?.message ?? null;
 }
 
 /**

@@ -142,6 +142,17 @@ export function armMayMove(status: string, last: ArmMarker | null, want: ArmMove
 	return false;
 }
 
+/**
+ * The run's status and its command log are two reads. A pause that begins
+ * between them shows as a RUNNING run whose log already has a waitForResume in
+ * progress — a state the robot is in only for an instant, and one armMayMove
+ * refuses (2026-11-09: a skip's 'ARM PARKED 2' read this way failed the loop
+ * with the gantry parked in the wax). The caller reads the status again.
+ */
+export function tornPauseRead(status: string, commands: ReadonlyArray<{ commandType?: string; status?: string } | null | undefined>): boolean {
+	return status === 'running' && commands.some((c) => c?.commandType === 'waitForResume' && c.status === 'running');
+}
+
 /** The run is effectively at 'ARM AT_SCAN <cart>': paused there, or paused NO_INSTRUCTION right after it (resumed from outside, never moved). */
 export function atScanFor(status: string, last: ArmMarker | null, prev: ArmMarker | null, cart: number): boolean {
 	if (status !== 'paused' || !last || !last.paused) return false;

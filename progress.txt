@@ -26991,3 +26991,23 @@ active "cable" to OT2CEP20200217B07 (rtt 70 ms); clock offset measured over the 
 pushing to production BIMS (82 commands of run f90ca68c, no error); /ot2/loop-driver/status idle.
 The driver only acts when Setup "Arm Pi Drives The Loop" is on (off); first driven loop waits for
 Alejandro to be at the robots. No code change; npm run check not rerun (no source change).
+
+================================================================================
+2026-11-09 — master — Arm wax fill: a pause read torn across two GETs no longer fails the loop
+================================================================================
+Alejandro, 09:43 CT, B07, 2-loop production run (loop SKuckm7cbQUgF-wGHfzPg): the scan read a cart already at
+wax_filled -> fail route -> skip sent 15:43:44Z -> run_parked 15:43:49Z -> loop_failed 15:43:50Z with
+"The OT-2 run is running after "ARM PARKED 2" — not clear of the calibrator and the stage for cart 1; the arm
+will not play the fail animation." The gantry WAS parked in the wax: readRunPause reads GET /runs/{id} (status)
+and then the command log; the 'ARM PARKED 2' pause began between the two, so the read was status 'running' with
+the waitForResume already in progress. armMayMove accepts neither half of that (rule 1 wants status paused, the
+uninstructed rule wants the pause NOT in progress) and cycleFail refused. The same sequence passed four minutes
+earlier (loop dxrNLOil7LX8LQvVQSRU9) by timing alone; a skip parks at once because the tip still holds its batch.
+- arm-loop-protocol.ts: tornPauseRead(status, commands) — a running run whose log has a waitForResume running.
+- arm-wax-fill.ts readRunPause: on a torn read, read the status again (up to 3x, 150 ms apart) before judging.
+  No gate is loosened: armMayMove is unchanged, the read is just made consistent. Still torn after that -> refused
+  as before.
+Also found this session (no code): B07 ran the stage .py from 27f7bd4f until 09:34 CT today, so the Deck Studio
+tip-rack offset (0, 5, 4) was never sent; Alejandro added 87b22737 (09d0bd35's .py) to the library and deployed it;
+the 09:38 and 09:42 runs carry tiprack_offset_y 5 / z 4.
+Tests: arm-loop-protocol 13 pass (1 new); npm run check 14 errors (baseline), none in these files.

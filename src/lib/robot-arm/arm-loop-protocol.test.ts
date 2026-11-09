@@ -95,3 +95,21 @@ describe('ARM FILLED — the withdraw may start once the final row is filled (20
 		expect(armMayMove('running', filled(2), { parked: 3, orClear: 2 })).toBe(false);
 	});
 });
+
+describe('tornPauseRead', () => {
+	it('is a running run whose log has a waitForResume in progress', async () => {
+		const { tornPauseRead, armMayMove } = await import('./arm-loop-protocol');
+		const parked2 = { commandType: 'waitForResume', status: 'running', params: { message: 'ARM PARKED 2' } };
+		expect(tornPauseRead('running', [{ commandType: 'comment', status: 'succeeded' }, parked2])).toBe(true);
+		// The same log with the status read after the pause began: consistent.
+		expect(tornPauseRead('paused', [parked2])).toBe(false);
+		// A resumed pause has succeeded; a running run after it is not torn.
+		expect(tornPauseRead('running', [{ commandType: 'waitForResume', status: 'succeeded' }])).toBe(false);
+		expect(tornPauseRead('running', [])).toBe(false);
+		// Why it matters: the torn read is refused, the re-read one is allowed (the fail animation after a skip of cart 1).
+		const want = { parked: 2, orClear: 1 };
+		const marker = { kind: 'PARKED' as const, cart: 2, paused: true };
+		expect(armMayMove('running', marker, want, { uninstructed: true })).toBe(false);
+		expect(armMayMove('paused', marker, want, { uninstructed: true })).toBe(true);
+	});
+});

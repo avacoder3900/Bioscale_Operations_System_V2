@@ -23,6 +23,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { sharedAnimateActions } from '$lib/server/robot-arm-animate-actions';
 import {
 	ArmWaxFillError,
+	cancelBlockingRun,
 	cycleAwaitParked,
 	cycleDecide,
 	cycleFail,
@@ -420,6 +421,17 @@ export const actions: Actions = {
 		try {
 			await stopArmDriver(null);
 			return json(await resetLoop(user));
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The blocking line's Cancel (no loop running): the wax run holding the robot — left open by a
+	// loop, or started on the Robots page — is cancelled the way the Robots page cancels it.
+	cancelBlockingRun: async (ev) => {
+		const { d, user } = await writer(ev, true);
+		try {
+			return json(await cancelBlockingRun(user, field(d, 'runId')));
 		} catch (err) {
 			return failFrom(err);
 		}

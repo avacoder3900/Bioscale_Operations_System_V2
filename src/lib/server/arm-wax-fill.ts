@@ -80,7 +80,7 @@ import {
 	WaxFillingRun
 } from '$lib/server/db';
 import crypto from 'node:crypto';
-import { checkRobotConflict } from '$lib/server/manufacturing/resource-locks';
+import { checkRobotConflict, findRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
@@ -89,7 +89,7 @@ import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, uploadAssembl
 // 2026-11-06: every robot read / action goes through the arm Pi's cable link when it is
 // usable (one HTTPS hop, ~2 ms on the cable) and through the Mongo queue otherwise.
 import { armLinkFor, armPiUrls, armScanAvailable, armScanWait, armSetInstruction, armWriteFile, ot2Delete, ot2Get, ot2Post, ot2WaitChange } from '$lib/server/ot2-arm-link';
-import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, atScanFor, parseArmComment, type ArmMarker, type ArmMoveWant } from '$lib/robot-arm/arm-loop-protocol';
+import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, atScanFor, parseArmComment, type ArmMarker, type ArmMoveWant, tornPauseRead } from '$lib/robot-arm/arm-loop-protocol';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
@@ -1382,8 +1382,24 @@ export function readiness(
 			`If the scan fails — ${scanPresenceOnly(settings, protocol) ? `nothing read (${protocol?.rehearsal ? 'the rehearsal' : 'Barcode Present Only'} accepts any barcode)` : 'nothing read, or the cart is not a backed cart'} — the fail animation "${settings.failAnimation.name ?? ''}" plays instead of the fill; that loop is skipped and the run continues with the next cart.`
 		);
 	if (active) blocking.push(`A loop is already running (started ${active.startedAt ? new Date(active.startedAt).toLocaleString() : ''}).`);
-	if (robotConflict) blocking.push(`${robotConflict} (Robots page)`);
+	if (robotConflict) blocking.push(conflictLine(robotConflict));
 	return { blocking, notes };
+}
+
+/** The readiness line for a run holding the robot (the page puts the wax run's Cancel on it). */
+const conflictLine = (robotConflict: string) => `${robotConflict} (Robots page)`;
+
+/** The wax run that blocks a start, for the blocking line's Cancel button and its confirm. */
+export interface BlockingRunView {
+	runId: string;
+	status: string;
+	/** The readiness.blocking line this run produces. */
+	line: string;
+	operator: string | null;
+	startedAt: string | null;
+	carts: number;
+	/** Left by a loop of this line (it ended without closing its run), else started on the Robots page. */
+	armLine: boolean;
 }
 
 /**
@@ -1604,8 +1620,23 @@ export async function loadArmWaxFill() {
 		protocolFor(settings.robotId).catch(() => null),
 		activeLoop(),
 		ArmWaxFillRun.find({ status: { $ne: 'running' } }).sort({ createdAt: -1 }).limit(8).lean(),
-		settings.robotId ? checkRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null)
+		settings.robotId ? findRobotConflict(settings.robotId).catch(() => null) : Promise.resolve(null)
 	]);
+	// A wax run holding the robot with no loop running can be cancelled from this page
+	// (2026-11-09); a running loop's own run ends with STOP RUN, a reagent run on its page.
+	let blockingRun: BlockingRunView | null = null;
+	if (robotConflict?.kind === 'wax' && !active) {
+		const run = (await WaxFillingRun.findById(robotConflict.runId).select('operator setupTimestamp runStartTime cartridgeIds armWaxFill').lean().catch(() => null)) as any;
+		blockingRun = {
+			runId: robotConflict.runId,
+			status: robotConflict.status,
+			line: conflictLine(robotConflict.message),
+			operator: run?.operator?.username ?? null,
+			startedAt: iso(run?.runStartTime ?? run?.setupTimestamp),
+			carts: (run?.cartridgeIds ?? []).length,
+			armLine: !!run?.armWaxFill?.loopId
+		};
+	}
 	// The teach aid follows the protocol on the robot (p20 for the fill, p300 for the rehearsal).
 	const teach: TeachAid | null = settings.robotId ? await teachAid(settings.robotId, stageTipProfile(protocol), calibration).catch((): TeachAid | null => null) : null;
 	const robotName = (robots as any[]).find((r) => String(r._id) === settings.robotId)?.name ?? null;
@@ -1635,7 +1666,8 @@ export async function loadArmWaxFill() {
 		teach,
 		activeLoop: active,
 		recentLoops: (recent as any[]).map(loopView),
-		readiness: readiness(settings, calibration, protocol, active, robotConflict)
+		readiness: readiness(settings, calibration, protocol, active, robotConflict?.message ?? null),
+		blockingRun
 	};
 }
 
@@ -2055,7 +2087,7 @@ async function readRunPause(robot: any, runId: string): Promise<RunPauseRead> {
 	} catch (e) {
 		throw new ArmWaxFillError(`The OT-2 run could not be read (${e instanceof Error ? e.message : String(e)}).`, 502);
 	}
-	const status = String(run?.status ?? 'unknown');
+	let status = String(run?.status ?? 'unknown');
 	if (status !== 'paused' && status !== 'running') return { status, message: null, pause: null, last: null, prev: null };
 	// The tail of the command log: the current pause (if any) and the last ARM
 	// announcement. Without a cursor the robot centres the page on the current
@@ -2074,6 +2106,17 @@ async function readRunPause(robot: any, runId: string): Promise<RunPauseRead> {
 	} catch {
 		cmds = [];
 	}
+	// Status first, log second: a pause beginning between the two reads looks like a
+	// running run on a waitForResume (tornPauseRead). Read the status until they agree.
+	for (let i = 0; i < 3 && tornPauseRead(status, cmds); i++) {
+		if (i) await waitMs(150);
+		try {
+			status = String((await read(`/runs/${runId}`))?.data?.status ?? status);
+		} catch {
+			break;
+		}
+	}
+	if (status !== 'paused' && status !== 'running') return { status, message: null, pause: null, last: null, prev: null };
 	const waits = cmds.filter((c) => c?.commandType === 'waitForResume');
 	const cur = status === 'paused' ? (waits.find((c) => c.status === 'running') ?? waits[waits.length - 1] ?? null) : null;
 	const message = cur?.params?.message ? String(cur.params.message) : null;
@@ -3247,6 +3290,41 @@ export async function haltHomeGantry(user: User, loopId: string): Promise<{ home
 	const waitedMs = Date.now() - t0;
 	await audit(user, 'arm_wax_fill.halt_gantry_home', 'arm_wax_fill_runs', loopId, { robotId, waitedMs, lastRun: cur, notes });
 	return { homedAt: at.toISOString(), waitedMs, notes };
+}
+
+/**
+ * Cancel the wax run that blocks a start ("Robot already has an active wax run
+ * … Finish or cancel it first.") from this page (2026-11-09) — the Robots
+ * page's Cancel: the robot run is stopped, the carts the robot log shows
+ * finished are recorded wax-filled and the rest go back to backed. Only with
+ * no loop running (a running loop's own run ends with STOP RUN) and only the
+ * run the operator was shown. A loop of this line that left the run open is
+ * marked finished, as after a halt.
+ */
+export async function cancelBlockingRun(user: User, rawRunId: unknown): Promise<{ runId: string; warning: string | null; loop: LoopView | null }> {
+	await connectDB();
+	const runId = String(rawRunId ?? '').trim();
+	if (!runId) throw new ArmWaxFillError('runId missing.');
+	const settings = await getSettings();
+	if (!settings.robotId) throw new ArmWaxFillError('Setup: pick the OT-2 the arm feeds.', 409);
+	if (await activeLoop()) throw new ArmWaxFillError('A loop is running — press STOP RUN to end it and its wax run.', 409);
+	const conflict = await findRobotConflict(settings.robotId);
+	if (!conflict) throw new ArmWaxFillError('No run is holding this robot any more — reload the page.', 409);
+	if (conflict.kind !== 'wax') throw new ArmWaxFillError('A reagent run holds this robot — finish or cancel it on the Robots page.', 409);
+	if (conflict.runId !== runId) throw new ArmWaxFillError('A different wax run holds this robot now — reload the page.', 409);
+	const run = (await WaxFillingRun.findById(runId).select('armWaxFill').lean()) as any;
+	const stop = await stopRunQueue('wax', 'cancel', runId, { reason: `Cancelled from the robot-arm wax-fill page by ${user.username}` }, user);
+	if (isActionFail(stop)) throw new ArmWaxFillError(stop.fail.error, stop.fail.status);
+	const warning = typeof stop.warning === 'string' && stop.warning ? stop.warning : null;
+	const loopId = run?.armWaxFill?.loopId ? String(run.armWaxFill.loopId) : null;
+	if (loopId) {
+		await ArmWaxFillRun.updateOne(
+			{ _id: loopId, status: { $ne: 'running' }, runFinished: { $ne: true } },
+			{ $set: { ending: true, runFinished: true, opentronsRunFinalStatus: 'stopped' } }
+		);
+	}
+	await audit(user, 'arm_wax_fill.blocking_run_cancel', 'wax_filling_runs', runId, { robotId: settings.robotId, status: conflict.status, loopId, warning });
+	return { runId, warning, loop: loopId ? await getLoop(loopId) : null };
 }
 
 /** A step failed in the browser (or here): the loop stops with the reason on the cycle. */

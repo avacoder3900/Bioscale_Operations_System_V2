@@ -912,6 +912,43 @@
 		}
 	}
 
+	/**
+	 * The blocking line's Cancel (2026-11-09): the wax run holding the robot
+	 * with no loop running — left open by a loop that failed, or started on
+	 * the Robots page — is cancelled here the way the Robots page cancels it
+	 * (the robot run stops; filled carts are kept, the rest go back to backed).
+	 */
+	let cancellingRun = $state(false);
+	async function cancelBlockingRun() {
+		const run = data.blockingRun;
+		if (!run || cancellingRun || busy || robotBusy) return;
+		const lines = [
+			`Cancel the wax run holding ${data.robotName ?? 'this robot'}?`,
+			'',
+			`Run …${run.runId.slice(-8)} · ${run.status}${run.operator ? ` · ${run.operator}` : ''}${run.startedAt ? ` · started ${new Date(run.startedAt).toLocaleString()}` : ''} · ${run.carts} cart${run.carts === 1 ? '' : 's'} on it.`,
+			run.armLine ? 'It was left open by a robot-arm loop.' : 'It was started on the Robots page — make sure nobody is running it there.',
+			'',
+			'• The OT-2 run is stopped where it is; the pipette keeps its tip.',
+			'• Carts the robot log shows fully filled are recorded wax-filled; the others go back to backed.'
+		];
+		if (!confirm(lines.join('\n'))) return;
+		cancellingRun = true;
+		pageError = null;
+		try {
+			const r = await post('cancelBlockingRun', { runId: run.runId });
+			if (!r.ok) {
+				pageError = `The wax run was not cancelled: ${r.error}`;
+				return;
+			}
+			if (r.data.loop && loop && r.data.loop._id === loop._id) loop = r.data.loop;
+			say(`Wax run …${run.runId.slice(-8)} cancelled.${r.data.warning ? ` ${r.data.warning}` : ''}`, 'warn');
+		} finally {
+			cancellingRun = false;
+			await invalidateAll();
+			setTimeout(pollHealth, 3000);
+		}
+	}
+
 	/** Home the OT-2 gantry (not during a loop or with the teach panel's maintenance run open). */
 	async function homeGantry() {
 		if (!robotId || robotBusy) return;
@@ -1195,7 +1232,18 @@
 		{#if !(loop && loop.status === 'running')}
 			{#if data.readiness.blocking.length}
 				<ul class="space-y-1 rounded border border-amber-500/40 bg-amber-900/15 p-2 text-xs text-amber-200">
-					{#each data.readiness.blocking as b (b)}<li>· {b}</li>{/each}
+					{#each data.readiness.blocking as b (b)}
+						<li>
+							· {b}
+							{#if data.blockingRun && b === data.blockingRun.line}
+								<button type="button" onclick={() => void cancelBlockingRun()} disabled={cancellingRun || busy || haltBusy || robotBusy !== null}
+									title="Cancels this wax run from here, as the Robots page does: the OT-2 run is stopped, filled carts are kept and the others go back to backed"
+									class="ml-1 rounded border border-red-500/50 bg-red-900/15 px-2 py-0.5 font-semibold text-red-300 hover:bg-red-900/25 disabled:opacity-40">
+									{cancellingRun ? 'Cancelling…' : 'Cancel This Run'}
+								</button>
+							{/if}
+						</li>
+					{/each}
 				</ul>
 			{/if}
 		{/if}
