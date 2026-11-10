@@ -27235,3 +27235,19 @@ Source: branch master @ commit 50554651 (merged from feat/cv-station-restart)
 Retrieve this exact code: git checkout master at commit 50554651
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: big square CV Station Restart buttons in the Post Mortem Inspect fullscreen view
+
+================================================================================
+2026-11-10 — (Station 2 Pi, no repo code) — CV Station 2 gets camera replug recovery
+================================================================================
+Station 2 already had BIMS_URL = production and CAMERA_DEVICE = /dev/v4l/by-id/usb-HD_USB_Camera... (only 2
+heartbeat failures in 10 days: DNS at 02:44 today, self-recovered), so no settings change. Its agent is the
+multi-camera version that exists only as uncommitted edits in ~brevitest2/bims-capture-agent on the Pi, so the
+master camera recovery was PORTED into its camera.py/agent.py (not copied): device_lost/reopen in place,
+check_and_recover() holds _track_lock so it never overlaps switch_camera(), keeps the active camera's profile;
+_camera_watchdog every 5 s. No heartbeat fallback (already on production). Originals in
+~brevitest2/agent-backup-2026-11-10. Pi git state untouched.
+Deploy restart 13:00 local: the OLD agent hung on stop for 90 s until systemd SIGKILLed it (13:02:02) — Station
+2 was off for ~90 s. Not yet known whether the new agent stops cleanly; a slow stop also slows the Restart button.
+Test 13:05: USB unbind/bind of port 1-2 (camera) -> "camera lost (... is gone)" -> "camera recovered" 7 s later,
+no restart, node moved video0 -> video1 behind the by-id link; /snapshot.jpg 200. BIMS 19:06 UTC: both
+stations online, camera + scanner OK.
