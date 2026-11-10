@@ -27220,3 +27220,13 @@ Source: branch master @ commit 8ef26a7a (merged from feat/cv-station-restart)
 Retrieve this exact code: git checkout master at commit 8ef26a7a
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: CV Station Restart buttons on Post Mortem Inspect + Capture; shared restart logic
+
+================================================================================
+2026-11-10 — feat/cv-station-restart — Fullscreen tablet: big square Restart buttons
+================================================================================
+Post Mortem Inspect fullscreen: the feed now keeps its 16:9 height at the top of the pane and the black band
+under it holds CvStationRestartPair: a square Restart button (as tall as the band, as wide as tall, red text,
+red border) at the far left labelled "CV Station 1" and one at the far right labelled "Station 2" (labels as
+dictated). cv:admin only; same restartStationAgent() as the other buttons. Capture has no fullscreen mode.
+Layout checked in a 1280x800 static mock-up; not yet seen on a tablet. npm run check 14 errors (baseline),
+none in these files.

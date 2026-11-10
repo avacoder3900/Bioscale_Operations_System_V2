@@ -19,6 +19,7 @@
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
 	import CvStationRestart from '$lib/components/CvStationRestart.svelte';
+	import CvStationRestartPair from '$lib/components/CvStationRestartPair.svelte';
 
 	let { data } = $props();
 
@@ -1343,7 +1344,7 @@
 
 		<!-- Video pane -->
 		<div class={fullscreen
-			? 'col-start-2 row-start-1 flex min-h-0 items-start justify-center bg-black'
+			? 'col-start-2 row-start-1 flex min-h-0 flex-col bg-black'
 			: 'rounded-lg border border-[var(--color-tron-border)] bg-black p-2 [@media(pointer:coarse)]:col-start-2 [@media(pointer:coarse)]:row-start-1'}>
 			{#if cameraError}
 				<div class="flex aspect-video items-center justify-center text-[var(--color-tron-red,#ff3366)]">
@@ -1358,16 +1359,23 @@
 						<img
 							src={liveSrc}
 							alt="Live station preview"
-							class={fullscreen ? 'h-full w-full object-contain object-top' : 'aspect-video w-full rounded object-contain'}
+							class={fullscreen ? 'aspect-video max-h-full min-h-0 w-full object-contain object-top' : 'aspect-video w-full rounded object-contain'}
 						/>
 					{:else}
-						<div class="{fullscreen ? 'h-full w-full' : 'aspect-video w-full rounded'} flex items-center justify-center text-sm text-gray-400">
+						<div class="{fullscreen ? 'aspect-video max-h-full min-h-0 w-full' : 'aspect-video w-full rounded'} flex items-center justify-center text-sm text-gray-400">
 							Connecting to station camera…
 						</div>
 					{/if}
 				{/if}
 				<!-- svelte-ignore a11y_media_has_caption -->
-				<video bind:this={videoEl} class="{fullscreen ? 'h-full w-full object-contain object-top' : 'aspect-video w-full rounded'} {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
+				<video bind:this={videoEl} class="{fullscreen ? 'aspect-video max-h-full min-h-0 w-full object-contain object-top' : 'aspect-video w-full rounded'} {mjpegShowing ? 'hidden' : ''}" playsinline autoplay muted></video>
+			{/if}
+			{#if fullscreen && data.canRestartStations}
+				<!-- The black band under the feed: square Restart buttons, CV Station 1
+				     far left, Station 2 far right, as tall as the band. -->
+				<div class="min-h-0 flex-1">
+					<CvStationRestartPair stations={data.stations} />
+				</div>
 			{/if}
 		</div>
 
