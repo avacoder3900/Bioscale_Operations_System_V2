@@ -27160,3 +27160,7 @@ The user asked for all three of the device-only logs worth having (not waiting f
 Tests: run-history.test.ts 7 (new), drive-log.test.ts 8 (2 new), test_bims_changes.py 10 (new),
 test_loop_driver.py 7; src/lib/robot-arm + server arm/ot2 378 pass. npm run check 13 errors (baseline), none in these.
 Pi side (bims_changes.py) waits for arm-pi: unplugged by the user at ~15:30 UTC.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/ELR3hMPxvrjhH6Tf2YqiunPtftE5
+Source: branch master @ commit c608b315
+Retrieve this exact code: git checkout c608b315
+What this deployment is for: OT-2 run actions (Run Control), Pi loop handshake events, Change Log unclean-stop display (Vercel status success 2026-11-10).
