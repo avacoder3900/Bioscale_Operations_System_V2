@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { stationLockUrl, watchStationLock, checkStationLock } from '$lib/station-device';
 	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
+	import CvStationRestart from '$lib/components/CvStationRestart.svelte';
 	import { invalidateAll } from '$app/navigation';
 	import jsQR from 'jsqr';
 
@@ -1371,6 +1372,9 @@
 						{/each}
 					</select>
 				</div>
+				{#if data.canRestartStations}
+					<CvStationRestart stations={data.stations} />
+				{/if}
 				<div>
 					<label for="station-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Station</label>
 					<select id="station-sel" bind:value={selectedStationId} onchange={() => onStationChange()} class="tron-input">

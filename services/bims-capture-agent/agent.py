@@ -475,6 +475,40 @@ async def websocket(request: web.Request) -> web.WebSocketResponse:
     return ws
 
 
+# Where the heartbeat goes when BIMS_URL's deployment no longer exists.
+# Override with BIMS_FALLBACK_URL; set it empty to disable the fallback.
+_PRODUCTION_BIMS_URL = "https://bioscale-operations-system-mongodb.vercel.app"
+
+
+def _deployment_gone(resp) -> bool:
+    """True when Vercel says the deployment behind BIMS_URL no longer exists
+    (410 "The deployment has been removed", or 404 DEPLOYMENT_NOT_FOUND).
+    A BIMS 404 such as "station not found" is a different problem and must
+    not move the station to another server."""
+    if resp.status == 410:
+        return True
+    return resp.status == 404 and resp.headers.get("x-vercel-error", "").upper() in (
+        "DEPLOYMENT_NOT_FOUND",
+        "DEPLOYMENT_DELETED",
+    )
+
+
+async def _camera_watchdog() -> None:
+    """Every CAMERA_WATCHDOG_S (default 5 s), notice a camera that was
+    unplugged or replugged and open it again; see camera.check_and_recover.
+    Before this an unplug left the station without a camera until someone
+    restarted the agent."""
+    interval_s = float(os.environ.get("CAMERA_WATCHDOG_S", "5"))
+    while True:
+        try:
+            await asyncio.sleep(interval_s)
+            await asyncio.to_thread(camera_mod.check_and_recover)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("camera watchdog check failed")
+
+
 async def _heartbeat_loop() -> None:
     """Phone home to BIMS every HEARTBEAT_INTERVAL_S so the dashboard
     knows we're alive.
@@ -502,7 +536,14 @@ async def _heartbeat_loop() -> None:
         return
 
     interval_s = float(os.environ.get("HEARTBEAT_INTERVAL_S", "30"))
-    url = f"{bims_url}/api/cv/stations/{station_id}/heartbeat"
+    fallback_url = (
+        os.environ.get("BIMS_FALLBACK_URL", _PRODUCTION_BIMS_URL).strip().rstrip("/")
+    )
+
+    def _heartbeat_url(base: str) -> str:
+        return f"{base}/api/cv/stations/{station_id}/heartbeat"
+
+    url = _heartbeat_url(bims_url)
     headers = {
         "Content-Type": "application/json",
         "x-station-agent-key": agent_key,
@@ -522,10 +563,33 @@ async def _heartbeat_loop() -> None:
                 "uptimeS": int(time.monotonic() - _started_at),
                 "agentVersion": __version__,
             }
+            switched = False
             try:
                 async with session.post(url, json=body, headers=headers) as resp:
                     if resp.status == 204:
                         log.debug("heartbeat ok")
+                    elif (
+                        _deployment_gone(resp)
+                        and fallback_url
+                        and bims_url != fallback_url
+                    ):
+                        # 2026-11-10: Station 1's BIMS_URL was a Vercel preview.
+                        # When Vercel removed it, every heartbeat got 410 and
+                        # the station sat "offline" for hours although it ran
+                        # fine; restarting changed nothing. Move to production
+                        # and keep going. sequence.py reads BIMS_URL at upload
+                        # time, so photo uploads follow too.
+                        log.error(
+                            "BIMS_URL %s is gone (HTTP %d); using %s instead. "
+                            "Fix BIMS_URL in /etc/bims/station.env.",
+                            bims_url,
+                            resp.status,
+                            fallback_url,
+                        )
+                        bims_url = fallback_url
+                        os.environ["BIMS_URL"] = fallback_url
+                        url = _heartbeat_url(bims_url)
+                        switched = True
                     else:
                         text = await resp.text()
                         log.warning(
@@ -538,6 +602,8 @@ async def _heartbeat_loop() -> None:
             except Exception as exc:
                 log.warning("heartbeat failed: %s", exc)
 
+            if switched:
+                continue  # report to the new address straight away
             try:
                 await asyncio.sleep(interval_s)
             except asyncio.CancelledError:
@@ -596,6 +662,9 @@ async def _on_startup(app: web.Application) -> None:
     app["heartbeat"] = asyncio.create_task(
         _heartbeat_loop(), name="bims-heartbeat"
     )
+    app["camera_watchdog"] = asyncio.create_task(
+        _camera_watchdog(), name="bims-camera-watchdog"
+    )
     # PREVIEW=local renders the camera full-screen on the station's own
     # display — sensor→screen, no encode, no network (the latency floor).
     if os.environ.get("PREVIEW", "").strip().lower() == "local":
@@ -605,7 +674,7 @@ async def _on_startup(app: web.Application) -> None:
 async def _on_cleanup(app: web.Application) -> None:
     # Stop any in-flight sequence run before tearing the loop down.
     await sequence_mod.manager.shutdown()
-    for key in ("scan_broadcaster", "heartbeat"):
+    for key in ("scan_broadcaster", "heartbeat", "camera_watchdog"):
         task = app.get(key)
         if task is not None:
             task.cancel()

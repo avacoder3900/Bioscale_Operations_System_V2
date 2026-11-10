@@ -245,6 +245,46 @@ def _open_capture(source: object) -> "cv2.VideoCapture":
     return cv2.VideoCapture(source, cv2.CAP_V4L2)
 
 
+# ~2 s of failed reads at 15 fps before a watched camera counts as lost.
+_LOST_AFTER_FAILED_READS = 30
+
+
+def _node_path(source: object) -> str:
+    return f"/dev/video{source}" if isinstance(source, int) else str(source)
+
+
+def _node_identity(source: object) -> Optional[tuple[int, int]]:
+    """(inode, device number) of the /dev node, or None when it does not
+    exist. A replug recreates the node with a new inode, so a changed
+    identity means our handle points at a device that is gone even if the
+    name came back. Not ctime: ACL updates on the node change that."""
+    if _IS_WINDOWS:
+        return None
+    try:
+        st = os.stat(os.path.realpath(_node_path(source)))
+    except OSError:
+        return None
+    return (st.st_ino, st.st_rdev)
+
+
+def _find_source_quietly() -> Optional[object]:
+    """Resolve CAMERA_DEVICE again for recovery, without falling back to
+    index 0 or opening a node that is not there (cv2 logs a warning per
+    failed open, and recovery retries every few seconds)."""
+    spec = _CAMERA_DEVICE_ENV
+    if _IS_WINDOWS:
+        return int(spec) if spec.isdigit() else 0
+    if not spec:
+        source: object = 0
+    elif spec.isdigit():
+        source = int(spec)
+    elif spec.startswith("/dev/") or os.path.exists(spec):
+        source = spec
+    else:
+        return _resolve_device_by_name(spec)
+    return source if _node_identity(source) is not None else None
+
+
 def _profile_dims() -> tuple[int, int]:
     """Capture (not streaming) resolution for the active CAMERA_PROFILE."""
     return _PROFILE_DIMS.get(_CAMERA_PROFILE, _PROFILE_DIMS["default"])
@@ -277,10 +317,25 @@ class CameraTrack(VideoStreamTrack):
         # grab_still() (sequence thread) — cv2.VideoCapture.read() is not
         # thread-safe, and both share this single handle.
         self._read_lock = threading.Lock()
+        self._next_deadline = 0.0
+        # Hot-replug recovery (2026-11-10): consecutive failed reads and the
+        # identity of the /dev node we opened. A replugged USB camera comes
+        # back as a NEW node (video0 -> video1) and the old handle is dead for
+        # good; check_and_recover() uses these to notice and reopen.
+        self._read_failures = 0
+        self._node_id: Optional[tuple[int, int]] = None
+        self._cap = None
+        self._open_and_configure(source, cap_w, cap_h)
+
+    def _open_and_configure(self, source: object, cap_w: int, cap_h: int) -> None:
+        """Open `source` and apply the stream settings. Caller holds no lock
+        at construction; reopen() holds _read_lock."""
+        self._source = source
         self._cap = _open_capture(source)
         self._native_w = cap_w
         self._native_h = cap_h
-        self._next_deadline = 0.0
+        self._read_failures = 0
+        self._node_id = _node_identity(source)
         if self._cap.isOpened():
             self._cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
             self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, cap_w)
@@ -315,6 +370,48 @@ class CameraTrack(VideoStreamTrack):
     def is_open(self) -> bool:
         return bool(self._cap and self._cap.isOpened())
 
+    def _note_read(self, ok: bool) -> None:
+        self._read_failures = 0 if ok else self._read_failures + 1
+
+    def device_lost(self) -> Optional[str]:
+        """Why the open handle is dead, or None if it looks healthy.
+
+        The /dev node vanishing, or being recreated (a replug that got the
+        same number), means the handle can never read again. A long run of
+        failed reads catches anything else while someone is watching.
+        """
+        if not self.is_open():
+            return "capture closed"
+        if not _IS_WINDOWS:
+            now = _node_identity(self._source)
+            if now is None:
+                return f"{_node_path(self._source)} is gone"
+            if self._node_id is not None and now != self._node_id:
+                return f"{_node_path(self._source)} was recreated"
+        if self._read_failures >= _LOST_AFTER_FAILED_READS:
+            return f"{self._read_failures} reads in a row failed"
+        return None
+
+    def reopen(self, source: object) -> bool:
+        """Swap in a fresh handle on `source`, keeping this track object.
+
+        The track is what MediaRelay and every open peer connection hold, so
+        reopening in place lets live viewers resume without reconnecting. A
+        sequence that held still mode keeps its resolution.
+        """
+        with self._read_lock:
+            if self._cap is not None:
+                try:
+                    self._cap.release()
+                except Exception:
+                    log.exception("releasing the dead capture failed")
+                self._cap = None
+            if self._still_mode > 0:
+                self._open_and_configure(source, self._still_w, self._still_h)
+            else:
+                self._open_and_configure(source, self._live_w, self._live_h)
+            return self.is_open()
+
     def grab_live(self) -> Optional["object"]:
         """One fresh frame at the LIVE (stream) resolution — no renegotiation.
 
@@ -326,6 +423,7 @@ class CameraTrack(VideoStreamTrack):
             if not self.is_open():
                 return None
             ok, frame_bgr = self._cap.read()
+            self._note_read(bool(ok and frame_bgr is not None))
         if not ok or frame_bgr is None:
             return None
         return frame_bgr
@@ -383,6 +481,7 @@ class CameraTrack(VideoStreamTrack):
                 self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._still_h)
                 self._cap.read()  # flush the transition frame
             ok, frame_bgr = self._cap.read()
+            self._note_read(bool(ok and frame_bgr is not None))
             if needs_switch:
                 self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._live_w)
                 self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self._live_h)
@@ -408,11 +507,13 @@ class CameraTrack(VideoStreamTrack):
                 self._next_deadline = time.monotonic() + _FRAME_INTERVAL
 
         pts, time_base = await self.next_timestamp()
+        ok, frame_bgr = False, None
         if self.is_open():
             with self._read_lock:
-                ok, frame_bgr = self._cap.read()
-        else:
-            ok, frame_bgr = False, None
+                # Re-check under the lock: reopen() swaps _cap while holding it.
+                if self.is_open():
+                    ok, frame_bgr = self._cap.read()
+                    self._note_read(bool(ok and frame_bgr is not None))
         if not ok or frame_bgr is None:
             # Black frame keeps the track alive when the camera glitches —
             # the client sees blank video rather than a torn-down connection.
@@ -516,6 +617,51 @@ def _ensure_source_track() -> Optional[CameraTrack]:
             _relay = MediaRelay()
             _camera_ok = True
         return _track
+
+
+def check_and_recover() -> bool:
+    """Find the camera again after it was unplugged and plugged back in.
+
+    Blocking (opens devices) — run it in a worker thread. Called every few
+    seconds by the agent's camera watchdog. Before 2026-11-10 a replugged
+    camera stayed dead until someone restarted the agent: the old handle
+    could never read again, and the replugged camera came back under a new
+    /dev/videoN while the agent kept asking for the old one. Also keeps
+    _camera_ok honest, so the heartbeat reports a missing camera instead of
+    the value from the last successful open.
+    """
+    global _camera_ok, _resolved_source
+    with _track_lock:
+        track = _track
+    if track is None:
+        # Never opened (camera absent at boot). Try again once it shows up.
+        source = _find_source_quietly()
+        if source is None:
+            _camera_ok = False
+            return False
+        _resolved_source = source
+        opened = _ensure_source_track() is not None
+        if opened:
+            log.info("camera found at %r", source)
+        return opened
+
+    reason = track.device_lost()
+    if reason is None:
+        _camera_ok = True
+        return True
+
+    if _camera_ok:
+        log.warning("camera lost (%s); looking for it again", reason)
+    _camera_ok = False
+    source = _find_source_quietly()
+    if source is None:
+        return False
+    if track.reopen(source):
+        _resolved_source = source
+        _camera_ok = True
+        log.info("camera recovered at %r", source)
+        return True
+    return False
 
 
 def get_camera_track():

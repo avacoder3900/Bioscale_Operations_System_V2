@@ -11,6 +11,7 @@ import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { CaptureStation, deriveStatus } from '$lib/server/db/models/capture-station.js';
 import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { FailureLabel } from '$lib/server/db/models/failure-label.js';
+import { hasPermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 const DEFAULT_PHASES = [
@@ -111,6 +112,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	return {
 		phases,
 		stations: JSON.parse(JSON.stringify(stations)),
+		// CV Station Restart buttons: the Pi only honours the admin claim.
+		canRestartStations: hasPermission(locals.user, 'cv:admin'),
 		user: { _id: locals.user._id, username: locals.user.username },
 		initialPhase,
 		projectContext,

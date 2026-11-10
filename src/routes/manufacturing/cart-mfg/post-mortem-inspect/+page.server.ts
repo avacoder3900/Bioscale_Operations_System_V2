@@ -23,7 +23,7 @@ import { CvProject } from '$lib/server/db/models/cv-project.js';
 import { CvInspection } from '$lib/server/db/models/cv-inspection.js';
 import { CvImage } from '$lib/server/db/models/cv-image.js';
 import { getR2Url } from '$lib/server/services/r2';
-import { requirePermission } from '$lib/server/permissions';
+import { hasPermission, requirePermission } from '$lib/server/permissions';
 import type { PageServerLoad } from './$types';
 
 const PHASE = 'post_mortem';
@@ -109,6 +109,8 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	return {
 		stations: JSON.parse(JSON.stringify(stations)),
+		// CV Station Restart buttons: the Pi only honours the admin claim.
+		canRestartStations: hasPermission(locals.user, 'cv:admin'),
 		user: { _id: locals.user._id, username: locals.user.username },
 		modelDeployed: deployedProjects.length > 0,
 		deployedProjects: JSON.parse(JSON.stringify(deployedProjects)),

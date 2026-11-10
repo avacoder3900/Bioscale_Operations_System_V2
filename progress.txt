@@ -27183,3 +27183,35 @@ Tested on arm-pi 15:53 UTC: switch-over (old life file marked clean by hand) -> 
 start row only; `systemctl kill -s SIGKILL` -> pi.service.unclean_stop "service process was killed (no clean
 shutdown)" with 12 journal lines (SIGKILL, Failed with result 'signal', Scheduled restart job). That kill row
 (15:53:51 UTC) is a test. test_bims_changes.py 13 pass.
+
+================================================================================
+2026-11-10 — feat/cv-station-restart — CV Station 1 offline fixed; stations self-heal; Restart buttons on tablets
+================================================================================
+CV Station 1 showed offline although its agent ran fine. Two root causes, neither fixable by a restart:
+- /etc/bims/station.env BIMS_URL was a Vercel PREVIEW (...git-bims-ca-e548ad-brevitest.vercel.app). Vercel
+  removed it about 15:59 UTC; every heartbeat since got "HTTP 410: The deployment has been removed". Set to
+  production (backup station.env.bak-2026-11-10 on the Pi).
+- The camera was replugged at 12:16 local and came back as /dev/video1 while the agent opened index 0
+  ("can't open camera by index"). Set CAMERA_DEVICE=HD USB Camera (name match).
+No heartbeat network failures in the last 10 days, so Wi-Fi was not part of it; Wi-Fi settings untouched.
+
+Agent hardening (services/bims-capture-agent, deployed to Station 1 /opt/bims-capture-agent; old files in
+~brevitest/agent-backup-2026-11-10):
+- camera.py: check_and_recover() + agent _camera_watchdog every CAMERA_WATCHDOG_S (5 s). Notices the /dev
+  node gone or recreated (inode) or 30 failed reads in a row, re-resolves CAMERA_DEVICE and reopens the
+  handle IN PLACE on the same track (relay + open viewers keep it). A camera absent at boot is picked up when
+  it appears. _camera_ok now goes false when the camera is lost (heartbeat used to keep saying true).
+- agent.py: heartbeat moves to BIMS_FALLBACK_URL (default production) when BIMS_URL answers 410 or a Vercel
+  404 DEPLOYMENT_NOT_FOUND, and sets os.environ BIMS_URL so sequence.py photo uploads follow.
+Tested on Station 1: USB unbind/bind of port 3-1 (the camera) -> "camera lost (/dev/video1 is gone)" then
+"camera recovered at '/dev/video0'" 13 s later, no restart; /snapshot.jpg 200, 1280x720 JPEG. Dead preview
+URL put back for one restart -> 410 -> switched to production in 0.5 s; then station.env restored. BIMS
+lastSeenAt 18:35:22 UTC online, camera+scanner OK. Station 2 not updated yet (unreachable from this Wi-Fi;
+its BIMS_URL unverified).
+
+BIMS: CV Station 1: Restart / CV Station 2: Restart (red text, red border) in the context bar of Post Mortem
+Inspect (between Cartridge and Station) and Capture (just left of Station; Phase sits between), cv:admin only
+(canRestartStations in both loads). Restart logic moved to src/lib/components/cv-station-restart.ts and
+shared with /cv/stations/[id] (its button and text unchanged). It talks to the Pi directly, so it works while
+BIMS shows the station offline. New: src/lib/components/CvStationRestart.svelte.
+npm run check: 14 errors (baseline 13-14), none in these files. Not clicked in a browser yet.

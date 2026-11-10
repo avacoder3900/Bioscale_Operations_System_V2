@@ -18,6 +18,7 @@
 	import { stationLockUrl, watchStationLock } from '$lib/station-device';
 	import PhotoAnnotatorModal from '$lib/components/PhotoAnnotatorModal.svelte';
 	import StationCameraSettings from '$lib/components/capture/StationCameraSettings.svelte';
+	import CvStationRestart from '$lib/components/CvStationRestart.svelte';
 
 	let { data } = $props();
 
@@ -1308,6 +1309,9 @@
 						<div class="text-xs text-[var(--color-tron-text-secondary)]">Accepts: {ALLOWED_STATUSES.join(' · ')}</div>
 					{/if}
 				</div>
+				{#if data.canRestartStations}
+					<CvStationRestart stations={data.stations} />
+				{/if}
 				<div>
 					<label for="station-sel" class="block text-xs uppercase text-[var(--color-tron-text-secondary)]">Station</label>
 					<select id="station-sel" bind:value={selectedStationId} onchange={() => onStationChange()} class="tron-input">

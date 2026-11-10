@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { restartStationAgent } from '$lib/components/cv-station-restart';
 
 	let { data, form } = $props();
 
@@ -13,61 +14,7 @@
 		restartMessage = null;
 
 		try {
-			// Mint an admin-claim JWT via the existing token endpoint.
-			// hasPermission(cv:admin) on the server side adds the admin: true
-			// claim (story F2). The Pi's admin_restart handler (F1) checks it.
-			const tokRes = await fetch(`/api/cv/stations/${encodeURIComponent(data.station.id)}/token`);
-			if (!tokRes.ok) throw new Error(`token mint HTTP ${tokRes.status}`);
-			const { token } = await tokRes.json();
-			if (!token) throw new Error('empty token');
-
-			const url = `wss://${data.station.hostname}/ws?token=${encodeURIComponent(token)}`;
-			const sock = new WebSocket(url);
-
-			const done = new Promise<void>((resolve, reject) => {
-				let helloSeen = false;
-				const timeout = setTimeout(() => {
-					try { sock.close(); } catch { /* */ }
-					reject(new Error('agent did not respond within 10 s'));
-				}, 10_000);
-
-				sock.onopen = () => { /* wait for hello */ };
-
-				sock.onmessage = (ev) => {
-					let msg: any;
-					try { msg = JSON.parse(ev.data); } catch { return; }
-					if (msg.event === 'hello' && !helloSeen) {
-						helloSeen = true;
-						try {
-							sock.send(JSON.stringify({ cmd: 'admin_restart' }));
-						} catch (e) {
-							clearTimeout(timeout);
-							reject(e instanceof Error ? e : new Error(String(e)));
-						}
-					} else if (msg.event === 'restart_pending') {
-						clearTimeout(timeout);
-						resolve();
-					} else if (msg.event === 'error') {
-						clearTimeout(timeout);
-						reject(new Error(`${msg.code ?? 'error'}: ${msg.message ?? 'unknown'}`));
-					}
-				};
-
-				sock.onerror = () => {
-					clearTimeout(timeout);
-					reject(new Error('WebSocket error'));
-				};
-
-				sock.onclose = () => {
-					// Pi closes the socket as part of the restart flow. If we
-					// haven't seen restart_pending yet by the time the close
-					// arrives, treat it as a failure.
-					clearTimeout(timeout);
-					if (!helloSeen) reject(new Error('socket closed before hello'));
-				};
-			});
-
-			await done;
+			await restartStationAgent(data.station.id, data.station.hostname);
 			restartMessage = {
 				kind: 'ok',
 				text: 'Restart command sent. Agent will be back online in ~5 s.'
