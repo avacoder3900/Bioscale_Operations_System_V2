@@ -27123,3 +27123,8 @@ Logging only (the fix, a retry of the read-only wait steps + shorter waits, wait
   x-vercel-id and the Wi-Fi (/proc/net/wireless); the drive's events go to BIMS (driveLog) when it ends.
 Tests: drive-log.test.ts 6 pass (new); src/lib/robot-arm + server arm/ot2 tests 369 pass; test_loop_driver.py 7 pass
 (1 new). npm run check 13 errors (baseline 14), none in these files. Not run on a robot yet.
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/4gJQoYCtQWP1JA9zqK8E6Jt5Zcoo
+Source: branch master @ commit 4bf8a9dc
+Retrieve this exact code: git checkout 4bf8a9dc
+What this deployment is for: arm Pi drive steps logged on both sides; OT-2 run state on a failed loop (Vercel status success 2026-11-10).
+Pi side (loop_driver.py) NOT installed yet: the remote copy + robot-arm restart needs the user's OK.
