@@ -27230,3 +27230,8 @@ red border) at the far left labelled "CV Station 1" and one at the far right lab
 dictated). cv:admin only; same restartStationAgent() as the other buttons. Capture has no fullscreen mode.
 Layout checked in a 1280x800 static mock-up; not yet seen on a tablet. npm run check 14 errors (baseline),
 none in these files.
+Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscale-operations-system-mongodb/GF5YFmSWvqGQJaAkBq3PzijXuFoz
+Source: branch master @ commit 50554651 (merged from feat/cv-station-restart)
+Retrieve this exact code: git checkout master at commit 50554651
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: big square CV Station Restart buttons in the Post Mortem Inspect fullscreen view
