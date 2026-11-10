@@ -27306,3 +27306,8 @@ move-log.test.ts, services/robot-arm/src/server/servo_config.py.
 npm run check: 13 errors, all pre-existing in unrelated files (r2.ts, research-proxy.ts, AskBimsWidget, assembly,
 magnetometer); none in touched files. Unit tests src/lib/robot-arm + src/lib/server: 822 passed, 1 skipped.
 No new index (play lookup by runId is bounded by the existing at index).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/BX2QkTsM3A3GMqBUFATf8aKzef8q
+Source: branch master @ commit 02b4cb5c (fast-forwarded from feat/arm-arrival-log)
+Retrieve this exact code: git checkout master at commit 02b4cb5c
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Movement Log Arrival rows after every play, Pose Saved rows, load in whole-arm readings
