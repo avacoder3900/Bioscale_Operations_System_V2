@@ -27127,4 +27127,7 @@ Deployment: production — https://vercel.com/alejandro-valdezs-projects/bioscal
 Source: branch master @ commit 4bf8a9dc
 Retrieve this exact code: git checkout 4bf8a9dc
 What this deployment is for: arm Pi drive steps logged on both sides; OT-2 run state on a failed loop (Vercel status success 2026-11-10).
-Pi side (loop_driver.py) NOT installed yet: the remote copy + robot-arm restart needs the user's OK.
+Pi side installed 2026-11-10 ~15:22 UTC with the user's OK: loop_driver.py copied to arm-pi (backup
+loop_driver.py.bak-20261110, md5 96b77b6d), /sessions/active null, robot-arm restarted, no motion. Verified: /health ok,
+link cable up, driver idle; a read-only loopState from the Pi with x-drive-req install-check-1 got 200 + the echoed
+headers, and BIMS wrote its drive_received / drive_answered rows (296 ms, iad1) on Robot 3 B07.
