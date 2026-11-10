@@ -27311,3 +27311,9 @@ Source: branch master @ commit 02b4cb5c (fast-forwarded from feat/arm-arrival-lo
 Retrieve this exact code: git checkout master at commit 02b4cb5c
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Movement Log Arrival rows after every play, Pose Saved rows, load in whole-arm readings
+
+2026-11-10 22:39 UTC — arm-pi: GET /servos/state installed (user OK, arm idle: /sessions/active null). The Pi's
+servo_config.py matched the repo's pre-change copy (md5 d3e6fcfa); backup servo_config.py.bak-pre-state-20261110.
+Copied, py_compile OK, `systemctl restart robot-arm` (active 16:39:56 CST). Through the tunnel: /servos/state answers
+all six servos (goal register, current, status 0, P/D/I); /servos and /servos/config unchanged. Change Log seed rows
+log.arrival (code) and pi.router.servo_state (pi) applied; page maintenance.moves added to ARM_PAGES.

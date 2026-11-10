@@ -25,6 +25,8 @@ export const ARM_PAGES = [
 	'maintenance.jog',
 	'maintenance.sync-zero',
 	'maintenance.tests',
+	/** Maintenance → Movement Log (2026-11-10). */
+	'maintenance.moves',
 	/** The ARM card in the right rail, on every tab. */
 	'arm-card',
 	/** The Opentrons lab pages (a protocol deployed from the library), 2026-11-06. */

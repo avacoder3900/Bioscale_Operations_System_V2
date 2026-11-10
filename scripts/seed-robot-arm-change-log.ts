@@ -99,7 +99,9 @@ const ROWS: Row[] = [
 	['2026-11-06T20:32:00Z', 'run', 'gripper', 'loop.first_grab_waits_for', null, null, 'ARM CALIBRATED', null, 'code', 'No tip on the OT-2, no arm motion (c4da8059)'],
 	['2026-11-06T20:39:00Z', 'calibrate.arm', 'servo', 'home.jog_speed', null, 'full', 600, 'steps/s', 'code', 'Return To Home jogs at a capped speed, full speed put back after (4accb024)'],
 	['2026-11-06T20:47:00Z', 'run', 'stage', 'setup.scan_presence_only', null, null, 'Added', null, 'code', 'Setup box Barcode Present Only (26ea0d2b)'],
-	['2026-11-06T21:07:00Z', 'run', 'network', 'link.home_timeout_s', null, 80, 60, 's', 'code', "Home Gantry through the cable link: the Pi's limit is 60 s (a073ed2d)"]
+	['2026-11-06T21:07:00Z', 'run', 'network', 'link.home_timeout_s', null, 80, 60, 's', 'code', "Home Gantry through the cable link: the Pi's limit is 60 s (a073ed2d)"],
+	['2026-11-10T22:26:14Z', 'maintenance.moves', 'servo', 'log.arrival', null, null, 'Added', null, 'code', 'Arrival row after every play, Pose Saved rows, load in readings (02b4cb5c)'],
+	['2026-11-10T22:39:56Z', 'pi', 'servo', 'pi.router.servo_state', null, null, 'Installed', null, 'pi', 'GET /servos/state: goal register, current, status bits, gains (servo_config.py; backup .bak-pre-state-20261110)']
 ];
 
 async function main() {
