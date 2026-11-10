@@ -714,7 +714,12 @@ def main() -> None:
         log.info("camera ready")
     else:
         log.warning("camera not available — /health will report camera_ok=false")
-    web.run_app(build_app(), host="0.0.0.0", port=port, print=None)
+    # shutdown_timeout: aiohttp's default (60 s) waits for open connections,
+    # and a tablet watching the live feed never closes its stream, so a
+    # restart sat until systemd SIGKILLed it at 90 s (Station 2, 2026-11-10).
+    web.run_app(
+        build_app(), host="0.0.0.0", port=port, print=None, shutdown_timeout=3
+    )
 
 
 if __name__ == "__main__":

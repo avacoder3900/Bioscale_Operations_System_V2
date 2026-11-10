@@ -14,6 +14,8 @@ WorkingDirectory=/opt/bims-capture-agent
 ExecStart=/opt/bims-capture-agent/.venv/bin/python /opt/bims-capture-agent/agent.py
 Restart=always
 RestartSec=5
+# 2026-11-10: a stuck stop held a station off for the 90 s default.
+TimeoutStopSec=15
 StandardOutput=journal
 StandardError=journal
 

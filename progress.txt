@@ -27251,3 +27251,14 @@ Deploy restart 13:00 local: the OLD agent hung on stop for 90 s until systemd SI
 Test 13:05: USB unbind/bind of port 1-2 (camera) -> "camera lost (... is gone)" -> "camera recovered" 7 s later,
 no restart, node moved video0 -> video1 behind the by-id link; /snapshot.jpg 200. BIMS 19:06 UTC: both
 stations online, camera + scanner OK.
+
+================================================================================
+2026-11-10 — feat/cv-station-restart — Station restarts no longer hang 90 s; "CV Station 2" label
+================================================================================
+Station 2's 13:00 restart hung 90 s: a tablet was watching the live feed (/snapshot.jpg ~11/s) and aiohttp's
+default shutdown_timeout (60 s) waits for open connections, then systemd SIGKILLed at its 90 s default. Fix:
+web.run_app(..., shutdown_timeout=3) in agent.py (repo + Station 2's Pi-only agent) and TimeoutStopSec=15
+(repo bims-capture-agent.service; drop-in /etc/systemd/system/bims-capture-agent.service.d/stop-timeout.conf on
+Station 2). Test on Station 2 with an MJPEG stream + snapshot loop running: restart 6.4 s, stopped cleanly (no
+timeout kill), camera OK. Station 1 not deployed yet (needs a restart; ask first).
+Fullscreen tablet strip: right label "Station 2" -> "CV Station 2" (user request).

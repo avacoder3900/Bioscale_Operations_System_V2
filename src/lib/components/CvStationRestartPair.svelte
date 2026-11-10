@@ -1,6 +1,6 @@
 <script lang="ts">
 	// Fullscreen tablet strip: CV Station 1 as a square Restart button at the
-	// far left, Station 2 at the far right. Each button is as tall as the strip
+	// far left, CV Station 2 at the far right. Each button is as tall as the strip
 	// and as wide as it is tall. Labels as dictated (2026-11-10).
 	import { restartStationAgent } from './cv-station-restart';
 
@@ -67,7 +67,7 @@
 	</div>
 	<div class="flex h-full min-w-0 items-stretch gap-4">
 		{#if right}
-			{@render label(right, 'Station 2', true)}
+			{@render label(right, 'CV Station 2', true)}
 			{@render square(right)}
 		{/if}
 	</div>
