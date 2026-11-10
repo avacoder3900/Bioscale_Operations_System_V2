@@ -27267,3 +27267,7 @@ Source: branch master @ commit a324fcbf (merged from feat/cv-station-restart)
 Retrieve this exact code: git checkout master at commit a324fcbf
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: "CV Station 2" label on the fullscreen tablet Restart strip
+
+Station 1 (2026-11-10): stop fix staged without a restart because a tablet was watching (247 feed requests in
+the last minute): new agent.py in /opt (old copy ~brevitest/agent-backup-2026-11-10/agent.py.before-stopfix) and the
+TimeoutStopSec=15 drop-in (daemon-reload, live now). The 3 s shutdown_timeout loads at the next restart.
