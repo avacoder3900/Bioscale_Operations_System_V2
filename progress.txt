@@ -27164,3 +27164,22 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit c608b315
 Retrieve this exact code: git checkout c608b315
 What this deployment is for: OT-2 run actions (Run Control), Pi loop handshake events, Change Log unclean-stop display (Vercel status success 2026-11-10).
+
+================================================================================
+2026-11-10 — feat/arm-drive-log — arm-pi unclean-stop report installed and tested on the Pi
+================================================================================
+With the user's OK (arm-pi back on, nothing plugged in, /sessions/active null), copied bims_changes.py to arm-pi
+(backup bims_changes.py.bak-20261110; it matched the repo before). Two bugs found on the Pi and fixed (de95c10a + this):
+- The Pi has no clock battery: it came up 19 min behind (System clock synchronized: no) until NTP synced, so a
+  boot time compared to the last heartbeat could call a power loss a kill. The life record keeps the kernel
+  boot_id; a new boot_id = power loss / reboot. The journal is volatile (no /var/log/journal), so after a power
+  loss the row says "previous boot: no journal (the journal is not kept across boots)".
+- A normal `systemctl restart` was reported "killed": the service runs under `uv run`, uvicorn shuts down
+  gracefully then re-raises SIGTERM, so Python dies by the signal and atexit never runs (journal: status=143,
+  "Failed with result 'exit-code'" on every stop). clean_stop is now set by a SIGTERM/SIGINT handler chained in
+  front of uvicorn's (uvicorn's graceful shutdown unchanged); the journal check ignores status 143 and
+  code=killed status=15/TERM, and counts other exit codes, kills (e.g. 9/KILL) and OOM.
+Tested on arm-pi 15:53 UTC: switch-over (old life file marked clean by hand) -> start row only; clean restart ->
+start row only; `systemctl kill -s SIGKILL` -> pi.service.unclean_stop "service process was killed (no clean
+shutdown)" with 12 journal lines (SIGKILL, Failed with result 'signal', Scheduled restart job). That kill row
+(15:53:51 UTC) is a test. test_bims_changes.py 13 pass.

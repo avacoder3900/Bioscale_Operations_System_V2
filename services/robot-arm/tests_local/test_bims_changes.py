@@ -47,6 +47,15 @@ class PreviousEndTests(unittest.TestCase):
         self.assertEqual(bc.previous_end(prev, 50.0, seg), "service exited with an error")
         ok = ["... robot-arm.service: Main process exited, code=exited, status=0/SUCCESS"]
         self.assertIsNone(bc.previous_end(prev, 50.0, ok))
+        # Every normal stop under `uv run` (seen on arm-pi 2026-11-10): not an error.
+        normal = [
+            "... robot-arm.service: Main process exited, code=exited, status=143/n/a",
+            "... robot-arm.service: Failed with result 'exit-code'.",
+            "... robot-arm.service: Main process exited, code=killed, status=15/TERM",
+        ]
+        self.assertIsNone(bc.previous_end(prev, 50.0, normal))
+        hung = ["... State 'stop-sigterm' timed out. Killing.", "... Main process exited, code=killed, status=9/KILL"]
+        self.assertEqual(bc.previous_end(prev, 50.0, hung), "service exited with an error")
 
     def test_the_segment_is_the_previous_run_only(self):
         lines = ["old 1", STARTED.replace("15:22", "09:00"), "run A 1", "run A 2", "Stopping robot-arm.service", STARTED, "now 1"]
@@ -119,6 +128,25 @@ class LifeTests(unittest.TestCase):
         self.assertEqual(now["pid"], os.getpid())
         self.assertFalse(now["clean_stop"])
         bc._on_exit()
+        self.assertTrue(json.loads(Path(bc.LIFE).read_text(encoding="utf-8"))["clean_stop"])
+
+
+class StopSignalTests(unittest.TestCase):
+    def test_sigterm_marks_a_clean_stop_and_still_reaches_uvicorn(self):
+        import json
+        import signal
+        from pathlib import Path
+
+        got = []
+        before = signal.getsignal(signal.SIGTERM)
+        try:
+            signal.signal(signal.SIGTERM, lambda signum, frame: got.append(signum))
+            bc._life.update(clean_stop=False, last_alive=1.0)
+            bc._chain_stop_signal(signal.SIGTERM)
+            signal.getsignal(signal.SIGTERM)(signal.SIGTERM, None)
+        finally:
+            signal.signal(signal.SIGTERM, before)
+        self.assertEqual(got, [signal.SIGTERM])
         self.assertTrue(json.loads(Path(bc.LIFE).read_text(encoding="utf-8"))["clean_stop"])
 
 

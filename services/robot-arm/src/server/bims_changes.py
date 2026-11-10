@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -337,12 +338,18 @@ def service_started(app: Any, delay_s: float = 3.0) -> None:
 
 # ---------------------------------------------------------------- how the previous run ended (2026-11-10)
 #
-# The service keeps ~/.bims-arm/service-life.json: {pid, started_at, last_alive, clean_stop, crash}.
-# last_alive is rewritten every HEARTBEAT_S; clean_stop is set by atexit (a systemctl stop / restart /
-# reboot: uvicorn takes the SIGTERM and Python exits normally); crash holds an uncaught exception's
-# traceback. A power cut or a SIGKILL leaves clean_stop false. On the next start previous_end() names it.
+# The service keeps ~/.bims-arm/service-life.json: {pid, boot_id, started_at, last_alive, clean_stop, crash}.
+# last_alive is rewritten every HEARTBEAT_S; clean_stop is set when SIGTERM / SIGINT arrives (a systemctl
+# stop / restart / reboot) and again by atexit. The SIGTERM handler is chained in front of uvicorn's: uvicorn
+# shuts down gracefully and then re-raises the signal, so Python dies by it and atexit never runs (seen
+# 2026-11-10: every restart exits status=143). crash holds an uncaught exception's traceback. A power cut or a
+# SIGKILL leaves clean_stop false. On the next start previous_end() names it.
 
-_EXIT_ERROR = re.compile(r"(code=(killed|dumped))|(status=(?!0/)\d+)|(Failed with result)|(oom-kill)", re.I)
+# A failed exit in the journal: killed / dumped by anything but SIGTERM, or an exit code other than 0 and 143
+# (143 = 128 + SIGTERM, every normal stop under `uv run`), or the OOM killer.
+_KILLED = re.compile(r"code=(killed|dumped), status=(?!15/)", re.I)
+_EXITED = re.compile(r"code=exited, status=(?!(0|143)/)\d+", re.I)
+_OOM = re.compile(r"oom-kill|out of memory", re.I)
 _life: dict[str, Any] = {}
 
 
@@ -391,7 +398,7 @@ def previous_end(prev: Optional[dict[str, Any]], booted_at: Optional[float], seg
         if booted_at and isinstance(alive, (int, float)) and booted_at > alive:
             return "Pi lost power or rebooted without stopping the service"
         return "service process was killed (no clean shutdown)"
-    if any(_EXIT_ERROR.search(ln) for ln in segment):
+    if any(_KILLED.search(ln) or _EXITED.search(ln) or _OOM.search(ln) for ln in segment):
         return "service exited with an error"
     return None
 
@@ -428,6 +435,26 @@ def _on_exit() -> None:
     _life["clean_stop"] = True
     _life["last_alive"] = time.time()
     _write_life()
+
+
+def _chain_stop_signal(sig: int) -> None:
+    """Mark the stop as clean when `sig` arrives, then hand it to whoever handled it before (uvicorn)."""
+    before = signal.getsignal(sig)
+
+    def handler(signum, frame):  # type: ignore[no-untyped-def]
+        try:
+            _on_exit()
+        except Exception:
+            pass
+        if callable(before):
+            before(signum, frame)
+        elif before == signal.SIG_IGN:
+            return
+        else:
+            signal.signal(signum, signal.SIG_DFL)
+            signal.raise_signal(signum)
+
+    signal.signal(sig, handler)
 
 
 _prev_hook = sys.excepthook
@@ -489,6 +516,11 @@ def track_life() -> Optional[dict[str, Any]]:
     _write_life()
     atexit.register(_on_exit)
     sys.excepthook = _excepthook
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            _chain_stop_signal(sig)
+        except Exception as exc:  # not the main thread: atexit still covers a normal exit
+            _log(f"stop signal not watched: {exc}")
 
     def beat() -> None:
         while True:
