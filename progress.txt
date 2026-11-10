@@ -27215,3 +27215,8 @@ Inspect (between Cartridge and Station) and Capture (just left of Station; Phase
 shared with /cv/stations/[id] (its button and text unchanged). It talks to the Pi directly, so it works while
 BIMS shows the station offline. New: src/lib/components/CvStationRestart.svelte.
 npm run check: 14 errors (baseline 13-14), none in these files. Not clicked in a browser yet.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/u9Qp1dQY4Lnv6eoPLtwRTQ6ZySVE
+Source: branch master @ commit 8ef26a7a (merged from feat/cv-station-restart)
+Retrieve this exact code: git checkout master at commit 8ef26a7a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: CV Station Restart buttons on Post Mortem Inspect + Capture; shared restart logic
