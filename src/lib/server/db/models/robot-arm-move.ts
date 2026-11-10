@@ -68,7 +68,11 @@ const robotArmMoveSchema = new Schema(
 		/** Play rows: { rateHz, t[], goals[][], fires[] } ($lib/robot-arm/move-log PlayFrames). Left out of list reads. */
 		frames: { type: Schema.Types.Mixed, default: undefined },
 		frameCount: { type: Number, default: undefined },
-		frameStats: { type: Schema.Types.Mixed, default: undefined }
+		frameStats: { type: Schema.Types.Mixed, default: undefined },
+		/** Arm Pi drive-step rows (2026-11-10, $lib/robot-arm/drive-log): the Pi's request id, on BIMS's rows and the Pi's. */
+		reqId: { type: String, default: undefined },
+		/** Drive-step rows: status, attempt, Vercel request id and region, the Pi's Wi-Fi. */
+		detail: { type: Schema.Types.Mixed, default: undefined }
 	},
 	{ timestamps: false, minimize: false, collection: 'robot_arm_moves' }
 );

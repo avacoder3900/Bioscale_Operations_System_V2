@@ -17,6 +17,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { connectDB, ArmWaxFillRun, ArmWaxFillSettings } from '$lib/server/db';
 import { robotArmFetchRaw } from './robot-arm-client';
 import { afterPlay, playbackActive } from './robot-arm-animation';
+import { recordPiDriveLog } from './arm-drive-log';
 import {
 	ArmWaxFillError,
 	cycleAwaitParked,
@@ -69,7 +70,8 @@ export const DRIVE_ACTIONS = [
 	'loopFinish',
 	'failLoop',
 	'playback',
-	'settle'
+	'settle',
+	'driveLog'
 ] as const;
 export type DriveAction = (typeof DRIVE_ACTIONS)[number];
 
@@ -125,6 +127,9 @@ export async function runDriveStep(loopId: string, action: string, extra: Record
 		case 'settle':
 			if (typeof extra.runId !== 'string' || !extra.runId) throw new ArmWaxFillError('No run.', 400);
 			return { settle: plain(await afterPlay(user, extra.runId)) };
+		case 'driveLog':
+			// The Pi's own step log for this loop, sent when its drive ends (2026-11-10).
+			return await recordPiDriveLog(loopId, extra.events);
 	}
 }
 

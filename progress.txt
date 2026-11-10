@@ -27097,3 +27097,29 @@ Deployment: production — https://vercel.com/brevitest/bioscale-operations-syst
 Source: branch master @ commit 585ec45f
 Retrieve this exact code: git checkout 585ec45f
 What this deployment is for: Wax Per Gate in the arm wax fill Setup, carriage volumes by default (Vercel status success 2026-11-09 18:11 UTC).
+
+================================================================================
+2026-11-10 — feat/arm-drive-log — Arm Pi drive steps logged on both sides (diagnosing the 09:02 CT ReadTimeout)
+================================================================================
+Loop 4aXs4KTxC2kwMqX_zLN-p (Giovanni, B07, arm-pi driver) failed 15:02:41 UTC with "grab: ReadTimeout: The read
+operation timed out". No arm motion. What the logs showed: the Pi sent awaitParked at 15:00:31 and its own driver
+log (GET /ot2/loop-driver/status) shows that request open 130 277 ms (STEP_TIMEOUT_S 130) — but BIMS had finished
+that step: audit arm_wax_fill.run_parked 15:01:24.8 (ARM CALIBRATED seen). So BIMS's answer never reached the Pi, or
+BIMS stalled between the audit and the answer. No deploy at the time. The logs could not say which: BIMS writes
+nothing when it answers a drive step, the Pi's log is memory only, and nothing pairs the two. The OT-2 command log
+also stops at 15:01:40 (mid-aspirate) because nothing read the run after the loop failed.
+Logging only (the fix, a retry of the read-only wait steps + shorter waits, waits for a repeat to confirm the cause):
+- robot-arm/drive-log.ts (new, pure): Movement Log rows device 'link' — drive_received / drive_answered (BIMS) and
+  pi_drive_step / pi_drive_note (the Pi), paired by the Pi's request id; fixed _ids so a resent log adds nothing.
+- server/arm-drive-log.ts (new): writes them, never throws.
+- api/robot-arm/wax-fill/drive/+server.ts: reads x-drive-req / x-drive-attempt, writes received (in parallel with the
+  step) and answered (status, ms, Vercel id, region) rows, echoes x-drive-req and x-drive-ms.
+- arm-loop-drive.ts: action driveLog (the Pi's events for the loop -> rows).
+- robot-arm-move.ts: reqId, detail. move-types.ts: group "Arm Pi Drive Step"; groupOfKind now groups link rows
+  (it mapped every link row to the arm, so they had no group).
+- arm-wax-fill.ts: failLoop records opentronsRunAtFail { status, message, last } (6 s cap) and logs the run's commands
+  so far (4 s budget); cancelBlockingRun logs the run's commands after the stop. arm-wax-fill-run.ts: the field.
+- services/robot-arm/src/server/loop_driver.py: request id per step (x-drive-req), events keep sent_at, status,
+  x-vercel-id and the Wi-Fi (/proc/net/wireless); the drive's events go to BIMS (driveLog) when it ends.
+Tests: drive-log.test.ts 6 pass (new); src/lib/robot-arm + server arm/ot2 tests 369 pass; test_loop_driver.py 7 pass
+(1 new). npm run check 13 errors (baseline 14), none in these files. Not run on a robot yet.

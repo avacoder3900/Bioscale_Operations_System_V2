@@ -3366,7 +3366,7 @@ export async function cancelBlockingRun(user: User, rawRunId: unknown): Promise<
 	if (!conflict) throw new ArmWaxFillError('No run is holding this robot any more — reload the page.', 409);
 	if (conflict.kind !== 'wax') throw new ArmWaxFillError('A reagent run holds this robot — finish or cancel it on the Robots page.', 409);
 	if (conflict.runId !== runId) throw new ArmWaxFillError('A different wax run holds this robot now — reload the page.', 409);
-	const run = (await WaxFillingRun.findById(runId).select('armWaxFill').lean()) as any;
+	const run = (await WaxFillingRun.findById(runId).select('armWaxFill opentronsRunId').lean()) as any;
 	const stop = await stopRunQueue('wax', 'cancel', runId, { reason: `Cancelled from the robot-arm wax-fill page by ${user.username}` }, user);
 	if (isActionFail(stop)) throw new ArmWaxFillError(stop.fail.error, stop.fail.status);
 	const warning = typeof stop.warning === 'string' && stop.warning ? stop.warning : null;
@@ -3378,6 +3378,8 @@ export async function cancelBlockingRun(user: User, rawRunId: unknown): Promise<
 		);
 	}
 	await audit(user, 'arm_wax_fill.blocking_run_cancel', 'wax_filling_runs', runId, { robotId: settings.robotId, status: conflict.status, loopId, warning });
+	// The robot run's last commands into the Movement Log (2026-11-10), so the log shows how it ended.
+	if (run?.opentronsRunId) await syncOt2Robot(settings.robotId, { runId: String(run.opentronsRunId), budgetMs: 6000 });
 	return { runId, warning, loop: loopId ? await getLoop(loopId) : null };
 }
 
@@ -3392,5 +3394,27 @@ export async function failLoop(user: User, loopId: string, step: string, error: 
 	if (cycle) await patchCycle(loopId, cycle.index, { step: 'failed', error: msg, endedAt: new Date(), ...extra });
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'failed', error: `${step}: ${msg}`, endedAt: new Date() } });
 	await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step, error: msg });
+	await recordRunAtFail(loop);
 	return (await getLoop(loopId))!;
+}
+
+/**
+ * A failed loop leaves its OT-2 run open, and nothing read the run after that
+ * (2026-11-10: its commands stop in the Movement Log mid-aspirate and the loop
+ * kept no robot status). Read where the run stands and log its commands so far.
+ * Bounded (~10 s) and never throws.
+ */
+async function recordRunAtFail(loop: any): Promise<void> {
+	const runId = loop?.opentronsRunId ? String(loop.opentronsRunId) : '';
+	if (!runId || loop.runFinished) return;
+	try {
+		const robot = await getRobot(String(loop.robot?._id ?? ''));
+		if (!robot) return;
+		const r = await Promise.race([readRunPause(robot, runId), waitMs(6000).then(() => null)]);
+		const at = { at: new Date(), status: r?.status ?? null, message: r?.message ?? null, last: r?.last ?? null, read: r ? 'ok' : 'no answer in 6 s' };
+		await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { opentronsRunAtFail: at } });
+	} catch (e) {
+		await ArmWaxFillRun.updateOne({ _id: loop._id }, { $set: { opentronsRunAtFail: { at: new Date(), read: `failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 300) } } }).catch(() => undefined);
+	}
+	await syncOt2Robot(String(loop.robot?._id ?? ''), { runId, budgetMs: 4000 });
 }

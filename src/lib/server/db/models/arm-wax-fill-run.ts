@@ -108,6 +108,8 @@ const armWaxFillRunSchema = new Schema(
 		/** The run's end was recorded on the wax run (loopFinish / halt). */
 		runFinished: { type: Boolean, default: false },
 		opentronsRunFinalStatus: String,
+		/** 2026-11-10: the OT-2 run as it stood when the loop failed — { at, status, message, last } (a failed loop leaves the run open). */
+		opentronsRunAtFail: Schema.Types.Mixed,
 		/**
 		 * The run's fill profile (seconds per cart and per station, from the robot's
 		 * command log — $lib/robot-arm/run-profile), saved once the run is over

@@ -17,6 +17,12 @@ The browser only watches (GET /ot2/loop-driver/status, through BIMS).
     POST /ot2/loop-driver/stop  {loop_id?}             (key)  stops driving after the current step (no motion)
     GET  /ot2/loop-driver/status                       (key)  running, loop, step, last note, error, recent events
 
+2026-11-10: every step carries a request id (x-drive-req) that BIMS logs on
+its "received" and "answered" Movement Log rows; each event here keeps that id,
+the HTTP status, Vercel's x-vercel-id and the Pi's Wi-Fi, and the drive's
+events go to BIMS (action driveLog) when the drive ends — so a step whose
+answer never arrived shows on both sides.
+
 A step BIMS refuses ends the drive with failLoop, as the browser does; an
 arrival miss ("ARM DID NOT ARRIVE:") ends the drive WITHOUT failing the loop
 (the operator resumes it from the Run tab). Stop / STOP RUN stay on the Run
@@ -28,6 +34,7 @@ from __future__ import annotations
 import os
 import threading
 import time
+import uuid
 from collections import deque
 from typing import Any, Callable, Optional
 
@@ -37,6 +44,22 @@ STEP_TIMEOUT_S = 130.0      # a BIMS wait step holds up to ~85 s (its maxDuratio
 PLAY_POLL_S = 0.1
 PLAY_GRACE_S = 20.0
 SELF_URL = os.environ.get("ARM_SELF_URL", "http://127.0.0.1:8000")
+LOG_TIMEOUT_S = 15.0
+
+
+def wifi() -> Optional[dict]:
+    """The Wi-Fi link right now, from /proc/net/wireless (no subprocess); None when there is none."""
+    try:
+        with open("/proc/net/wireless", encoding="ascii") as f:
+            lines = f.read().splitlines()[2:]
+        for line in lines:
+            name, _, rest = line.partition(":")
+            parts = rest.split()
+            if len(parts) >= 3:
+                return {"iface": name.strip(), "link": float(parts[1].rstrip(".")), "level": float(parts[2].rstrip("."))}
+    except Exception:
+        return None
+    return None
 
 
 class DriveStopped(Exception):
@@ -64,6 +87,10 @@ class LoopDriver:
         self._session_active = session_active
         self._clock = clock
         self._sleep = sleep
+        self._wifi = wifi
+        self._seq = 0
+        self._run_tag = ""
+        self._drive_from = 0.0
 
     # ---- outside ----
     def status(self) -> dict:
@@ -79,6 +106,9 @@ class LoopDriver:
             self.loop_id = loop_id
             self.bims_url = bims_url.rstrip("/")
             self.stop_flag.clear()
+            self._seq = 0
+            self._run_tag = uuid.uuid4().hex[:6]
+            self._drive_from = time.time()
             self.state = {"running": True, "loop_id": loop_id, "step": None, "note": "starting", "error": None, "started_at": time.time(), "ended_at": None}
         # BIMS must answer before we take the loop over; else the browser drives.
         first = self.step("loopState")
@@ -106,23 +136,48 @@ class LoopDriver:
     def step(self, action: str, extra: Optional[dict] = None) -> dict:
         """One BIMS step: {ok, data} or {ok: False, error, status}."""
         body = {"loopId": self.loop_id, "action": action, **(extra or {})}
+        with self.lock:
+            self._seq += 1
+            req = f"{self._run_tag}-{self._seq}"
+        sent_at = time.time()
         t0 = time.perf_counter()
+        vercel_id = None
         if self._call:
             r = self._call(action, body)
         else:
             try:
                 key = os.environ.get("ROBOT_ARM_API_KEY", "")
-                res = httpx.post(f"{self.bims_url}/api/robot-arm/wax-fill/drive", json=body, headers={"x-api-key": key}, timeout=STEP_TIMEOUT_S)
+                headers = {"x-api-key": key, "x-drive-req": req, "x-drive-attempt": "1"}
+                timeout = LOG_TIMEOUT_S if action == "driveLog" else STEP_TIMEOUT_S
+                res = httpx.post(f"{self.bims_url}/api/robot-arm/wax-fill/drive", json=body, headers=headers, timeout=timeout)
+                vercel_id = res.headers.get("x-vercel-id")
                 try:
                     payload = res.json()
                 except Exception:
                     payload = {"error": res.text[:200]}
-                r = {"ok": True, "data": payload} if res.status_code < 400 else {"ok": False, "error": str(payload.get("error") or f"HTTP {res.status_code}"), "status": res.status_code}
+                r = {"ok": True, "data": payload, "status": res.status_code} if res.status_code < 400 else {"ok": False, "error": str(payload.get("error") or f"HTTP {res.status_code}"), "status": res.status_code}
             except Exception as e:
                 r = {"ok": False, "error": f"{type(e).__name__}: {e}", "status": 0}
-        with self.lock:
-            self.events.append({"at": time.time(), "action": action, "ok": r.get("ok"), "ms": round((time.perf_counter() - t0) * 1000), "error": r.get("error")})
+        if action != "driveLog":
+            with self.lock:
+                self.events.append({
+                    "at": time.time(), "sent_at": sent_at, "action": action, "ok": r.get("ok"),
+                    "ms": round((time.perf_counter() - t0) * 1000), "error": r.get("error"),
+                    "req": req, "attempt": 1, "status": r.get("status"), "vercel_id": vercel_id, "wifi": self._wifi(),
+                })
         return r
+
+    def send_log(self) -> None:
+        """This drive's events to BIMS's Movement Log (one call; on failure they stay in /ot2/loop-driver/status)."""
+        with self.lock:
+            since = self._drive_from
+            events = [e for e in self.events if e.get("at", 0) >= since]
+        if not events:
+            return
+        r = self.step("driveLog", {"events": events})
+        # An event, not the note: the note keeps the drive's outcome ("grab failed: ...") for the Run tab.
+        with self.lock:
+            self.events.append({"at": time.time(), "log": "sent to BIMS" if r.get("ok") else f"not sent: {r.get('error')}"})
 
     def must(self, step_name: str, action: str, extra: Optional[dict] = None) -> dict:
         if self.stop_flag.is_set():
@@ -262,6 +317,11 @@ class LoopDriver:
                 self.state["error"] = f"{type(e).__name__}: {e}"
             self.note(f"driver error: {type(e).__name__}: {e}")
         finally:
+            try:
+                self.send_log()
+            except Exception as e:
+                with self.lock:
+                    self.events.append({"at": time.time(), "log": f"not sent: {type(e).__name__}: {e}"})
             with self.lock:
                 self.state.update(running=False, ended_at=time.time())
 

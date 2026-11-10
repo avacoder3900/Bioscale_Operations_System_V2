@@ -30,8 +30,12 @@ class Fake:
     def __init__(self, script):
         self.script = {k: list(v) for k, v in script.items()}
         self.calls = []
+        self.logs = []
 
     def __call__(self, action, body):
+        if action == "driveLog":  # the drive's own log, sent when it ends (kept apart from the step order)
+            self.logs.append(body.get("events") or [])
+            return {"ok": True, "data": {"rows": len(self.logs[-1])}}
         self.calls.append(action)
         q = self.script.get(action)
         if not q:
@@ -132,6 +136,24 @@ class LoopDriverTests(unittest.TestCase):
         d._run(loop("grab"))
         self.assertEqual(fake.calls, [])
         self.assertIn("stopped", d.state["note"])
+
+
+    def test_the_drive_log_goes_to_bims_once_with_request_ids(self):
+        d, f = run_driver({
+            "loopState": [ok(loop=loop("grab"))],
+            "awaitParked": [{"ok": False, "error": "ReadTimeout: The read operation timed out", "status": 0}],
+            "failLoop": [ok(loop=loop("grab", status="failed"))],
+        })
+        self.assertEqual(len(f.logs), 1)
+        steps = [e for e in f.logs[0] if e.get("action")]
+        self.assertEqual([e["action"] for e in steps], ["awaitParked", "loopState", "failLoop"])
+        self.assertEqual(len({e["req"] for e in steps}), 3)
+        self.assertFalse(steps[0]["ok"])
+        self.assertIn("ReadTimeout", steps[0]["error"])
+        self.assertLessEqual(steps[0]["sent_at"], steps[0]["at"])
+        self.assertTrue(any("grab failed" in (e.get("note") or "") for e in f.logs[0]))
+        self.assertIn("grab failed", d.state["note"])
+        self.assertEqual(d.events[-1].get("log"), "sent to BIMS")
 
 
 if __name__ == "__main__":
