@@ -27317,3 +27317,14 @@ servo_config.py matched the repo's pre-change copy (md5 d3e6fcfa); backup servo_
 Copied, py_compile OK, `systemctl restart robot-arm` (active 16:39:56 CST). Through the tunnel: /servos/state answers
 all six servos (goal register, current, status 0, P/D/I); /servos and /servos/config unchanged. Change Log seed rows
 log.arrival (code) and pi.router.servo_state (pi) applied; page maintenance.moves added to ARM_PAGES.
+
+2026-11-10 23:03-23:07 UTC — arm-pi shoulder I test (user's go-ahead; user away for the I=1 run). Same 9 moves both
+times, exactly as the user listed: 1. Shoulder Down, 0. Remove Home, 1. Shoulder Down, 0. Remove Home, pause 5 s,
+6. Elbow, 5. Shoulder Down, 6. Elbow, 5. Shoulder Down. Shoulder (servo 2) off, from the Arrival rows:
+  I=0: 11, 0, 1, 1 | 1, 20, 6, 19      I=1 (temporary, 23:05:05): 9, 1, -1, 0 | 1, 16, 7, 16
+I=1 trims the lifting miss on 5. Shoulder Down from 19-20 to 16 (load about -155 both ways, about 344 mA), with no
+hunting (6 reads after each arrival, spread 0), no servo error flags, all servos 38-41 C. At rest after the write
+the shoulder stayed 18 off and did not creep over 5 s; only the push rose (load -150 -> -168). Put back to I=0 at
+23:06:47 (temporary write, EEPROM was 0 throughout; shoulder Lock now 1). Both gain writes are Pi Change Log rows.
+Mistake earlier in the session: the first baseline run added a start move, return moves and a 4-step route the
+user had not asked for (11 plays); the user corrected it and the 9-move list above was run instead.
