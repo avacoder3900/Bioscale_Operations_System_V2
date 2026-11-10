@@ -47,11 +47,15 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	},
 	{ id: 'ot2:lights', device: 'ot2', title: 'Lights', kinds: ['setRailLights', 'lights_on', 'lights_off', 'lights'] },
 	{ id: 'ot2:comment', device: 'ot2', title: 'Comment', kinds: ['comment'] },
+	// 2026-11-10: the run's play / pause / stop (robot side and BIMS's sends) and run-level errors ($lib/robot-arm/run-history).
+	{ id: 'ot2:run', device: 'ot2', title: 'Run Control', kinds: ['run_action', 'run_action_sent', 'run_error'] },
 	{ id: 'ot2:other', device: 'ot2', title: 'Other', kinds: [] },
 	// The link (2026-11-06): every BIMS -> OT-2 hop, through the arm Pi's cable or the queue.
 	{ id: 'link:hop', device: 'link', title: 'OT-2 Hop', kinds: ['ot2_call'] },
 	// 2026-11-10: each loop step the arm Pi asked BIMS for, as BIMS and the Pi each saw it ($lib/robot-arm/drive-log).
-	{ id: 'link:drive', device: 'link', title: 'Arm Pi Drive Step', kinds: ['drive_received', 'drive_answered', 'pi_drive_step', 'pi_drive_note'] }
+	{ id: 'link:drive', device: 'link', title: 'Arm Pi Drive Step', kinds: ['drive_received', 'drive_answered', 'pi_drive_step', 'pi_drive_note'] },
+	// 2026-11-10: the instruction / announcement handshake as the Pi saw it (read from the Pi when a loop ends).
+	{ id: 'link:handshake', device: 'link', title: 'Loop Handshake', kinds: ['pi_loop_event'] }
 ];
 
 const BY_ID = new Map(MOVE_GROUPS.map((g) => [g.id, g]));

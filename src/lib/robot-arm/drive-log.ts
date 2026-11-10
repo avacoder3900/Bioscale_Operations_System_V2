@@ -16,7 +16,7 @@
  * timeout on the same reqId: the answer was lost between Vercel and the Pi.
  */
 
-export const DRIVE_KINDS = ['drive_received', 'drive_answered', 'pi_drive_step', 'pi_drive_note'] as const;
+export const DRIVE_KINDS = ['drive_received', 'drive_answered', 'pi_drive_step', 'pi_drive_note', 'pi_loop_event'] as const;
 
 /** The Pi's Wi-Fi at the step, from /proc/net/wireless. */
 export interface PiWifi {
@@ -170,4 +170,94 @@ export function piEventRows(loopId: string, events: unknown[], max = 400): Drive
 		}
 	}
 	return rows;
+}
+
+/**
+ * The Pi's loop handshake events (2026-11-10, GET /ot2/loop/events, memory
+ * only on the Pi): the instruction BIMS set, the moment the OT-2 picked it up,
+ * each ARM announcement as the Pi got it, scan requests and results, the
+ * instruction file writes. BIMS reads them when a loop ends (any driver).
+ * Events carry the loop id, or the run id (scans), or neither (file writes,
+ * kept when inside the loop's time).
+ */
+export interface PiLoopEvent {
+	at?: number;
+	kind?: string;
+	loop?: string | null;
+	run_id?: string | null;
+	cart?: number | null;
+	seq?: number | null;
+	action?: string | null;
+	marker?: string | null;
+	note?: string | null;
+	peer?: string | null;
+	why?: string | null;
+	barcode?: string | null;
+	error?: string | null;
+	attempts?: number | null;
+	ms?: number | null;
+	ms_from_request?: number | null;
+	host?: string | null;
+}
+
+function loopEventLine(e: PiLoopEvent): { line: string; ok: boolean } {
+	const instr = [e.seq != null ? `seq ${e.seq}` : null, e.action ?? null, e.cart != null ? `cart ${e.cart}` : null].filter(Boolean).join(' ');
+	switch (e.kind) {
+		case 'instruction_set':
+			return { line: `Instruction Set On Pi  ${instr}`, ok: true };
+		case 'instruction_served':
+			return { line: `OT-2 Picked Up Instruction  ${instr}`, ok: true };
+		case 'announce':
+			return { line: `OT-2 Announced  ${[e.marker, e.cart].filter((x) => x != null && x !== '').join(' ')}${e.note ? `  ${e.note}` : ''}`, ok: true };
+		case 'scan_requested':
+			return { line: `Scan Requested  cart ${e.cart ?? '?'}${e.why ? `  ${e.why}` : ''}`, ok: true };
+		case 'scan_result':
+			return {
+				line: `Scan Result  cart ${e.cart ?? '?'}  ${e.barcode ?? (e.error ? 'No Barcode' : 'Nothing Read')}${e.ms_from_request != null ? `  ${Math.round(e.ms_from_request)} ms` : ''}`,
+				ok: !!e.barcode
+			};
+		case 'file_written':
+			return { line: `Instruction File Written  ${instr}${e.ms != null ? `  ${Math.round(e.ms)} ms` : ''}`, ok: true };
+		default:
+			return { line: `Pi Loop Event  ${e.kind ?? 'unknown'}`, ok: true };
+	}
+}
+
+export function piLoopEventRows(o: { loopId: string; runId: string | null; startedAt: Date; endedAt: Date; events: unknown[] }): DriveRow[] {
+	const from = o.startedAt.getTime() - 5_000;
+	const to = o.endedAt.getTime() + 5_000;
+	const rows: DriveRow[] = [];
+	const seen = new Map<string, number>();
+	for (const raw of o.events) {
+		if (!raw || typeof raw !== 'object') continue;
+		const e = raw as PiLoopEvent;
+		const at = num(e.at);
+		if (at == null || !e.kind) continue;
+		const ms = at * 1000;
+		if (e.loop) {
+			if (String(e.loop) !== o.loopId) continue;
+		} else if (e.run_id) {
+			if (!o.runId || String(e.run_id) !== o.runId) continue;
+		} else if (ms < from || ms > to) continue;
+		const { line, ok } = loopEventLine(e);
+		const base = `pievt-${o.loopId}-${Math.round(ms)}-${e.kind}`;
+		const n = (seen.get(base) ?? 0) + 1;
+		seen.set(base, n);
+		rows.push({
+			_id: n > 1 ? `${base}-${n}` : base,
+			device: 'link',
+			kind: 'pi_loop_event',
+			at: new Date(ms),
+			endAt: null,
+			durationMs: null,
+			what: e.kind,
+			line: line.slice(0, 500),
+			ok,
+			error: cut(e.error, 500),
+			from: 'Arm Pi Link',
+			loopId: o.loopId,
+			detail: { ...e }
+		});
+	}
+	return rows.sort((a, b) => a.at.getTime() - b.at.getTime());
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { answeredRow, piEventRows, receivedRow, wifiText } from './drive-log';
+import { answeredRow, piEventRows, piLoopEventRows, receivedRow, wifiText } from './drive-log';
 import { groupOfKind } from './move-types';
 
 const t0 = new Date('2026-11-10T15:00:31.000Z');
@@ -59,5 +59,41 @@ describe('arm Pi drive-step rows', () => {
 		expect(groupOfKind('link', 'pi_drive_step')?.id).toBe('link:drive');
 		expect(groupOfKind('link', 'drive_answered')?.title).toBe('Arm Pi Drive Step');
 		expect(groupOfKind('link', 'ot2_call')?.id).toBe('link:hop');
+	});
+
+	it("keeps the Pi's handshake events that belong to the loop, in time order", () => {
+		const t = (s: number) => t0.getTime() / 1000 + s;
+		const rows = piLoopEventRows({
+			loopId: 'L1',
+			runId: 'run1',
+			startedAt: t0,
+			endedAt: new Date(t0.getTime() + 130_000),
+			events: [
+				{ at: t(54), kind: 'announce', loop: 'L1', marker: 'CALIBRATED', cart: null },
+				{ at: t(1), kind: 'instruction_set', loop: 'L1', seq: 0, action: 'start', cart: 1 },
+				{ at: t(2), kind: 'instruction_served', loop: 'L1', seq: 0, action: 'start', cart: 1, peer: '169.254.199.218' },
+				{ at: t(3), kind: 'instruction_set', loop: 'OTHER', seq: 0, action: 'start', cart: 1 },
+				{ at: t(60), kind: 'scan_result', run_id: 'run1', cart: 1, barcode: null, error: 'timeout', ms_from_request: 4100 },
+				{ at: t(61), kind: 'scan_result', run_id: 'run9', cart: 1, barcode: 'x' },
+				{ at: t(0.5), kind: 'file_written', seq: 0, action: 'start', ms: 788 },
+				{ at: t(-3600), kind: 'file_written', seq: 9, action: 'end', ms: 700 }
+			]
+		});
+		expect(rows.map((r) => r.line)).toEqual([
+			'Instruction File Written  seq 0 start  788 ms',
+			'Instruction Set On Pi  seq 0 start cart 1',
+			'OT-2 Picked Up Instruction  seq 0 start cart 1',
+			'OT-2 Announced  CALIBRATED',
+			'Scan Result  cart 1  No Barcode  4100 ms'
+		]);
+		expect(rows.every((r) => r.kind === 'pi_loop_event')).toBe(true);
+		expect(rows[4].ok).toBe(false);
+		expect(groupOfKind('link', 'pi_loop_event')?.title).toBe('Loop Handshake');
+	});
+
+	it('gives two same-moment events different ids', () => {
+		const ev = { at: 1794322830, kind: 'announce', loop: 'L1', marker: 'PARKED', cart: 1 };
+		const rows = piLoopEventRows({ loopId: 'L1', runId: null, startedAt: t0, endedAt: t0, events: [ev, ev] });
+		expect(new Set(rows.map((r) => r._id)).size).toBe(2);
 	});
 });

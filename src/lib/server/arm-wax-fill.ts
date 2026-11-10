@@ -85,6 +85,7 @@ import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health'
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
 import { recordArmLoopStep, syncOt2Robot } from '$lib/server/ot2-move-log';
+import { recordPiLoopEvents } from '$lib/server/arm-drive-log';
 import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 // 2026-11-06: every robot read / action goes through the arm Pi's cable link when it is
 // usable (one HTTPS hop, ~2 ms on the cable) and through the Mongo queue otherwise.
@@ -3075,6 +3076,7 @@ export async function loopFinish(user: User, loopId: string): Promise<{ done: bo
 	await audit(user, 'arm_wax_fill.loop_run_finished', 'arm_wax_fill_runs', loopId, { status, waxRunId: loop.waxRunId ?? null, opentronsRunId: loop.opentronsRunId, advanced, loopStatus: loop.status });
 	// Every command of the ended run into the Movement Log; what the budget leaves, the Movement Log page reads on its next load.
 	await syncOt2Robot(String(loop.robot?._id ?? ''), { runId: String(loop.opentronsRunId), budgetMs: 10_000 });
+	await recordPiLoopEvents(loop);
 	return { done: true, status, loop: (await getLoop(loopId))! };
 }
 
@@ -3279,6 +3281,7 @@ export async function haltLoop(user: User, loopId: string): Promise<HaltResult> 
 	await patchCycle(loopId, cycle.index, { step: 'stopped', error: HALT_REASON, endedAt: now });
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', error: HALT_REASON, endedAt: now } });
 	await audit(user, 'arm_wax_fill.halt', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, robotNotes });
+	await recordPiLoopEvents({ ...(await ArmWaxFillRun.findById(loopId).select('robot startedAt endedAt opentronsRunId').lean()), _id: loopId });
 	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn, robotNotes };
 }
 
@@ -3395,6 +3398,7 @@ export async function failLoop(user: User, loopId: string, step: string, error: 
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'failed', error: `${step}: ${msg}`, endedAt: new Date() } });
 	await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step, error: msg });
 	await recordRunAtFail(loop);
+	await recordPiLoopEvents(loop);
 	return (await getLoop(loopId))!;
 }
 

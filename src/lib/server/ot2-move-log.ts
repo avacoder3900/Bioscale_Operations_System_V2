@@ -19,6 +19,7 @@ import { connectDB } from './db/connection';
 import { Ot2MoveSync, RobotArmMove } from './db/models';
 import { getRobot, robotGet } from './opentrons/proxy';
 import { armLinkStatus, robotSlot } from './ot2-arm-link';
+import { runHistoryRows, type SentAction } from '$lib/robot-arm/run-history';
 import {
 	commandTiming,
 	isRunEnded,
@@ -131,6 +132,30 @@ async function piClockOffset(robot: any): Promise<number | null> {
 	}
 }
 
+/** When BIMS began logging its run-action sends: robot actions before it have no known source. */
+let sentSinceCache: Date | null = null;
+async function sentLoggedSince(): Promise<Date | null> {
+	if (sentSinceCache) return sentSinceCache;
+	const first = (await RobotArmMove.findOne({ kind: 'run_action_sent' }).sort({ at: 1 }).select('at').lean()) as any;
+	if (first?.at) sentSinceCache = new Date(first.at);
+	return sentSinceCache;
+}
+
+/** The run's own play / pause / stop and run-level errors (2026-11-10). Never throws. */
+async function logRunHistory(robotRef: { _id: string; name: string }, runId: string, from: string, run: any, clockOffsetMs: number | null): Promise<{ logged: number; deferred: number }> {
+	if (!Array.isArray(run?.actions) && !Array.isArray(run?.errors)) return { logged: 0, deferred: 0 };
+	try {
+		const sent = ((await RobotArmMove.find({ device: 'ot2', kind: 'run_action_sent', runId }).select('at ok detail movedBy from').lean()) as any[]).map(
+			(r): SentAction => ({ at: new Date(r.at), actionType: String(r.detail?.actionType ?? 'unknown'), ok: r.ok !== false, username: r.movedBy?.username ?? null, from: r.from ?? null })
+		);
+		const h = runHistoryRows({ robot: robotRef, runId, from, run, sent, sentSince: await sentLoggedSince(), clockOffsetMs, now: new Date() });
+		return { logged: await insertOt2Docs(h.rows), deferred: h.deferred };
+	} catch (e) {
+		console.warn('[ot2-move-log] run history not logged:', e instanceof Error ? e.message : e);
+		return { logged: 0, deferred: 1 };
+	}
+}
+
 async function syncRun(robot: any, runId: string, deadline: number): Promise<{ logged: number; pending: boolean }> {
 	const state = ((await Ot2MoveSync.findById(runId).lean()) as any) ?? null;
 	if (state?.done) return { logged: 0, pending: false };
@@ -142,8 +167,10 @@ async function syncRun(robot: any, runId: string, deadline: number): Promise<{ l
 	const robotRef = { _id: String(robot._id), name: String(robot.name ?? '') };
 	const clockOffsetMs = await piClockOffset(robot);
 
+	const history = await logRunHistory(robotRef, runId, from, run, clockOffsetMs);
+
 	let cursor = Number(state?.cursor ?? 0);
-	let logged = 0;
+	let logged = history.logged;
 	let blocked = false;
 	let total = Number.POSITIVE_INFINITY;
 	const save = (done: boolean) =>
@@ -167,7 +194,8 @@ async function syncRun(robot: any, runId: string, deadline: number): Promise<{ l
 		await save(false);
 		throw e;
 	}
-	const done = isRunEnded(runStatus) && !blocked && cursor >= total;
+	// An action too young to source yet keeps the run open for the next sync.
+	const done = isRunEnded(runStatus) && !blocked && cursor >= total && history.deferred === 0;
 	await save(done);
 	return { logged, pending: !done };
 }

@@ -9,6 +9,7 @@
  * arrival checked). $lib/server/ot2-move-log reads the robot and writes them.
  */
 import type { Ot2CommandSummary } from './run-profile';
+import { runActionOf } from './run-history';
 
 export type MoveDevice = 'arm' | 'ot2' | 'link';
 
@@ -239,7 +240,7 @@ export function loopStepLine(step: LoopStep, cart: number, plannedS: number | nu
  * and line its Movement Log row gets, or null for anything else. `body` may be
  * the JSON object or its text (the browser's direct line reports the text).
  */
-export function ot2ActionOf(method: string, path: string, body: unknown): { kind: string; line: string } | null {
+export function ot2ActionOf(method: string, path: string, body: unknown): { kind: string; line: string; runId?: string; actionType?: string } | null {
 	if (method.toUpperCase() !== 'POST') return null;
 	const p = path.split('?')[0];
 	let b: any = body;
@@ -259,5 +260,8 @@ export function ot2ActionOf(method: string, path: string, body: unknown): { kind
 		if (typeof b?.on !== 'boolean') return { kind: 'lights', line: 'Rail Lights' };
 		return { kind: b.on ? 'lights_on' : 'lights_off', line: `Rail Lights ${b.on ? 'On' : 'Off'}` };
 	}
+	// 2026-11-10: the run actions BIMS sends (play / pause / stop), so a robot action can be traced to them ($lib/robot-arm/run-history).
+	const ra = runActionOf(p, b);
+	if (ra) return { kind: 'run_action_sent', line: `Run Action Sent  ${camelTitle(ra.actionType)}  Run ${ra.runId.slice(0, 8)}`, runId: ra.runId, actionType: ra.actionType };
 	return null;
 }

@@ -52,7 +52,14 @@ export interface ArmChangeRow {
 	line: string;
 	note: string | null;
 	changedBy: { _id?: string; username?: string } | null;
+	/** pi.service.unclean_stop rows (2026-11-10): the previous run's last journal lines, as the Pi sent them. */
+	journal?: string[] | null;
+	journalNote?: string | null;
+	crash?: string | null;
 }
+
+/** Keys whose details the Change Log shows (the rest keep their details out of the list read). */
+const KEYS_WITH_JOURNAL = new Set(['pi.service.unclean_stop']);
 
 export function validateArmChange(e: ArmChangeInput): string | null {
 	if (!isArmPage(e.page)) return `unknown page "${e.page}"`;
@@ -100,9 +107,17 @@ export async function listArmChanges(o: { limit?: number } = {}): Promise<ArmCha
 	const rows = await RobotArmChange.find({})
 		.sort({ at: -1 })
 		.limit(Math.min(Math.max(o.limit ?? 200, 1), 1000))
-		.select('at page hardware key target oldValue newValue unit source line note changedBy')
+		.select('at page hardware key target oldValue newValue unit source line note changedBy details')
 		.lean();
-	return JSON.parse(JSON.stringify(rows));
+	return JSON.parse(JSON.stringify(rows)).map(({ details, ...r }: any) => {
+		if (!KEYS_WITH_JOURNAL.has(r.key) || !details) return r;
+		return {
+			...r,
+			journal: Array.isArray(details.journal) ? details.journal.map(String).slice(-200) : null,
+			journalNote: typeof details.journalNote === 'string' ? details.journalNote : null,
+			crash: typeof details.crash === 'string' ? details.crash : null
+		};
+	});
 }
 
 /** The newest logged value for a key (and target): what the arm is meant to be set to. */

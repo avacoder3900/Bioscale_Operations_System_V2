@@ -11,6 +11,9 @@ service restarts show up in the same list:
     service start             -> pi.service.start 0.2.0, plus pi.route <path> Added / Removed
                                  and pi.app_py <hash> -> <hash> when app.py changed since the
                                  previous start (install_change_reporter.py wires it in)
+    unclean end (2026-11-10)  -> pi.service.unclean_stop "Pi lost power or rebooted" / "service process
+                                 was killed" / "service crashed: ..." / "service exited with an error",
+                                 with the previous run's last journal lines (see previous_end)
     by hand                   -> python3 scripts/bims_report.py change --hardware network
                                  --key pi.wifi_ssid --new Aquinas_Townpark
 
@@ -30,10 +33,14 @@ Stdlib only; never raises into the caller.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
 import os
+import re
 import socket
+import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -45,6 +52,10 @@ from typing import Any, Iterable, Optional
 ROOT = Path(__file__).resolve().parents[2]
 PENDING = Path(os.environ.get("BIMS_ARM_CHANGES_PENDING", str(Path.home() / ".bims-arm" / "changes-pending.jsonl")))
 STATE = Path(os.environ.get("BIMS_ARM_CHANGES_STATE", str(Path.home() / ".bims-arm" / "changes-state.json")))
+LIFE = Path(os.environ.get("BIMS_ARM_SERVICE_LIFE", str(Path.home() / ".bims-arm" / "service-life.json")))
+HEARTBEAT_S = 60.0
+JOURNAL_LINES = 60
+UNIT = os.environ.get("BIMS_ARM_UNIT", "robot-arm")
 CHUNK = 50
 TIMEOUT_S = 8.0
 RETRY_DELAYS_S = (1.0, 3.0)
@@ -294,16 +305,27 @@ def start_rows(now: dict[str, Any], prev: Optional[dict[str, Any]]) -> list[dict
 def service_started(app: Any, delay_s: float = 3.0) -> None:
     """Call at import time from app.py (install_change_reporter.py): reports the start from a daemon thread."""
 
+    try:
+        prev_life = track_life()
+    except Exception as exc:
+        prev_life = None
+        _log(f"service life not tracked: {exc}")
+
     def run() -> None:
         try:
             time.sleep(delay_s)
+            try:
+                unclean = unclean_end_rows(prev_life)
+            except Exception as exc:
+                unclean = []
+                _log(f"previous end not checked: {exc}")
             now = _snapshot(app)
             prev: Optional[dict[str, Any]] = None
             try:
                 prev = json.loads(STATE.read_text(encoding="utf-8")) if STATE.exists() else None
             except Exception:
                 prev = None
-            rows = start_rows(now, prev)
+            rows = unclean + start_rows(now, prev)
             STATE.parent.mkdir(parents=True, exist_ok=True)
             STATE.write_text(json.dumps(now), encoding="utf-8")
             report(rows, wait=True)
@@ -311,3 +333,150 @@ def service_started(app: Any, delay_s: float = 3.0) -> None:
             _log(f"service start not reported: {exc}")
 
     threading.Thread(target=run, name="bims-changes-start", daemon=True).start()
+
+
+# ---------------------------------------------------------------- how the previous run ended (2026-11-10)
+#
+# The service keeps ~/.bims-arm/service-life.json: {pid, started_at, last_alive, clean_stop, crash}.
+# last_alive is rewritten every HEARTBEAT_S; clean_stop is set by atexit (a systemctl stop / restart /
+# reboot: uvicorn takes the SIGTERM and Python exits normally); crash holds an uncaught exception's
+# traceback. A power cut or a SIGKILL leaves clean_stop false. On the next start previous_end() names it.
+
+_EXIT_ERROR = re.compile(r"(code=(killed|dumped))|(status=(?!0/)\d+)|(Failed with result)|(oom-kill)", re.I)
+_life: dict[str, Any] = {}
+
+
+def boot_time() -> Optional[float]:
+    try:
+        for line in Path("/proc/stat").read_text(encoding="ascii").splitlines():
+            if line.startswith("btime "):
+                return float(line.split()[1])
+    except Exception:
+        return None
+    return None
+
+
+def journal_segment(lines: list[str]) -> list[str]:
+    """The previous run's lines: from the start before the last "Started" (the current one) up to it."""
+    starts = [i for i, ln in enumerate(lines) if "Started " in ln and UNIT in ln]
+    if not starts:
+        return lines[-JOURNAL_LINES:]
+    end = starts[-1]
+    begin = starts[-2] if len(starts) > 1 else 0
+    return lines[begin:end][-JOURNAL_LINES:]
+
+
+def previous_end(prev: Optional[dict[str, Any]], booted_at: Optional[float], segment: list[str]) -> Optional[str]:
+    """Why the previous run ended, or None when it stopped cleanly (or there is nothing to judge)."""
+    if not prev:
+        return None
+    if prev.get("crash"):
+        last = str(prev["crash"]).strip().splitlines()[-1:] or ["?"]
+        return f"service crashed: {last[0][:200]}"
+    if not prev.get("clean_stop"):
+        alive = prev.get("last_alive")
+        if booted_at and isinstance(alive, (int, float)) and booted_at > alive:
+            return "Pi lost power or rebooted without stopping the service"
+        return "service process was killed (no clean shutdown)"
+    if any(_EXIT_ERROR.search(ln) for ln in segment):
+        return "service exited with an error"
+    return None
+
+
+def read_journal(previous_boot: bool = False) -> tuple[list[str], Optional[str]]:
+    """The unit's recent journal lines, or why they could not be read (no sudo: needs the adm/systemd-journal group)."""
+    cmd = ["journalctl", "-u", UNIT, "--no-pager", "-o", "short-iso", "-n", "400"]
+    if previous_boot:
+        cmd[1:1] = ["-b", "-1"]
+    try:
+        out = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+    except Exception as exc:
+        return [], f"journalctl failed: {exc}"
+    text = (out.stdout or "") + (out.stderr or "")
+    if "insufficient permissions" in text or "not seeing messages" in text.lower():
+        return [], "journal not readable by this user"
+    lines = [ln[:300] for ln in (out.stdout or "").splitlines() if ln.strip() and not ln.startswith("-- ")]
+    return lines, None
+
+
+def _write_life() -> None:
+    try:
+        LIFE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = LIFE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(_life), encoding="utf-8")
+        tmp.replace(LIFE)
+    except Exception as exc:
+        _log(f"service life not written: {exc}")
+
+
+def _on_exit() -> None:
+    _life["clean_stop"] = True
+    _life["last_alive"] = time.time()
+    _write_life()
+
+
+_prev_hook = sys.excepthook
+
+
+def _excepthook(kind, value, tb) -> None:  # type: ignore[no-untyped-def]
+    import traceback
+
+    _life["crash"] = "".join(traceback.format_exception(kind, value, tb))[-4000:]
+    _write_life()
+    _prev_hook(kind, value, tb)
+
+
+def unclean_end_rows(prev: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The Change Log row for an unclean previous end (none when it stopped cleanly)."""
+    if not prev:
+        return []
+    booted = boot_time()
+    lines, why_not = read_journal()
+    segment = journal_segment(lines)
+    reason = previous_end(prev, booted, segment)
+    if not reason:
+        return []
+    if reason.startswith("Pi lost power"):
+        before, why_prev = read_journal(previous_boot=True)
+        if before:
+            segment, why_not = before[-JOURNAL_LINES:], None
+        elif why_prev:
+            why_not = f"previous boot: {why_prev}"
+    alive = prev.get("last_alive")
+    note = f"last alive {datetime.fromtimestamp(alive, timezone.utc).isoformat()}" if isinstance(alive, (int, float)) else None
+    details: dict[str, Any] = {
+        "reason": reason,
+        "pid": prev.get("pid"),
+        "startedAt": prev.get("started_at"),
+        "lastAlive": alive,
+        "bootTime": booted,
+        "crash": prev.get("crash"),
+        "journal": segment,
+    }
+    if why_not:
+        details["journalNote"] = why_not
+    return [change("pi", "pi.service.unclean_stop", new=reason, note=note, details=details)]
+
+
+def track_life() -> Optional[dict[str, Any]]:
+    """Start this run's life record; returns the previous run's. Heartbeat, atexit and excepthook installed."""
+    prev: Optional[dict[str, Any]] = None
+    try:
+        prev = json.loads(LIFE.read_text(encoding="utf-8")) if LIFE.exists() else None
+    except Exception:
+        prev = None
+    now = time.time()
+    _life.clear()
+    _life.update(pid=os.getpid(), started_at=now, last_alive=now, clean_stop=False, crash=None)
+    _write_life()
+    atexit.register(_on_exit)
+    sys.excepthook = _excepthook
+
+    def beat() -> None:
+        while True:
+            time.sleep(HEARTBEAT_S)
+            _life["last_alive"] = time.time()
+            _write_life()
+
+    threading.Thread(target=beat, name="bims-service-life", daemon=True).start()
+    return prev

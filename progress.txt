@@ -27131,3 +27131,32 @@ Pi side installed 2026-11-10 ~15:22 UTC with the user's OK: loop_driver.py copie
 loop_driver.py.bak-20261110, md5 96b77b6d), /sessions/active null, robot-arm restarted, no motion. Verified: /health ok,
 link cable up, driver idle; a read-only loopState from the Pi with x-drive-req install-check-1 got 200 + the echoed
 headers, and BIMS wrote its drive_received / drive_answered rows (296 ms, iad1) on Robot 3 B07.
+
+================================================================================
+2026-11-10 — feat/arm-drive-log — Device-only logs into BIMS: OT-2 run actions, Pi handshake events, Pi unclean stops
+================================================================================
+The user asked for all three of the device-only logs worth having (not waiting for a crash to log one).
+1. OT-2 run play / pause / stop and run errors (Movement Log -> Run Control):
+   - robot-arm/run-history.ts (new, pure): run_action rows from the run's `actions` (robot time, on the Pi clock),
+     each matched to BIMS's own send of the same type (within 120 s before / 3 s after, each send used once):
+     "Sent By BIMS (<user>)", "Not Sent By BIMS" (robot screen, Opentrons App, another client), or "Source Not
+     Recorded" before BIMS logged its sends; run_error rows from the run's `errors`. Fixed ids (ot2act-/ot2err-).
+     An action younger than 10 s is deferred and keeps the run open for the next sync (a Cancel's stop is synced
+     right after it is sent).
+   - ot2-move-log.ts ot2ActionOf + robot-arm-move-log.ts recordOt2Action: every POST /runs/{id}/actions BIMS sends
+     (robotPost, so the carriage line and Cancel too) is a run_action_sent row with runId + actionType.
+   - server/ot2-move-log.ts syncRun: logRunHistory on every run sync (loop end, failure, cancel, Movement Log page).
+   Answers questions like 2026-11-09 10:00 CT "run ended stopped" (who stopped it).
+2. The Pi's loop handshake (Movement Log -> Loop Handshake): drive-log.ts piLoopEventRows +
+   arm-drive-log.ts recordPiLoopEvents read GET /ot2/loop/events (Pi memory only) at loopFinish, failLoop and
+   haltLoop, any driver: instruction set on the Pi, OT-2 picked up the instruction, OT-2 announcements, scan
+   requests and results, instruction file writes. Kept by loop id, run id, or the loop's time. 5 s cap.
+3. Pi unclean stops (Change Log, pi.service.unclean_stop, with a Service Log disclosure): bims_changes.py keeps
+   ~/.bims-arm/service-life.json (heartbeat every 60 s, clean_stop by atexit, crash traceback by excepthook). On the
+   next start: "Pi lost power or rebooted" (boot after the last heartbeat), "service process was killed",
+   "service crashed: <exception>", or "service exited with an error" (journal shows a failed exit), with the
+   previous run's last 60 journal lines (previous boot's journal for a power loss; "journal not readable" said
+   when the user cannot read it). robot-arm-change-log.ts listArmChanges passes journal / crash for those rows.
+Tests: run-history.test.ts 7 (new), drive-log.test.ts 8 (2 new), test_bims_changes.py 10 (new),
+test_loop_driver.py 7; src/lib/robot-arm + server arm/ot2 378 pass. npm run check 13 errors (baseline), none in these.
+Pi side (bims_changes.py) waits for arm-pi: unplugged by the user at ~15:30 UTC.

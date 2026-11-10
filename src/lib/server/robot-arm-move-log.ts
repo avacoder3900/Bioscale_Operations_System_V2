@@ -202,7 +202,8 @@ export async function recordOt2Action(o: {
 			error: o.error ? o.error.slice(0, 300) : null,
 			from: o.from ?? actor?.from ?? null,
 			movedBy: user?.username ? { _id: user._id, username: user.username } : null,
-			robot: { _id: String(o.robot._id ?? ''), name: String(o.robot.name ?? '') }
+			robot: { _id: String(o.robot._id ?? ''), name: String(o.robot.name ?? '') },
+			...(a.runId ? { runId: a.runId, detail: { actionType: a.actionType } } : {})
 		});
 	} catch (err) {
 		console.warn('[ot2-move-log] action write failed:', err instanceof Error ? err.message : err);

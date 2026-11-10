@@ -59,6 +59,14 @@
 								<td class="pr-3">
 									<span class="font-mono">{c.line}</span>
 									{#if c.note}<span class="ml-2" style="color: var(--color-tron-text-secondary)">{c.note}</span>{/if}
+									{#if c.journal?.length || c.crash || c.journalNote}
+										<details class="mt-1">
+											<summary class="cursor-pointer" style="color: var(--color-tron-text-secondary)">Service Log</summary>
+											{#if c.journalNote}<p class="mt-1" style="color: var(--color-tron-text-secondary)">{c.journalNote}</p>{/if}
+											{#if c.crash}<pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px] text-red-300">{c.crash}</pre>{/if}
+											{#if c.journal?.length}<pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap font-mono text-[11px]">{c.journal.join('\n')}</pre>{/if}
+										</details>
+									{/if}
 								</td>
 								<td class="whitespace-nowrap pr-3">{labelTitle(c.source)}</td>
 								<td class="whitespace-nowrap pr-3">{c.changedBy?.username ?? ''}</td>
