@@ -356,6 +356,15 @@ def boot_time() -> Optional[float]:
     return None
 
 
+def boot_id() -> Optional[str]:
+    """The kernel's id for this boot: a new boot is certain when it changes (the Pi has no clock battery, so
+    right after power-up its time is the last saved one, and boot times cannot be compared to heartbeats)."""
+    try:
+        return Path("/proc/sys/kernel/random/boot_id").read_text(encoding="ascii").strip() or None
+    except Exception:
+        return None
+
+
 def journal_segment(lines: list[str]) -> list[str]:
     """The previous run's lines: from the start before the last "Started" (the current one) up to it."""
     starts = [i for i, ln in enumerate(lines) if "Started " in ln and UNIT in ln]
@@ -366,7 +375,7 @@ def journal_segment(lines: list[str]) -> list[str]:
     return lines[begin:end][-JOURNAL_LINES:]
 
 
-def previous_end(prev: Optional[dict[str, Any]], booted_at: Optional[float], segment: list[str]) -> Optional[str]:
+def previous_end(prev: Optional[dict[str, Any]], booted_at: Optional[float], segment: list[str], this_boot: Optional[str] = None) -> Optional[str]:
     """Why the previous run ended, or None when it stopped cleanly (or there is nothing to judge)."""
     if not prev:
         return None
@@ -374,6 +383,10 @@ def previous_end(prev: Optional[dict[str, Any]], booted_at: Optional[float], seg
         last = str(prev["crash"]).strip().splitlines()[-1:] or ["?"]
         return f"service crashed: {last[0][:200]}"
     if not prev.get("clean_stop"):
+        if prev.get("boot_id") and this_boot:
+            if prev["boot_id"] != this_boot:
+                return "Pi lost power or rebooted without stopping the service"
+            return "service process was killed (no clean shutdown)"
         alive = prev.get("last_alive")
         if booted_at and isinstance(alive, (int, float)) and booted_at > alive:
             return "Pi lost power or rebooted without stopping the service"
@@ -393,6 +406,8 @@ def read_journal(previous_boot: bool = False) -> tuple[list[str], Optional[str]]
     except Exception as exc:
         return [], f"journalctl failed: {exc}"
     text = (out.stdout or "") + (out.stderr or "")
+    if previous_boot and ("no persistent journal" in text.lower() or "data from the specified boot" in text.lower()):
+        return [], None
     if "insufficient permissions" in text or "not seeing messages" in text.lower():
         return [], "journal not readable by this user"
     lines = [ln[:300] for ln in (out.stdout or "").splitlines() if ln.strip() and not ln.startswith("-- ")]
@@ -433,15 +448,16 @@ def unclean_end_rows(prev: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
     booted = boot_time()
     lines, why_not = read_journal()
     segment = journal_segment(lines)
-    reason = previous_end(prev, booted, segment)
+    reason = previous_end(prev, booted, segment, boot_id())
     if not reason:
         return []
     if reason.startswith("Pi lost power"):
         before, why_prev = read_journal(previous_boot=True)
         if before:
             segment, why_not = before[-JOURNAL_LINES:], None
-        elif why_prev:
-            why_not = f"previous boot: {why_prev}"
+        else:
+            segment = []
+            why_not = f"previous boot: {why_prev}" if why_prev else "previous boot: no journal (the journal is not kept across boots)"
     alive = prev.get("last_alive")
     note = f"last alive {datetime.fromtimestamp(alive, timezone.utc).isoformat()}" if isinstance(alive, (int, float)) else None
     details: dict[str, Any] = {
@@ -450,6 +466,8 @@ def unclean_end_rows(prev: Optional[dict[str, Any]]) -> list[dict[str, Any]]:
         "startedAt": prev.get("started_at"),
         "lastAlive": alive,
         "bootTime": booted,
+        "bootId": boot_id(),
+        "previousBootId": prev.get("boot_id"),
         "crash": prev.get("crash"),
         "journal": segment,
     }
@@ -467,7 +485,7 @@ def track_life() -> Optional[dict[str, Any]]:
         prev = None
     now = time.time()
     _life.clear()
-    _life.update(pid=os.getpid(), started_at=now, last_alive=now, clean_stop=False, crash=None)
+    _life.update(pid=os.getpid(), boot_id=boot_id(), started_at=now, last_alive=now, clean_stop=False, crash=None)
     _write_life()
     atexit.register(_on_exit)
     sys.excepthook = _excepthook

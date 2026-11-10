@@ -31,6 +31,12 @@ class PreviousEndTests(unittest.TestCase):
         prev = {"clean_stop": False, "last_alive": 300.0}
         self.assertEqual(bc.previous_end(prev, 200.0, []), "service process was killed (no clean shutdown)")
 
+    def test_a_new_boot_id_is_a_power_loss_even_when_the_clock_came_back_early(self):
+        # No clock battery: after power-up the time is the last saved one, earlier than the last heartbeat.
+        prev = {"clean_stop": False, "last_alive": 900.0, "boot_id": "aaa"}
+        self.assertEqual(bc.previous_end(prev, 100.0, [], "bbb"), "Pi lost power or rebooted without stopping the service")
+        self.assertEqual(bc.previous_end(prev, 1000.0, [], "aaa"), "service process was killed (no clean shutdown)")
+
     def test_a_crash_names_the_exception(self):
         prev = {"clean_stop": True, "crash": "Traceback (most recent call last):\n  File x\nRuntimeError: bus gone\n"}
         self.assertEqual(bc.previous_end(prev, 0, []), "service crashed: RuntimeError: bus gone")
@@ -73,6 +79,20 @@ class UncleanRowTests(unittest.TestCase):
         self.assertEqual(r["details"]["journal"], ["prev boot line"])
         self.assertEqual(calls, [False, True])
         self.assertIn("last alive", r["note"])
+
+    def test_no_journal_from_before_the_boot_is_said(self):
+        bc.boot_time = lambda: 100.0
+        bid = bc.boot_id
+        bc.boot_id = lambda: "new"
+        try:
+            bc.read_journal = lambda previous_boot=False: ([], None) if previous_boot else ([STARTED], None)
+            r = bc.unclean_end_rows({"last_alive": 400.0, "clean_stop": False, "boot_id": "old"})[0]
+        finally:
+            bc.boot_id = bid
+        self.assertTrue(r["newValue"].startswith("Pi lost power"))
+        self.assertEqual(r["details"]["journal"], [])
+        self.assertIn("not kept across boots", r["details"]["journalNote"])
+        self.assertEqual(r["details"]["previousBootId"], "old")
 
     def test_an_unreadable_journal_is_said_not_hidden(self):
         bc.boot_time = lambda: 100.0
