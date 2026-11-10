@@ -248,7 +248,7 @@ async function sendArmCommand<T>(path: string, method: string, opts: FetchOption
 	}
 }
 
-interface TimedReading {
+export interface TimedReading {
 	at: number;
 	ms: number;
 	readings: ServoReading[] | null;
@@ -266,7 +266,7 @@ const SETTLE_POLL_MS = 250;
 let moveSeq = 0;
 let latestBefore: { seq: number; reading: Promise<TimedReading> } | null = null;
 
-async function readServosTimed(): Promise<TimedReading> {
+export async function readServosTimed(): Promise<TimedReading> {
 	const at = Date.now();
 	try {
 		const raw = await armFetchJson<unknown>('/servos', { timeoutMs: READ_TIMEOUT_MS });
@@ -277,8 +277,20 @@ async function readServosTimed(): Promise<TimedReading> {
 	}
 }
 
+/**
+ * The servos' own registers (GET /servos/state, 2026-11-10): goal register, current, error flags, gains.
+ * Null when the Pi lacks the route (404), the bus is busy, or the read fails — never throws.
+ */
+export async function readServoRegisters(): Promise<{ raw: unknown; error: string | null }> {
+	try {
+		return { raw: await armFetchJson<unknown>('/servos/state', { timeoutMs: 2500 }), error: null };
+	} catch (err) {
+		return { raw: null, error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
 /** Keep a promise running after the response on Vercel (its request context's waitUntil); elsewhere it just runs. */
-function afterResponse(p: Promise<unknown>): void {
+export function afterResponse(p: Promise<unknown>): void {
 	const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[
 		Symbol.for('@vercel/request-context')
 	]?.get?.();

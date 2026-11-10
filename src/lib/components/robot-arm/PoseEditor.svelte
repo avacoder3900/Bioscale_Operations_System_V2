@@ -51,6 +51,7 @@
 	} from '$lib/robot-arm/animation';
 	import type { PoseSummary } from '$lib/server/robot-arm-animation';
 	import { liveBus } from '$lib/robot-arm/bus-free';
+	import { AT_POSE_STEPS } from '$lib/robot-arm/arrival';
 
 	interface ArmRead {
 		positions: number[];
@@ -80,12 +81,8 @@
 
 	let { pose, allPoses, arm, armReachable, blocked, blockReason, ongoto, onclose, home = null, beforeLive }: Props = $props();
 
-	/**
-	 * "The arm is at these values": Go To Pose hides inside this. 80 while loaded joints sat
-	 * tens of steps short; 20 (Short Move's limit) since stiffness 32 on 2026-11-06 lands every
-	 * joint within ~9, so a 60-step pose pair (5. Shoulder Down -> 6. Elbow) gets its button.
-	 */
-	const AT_POSE_STEPS = 20;
+	// "The arm is at these values": Go To Pose hides inside AT_POSE_STEPS. The Movement Log's
+	// Arrival and Pose Saved rows judge with the same number ($lib/robot-arm/arrival).
 	/** Live starts on the pose's numbers when every servo is this close. */
 	const LIVE_FROM_POSE_STEPS = 150;
 	// Fast enough that the New Pose sliders track an arm moved by hand (2026-11-04, was 1500).

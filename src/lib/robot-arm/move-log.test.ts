@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeArmMove, FIRE_KINDS, frameStats, goalsById, moveLine, playFramesFromJsonl, summarizeServoMoves } from './move-log';
+import { describeArmMove, FIRE_KINDS, frameStats, goalsById, moveLine, playFramesFromJsonl, readingLine, summarizeServoMoves } from './move-log';
 
 describe('describeArmMove', () => {
 	it('a slider move is one servo with its goal', () => {
@@ -145,5 +145,12 @@ describe('summarizeServoMoves', () => {
 		const hold = { at: at(2), kind: 'hold' as const, servo: null, goal: null, delta: null, goals: { '5': 900 } };
 		const rows = [jog(0, 20), jog(1, -20), hold, { ...mv(3, 5, 950) }];
 		expect(summarizeServoMoves(rows).find((x) => x.servo === 5)).toEqual({ servo: 5, moves: 3, reversals: 2 });
+	});
+});
+
+describe('readingLine whole arm', () => {
+	it('shows each servo with its load (2026-11-10: a stalled joint is a big load at speed 0)', () => {
+		const r = (id: number, position: number, load: number | null) => ({ id, position, speed: 0, load, voltage: 12.4, temperature: 44, torque: true });
+		expect(readingLine('before', [r(1, 2038, 30), r(2, 2246, -199), r(3, 2381, null)])).toBe('Before  1: 2038 Load 30 44 °C  2: 2246 Load -199 44 °C  3: 2381 44 °C');
 	});
 });

@@ -19,6 +19,12 @@
 	 *
 	 * Frames (2026-11-06): a play's row opens to every frame the Pi was given
 	 * (time, each servo's goal, fire steps), read on demand from ./frames.
+	 *
+	 * Arrival and Pose Saved (2026-11-10): an Arrival row follows every play
+	 * (each servo's goal vs where it stopped, the load holding it, and the
+	 * servo's own registers when the Pi has them); a Pose Saved row follows
+	 * every pose save (what changed, and where the arm was). Show Servos
+	 * opens the per-servo table ($lib/robot-arm/arrival).
 	 */
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { goto } from '$app/navigation';
@@ -30,6 +36,10 @@
 	let logHidden = $state(false);
 
 	/** Opened plays: their frames, or the read's error. */
+	let openServos = $state<Record<string, boolean>>({});
+	const servoReport = (m: (typeof data.moves)[number]) => m.arrival ?? m.poseSave?.arm ?? null;
+	const signedN = (v: number | null | undefined) => (v == null ? '' : `${v > 0 ? '+' : ''}${v}`);
+	const DIR_TITLES = { increasing: 'Increasing', decreasing: 'Decreasing', still: 'Still' } as const;
 	let openFrames = $state<Record<string, { frames: PlayFrames | null; error: string | null; loading: boolean }>>({});
 
 	async function toggleFrames(id: string) {
@@ -360,11 +370,28 @@
 												{openFrames[m._id] ? 'Hide Frames' : 'Show Frames'}
 											</button>
 										{/if}
+										{#if servoReport(m)}
+											<button
+												type="button"
+												onclick={() => (openServos[m._id] = !openServos[m._id])}
+												class="ml-2 rounded border px-1.5 py-px font-sans text-[10px]"
+												style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+												aria-expanded={!!openServos[m._id]}
+											>
+												{openServos[m._id] ? 'Hide Servos' : 'Show Servos'}
+											</button>
+										{/if}
 									</td>
 									<td class="whitespace-nowrap pr-3 font-mono">{took(m)}</td>
 									<td class="pr-3">
 										{#if m.ok}
-											<span class="text-green-300">{m.device === 'ot2' ? 'Done' : m.device === 'link' ? 'Answered' : m.kind.startsWith('reading_') ? 'Read' : 'Sent'}</span>
+											{#if m.kind === 'arrival'}
+												{#if m.arrival?.reached === true}<span class="text-green-300">Reached</span>
+												{:else if m.arrival?.reached === false}<span class="text-yellow-300">Missed</span>
+												{:else}<span style="color: var(--color-tron-text-secondary)">Not Read</span>{/if}
+											{:else}
+												<span class="text-green-300">{m.device === 'ot2' ? 'Done' : m.device === 'link' ? 'Answered' : m.kind === 'pose_save' ? 'Saved' : m.kind.startsWith('reading_') ? 'Read' : 'Sent'}</span>
+											{/if}
 										{:else}
 											<span class="text-red-300">Failed</span>
 											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>
@@ -373,6 +400,54 @@
 									<td class="whitespace-nowrap pr-3" style="color: var(--color-tron-text-secondary)">{m.from ?? ''}</td>
 									<td class="whitespace-nowrap pr-3">{m.movedBy?.username ?? ''}</td>
 								</tr>
+								{#if openServos[m._id] && servoReport(m)}
+									{@const rep = servoReport(m)!}
+									{@const regs = m.servoState ?? null}
+									<tr>
+										<td colspan="8" class="pb-2 pl-6">
+											<div class="overflow-auto rounded border border-[var(--color-tron-border)]">
+												<table class="w-full text-left font-mono text-[11px]">
+													<thead style="color: var(--color-tron-text-secondary)">
+														<tr>
+															<th class="px-2 py-1">Servo</th><th class="pr-3">Goal</th><th class="pr-3">From</th><th class="pr-3">Asked</th><th class="pr-3">Moved</th><th class="pr-3">At</th><th class="pr-3">Off</th><th class="pr-3">Direction</th><th class="pr-3">Load</th><th class="pr-3">Speed</th><th class="pr-3">°C</th><th class="pr-3">Torque</th><th class="pr-3">Within {rep.toleranceSteps}</th>
+															{#if regs}<th class="pr-3">Goal Register</th><th class="pr-3">Current (mA)</th><th class="pr-3">Moving</th><th class="pr-3">Errors</th><th class="pr-3">P</th><th class="pr-3">D</th><th class="pr-3">I</th><th class="pr-3">Torque Limit</th>{/if}
+														</tr>
+													</thead>
+													<tbody>
+														{#each rep.servos as s (s.servo)}
+															{@const g = regs?.find((x) => x.id === s.servo)}
+															<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
+																<td class="px-2">{s.servo} {jointTitle(s.servo)}</td>
+																<td class="pr-3">{s.target}</td>
+																<td class="pr-3">{s.from ?? ''}</td>
+																<td class="pr-3">{signedN(s.asked)}</td>
+																<td class="pr-3">{signedN(s.moved)}</td>
+																<td class="pr-3">{s.position ?? ''}</td>
+																<td class="pr-3" class:text-yellow-300={s.reached === false}>{signedN(s.off)}</td>
+																<td class="pr-3">{s.direction ? DIR_TITLES[s.direction] : ''}</td>
+																<td class="pr-3">{s.load ?? ''}</td>
+																<td class="pr-3">{s.speed ?? ''}</td>
+																<td class="pr-3">{s.temperature ?? ''}</td>
+																<td class="pr-3">{s.torque == null ? '' : s.torque ? 'On' : 'Off'}</td>
+																<td class="pr-3">{s.reached == null ? '' : s.reached ? 'Yes' : 'No'}</td>
+																{#if regs}
+																	<td class="pr-3">{g?.goalPosition ?? ''}</td>
+																	<td class="pr-3">{g?.currentMa ?? ''}</td>
+																	<td class="pr-3">{g?.moving == null ? '' : g.moving ? 'Yes' : 'No'}</td>
+																	<td class="pr-3" class:text-yellow-300={!!g?.errors.length}>{g?.errors.join(', ') ?? ''}</td>
+																	<td class="pr-3">{g?.p ?? ''}</td>
+																	<td class="pr-3">{g?.d ?? ''}</td>
+																	<td class="pr-3">{g?.i ?? ''}</td>
+																	<td class="pr-3">{g?.torqueLimit ?? ''}</td>
+																{/if}
+															</tr>
+														{/each}
+													</tbody>
+												</table>
+											</div>
+										</td>
+									</tr>
+								{/if}
 								{#if openFrames[m._id]}
 									{@const o = openFrames[m._id]}
 									<tr>

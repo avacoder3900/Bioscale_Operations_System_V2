@@ -32,6 +32,8 @@ export type ArmMoveKind =
 	| 'loop_step'
 	| 'reading_before'
 	| 'reading_after'
+	| 'arrival'
+	| 'pose_save'
 	| 'fire'
 	| 'fire_sequence'
 	| 'conveyor'
@@ -68,6 +70,8 @@ const KIND_TITLES: Record<ArmMoveKind, string> = {
 	loop_step: 'Loop Step',
 	reading_before: 'Reading Before',
 	reading_after: 'Reading After',
+	arrival: 'Arrival',
+	pose_save: 'Pose Saved',
 	fire: 'Trapdoor Solenoid Fire',
 	fire_sequence: 'Trapdoor Solenoid Sequence',
 	conveyor: 'Conveyor Belt Fire',
@@ -355,7 +359,7 @@ export function summarizeServoMoves(rows: SummaryRow[], servoCount = 6): ServoMo
  * reading_after) linked to the move by moveId. A per-servo move's rows name
  * that servo; a whole-arm command's rows carry all six.
  */
-export const READING_KINDS = new Set(['reading_before', 'reading_after']);
+export const READING_KINDS = new Set(['reading_before', 'reading_after', 'arrival', 'pose_save']);
 
 export interface ServoReading {
 	id: number;
@@ -434,7 +438,12 @@ export function readingLine(
 			parts.push(body.replace(/^(Position -?\d+)/, `$1  Goal ${o.goal}  Off ${r.position - o.goal}`));
 		} else parts.push(body);
 	} else {
-		parts.push(readings.map((x) => `${x.id}: ${x.position ?? '?'} ${x.temperature != null ? `${x.temperature} °C` : ''}`.trim()).join('  '));
+		// Load too (2026-11-10): a joint stalled short of its goal shows as a big load at speed 0.
+		parts.push(
+			readings
+				.map((x) => [`${x.id}: ${x.position ?? '?'}`, x.load != null ? `Load ${x.load}` : null, x.temperature != null ? `${x.temperature} °C` : null].filter(Boolean).join(' '))
+				.join('  ')
+		);
 	}
 	if (o.settledMs != null) parts.push(`Settled ${(o.settledMs / 1000).toFixed(1)} s`);
 	if (o.note) parts.push(o.note);

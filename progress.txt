@@ -27271,3 +27271,38 @@ What this deployment is for: "CV Station 2" label on the fullscreen tablet Resta
 Station 1 (2026-11-10): stop fix staged without a restart because a tablet was watching (247 feed requests in
 the last minute): new agent.py in /opt (old copy ~brevitest/agent-backup-2026-11-10/agent.py.before-stopfix) and the
 TimeoutStopSec=15 drop-in (daemon-reload, live now). The 3 s shutdown_timeout loads at the next restart.
+
+================================================================================
+2026-11-10 — feat/arm-arrival-log — Movement Log: Arrival after every play, Pose Saved rows, load in readings
+================================================================================
+Diagnosis that started it: "r.r.2 hover Copy" kept its Go To Pose button because after every Go To the shoulder
+(servo 2) stopped 26-34 steps above its 2220 goal (load -185..-320, speed 0); the pose editor's limit is 20. Lifting
+moves (lower shoulder number) stall ~25-45 short at P 32 / I 0; lowering lands within ~5-9; re-sending the same goal
+lands in the same place. The pose was saved at 21:59:26 UTC with the slider's 2220 while the arm sat at 2244. Working
+that out took the next move's Reading Before as the arrival and the audit_log for the pose edits, because:
+  - plays had no Reading After (SETTLING_KINDS leaves play out), and afterPlay read the arm and kept nothing;
+  - the editor's "not at pose" verdict and pose saves were not in the Movement Log;
+  - whole-arm readings showed position + temperature but not load;
+  - nothing read the servo's own goal register, current or error flags.
+Added:
+  - Arrival row (kind arrival, group Arrival) after every play, id arrival-<runId>, written by whichever end of the
+    play comes first: afterPlay (page) or the Pi's replay.stop webhook (no page needed). Waits for the bus (409 while
+    the session holds it, 12 s), then for the arm to stand still (4 s cap). Per servo: goal (the play's last frame),
+    from (the play's Reading Before), asked, moved, at, off, direction, load, speed, temperature, torque, within the
+    editor's 20. Line names every missed servo. "Next Play Started" when another play began before the read.
+  - Pose Saved row (kind pose_save) on every pose save / edit / duplicate / leader save: what changed and where the
+    arm was; "⚠ Arm Not At Saved Numbers" when the arm was near but not at them, "Arm Elsewhere" when far (Edit Values).
+  - Play rows now carry the Pi's runId. Whole-arm reading lines include each servo's load.
+  - AT_POSE_STEPS moved to $lib/robot-arm/arrival (shared by the pose editor and the log).
+  - Movement Log page: Show Servos on Arrival / Pose Saved rows (per-servo table; register columns when present);
+    Result says Reached / Missed / Not Read / Saved.
+  - Pi: GET /servos/state in services/robot-arm/src/server/servo_config.py (read-only: goal register, position,
+    speed, load, current + mA, moving, status error bits, P/D/I, torque limit). NOT installed on arm-pi yet; BIMS
+    stores its answer on Arrival rows once it is there and records the 404 until then.
+Files: src/lib/robot-arm/arrival.ts (+test), src/lib/server/robot-arm-arrival.ts, robot-arm-move-log.ts,
+robot-arm-client.ts, robot-arm-animation.ts, db/models/robot-arm-move.ts, robot-arm/move-log.ts, move-types.ts,
+api/robot-arm/webhook/+server.ts, maintenance/moves/+page.svelte, PoseEditor.svelte, move-readings.test.ts,
+move-log.test.ts, services/robot-arm/src/server/servo_config.py.
+npm run check: 13 errors, all pre-existing in unrelated files (r2.ts, research-proxy.ts, AskBimsWidget, assembly,
+magnetometer); none in touched files. Unit tests src/lib/robot-arm + src/lib/server: 822 passed, 1 skipped.
+No new index (play lookup by runId is bounded by the existing at index).

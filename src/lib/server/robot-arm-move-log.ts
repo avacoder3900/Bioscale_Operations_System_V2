@@ -29,6 +29,7 @@ import {
 	type ServoReading
 } from '$lib/robot-arm/move-log';
 import { ot2ActionOf } from '$lib/robot-arm/ot2-move-log';
+import type { ArrivalReport, PoseSaveReport, ServoRegisterState } from '$lib/robot-arm/arrival';
 import { generateId } from './db/utils';
 import { groupKindQuery, moveGroup } from '$lib/robot-arm/move-types';
 
@@ -84,6 +85,14 @@ export interface ArmMoveRow {
 	/** Play rows: how many frames, and per servo its travel and turns (the frames themselves load on demand). */
 	frameCount?: number | null;
 	frameStats?: Record<string, FrameServoStats> | null;
+	/** Arrival rows (2026-11-10): target vs where the play left each servo. */
+	arrival?: ArrivalReport | null;
+	/** Arrival rows: the servos' own registers, when the Pi has GET /servos/state. */
+	servoState?: ServoRegisterState[] | null;
+	/** Pose Saved rows: what changed and where the arm was. */
+	poseSave?: PoseSaveReport | null;
+	poseId?: string | null;
+	settledMs?: number | null;
 }
 
 export async function recordArmMove(
@@ -112,6 +121,8 @@ export async function recordArmMove(
 			...e,
 			line: frames ? `${moveLine(e)}  ${frames.t.length} Frames` : moveLine(e),
 			...(frames ? { frames, frameCount: frames.t.length, frameStats: frameStats(frames) } : {}),
+			// The Pi's run id (2026-11-10), so the play's Arrival row can find it.
+			...(e.kind === 'play' && typeof (response as { run_id?: unknown } | null)?.run_id === 'string' ? { runId: (response as { run_id: string }).run_id } : {}),
 			ok: !error,
 			error: error ? (error instanceof Error ? error.message : String(error)).slice(0, 300) : null,
 			durationMs: Date.now() - startedAt,
@@ -247,7 +258,7 @@ export async function listArmMoves(o: ArmMoveFilter & { limit?: number | null } 
 	let find = RobotArmMove.find(moveQuery(o)).sort({ at: -1 });
 	if (o.limit !== null) find = find.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000));
 	const rows = await find
-		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart readings moveId frameCount frameStats')
+		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart readings moveId frameCount frameStats arrival servoState poseSave poseId settledMs')
 		.lean();
 	return JSON.parse(JSON.stringify(rows));
 }

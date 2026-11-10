@@ -16,6 +16,7 @@ import { connectDB } from '$lib/server/db/connection';
 import { RobotArmRun } from '$lib/server/db/models';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { holdAfterReplayStop } from '$lib/server/robot-arm-animation';
+import { logPlayArrival } from '$lib/server/robot-arm-arrival';
 
 /**
  * Keep `p` running after the response. On Vercel this is the runtime's
@@ -141,7 +142,10 @@ export const POST: RequestHandler = async ({ request }) => {
 	// waiting on this request inside the session, which still owns the bus.
 	if (eventType === 'replay.stop') {
 		runAfterResponse(
-			holdAfterReplayStop(runId, event).catch((err) => console.error(`[robot-arm webhook] torque backstop for ${runId}:`, err))
+			holdAfterReplayStop(runId, event)
+				.catch((err) => console.error(`[robot-arm webhook] torque backstop for ${runId}:`, err))
+				// Then where the play left the arm (Movement Log Arrival row, 2026-11-10); afterPlay may have written it already.
+				.then(() => logPlayArrival(runId, 'replay_stop'))
 		);
 	}
 

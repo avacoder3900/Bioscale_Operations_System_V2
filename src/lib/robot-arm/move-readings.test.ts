@@ -20,7 +20,7 @@ describe('servo readings', () => {
 		expect(readingLine('after', r, { servo: 3, goal: 2947, settledMs: 1200 })).toBe(
 			'After  Servo 3  Position 2975  Goal 2947  Off 28  38 °C  Load -115  12.4 V  Torque On  Settled 1.2 s'
 		);
-		expect(readingLine('after', r, { note: 'Still Moving' })).toBe('After  1: 2049 42 °C  3: 2975 38 °C  Still Moving');
+		expect(readingLine('after', r, { note: 'Still Moving' })).toBe('After  1: 2049 Load 0 42 °C  3: 2975 Load -115 38 °C  Still Moving');
 	});
 	it('is settled only when the watched servos are still', () => {
 		const a = servoReadings(raw)!;

@@ -36,6 +36,7 @@ import { recordingStem, robotArm, type RecordingSidecar, type ServoState } from 
 import { forgetPreviewPath, lookUpPath, PreviewWriteError, writePreviewRecording } from './robot-arm-preview';
 import { ArmMotionBusy, claimArmMotion, releaseArmMotion } from './robot-arm-motion';
 import { withPlayRecording } from './robot-arm-move-log';
+import { logPlayArrivalLater, logPoseSave } from './robot-arm-arrival';
 import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2, whoUses } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -454,6 +455,7 @@ export async function savePoseFromLeader(user: User, input: { name: unknown; not
 		source: 'leader',
 		pausedRunId: posing.runId
 	});
+	logPoseSave({ user, action: 'save', poseId: _id, name, before: null, after: now.positions, basis: 'reading', source: 'leader' });
 	let warning: string | null = !stop.torque.ok || now.torqueOn === false ? `Torque could not be turned back on (${stop.torque.error ?? 'the servos report it off'}), so the pose may be low — check it.` : null;
 	let resumed = false;
 	let runId: string | null = null;
@@ -568,6 +570,7 @@ export async function createPose(user: User, input: { name: unknown; notes?: unk
 	const _id = generateId();
 	await RobotArmPose.create({ _id, name, positions, basis, notes: cleanNotes(input.notes), createdBy: opRef(user) });
 	await audit(user, 'robot_arm.animate.pose_save', 'robot_arm_poses', _id, { name, positions, basis, source: basis === 'goal' ? 'sliders' : 'arm', ...(temps ? { temps } : {}) });
+	logPoseSave({ user, action: 'save', poseId: _id, name, before: null, after: positions, basis, source: basis === 'goal' ? 'sliders' : 'arm' });
 	return poseSummary(await RobotArmPose.findById(_id).lean());
 }
 
@@ -589,6 +592,7 @@ export async function setPosePositions(user: User, id: string, raw: unknown): Pr
 		after: positions,
 		beforeBasis: before.basis ?? 'reading'
 	});
+	logPoseSave({ user, action: 'edit', poseId: id, name: String(before.name), before: old, after: positions, basis: 'goal', source: 'sliders' });
 	return { pose: poseSummary(await RobotArmPose.findById(id).lean()), moved: positions.map((p, i) => p - (old[i] ?? p)) };
 }
 
@@ -627,6 +631,7 @@ export async function duplicatePose(user: User, id: string): Promise<PoseSummary
 		createdBy: opRef(user)
 	});
 	await audit(user, 'robot_arm.animate.pose_duplicate', 'robot_arm_poses', _id, { name, from: { _id: id, name: src.name }, positions: src.positions, basis: src.basis ?? 'reading' });
+	logPoseSave({ user, action: 'duplicate', poseId: _id, name, before: null, after: (src.positions ?? []).map(Number), basis: src.basis ?? 'reading', source: 'duplicate', fromPose: String(src.name) });
 	return poseSummary(await RobotArmPose.findById(_id).lean());
 }
 
@@ -777,6 +782,8 @@ export async function afterPlay(user: User, runId: string, _opts: { droop?: bool
 	const base = { torqueRestored: false, torqueError: null as string | null, arm: null as ArmNow | null };
 	// A fires-only run never moved the arm (and may have played with it unpowered).
 	if (runId.startsWith(FIRES_RUN_PREFIX)) return { ...base, skipped: 'fires only' };
+	// Where the play left the arm, as a Movement Log Arrival row (2026-11-10; once per run, after the response).
+	logPlayArrivalLater(runId, 'after_play');
 	// Torque first, whatever else happens: a limp arm is the worst end state.
 	try {
 		await requireIdle();

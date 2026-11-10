@@ -188,6 +188,71 @@ def servos_gains(body: GainsRequest) -> dict[str, Any]:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+#: GET /servos/state (2026-11-10): the registers that tell a miss apart. name -> (address, length, sign bit or None)
+STATE_REGISTERS: dict[str, tuple[int, int, int | None]] = {
+    "goal_position": (42, 2, 15),
+    "torque_limit": (48, 2, None),
+    "position": (56, 2, 15),
+    "speed": (58, 2, 15),
+    "load": (60, 2, 10),
+    "status": (65, 1, None),
+    "moving": (66, 1, None),
+    "current": (69, 2, 15),
+    "p_coefficient": (21, 1, None),
+    "d_coefficient": (22, 1, None),
+    "i_coefficient": (23, 1, None),
+}
+
+#: STS3215 Present_Current unit.
+CURRENT_MA_PER_UNIT = 6.5
+
+
+def _signed(raw: int | None, sign_bit: int | None) -> int | None:
+    """STS3215 sign-magnitude registers: bit ``sign_bit`` is the direction."""
+    if raw is None or sign_bit is None:
+        return raw
+    magnitude = raw & ((1 << sign_bit) - 1)
+    return -magnitude if raw & (1 << sign_bit) else magnitude
+
+
+def read_state() -> list[dict[str, Any]]:
+    """
+    Each follower servo's live registers. Read-only. Why (2026-11-10): the
+    shoulder stopped 26-34 steps short of a pose; GET /servos shows position
+    and load but not the goal the servo is really holding, its current, its
+    error flags or the gains in effect, so "stalled under load" could only
+    be inferred. Status bits: 0 voltage, 1 angle sensor, 2 temperature,
+    3 current, 5 overload.
+    """
+    arms = _connected_arms(require_leader=False)
+    try:
+        bus = arms.follower
+        assert bus is not None
+        out = []
+        for sid in range(1, NUM_MOTORS + 1):
+            row: dict[str, Any] = {"id": sid, "joint": JOINT_NAMES[sid - 1]}
+            for name, (addr, length, sign) in STATE_REGISTERS.items():
+                row[name] = _signed(_read_raw(bus, sid, addr, length), sign)
+            row["moving"] = bool(row["moving"]) if row["moving"] is not None else None
+            row["current_ma"] = round(row["current"] * CURRENT_MA_PER_UNIT) if row["current"] is not None else None
+            out.append(row)
+        return out
+    finally:
+        arms.disconnect()
+
+
+@router.get("/servos/state")
+def servos_state() -> dict[str, Any]:
+    """Read every follower servo's goal, position, load, current, status and gains. Writes nothing."""
+    if bus_free is not None:
+        bus_free()
+    try:
+        with BUS_LOCK:
+            return {"servos": read_state()}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.get("/servos/config")
 def servos_config() -> dict[str, Any]:
     """Read every follower servo's gain / torque registers. Writes nothing."""

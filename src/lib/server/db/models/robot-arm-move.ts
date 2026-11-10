@@ -72,7 +72,17 @@ const robotArmMoveSchema = new Schema(
 		/** Arm Pi drive-step rows (2026-11-10, $lib/robot-arm/drive-log): the Pi's request id, on BIMS's rows and the Pi's. */
 		reqId: { type: String, default: undefined },
 		/** Drive-step rows: status, attempt, Vercel request id and region, the Pi's Wi-Fi. */
-		detail: { type: Schema.Types.Mixed, default: undefined }
+		detail: { type: Schema.Types.Mixed, default: undefined },
+		/** Arrival rows (2026-11-10): per servo target vs where the play left it ($lib/robot-arm/arrival ArrivalReport). */
+		arrival: { type: Schema.Types.Mixed, default: undefined },
+		/** Arrival rows: the servos' own registers (goal, current, error flags, gains) from the Pi's GET /servos/state. */
+		servoState: { type: Schema.Types.Mixed, default: undefined },
+		/** Pose Saved rows (2026-11-10): what changed and whether the arm was at the saved numbers (PoseSaveReport). */
+		poseSave: { type: Schema.Types.Mixed, default: undefined },
+		/** Arrival and Pose Saved rows: the pose, when the play or save was of one. */
+		poseId: { type: String, default: undefined },
+		/** Arrival rows: ms from the first read that answered to the arm standing still; null = still moving at the cap. */
+		settledMs: { type: Number, default: undefined }
 	},
 	{ timestamps: false, minimize: false, collection: 'robot_arm_moves' }
 );

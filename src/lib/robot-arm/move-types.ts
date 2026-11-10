@@ -24,6 +24,9 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	{ id: 'arm:loop', device: 'arm', title: 'Loop Step', kinds: ['loop_step'] },
 	{ id: 'arm:stop', device: 'arm', title: 'Stop', kinds: ['stop'] },
 	{ id: 'arm:reading', device: 'arm', title: 'Servo Reading', kinds: ['reading_before', 'reading_after'] },
+	// 2026-11-10: where each play left the arm, and each pose save against where the arm was ($lib/robot-arm/arrival).
+	{ id: 'arm:arrival', device: 'arm', title: 'Arrival', kinds: ['arrival'] },
+	{ id: 'arm:pose', device: 'arm', title: 'Pose Saved', kinds: ['pose_save'] },
 	{ id: 'arm:fire', device: 'arm', title: 'Conveyor Belt And Trapdoor Solenoids', kinds: ['fire', 'fire_sequence', 'conveyor', 'conveyor_stop', 'fires_play', 'fires_stop'] },
 	{
 		id: 'ot2:movement',
