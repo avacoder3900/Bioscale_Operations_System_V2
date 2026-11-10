@@ -27262,3 +27262,8 @@ web.run_app(..., shutdown_timeout=3) in agent.py (repo + Station 2's Pi-only age
 Station 2). Test on Station 2 with an MJPEG stream + snapshot loop running: restart 6.4 s, stopped cleanly (no
 timeout kill), camera OK. Station 1 not deployed yet (needs a restart; ask first).
 Fullscreen tablet strip: right label "Station 2" -> "CV Station 2" (user request).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/4b5R5dTPHzSU3nGBsLFeNLfiMX3L
+Source: branch master @ commit a324fcbf (merged from feat/cv-station-restart)
+Retrieve this exact code: git checkout master at commit a324fcbf
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: "CV Station 2" label on the fullscreen tablet Restart strip
