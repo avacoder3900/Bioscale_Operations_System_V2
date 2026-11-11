@@ -27409,3 +27409,10 @@ off at r.r.2 hover at every shoulder setting (untuned). Runs: Pi ~/gain-grid/rou
 Pi interruptions: the Pi was unplugged 2 more times (18:10-18:14); torque-on goal-sync fix used each time, no motion.
 Removed the runner's "no load = resting" stop: after a lowering move the gearbox friction holds the arm and the
 shoulder reads load 0 in free air (two false stops). Shoulder left at P 32 D 15 I 0 (EEPROM unchanged all day).
+
+2026-11-11 19:16-19:46 UTC — elbow (servo 3) I test on the Pi (user's go-ahead; shoulder held at P32 D15 I4, temporary).
+Same 9 moves as round 2 (0. Remove Home <-> 16., 16. <-> r.r.2 hover); one extra Go To 0. Remove Home first, asked by the
+user, because the arm had sagged 71 steps during a power cut. Elbow P32 D15, I 0/1/2/3/4/6, 6-7 runs each. Elbow off:
+into 16. from Remove Home 11-17 (I0) -> 9-13 (I1) -> 5 (I2) -> 1-5 (I3) -> 1 (I4) -> 0-1 (I6); at r.r.2 hover 12 -> 8
+-> 4-5 -> 2-3 -> 0-1 -> 1; at Remove Home -8/-9 -> -1. No shakes; I6 shows 7 turns at 2 steps (I4: 0), the start of a
+buzz. Max 45 C, elbow 41 C. Both joints back to P32 D15 I0 at the end (EEPROM unchanged). Data ~/gain-grid/elbow.jsonl.
