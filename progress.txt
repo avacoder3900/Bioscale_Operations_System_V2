@@ -27354,3 +27354,8 @@ shaking (2+ turns over 4+ steps, the sweep's rule). The line adds "⚠ Shaking  
 Older Pi (404): falls back to the old polling. Movement Log: motion columns in Show Servos, Show Trace (./trace),
 agents GET /api/robot-arm/moves?trace=<id>. Change Log rows pi.router.servo_trace and log.arrival_trace.
 npm run check: 13 errors, all pre-existing and unrelated. Unit tests src/lib/robot-arm + src/lib/server: 825 passed.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/5xsL17NWVwG8FJMHVdhADrMPRHan
+Source: branch master @ commit 4ab674af (fast-forwarded from feat/arm-arrival-log)
+Retrieve this exact code: git checkout master at commit 4ab674af
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Arrival rows with a fast Pi trace after every play (swing, turns, shake Hz), Show Trace
