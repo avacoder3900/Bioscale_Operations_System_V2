@@ -27375,3 +27375,22 @@ Source: branch master @ commit 50c98312 (fast-forwarded from fix/tube-rack-no-ho
 Retrieve this exact code: git checkout master at commit 50c98312
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Tube Rack tab draws holes without the wax/reagent colour (A3 no longer shows reagent)
+2026-11-11 — feat/arm-arrival-log — shoulder P/D/I grid moved to the Pi; power loss; torque-on safety fix on arm-pi
+================================================================================
+Grid (shoulder P 24/32/40/48 x D 15/8/30/45 x I 0/2/4/6, the user's 9 moves, one run per combination): the D 15
+block ran from the workstation 15:46-16:06 UTC (one restart after a DNS dropout). Lifting miss on 5. Shoulder Down
+(steps 7/9): P24 I0 27 -> P48 I2 3; P32 I4 4. One shake: P40 D15 I6 at 0. Remove Home, 8.4 Hz, swing 16, 50 turns
+(caught by the trace; safe gains put back). Max 44 C. Data: scratchpad run/grid.jsonl.
+The user's laptop sleeps with the lid closed, so the test was moved onto the Pi: six Go To Pose recordings
+rendered exactly as goToPose does (datasets/gaingrid-*.jsonl, uploaded with writePreviewRecording) and a
+stdlib-only runner ~/gain-grid/pi_gain_grid.py (localhost only; same skip / cooling 47->43 C / stop at 52 C /
+error-flag / preflight rules; restores P32 D15 I0 on any exit). Not in the repo yet (scratchpad run/).
+The Pi then went offline ~16:10 UTC and came back at 16:41 after a reboot: the Pi and the servos lost power
+together (torque off, servos cooled, throttled=0x0 since boot). The runner started and refused: "torque is off".
+Found then: after the power loss every servo's Goal_Position reads 0, and the Pi's POST /torque only wrote
+Torque_Enable, so torque-on (the runner, BIMS's Torque On, the post-play backstop) would have driven the whole arm
+toward 0. Fixed on arm-pi (user's standing permission for Pi code changes): manual_control.set_torque now, before
+enabling, sets any goal that is 0 or > 200 steps from the servo's position to that position (smaller gaps kept, so
+the post-play lift back onto a pose still works), refuses if a position or goal write fails, and reports
+goals_synced. Backup manual_control.py.bak-pre-torque-sync-20261111; service restarted 16:5x UTC. manual_control.py
+is a Pi-only file (not in this repo). Torque has NOT been turned on; the grid waits for the user.

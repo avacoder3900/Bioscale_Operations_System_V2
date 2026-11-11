@@ -103,7 +103,8 @@ const ROWS: Row[] = [
 	['2026-11-10T22:26:14Z', 'maintenance.moves', 'servo', 'log.arrival', null, null, 'Added', null, 'code', 'Arrival row after every play, Pose Saved rows, load in readings (02b4cb5c)'],
 	['2026-11-10T22:39:56Z', 'pi', 'servo', 'pi.router.servo_state', null, null, 'Installed', null, 'pi', 'GET /servos/state: goal register, current, status bits, gains (servo_config.py; backup .bak-pre-state-20261110)'],
 	['2026-11-11T15:23:49Z', 'pi', 'servo', 'pi.router.servo_trace', null, null, 'Installed', null, 'pi', 'GET /servos/trace: every servo sampled at up to 100 Hz after a play, yields to a waiting play (servo_config.py; backup .bak-pre-trace-20261111)'],
-	['2026-11-11T15:30:00Z', 'maintenance.moves', 'servo', 'log.arrival_trace', null, null, 'Added', null, 'code', 'Arrival rows keep a 3 s, 50 Hz trace with swing, turns and shake speed per servo; Show Trace']
+	['2026-11-11T15:30:00Z', 'maintenance.moves', 'servo', 'log.arrival_trace', null, null, 'Added', null, 'code', 'Arrival rows keep a 3 s, 50 Hz trace with swing, turns and shake speed per servo; Show Trace'],
+	['2026-11-11T16:56:00Z', 'pi', 'servo', 'pi.torque_on_goal_sync', null, 'enable only', 'goal 0 or > 200 off set to position first', 'steps', 'pi', 'After a power loss every goal read 0; torque-on would drive the arm toward 0 (manual_control.py; backup .bak-pre-torque-sync-20261111)']
 ];
 
 async function main() {
