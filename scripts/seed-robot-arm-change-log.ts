@@ -101,7 +101,9 @@ const ROWS: Row[] = [
 	['2026-11-06T20:47:00Z', 'run', 'stage', 'setup.scan_presence_only', null, null, 'Added', null, 'code', 'Setup box Barcode Present Only (26ea0d2b)'],
 	['2026-11-06T21:07:00Z', 'run', 'network', 'link.home_timeout_s', null, 80, 60, 's', 'code', "Home Gantry through the cable link: the Pi's limit is 60 s (a073ed2d)"],
 	['2026-11-10T22:26:14Z', 'maintenance.moves', 'servo', 'log.arrival', null, null, 'Added', null, 'code', 'Arrival row after every play, Pose Saved rows, load in readings (02b4cb5c)'],
-	['2026-11-10T22:39:56Z', 'pi', 'servo', 'pi.router.servo_state', null, null, 'Installed', null, 'pi', 'GET /servos/state: goal register, current, status bits, gains (servo_config.py; backup .bak-pre-state-20261110)']
+	['2026-11-10T22:39:56Z', 'pi', 'servo', 'pi.router.servo_state', null, null, 'Installed', null, 'pi', 'GET /servos/state: goal register, current, status bits, gains (servo_config.py; backup .bak-pre-state-20261110)'],
+	['2026-11-11T15:23:49Z', 'pi', 'servo', 'pi.router.servo_trace', null, null, 'Installed', null, 'pi', 'GET /servos/trace: every servo sampled at up to 100 Hz after a play, yields to a waiting play (servo_config.py; backup .bak-pre-trace-20261111)'],
+	['2026-11-11T15:30:00Z', 'maintenance.moves', 'servo', 'log.arrival_trace', null, null, 'Added', null, 'code', 'Arrival rows keep a 3 s, 50 Hz trace with swing, turns and shake speed per servo; Show Trace']
 ];
 
 async function main() {

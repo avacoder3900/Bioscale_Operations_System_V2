@@ -56,6 +56,8 @@ export interface ArrivalReport {
 	worst: { servo: number; off: number } | null;
 	/** Servos outside tolerance, worst first. */
 	missed: number[];
+	/** Arrival rows with a fast trace (2026-11-11): per servo swing, turns and when it went steady. */
+	motion?: ServoMotion[] | null;
 }
 
 const at = (arr: (number | null)[] | null | undefined, i: number): number | null => {
@@ -187,6 +189,114 @@ export function poseSaveLine(name: string, r: PoseSaveReport, o: { from?: string
 		}
 	}
 	return parts.join('  ');
+}
+
+/*
+ * The arm right after a play, sampled fast ON the Pi (GET /servos/trace,
+ * 2026-11-11). Why: at shoulder I = 8 the arm shook at 0. Remove Home
+ * (869–891 around 880), but BIMS reads the servos at best every ~300 ms over
+ * the tunnel, and not at all while a play holds the bus, so the shake's size
+ * and speed were guesses. The Pi samples every servo at up to 100 Hz the
+ * moment the play lets go, and stops at once if another play is waiting.
+ */
+export interface ServoTrace {
+	/** Seconds from the trace's start, one per sample. */
+	t: number[];
+	servos: { id: number; position: (number | null)[]; load: (number | null)[] }[];
+	achievedHz: number | null;
+	/** Why it ended early ("session started"), or null when it ran its full time. */
+	stopped: string | null;
+}
+
+export interface ServoMotion {
+	servo: number;
+	first: number | null;
+	last: number | null;
+	/** Peak to peak over the trace, steps. */
+	swing: number | null;
+	/** Direction changes of at least SHAKE_DEADBAND_STEPS. */
+	turns: number;
+	/** turns / 2 / seconds: how fast it swings back and forth. */
+	hz: number | null;
+	/** Seconds until it stays within ±STEADY_STEPS of its last value; null when it never does. */
+	steadyAfterS: number | null;
+	/** Load range over the trace. */
+	loadMin: number | null;
+	loadMax: number | null;
+	shaking: boolean;
+}
+
+/** A move of this many steps or more back the other way counts as a turn (readings jitter by 1). */
+export const SHAKE_DEADBAND_STEPS = 2;
+/** Shaking = at least this many turns over more than SHAKE_SWING_STEPS (the I sweep's hunting rule). */
+export const SHAKE_TURNS = 2;
+export const SHAKE_SWING_STEPS = 4;
+export const STEADY_STEPS = 2;
+
+/** The Pi's GET /servos/trace answer, cleaned. Null when it has none (an older Pi answers 404). */
+export function servoTraceFrom(raw: unknown): ServoTrace | null {
+	const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+	if (!o || !Array.isArray(o.t) || !Array.isArray(o.servos)) return null;
+	const t = (o.t as unknown[]).map((v) => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : NaN));
+	if (!t.length || t.some((v) => !Number.isFinite(v))) return null;
+	const col = (v: unknown) => (Array.isArray(v) ? v.map((x) => n(x)) : t.map(() => null));
+	const servos = (o.servos as unknown[])
+		.map((s) => (s && typeof s === 'object' ? (s as Record<string, unknown>) : null))
+		.filter((s): s is Record<string, unknown> => !!s && n(s.id) != null)
+		.map((s) => ({ id: n(s.id)!, position: col(s.position), load: col(s.load) }));
+	return servos.length ? { t, servos, achievedHz: n(o.achieved_hz), stopped: typeof o.stopped === 'string' ? o.stopped : null } : null;
+}
+
+/** Per servo over the trace: swing, turns, how fast, when it went steady, and whether it shook. */
+export function traceMotion(trace: ServoTrace): ServoMotion[] {
+	const dur = trace.t.length > 1 ? trace.t[trace.t.length - 1] - trace.t[0] : 0;
+	return trace.servos.map((s) => {
+		const pts = s.position.map((p, i) => ({ p, t: trace.t[i] })).filter((x): x is { p: number; t: number } => x.p != null);
+		const loads = s.load.filter((v): v is number => v != null);
+		if (!pts.length) return { servo: s.id, first: null, last: null, swing: null, turns: 0, hz: null, steadyAfterS: null, loadMin: null, loadMax: null, shaking: false };
+		const vals = pts.map((x) => x.p);
+		let turns = 0;
+		let dir = 0;
+		let peak = vals[0];
+		for (const v of vals.slice(1)) {
+			if (dir === 0) {
+				if (Math.abs(v - peak) >= SHAKE_DEADBAND_STEPS) {
+					dir = Math.sign(v - peak);
+					peak = v;
+				}
+			} else if ((v - peak) * dir > 0) peak = v;
+			else if (Math.abs(v - peak) >= SHAKE_DEADBAND_STEPS) {
+				turns++;
+				dir = -dir;
+				peak = v;
+			}
+		}
+		const last = vals[vals.length - 1];
+		let steadyIdx = pts.length - 1;
+		while (steadyIdx > 0 && Math.abs(pts[steadyIdx - 1].p - last) <= STEADY_STEPS) steadyIdx--;
+		const swing = Math.max(...vals) - Math.min(...vals);
+		// Steady only if it held still for the last quarter of the trace, at least.
+		const steadyAfterS = dur > 0 && pts[pts.length - 1].t - pts[steadyIdx].t >= dur / 4 ? Math.round((pts[steadyIdx].t - trace.t[0]) * 100) / 100 : null;
+		return {
+			servo: s.id,
+			first: vals[0],
+			last,
+			swing,
+			turns,
+			hz: dur > 0 && turns ? Math.round((turns / 2 / dur) * 10) / 10 : null,
+			steadyAfterS,
+			loadMin: loads.length ? Math.min(...loads) : null,
+			loadMax: loads.length ? Math.max(...loads) : null,
+			shaking: turns >= SHAKE_TURNS && swing > SHAKE_SWING_STEPS
+		};
+	});
+}
+
+/** "⚠ Shaking  Servo 2  Swing 22  3 Turns  0.5 Hz", or null when nothing shook. */
+export function shakeNote(motion: ServoMotion[] | null): string | null {
+	const shook = (motion ?? []).filter((m) => m.shaking);
+	if (!shook.length) return null;
+	return `⚠ Shaking  ${shook.map((m) => `Servo ${m.servo}  Swing ${m.swing}  ${m.turns} Turns${m.hz != null ? `  ${m.hz} Hz` : ''}`).join('  ')}`;
 }
 
 /*

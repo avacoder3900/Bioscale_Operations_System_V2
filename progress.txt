@@ -27336,3 +27336,21 @@ I=8: the shoulder shook at 0. Remove Home (the user saw it): arrived 4 and 8 off
 load 0, then swung 869-891 over 3 s (3 turns). The sweep's hunting guard stopped it and put I back to 0 at 15:12:39.
 Reading: the 1120-step lift to Remove Home lags its moving goal the whole way, the integral winds up, and at the
 end it overshoots and swings. No servo error flags, temperatures 38-42 C. Round 2 and I = 12, 16, 24 were not run.
+
+================================================================================
+2026-11-11 — feat/arm-arrival-log — Arrival rows keep a fast trace of the arm after every play
+================================================================================
+Gap found by the I sweep: at shoulder I = 8 the arm shook at 0. Remove Home, but BIMS could only read it every
+~300 ms over the tunnel (and not at all during the play), so the shake's size and speed were guesses.
+Pi: GET /servos/trace?ms=&hz=&ids=&load= in services/robot-arm/src/server/servo_config.py. Samples every servo's
+position + load on the Pi at up to 100 Hz for up to 10 s, under BUS_LOCK, checking before each sample whether a
+session is waiting (bus_free) and stopping at once if so, so a play is held up by one sample at most. Installed on
+arm-pi 15:23:49 UTC (user's go-ahead; idle; Pi copy matched yesterday's install md5 5d5b600a; backup
+servo_config.py.bak-pre-trace-20261111). Through the tunnel: 2 s at 50 Hz -> 100 samples, achieved 50 Hz, no
+missed reads. The yield-to-a-waiting-play path is not exercised yet (needs a play during a trace).
+BIMS: an Arrival row now starts a 3 s / 50 Hz trace the moment the play lets go (409 = retry), stores it (field
+trace, left out of list reads), and arrival.motion per servo: swing, turns, shake Hz, steady after, load range,
+shaking (2+ turns over 4+ steps, the sweep's rule). The line adds "⚠ Shaking  Servo N  Swing S  T Turns  H Hz".
+Older Pi (404): falls back to the old polling. Movement Log: motion columns in Show Servos, Show Trace (./trace),
+agents GET /api/robot-arm/moves?trace=<id>. Change Log rows pi.router.servo_trace and log.arrival_trace.
+npm run check: 13 errors, all pre-existing and unrelated. Unit tests src/lib/robot-arm + src/lib/server: 825 passed.

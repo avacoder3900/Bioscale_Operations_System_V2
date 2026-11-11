@@ -29,7 +29,7 @@ import {
 	type ServoReading
 } from '$lib/robot-arm/move-log';
 import { ot2ActionOf } from '$lib/robot-arm/ot2-move-log';
-import type { ArrivalReport, PoseSaveReport, ServoRegisterState } from '$lib/robot-arm/arrival';
+import type { ArrivalReport, PoseSaveReport, ServoRegisterState, ServoTrace } from '$lib/robot-arm/arrival';
 import { generateId } from './db/utils';
 import { groupKindQuery, moveGroup } from '$lib/robot-arm/move-types';
 
@@ -268,6 +268,13 @@ export async function getArmMoveFrames(id: string): Promise<PlayFrames | null> {
 	await connectDB();
 	const row = (await RobotArmMove.findById(id).select('frames').lean()) as { frames?: PlayFrames } | null;
 	return row?.frames ?? null;
+}
+
+/** One Arrival row's fast trace, for the log's Show Trace (2026-11-11). Null when the row has none. */
+export async function getArmMoveTrace(id: string): Promise<ServoTrace | null> {
+	await connectDB();
+	const row = (await RobotArmMove.findById(id).select('trace').lean()) as { trace?: ServoTrace } | null;
+	return row?.trace ?? null;
 }
 
 /** How many rows match, for "Showing 100 of 4210". */

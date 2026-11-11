@@ -25,10 +25,16 @@
 	 * servo's own registers when the Pi has them); a Pose Saved row follows
 	 * every pose save (what changed, and where the arm was). Show Servos
 	 * opens the per-servo table ($lib/robot-arm/arrival).
+	 *
+	 * Trace (2026-11-11): an Arrival row keeps the arm sampled fast on the Pi
+	 * right after the play; Show Servos adds each servo's swing, turns, speed
+	 * of the shake and when it went steady, and Show Trace opens every sample,
+	 * read on demand from ./trace.
 	 */
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { goto } from '$app/navigation';
 	import { kindTitle, type PlayFrames } from '$lib/robot-arm/move-log';
+	import type { ServoTrace } from '$lib/robot-arm/arrival';
 	import { MOVE_GROUPS, groupOfKind, moveGroup } from '$lib/robot-arm/move-types';
 
 	let { data } = $props();
@@ -40,6 +46,21 @@
 	const servoReport = (m: (typeof data.moves)[number]) => m.arrival ?? m.poseSave?.arm ?? null;
 	const signedN = (v: number | null | undefined) => (v == null ? '' : `${v > 0 ? '+' : ''}${v}`);
 	const DIR_TITLES = { increasing: 'Increasing', decreasing: 'Decreasing', still: 'Still' } as const;
+	let openTrace = $state<Record<string, { trace: ServoTrace | null; error: string | null; loading: boolean }>>({});
+	async function toggleTrace(id: string) {
+		if (openTrace[id]) {
+			delete openTrace[id];
+			return;
+		}
+		openTrace[id] = { trace: null, error: null, loading: true };
+		try {
+			const res = await fetch(`${BASE}/trace?id=${encodeURIComponent(id)}`);
+			const body = await res.json();
+			if (openTrace[id]) openTrace[id] = { trace: body.trace, error: body.trace ? null : 'No Trace Kept', loading: false };
+		} catch (err) {
+			if (openTrace[id]) openTrace[id] = { trace: null, error: err instanceof Error ? err.message : String(err), loading: false };
+		}
+	}
 	let openFrames = $state<Record<string, { frames: PlayFrames | null; error: string | null; loading: boolean }>>({});
 
 	async function toggleFrames(id: string) {
@@ -381,6 +402,17 @@
 												{openServos[m._id] ? 'Hide Servos' : 'Show Servos'}
 											</button>
 										{/if}
+										{#if m.arrival?.motion?.length}
+											<button
+												type="button"
+												onclick={() => toggleTrace(m._id)}
+												class="ml-2 rounded border px-1.5 py-px font-sans text-[10px]"
+												style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+												aria-expanded={!!openTrace[m._id]}
+											>
+												{openTrace[m._id] ? 'Hide Trace' : 'Show Trace'}
+											</button>
+										{/if}
 									</td>
 									<td class="whitespace-nowrap pr-3 font-mono">{took(m)}</td>
 									<td class="pr-3">
@@ -403,6 +435,7 @@
 								{#if openServos[m._id] && servoReport(m)}
 									{@const rep = servoReport(m)!}
 									{@const regs = m.servoState ?? null}
+									{@const motion = m.arrival?.motion ?? null}
 									<tr>
 										<td colspan="8" class="pb-2 pl-6">
 											<div class="overflow-auto rounded border border-[var(--color-tron-border)]">
@@ -410,12 +443,14 @@
 													<thead style="color: var(--color-tron-text-secondary)">
 														<tr>
 															<th class="px-2 py-1">Servo</th><th class="pr-3">Goal</th><th class="pr-3">From</th><th class="pr-3">Asked</th><th class="pr-3">Moved</th><th class="pr-3">At</th><th class="pr-3">Off</th><th class="pr-3">Direction</th><th class="pr-3">Load</th><th class="pr-3">Speed</th><th class="pr-3">°C</th><th class="pr-3">Torque</th><th class="pr-3">Within {rep.toleranceSteps}</th>
+															{#if motion}<th class="pr-3">Swing</th><th class="pr-3">Turns</th><th class="pr-3">Shake (Hz)</th><th class="pr-3">Steady After (s)</th><th class="pr-3">Load Range</th>{/if}
 															{#if regs}<th class="pr-3">Goal Register</th><th class="pr-3">Current (mA)</th><th class="pr-3">Moving</th><th class="pr-3">Errors</th><th class="pr-3">P</th><th class="pr-3">D</th><th class="pr-3">I</th><th class="pr-3">Torque Limit</th>{/if}
 														</tr>
 													</thead>
 													<tbody>
 														{#each rep.servos as s (s.servo)}
 															{@const g = regs?.find((x) => x.id === s.servo)}
+															{@const mo = motion?.find((x) => x.servo === s.servo)}
 															<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
 																<td class="px-2">{s.servo} {jointTitle(s.servo)}</td>
 																<td class="pr-3">{s.target}</td>
@@ -430,6 +465,13 @@
 																<td class="pr-3">{s.temperature ?? ''}</td>
 																<td class="pr-3">{s.torque == null ? '' : s.torque ? 'On' : 'Off'}</td>
 																<td class="pr-3">{s.reached == null ? '' : s.reached ? 'Yes' : 'No'}</td>
+																{#if motion}
+																	<td class="pr-3" class:text-yellow-300={!!mo?.shaking}>{mo?.swing ?? ''}</td>
+																	<td class="pr-3" class:text-yellow-300={!!mo?.shaking}>{mo?.turns ?? ''}</td>
+																	<td class="pr-3">{mo?.hz ?? ''}</td>
+																	<td class="pr-3">{mo ? (mo.steadyAfterS ?? 'Not Steady') : ''}</td>
+																	<td class="pr-3">{mo?.loadMin != null ? `${mo.loadMin} To ${mo.loadMax}` : ''}</td>
+																{/if}
 																{#if regs}
 																	<td class="pr-3">{g?.goalPosition ?? ''}</td>
 																	<td class="pr-3">{g?.currentMa ?? ''}</td>
@@ -445,6 +487,39 @@
 													</tbody>
 												</table>
 											</div>
+										</td>
+									</tr>
+								{/if}
+								{#if openTrace[m._id]}
+									{@const o = openTrace[m._id]}
+									<tr>
+										<td colspan="8" class="pb-2 pl-6">
+											{#if o.loading}
+												<p class="text-xs" style="color: var(--color-tron-text-secondary)">Loading Trace</p>
+											{:else if o.error || !o.trace}
+												<p class="text-xs text-red-300">{o.error ?? 'No Trace Kept'}</p>
+											{:else}
+												{@const tr = o.trace}
+												<p class="mb-1 text-xs" style="color: var(--color-tron-text-secondary)">{tr.t.length} Samples{tr.achievedHz != null ? `  ${tr.achievedHz} Hz` : ''}{tr.stopped ? `  Stopped: ${tr.stopped}` : ''}</p>
+												<div class="max-h-96 overflow-auto rounded border border-[var(--color-tron-border)]">
+													<table class="w-full text-left font-mono text-[11px]">
+														<thead class="sticky top-0 bg-[var(--color-tron-surface)]" style="color: var(--color-tron-text-secondary)">
+															<tr>
+																<th class="px-2 py-1">Time</th>
+																{#each tr.servos as sv (sv.id)}<th class="pr-3">Servo {sv.id}</th><th class="pr-3">Load {sv.id}</th>{/each}
+															</tr>
+														</thead>
+														<tbody>
+															{#each tr.t as tt, i (i)}
+																<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
+																	<td class="px-2">{tt.toFixed(3)} s</td>
+																	{#each tr.servos as sv (sv.id)}<td class="pr-3">{sv.position[i] ?? ''}</td><td class="pr-3" style="color: var(--color-tron-text-secondary)">{sv.load[i] ?? ''}</td>{/each}
+																</tr>
+															{/each}
+														</tbody>
+													</table>
+												</div>
+											{/if}
 										</td>
 									</tr>
 								{/if}

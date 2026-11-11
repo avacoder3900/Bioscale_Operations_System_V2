@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrivalLine, arrivalReport, poseSaveLine, poseSaveReport, registerNote, servoRegisterStates, statusErrors, AT_POSE_STEPS } from './arrival';
+import { arrivalLine, arrivalReport, poseSaveLine, poseSaveReport, registerNote, servoRegisterStates, servoTraceFrom, shakeNote, statusErrors, traceMotion, AT_POSE_STEPS } from './arrival';
 import type { ServoReading } from './move-log';
 
 const reading = (positions: number[], loads: number[] = []): ServoReading[] =>
@@ -90,5 +90,45 @@ describe('servo registers', () => {
 		]);
 		expect(registerNote(s, [2040, 2220])).toBe('Servo Goal Register Differs: 2: 2250 (Sent 2220)  ⚠ Servo Errors: 2: Overload');
 		expect(registerNote(servoRegisterStates([{ id: 1, goal_position: 2040, status: 0 }]), [2040])).toBeNull();
+	});
+});
+
+describe('fast trace', () => {
+	// 3 s at 50 Hz. Servo 2 swings +-11 around 880 at 1 Hz (like shoulder I = 8 at 0. Remove Home, 2026-11-11); servo 3 lands and holds.
+	const t = Array.from({ length: 151 }, (_, i) => i / 50);
+	const raw = {
+		achieved_hz: 49.6,
+		stopped: null,
+		t,
+		servos: [
+			{ id: 2, position: t.map((x) => Math.round(880 + 11 * Math.sin(2 * Math.PI * x))), load: t.map((x) => Math.round(-220 * Math.cos(2 * Math.PI * x))) },
+			{ id: 3, position: t.map((x) => (x < 0.4 ? 3010 - Math.round((0.4 - x) * 250) : 3010)), load: t.map(() => 0) }
+		]
+	};
+
+	it('reads the Pi answer, and nothing from an older Pi', () => {
+		const tr = servoTraceFrom(raw)!;
+		expect(tr.t.length).toBe(151);
+		expect(tr.servos.map((s) => s.id)).toEqual([2, 3]);
+		expect(tr.achievedHz).toBe(49.6);
+		expect(servoTraceFrom({ detail: 'Not Found' })).toBeNull();
+		expect(servoTraceFrom(null)).toBeNull();
+	});
+
+	it('calls the swinging servo shaking, with its swing, turns and speed, and the other steady', () => {
+		const [s2, s3] = traceMotion(servoTraceFrom(raw)!);
+		expect(s2).toMatchObject({ servo: 2, swing: 22, turns: 6, hz: 1, steadyAfterS: null, loadMin: -220, loadMax: 220, shaking: true });
+		expect(s3.shaking).toBe(false);
+		expect(s3.turns).toBe(0);
+		expect(s3.steadyAfterS).toBeLessThanOrEqual(0.4);
+		expect(shakeNote([s2, s3])).toBe('⚠ Shaking  Servo 2  Swing 22  6 Turns  1 Hz');
+		expect(shakeNote([s3])).toBeNull();
+	});
+
+	it('does not call 1-step reading jitter a shake', () => {
+		const [m] = traceMotion({ t, servos: [{ id: 2, position: t.map((_, i) => 880 + (i % 2)), load: t.map(() => 0) }], achievedHz: 50, stopped: null });
+		expect(m.turns).toBe(0);
+		expect(m.shaking).toBe(false);
+		expect(m.steadyAfterS).toBe(0);
 	});
 });

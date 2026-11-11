@@ -19,7 +19,7 @@
  */
 import { connectDB } from './db/connection';
 import { RobotArmMove, RobotArmMoveSet, RobotArmPose, RobotArmSequence } from './db/models';
-import { afterResponse, readServoRegisters, readServosTimed, type TimedReading } from './robot-arm-client';
+import { afterResponse, readServoRegisters, readServoTrace, readServosTimed, type TimedReading } from './robot-arm-client';
 import { currentArmActor } from './robot-arm-move-log';
 import { isSettled, type ServoReading } from '$lib/robot-arm/move-log';
 import {
@@ -29,6 +29,11 @@ import {
 	poseSaveReport,
 	registerNote,
 	servoRegisterStates,
+	servoTraceFrom,
+	shakeNote,
+	traceMotion,
+	type ServoMotion,
+	type ServoTrace,
 	type PoseSaveAction
 } from '$lib/robot-arm/arrival';
 
@@ -37,6 +42,9 @@ const BUS_WAIT_MS = 12_000;
 /** Then this long for the arm to stand still. */
 const SETTLE_CAP_MS = 4_000;
 const POLL_MS = 300;
+/** The fast trace on the Pi right after a play (2026-11-11): long enough to see a shake die out or not. */
+const TRACE_MS = 3000;
+const TRACE_HZ = 50;
 /** The play row is written once the Pi answers (a Pi recording's after its read-back): look for it this long. */
 const PLAY_ROW_WAIT_MS = 4_000;
 
@@ -78,9 +86,44 @@ async function findPlayedDoc(runId: string): Promise<{ name: string | null; pose
 	return null;
 }
 
-/** Read until the bus is free, then until the arm stands still. */
-async function readArrived(): Promise<{ last: TimedReading | null; settledMs: number | null; note: string | null }> {
+interface Arrived {
+	last: TimedReading | null;
+	settledMs: number | null;
+	note: string | null;
+	trace: ServoTrace | null;
+	motion: ServoMotion[] | null;
+	traceError: string | null;
+}
+
+/**
+ * The fast trace first, so it starts on the Pi the moment the play lets go of the bus (409 = still
+ * held: retry). Then one full read. Without the trace route (an older Pi), poll until it stands still.
+ */
+async function readArrived(): Promise<Arrived> {
 	const busUntil = Date.now() + BUS_WAIT_MS;
+	let trace: ServoTrace | null = null;
+	let traceError: string | null = null;
+	while (Date.now() < busUntil) {
+		const r = await readServoTrace(TRACE_MS, TRACE_HZ);
+		trace = servoTraceFrom(r.raw);
+		if (trace) break;
+		traceError = r.error ?? 'GET /servos/trace gave no samples';
+		if (!/409/.test(traceError)) break;
+		await sleep(POLL_MS);
+	}
+	if (trace) {
+		traceError = null;
+		const motion = traceMotion(trace);
+		const last = await readServosTimed();
+		const steady = motion.map((m) => m.steadyAfterS);
+		const settledMs = steady.every((s) => s != null) ? Math.round(Math.max(...(steady as number[])) * 1000) : null;
+		const note = [trace.stopped ? `Trace Stopped: ${trace.stopped}` : null, settledMs == null ? 'Still Moving' : null].filter(Boolean).join('  ') || null;
+		return { last, settledMs, note, trace, motion, traceError: null };
+	}
+	return { ...(await pollArrived(busUntil)), trace: null, motion: null, traceError };
+}
+
+async function pollArrived(busUntil: number): Promise<{ last: TimedReading | null; settledMs: number | null; note: string | null }> {
 	let last: TimedReading | null = null;
 	while (Date.now() < busUntil) {
 		last = await readServosTimed();
@@ -134,7 +177,7 @@ export async function logPlayArrival(runId: string, source: 'after_play' | 'repl
 		const states = servoRegisterStates(regs.raw);
 		const report = arrivalReport(target, last?.readings ?? null, from);
 		const title = play?.what ?? doc?.name ?? null;
-		const notes = [note, registerNote(states, target)].filter(Boolean).join('  ') || null;
+		const notes = [note, shakeNote(read.motion), registerNote(states, target)].filter(Boolean).join('  ') || null;
 		const goals: Record<string, number> = {};
 		target.forEach((v, i) => {
 			if (typeof v === 'number') goals[String(i + 1)] = v;
@@ -161,11 +204,12 @@ export async function logPlayArrival(runId: string, source: 'after_play' | 'repl
 			runId,
 			moveId: play?._id,
 			readings: last?.readings ?? null,
-			arrival: report,
+			arrival: { ...report, motion: read.motion },
+			trace: read.trace ?? undefined,
 			servoState: states,
 			poseId: doc?.poseId ?? undefined,
 			settledMs,
-			detail: { source, registersError: regs.error ? regs.error.slice(0, 200) : null }
+			detail: { source, registersError: regs.error ? regs.error.slice(0, 200) : null, traceError: read.traceError ? read.traceError.slice(0, 200) : null }
 		});
 	} catch (err) {
 		// 11000: the other end of the play wrote it first.

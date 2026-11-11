@@ -10,6 +10,7 @@
  * total: how many rows match, past the limit.
  *
  *   GET /api/robot-arm/moves?frames=<row id>   → { frames } — one play's frames (2026-11-06)
+ *   GET /api/robot-arm/moves?trace=<row id>    → { trace } — one Arrival row's fast trace (2026-11-11)
  *
  * Same rows and per-servo summary as Maintenance → Movement Log, so "it kept
  * going back and forth in the last hour" can be checked without the page.
@@ -17,7 +18,7 @@
 import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { isAgentApiKey } from '$lib/server/api-auth';
-import { countArmMoves, getArmMoveFrames, listArmMoves } from '$lib/server/robot-arm-move-log';
+import { countArmMoves, getArmMoveFrames, getArmMoveTrace, listArmMoves } from '$lib/server/robot-arm-move-log';
 import { summarizeServoMoves } from '$lib/robot-arm/move-log';
 import { summarizeTiming } from '$lib/robot-arm/ot2-move-log';
 
@@ -25,6 +26,8 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	if (!isAgentApiKey(request)) return json({ error: 'Unauthorized' }, { status: 401 });
 	const framesId = url.searchParams.get('frames');
 	if (framesId) return json({ frames: await getArmMoveFrames(framesId.slice(0, 64)) });
+	const traceId = url.searchParams.get('trace');
+	if (traceId) return json({ trace: await getArmMoveTrace(traceId.slice(0, 64)) });
 	const minutes = Number(url.searchParams.get('minutes')) || null;
 	const servo = Number(url.searchParams.get('servo')) || null;
 	const d = url.searchParams.get('device');

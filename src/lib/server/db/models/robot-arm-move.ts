@@ -79,6 +79,8 @@ const robotArmMoveSchema = new Schema(
 		servoState: { type: Schema.Types.Mixed, default: undefined },
 		/** Pose Saved rows (2026-11-10): what changed and whether the arm was at the saved numbers (PoseSaveReport). */
 		poseSave: { type: Schema.Types.Mixed, default: undefined },
+		/** Arrival rows (2026-11-11): the arm sampled fast on the Pi right after the play ({ t[], servos[{id, position[], load[]}] }). Left out of list reads. */
+		trace: { type: Schema.Types.Mixed, default: undefined },
 		/** Arrival and Pose Saved rows: the pose, when the play or save was of one. */
 		poseId: { type: String, default: undefined },
 		/** Arrival rows: ms from the first read that answered to the arm standing still; null = still moving at the cap. */

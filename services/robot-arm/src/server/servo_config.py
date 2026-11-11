@@ -36,6 +36,7 @@ move.py.
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, HTTPException
@@ -249,6 +250,94 @@ def servos_state() -> dict[str, Any]:
     try:
         with BUS_LOCK:
             return {"servos": read_state()}
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+#: GET /servos/trace limits (2026-11-11).
+TRACE_MAX_MS = 10_000
+TRACE_MAX_HZ = 100
+
+
+def _session_waiting() -> bool:
+    """True once a session (a play) wants the bus: the trace must step aside at once."""
+    if bus_free is None:
+        return False
+    try:
+        bus_free()
+        return False
+    except HTTPException:
+        return True
+
+
+def read_trace(ms: int, hz: int, ids: list[int], with_load: bool) -> dict[str, Any]:
+    """
+    Sample the follower fast for ``ms``: every listed servo's position (and
+    load) at up to ``hz``. Read-only. Why (2026-11-11): at shoulder I = 8 the
+    arm shook at a pose (869-891 around 880); BIMS reads the servos at best
+    every ~300 ms over the tunnel and not at all during a play, so the
+    shake's size and speed were guesses. BIMS calls this the moment a play
+    lets go of the bus. Stops before the next sample when a session is
+    waiting, so a play is held up by one sample at most.
+    """
+    period = 1.0 / hz
+    arms = _connected_arms(require_leader=False)
+    t: list[float] = []
+    pos: dict[int, list[int | None]] = {i: [] for i in ids}
+    load: dict[int, list[int | None]] = {i: [] for i in ids}
+    stopped: str | None = None
+    try:
+        bus = arms.follower
+        assert bus is not None
+        t0 = time.monotonic()
+        nxt = t0
+        while True:
+            now = time.monotonic()
+            if now - t0 > ms / 1000:
+                break
+            if _session_waiting():
+                stopped = "session started"
+                break
+            t.append(round(now - t0, 4))
+            for sid in ids:
+                pos[sid].append(_signed(_read_raw(bus, sid, 56, 2, retries=0), 15))
+                if with_load:
+                    load[sid].append(_signed(_read_raw(bus, sid, 60, 2, retries=0), 10))
+            nxt += period
+            delay = nxt - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            else:
+                nxt = time.monotonic()
+    finally:
+        arms.disconnect()
+    dur = t[-1] - t[0] if len(t) > 1 else 0
+    return {
+        "requested_hz": hz,
+        "ms": ms,
+        "achieved_hz": round((len(t) - 1) / dur, 1) if dur > 0 else None,
+        "stopped": stopped,
+        "t": t,
+        "servos": [{"id": sid, "position": pos[sid], **({"load": load[sid]} if with_load else {})} for sid in ids],
+    }
+
+
+@router.get("/servos/trace")
+def servos_trace(ms: int = 3000, hz: int = 50, ids: str = "1,2,3,4,5,6", load: bool = True) -> dict[str, Any]:
+    """Sample servo positions (and load) fast for up to 10 s. Writes nothing; yields to a waiting play."""
+    if bus_free is not None:
+        bus_free()
+    ms = max(100, min(int(ms), TRACE_MAX_MS))
+    hz = max(1, min(int(hz), TRACE_MAX_HZ))
+    try:
+        id_list = sorted({int(x) for x in ids.split(",") if x.strip()})
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="ids must be comma-separated servo ids") from exc
+    if not id_list or any(not 1 <= i <= NUM_MOTORS for i in id_list):
+        raise HTTPException(status_code=400, detail=f"ids must be 1..{NUM_MOTORS}")
+    try:
+        with BUS_LOCK:
+            return read_trace(ms, hz, id_list, load)
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
