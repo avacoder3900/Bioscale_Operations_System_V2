@@ -27328,3 +27328,11 @@ the shoulder stayed 18 off and did not creep over 5 s; only the push rose (load 
 23:06:47 (temporary write, EEPROM was 0 throughout; shoulder Lock now 1). Both gain writes are Pi Change Log rows.
 Mistake earlier in the session: the first baseline run added a start move, return moves and a 4-step route the
 user had not asked for (11 plays); the user corrected it and the 9-move list above was run instead.
+
+2026-11-11 15:04-15:12 UTC — shoulder I sweep, round 1 (one run of the user's 9 moves per level, I = 0,1,2,3,4,6,8;
+the 14:47 run before it gave 4 runs each of I = 0,1,2 and was stopped by the user for taking too long).
+Lifting miss on 5. Shoulder Down (steps 7 / 9): I=0 20-21, 1 16, 2 12, 3 8-9, 4 5, 6 2. Big pair within 0-2 from I=3.
+I=8: the shoulder shook at 0. Remove Home (the user saw it): arrived 4 and 8 off with load -220 at a pose that needs
+load 0, then swung 869-891 over 3 s (3 turns). The sweep's hunting guard stopped it and put I back to 0 at 15:12:39.
+Reading: the 1120-step lift to Remove Home lags its moving goal the whole way, the integral winds up, and at the
+end it overshoots and swings. No servo error flags, temperatures 38-42 C. Round 2 and I = 12, 16, 24 were not run.
