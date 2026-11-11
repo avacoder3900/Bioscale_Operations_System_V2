@@ -27370,3 +27370,8 @@ Fix, Tube Rack tab only (kind 'tube' = drybath tube rack + custom_2ml_24_tube_ra
 colour, the hover title drops "(reagent)/(wax)", and the help line drops the amber/blue sentence. Cartridge
 decks and tip racks are unchanged. File: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte.
 npm run check: 14 errors, same as master at 68af4f41 (none in this file).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/Cr5KHvk4jNbxyBxu86JJnreJYs1Y
+Source: branch master @ commit 50c98312 (fast-forwarded from fix/tube-rack-no-hole-roles)
+Retrieve this exact code: git checkout master at commit 50c98312
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Tube Rack tab draws holes without the wax/reagent colour (A3 no longer shows reagent)
