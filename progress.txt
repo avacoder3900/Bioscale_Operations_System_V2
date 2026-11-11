@@ -27439,3 +27439,8 @@ goal turns vs actual turns, extra turns; wobble = 4+ extra turns. Stored on the 
 line adds "In Play: Worst Servo N Max Error E At T s  ⚠ Wobble Servo N +K Turns". Movement Log: tracking columns in Show
 Servos, Show In Play (every sample vs goal, ./inplay); agents ?inplay=<id>. Not yet seen on a real play.
 npm run check: 13 errors, pre-existing/unrelated. Unit tests (robot-arm + server): 827 passed.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/GHHb1poZfKocvBaE3ry75Zx9wpUA
+Source: branch master @ commit 7470f6a8 (fast-forwarded from feat/arm-arrival-log)
+Retrieve this exact code: git checkout master at commit 7470f6a8
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Arrival rows record where the arm was during the play (in-play samples, wobble), Show In Play
