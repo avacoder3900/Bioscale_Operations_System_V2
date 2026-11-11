@@ -334,6 +334,53 @@ def _bus_io(bus: Any) -> tuple[Callable[[], dict[int, int]], Callable[[dict[int,
     return read, write
 
 
+# ── in-play measurement (2026-11-11) ────────────────────────────────────
+# Why: the user saw the arm wobble during "place and remove" (shoulder,
+# elbow and wrist flex at I = 4) but BIMS could not read the arm during a
+# play, so the Movement Log had the goals and nothing of where the arm went.
+# After each frame's goals are written, the six positions are read when the
+# next frame is at least MEASURE_MIN_SLACK_S away (a frame never waits for a
+# read), and the samples are saved to MEASURE_DIR/<run_id>.json for BIMS
+# (GET /replay/measured/{run_id}). Positions only, retries 0: ~6 reads.
+MEASURE_MIN_SLACK_S = 0.012
+MEASURE_DIR = Path.home() / ".bims-arm" / "measured"
+
+
+def _current_run_id() -> Optional[str]:
+    try:
+        from src.utils.logging import _run_id_ctx  # set for the session thread by sessions.py
+
+        return _run_id_ctx.get()
+    except Exception:
+        return None
+
+
+def _save_measured(run_id: Optional[str], source: Path, started_iso: str, n: int, loops: int, samples: list, skipped: int, read_s: list) -> Optional[str]:
+    """Write one play's samples; returns the file name, or None (never fails the replay)."""
+    try:
+        MEASURE_DIR.mkdir(parents=True, exist_ok=True)
+        name = f"{run_id or time.strftime('%Y%m%dT%H%M%S')}.json"
+        body = {
+            "run_id": run_id,
+            "source": str(source),
+            "started_iso": started_iso,
+            "frames": n,
+            "loops": loops,
+            "columns": ["t", "frame", "loop", "s1", "s2", "s3", "s4", "s5", "s6"],
+            "samples": samples,
+            "skipped": skipped,
+            "read_ms_avg": round(sum(read_s) / len(read_s) * 1000, 2) if read_s else None,
+            "read_ms_max": round(max(read_s) * 1000, 2) if read_s else None,
+        }
+        tmp = MEASURE_DIR / (name + ".tmp")
+        tmp.write_text(json.dumps(body, separators=(",", ":")), encoding="utf-8")
+        tmp.replace(MEASURE_DIR / name)
+        return name
+    except Exception as exc:  # noqa: BLE001
+        print(f"[replay_settle] measured samples not saved: {exc}", flush=True)
+        return None
+
+
 def _bus_lock() -> Any:
     try:
         from src.server.bus_lock import BUS_LOCK
@@ -433,6 +480,11 @@ def _replay_session_settling_unlocked(
 
     offset: dict[int, int] = {sid: 0 for sid in SETTLE_SERVOS}
     results: list[dict] = []
+    run_id = _current_run_id()
+    started_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    measured: list[list] = []
+    measure_skipped = 0
+    read_s: list[float] = []
     fired: list[dict] = []
     timers: list[FireTimer] = []
     halt = threading.Event()
@@ -483,6 +535,18 @@ def _replay_session_settling_unlocked(
                     break
                 goal = frame["goal"]
                 write({sid: _clamp(p + offset.get(sid, 0), POS_MIN, POS_MAX) for sid, p in goal.items()})
+                # Where the arm is (not only where it was sent), when there is time before the next frame.
+                elapsed = time.perf_counter() - t_loop_start
+                if i + 1 >= n or frames[i + 1]["t"] - elapsed > MEASURE_MIN_SLACK_S:
+                    r0 = time.perf_counter()
+                    try:
+                        pos = [follower.read(sid, "Present_Position", retries=0) for sid in range(1, SERVO_COUNT + 1)]
+                    except Exception:  # noqa: BLE001 - a missed sample must never stop the play
+                        pos = [None] * SERVO_COUNT
+                    read_s.append(time.perf_counter() - r0)
+                    measured.append([round(r0 - t_loop_start, 4), i, loop_idx + 1, *pos])
+                else:
+                    measure_skipped += 1
                 if not frame["settle"]:
                     continue
                 j = window_end_index(frames, i)
@@ -519,7 +583,11 @@ def _replay_session_settling_unlocked(
         # goal written is the last frame, so torque-on simply holds it.
         if arms.follower is not None and not header.get("hold_at_end"):
             arms._write_all_torque(arms.follower, 0)
-    arms.logger.log_event("replay.stop", {"settled": len(results), "held": bool(header.get("hold_at_end"))})
+        measured_file = _save_measured(run_id, source_path, started_iso, n, loops, measured, measure_skipped, read_s)
+    arms.logger.log_event(
+        "replay.stop",
+        {"settled": len(results), "held": bool(header.get("hold_at_end")), "measured": {"file": measured_file, "samples": len(measured), "skipped": measure_skipped}},
+    )
 
 
 def install() -> dict[str, Any]:

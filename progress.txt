@@ -27422,3 +27422,20 @@ saved P32 D15 I4 (not touched by the runner); wrist P32 D30, I 0/1/2/3/4/6, 6-7 
 joints logged. Wrist off on r.r.2 hover -> 16.: 7-9 (I0) -> 3-5 (I1) -> 1 (I2) -> 0-1 (I3, I4) -> 1 (I6); every wrist
 arrival within 1 from I3 up. No shakes or buzz (0 turns at every level), max 45 C, everything steady within the trace.
 Shoulder/elbow held within 1-4 throughout. Wrist back to P32 D30 I0 at the end. Data ~/gain-grid/wrist.jsonl.
+
+================================================================================
+2026-11-11 — feat/arm-arrival-log — the Movement Log sees the arm DURING a play (in-play samples)
+================================================================================
+Wrist flex saved at P32 D30 I4 (~20:30 UTC, user accepted). Then the user saw "place and remove" wobble; the log could
+not show it: during a play the Pi only writes goals, and the Arrival trace starts after the play ends (it showed all
+servos still). Fix:
+Pi (installed 2026-11-11 ~21:20 UTC, user's go-ahead; idle; md5s matched the repo; backups *.bak-pre-inplay-20261111):
+  replay_settle.py — after each frame's goal writes, read the six Present_Position (retries 0) when the next frame is
+  >= 12 ms away (a frame never waits for a read); save ~/.bims-arm/measured/<run_id>.json (t, frame, loop, s1..s6,
+  skipped, read_ms avg/max); replay.stop carries {measured: file, samples, skipped}. Simulator updated (plain plays now
+  read positions) — all checks pass. servo_config.py — GET /replay/measured/{run_id} (file read, no bus).
+BIMS: logPlayArrival fetches the samples, sets each against that frame's goal: per servo max error (+ when), RMS error,
+goal turns vs actual turns, extra turns; wobble = 4+ extra turns. Stored on the Arrival row (inPlay, arrival.tracking),
+line adds "In Play: Worst Servo N Max Error E At T s  ⚠ Wobble Servo N +K Turns". Movement Log: tracking columns in Show
+Servos, Show In Play (every sample vs goal, ./inplay); agents ?inplay=<id>. Not yet seen on a real play.
+npm run check: 13 errors, pre-existing/unrelated. Unit tests (robot-arm + server): 827 passed.

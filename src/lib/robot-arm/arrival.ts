@@ -58,6 +58,8 @@ export interface ArrivalReport {
 	missed: number[];
 	/** Arrival rows with a fast trace (2026-11-11): per servo swing, turns and when it went steady. */
 	motion?: ServoMotion[] | null;
+	/** Arrival rows with in-play samples (2026-11-11): per servo error from its goals during the play, and wobble. */
+	tracking?: ServoTracking[] | null;
 }
 
 const at = (arr: (number | null)[] | null | undefined, i: number): number | null => {
@@ -297,6 +299,109 @@ export function shakeNote(motion: ServoMotion[] | null): string | null {
 	const shook = (motion ?? []).filter((m) => m.shaking);
 	if (!shook.length) return null;
 	return `⚠ Shaking  ${shook.map((m) => `Servo ${m.servo}  Swing ${m.swing}  ${m.turns} Turns${m.hz != null ? `  ${m.hz} Hz` : ''}`).join('  ')}`;
+}
+
+/*
+ * The arm DURING a play (2026-11-11). Why: the user saw "place and remove"
+ * wobble with shoulder, elbow and wrist flex at I = 4, but the log had only
+ * the goals the arm was given and the 3 s after the play. The Pi now reads
+ * the six positions after each frame's goals (when there is time before the
+ * next frame) and keeps them per run (GET /replay/measured/{run_id}); here
+ * each sample is set against that frame's goal.
+ */
+export interface InPlaySamples {
+	/** Seconds from the loop's start, frame index, loop number, then servo 1..6 positions. */
+	samples: (number | null)[][];
+	skipped: number;
+	readMsAvg: number | null;
+	readMsMax: number | null;
+}
+
+export interface ServoTracking {
+	servo: number;
+	samples: number;
+	/** actual − goal at the sample with the largest |error|, and when. */
+	maxErr: number | null;
+	maxErrAtS: number | null;
+	rmsErr: number | null;
+	/** Direction changes (≥ SHAKE_DEADBAND_STEPS) of the goals sent and of where the servo really went. */
+	goalTurns: number;
+	actualTurns: number;
+	/** actualTurns − goalTurns: the servo turning back where its goal did not. */
+	extraTurns: number;
+	wobble: boolean;
+}
+
+/** A servo that turns back this many more times than its goals did is wobbling. */
+export const WOBBLE_EXTRA_TURNS = 4;
+
+/** The Pi's GET /replay/measured answer, cleaned. Null when it has none (an older Pi, or no samples). */
+export function inPlayFrom(raw: unknown): InPlaySamples | null {
+	const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null;
+	if (!o || !Array.isArray(o.samples) || !o.samples.length) return null;
+	const samples = (o.samples as unknown[]).filter(Array.isArray).map((r) => (r as unknown[]).map((v) => n(v)));
+	return samples.length ? { samples, skipped: n(o.skipped) ?? 0, readMsAvg: n(o.read_ms_avg), readMsMax: n(o.read_ms_max) } : null;
+}
+
+function turnsOf(vals: number[]): number {
+	let turns = 0;
+	let dir = 0;
+	let peak = vals[0];
+	for (const v of vals.slice(1)) {
+		if (dir === 0) {
+			if (Math.abs(v - peak) >= SHAKE_DEADBAND_STEPS) {
+				dir = Math.sign(v - peak);
+				peak = v;
+			}
+		} else if ((v - peak) * dir > 0) peak = v;
+		else if (Math.abs(v - peak) >= SHAKE_DEADBAND_STEPS) {
+			turns++;
+			dir = -dir;
+			peak = v;
+		}
+	}
+	return turns;
+}
+
+/** Per servo: how far it ran from its goals during the play, and whether it turned back where its goals did not. */
+export function inPlayTracking(m: InPlaySamples, goals: (number | null)[][]): ServoTracking[] {
+	const out: ServoTracking[] = [];
+	for (let s = 1; s <= 6; s++) {
+		const rows = m.samples
+			.map((r) => ({ t: r[0], frame: r[1], pos: r[2 + s], goal: r[1] != null ? (goals[r[1]]?.[s - 1] ?? null) : null }))
+			.filter((r): r is { t: number; frame: number; pos: number; goal: number } => r.t != null && r.frame != null && r.pos != null && r.goal != null);
+		if (!rows.length) continue;
+		let max = rows[0];
+		let sq = 0;
+		for (const r of rows) {
+			if (Math.abs(r.pos - r.goal) > Math.abs(max.pos - max.goal)) max = r;
+			sq += (r.pos - r.goal) ** 2;
+		}
+		const goalTurns = turnsOf(rows.map((r) => r.goal));
+		const actualTurns = turnsOf(rows.map((r) => r.pos));
+		out.push({
+			servo: s,
+			samples: rows.length,
+			maxErr: max.pos - max.goal,
+			maxErrAtS: Math.round(max.t * 100) / 100,
+			rmsErr: Math.round(Math.sqrt(sq / rows.length) * 10) / 10,
+			goalTurns,
+			actualTurns,
+			extraTurns: actualTurns - goalTurns,
+			wobble: actualTurns - goalTurns >= WOBBLE_EXTRA_TURNS
+		});
+	}
+	return out;
+}
+
+/** "In Play: Worst Servo 2 Max Error +25 At 12.4 s  ⚠ Wobble Servo 3 +6 Turns", or null without samples. */
+export function inPlayNote(t: ServoTracking[] | null): string | null {
+	if (!t?.length) return null;
+	const worst = [...t].sort((a, b) => Math.abs(b.maxErr ?? 0) - Math.abs(a.maxErr ?? 0))[0];
+	const parts = [`In Play: Worst Servo ${worst.servo} Max Error ${signed(worst.maxErr ?? 0)} At ${worst.maxErrAtS} s`];
+	const wob = t.filter((x) => x.wobble);
+	if (wob.length) parts.push(`⚠ Wobble ${wob.map((x) => `Servo ${x.servo} +${x.extraTurns} Turns`).join('  ')}`);
+	return parts.join('  ');
 }
 
 /*

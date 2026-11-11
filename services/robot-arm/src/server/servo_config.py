@@ -342,6 +342,23 @@ def servos_trace(ms: int = 3000, hz: int = 50, ids: str = "1,2,3,4,5,6", load: b
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+#: In-play samples written by replay_settle (2026-11-11).
+MEASURED_DIR = __import__("pathlib").Path.home() / ".bims-arm" / "measured"
+
+
+@router.get("/replay/measured/{run_id}")
+def replay_measured(run_id: str) -> dict[str, Any]:
+    """One play's in-play samples (where each servo was after each frame's goals). Reads a file; no bus."""
+    if not run_id.replace("-", "").replace("_", "").isalnum() or len(run_id) > 80:
+        raise HTTPException(status_code=400, detail="bad run id")
+    f = MEASURED_DIR / f"{run_id}.json"
+    if not f.exists():
+        raise HTTPException(status_code=404, detail="no samples for that run")
+    import json as _json
+
+    return _json.loads(f.read_text(encoding="utf-8"))
+
+
 @router.get("/servos/config")
 def servos_config() -> dict[str, Any]:
     """Read every follower servo's gain / torque registers. Writes nothing."""

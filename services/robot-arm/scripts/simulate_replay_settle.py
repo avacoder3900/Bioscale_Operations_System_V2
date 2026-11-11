@@ -136,7 +136,9 @@ def main() -> None:
     B = [2100, 1300, 2900, 1900, 2048, 1800]
     droop = {2: 18, 3: 9, 4: 5}
 
-    # 1. no flags: identical to the original (writes only, no reads, no settle event)
+    # 1. no flags: the original writes, plus position reads (in-play measurement), no settle event
+    rs.MEASURE_DIR = tmp / "measured"
+    frames_plain = 2
     p = tmp / "plain.jsonl"
     recording(p, [(A, 0.04, False, None), (B, 0.04, False, None)])
     bus = FakeBus(droop)
@@ -144,7 +146,11 @@ def main() -> None:
     rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
     kinds = [e for e, _ in arms.logger.events]
     check(kinds == ["replay.start", "replay.loop", "replay.ramp", "replay.stop"], f"plain: events {kinds}")
-    check(bus.reads == 0, "plain: no bus reads")
+    # 2026-11-11: a plain play now reads each servo's position after each frame (in-play
+    # measurement), never anything else, and saves the samples for BIMS.
+    stop = [p for e, p in arms.logger.events if e == "replay.stop"][0]
+    check(bus.reads <= 6 * frames_plain, f"plain: at most 6 position reads per frame ({bus.reads})")
+    check(stop["measured"]["samples"] >= 1 and stop["measured"]["file"], f"plain: measured samples saved {stop['measured']}")
     torque = [(s, v) for s, n, v in bus.writes if n == "Torque_Enable"]
     check(torque[:6] == [(s, 0) for s in range(1, 7)] and torque[6:12] == [(s, 1) for s in range(1, 7)] and torque[-6:] == [(s, 0) for s in range(1, 7)], "plain: torque off, on, ..., off")
     gw = goal_writes(bus)

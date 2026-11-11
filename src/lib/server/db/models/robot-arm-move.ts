@@ -81,6 +81,8 @@ const robotArmMoveSchema = new Schema(
 		poseSave: { type: Schema.Types.Mixed, default: undefined },
 		/** Arrival rows (2026-11-11): the arm sampled fast on the Pi right after the play ({ t[], servos[{id, position[], load[]}] }). Left out of list reads. */
 		trace: { type: Schema.Types.Mixed, default: undefined },
+		/** Arrival rows (2026-11-11): where each servo was during the play, read on the Pi after each frame ({ samples[[t, frame, loop, s1..s6]], skipped, readMsAvg }). Left out of list reads. */
+		inPlay: { type: Schema.Types.Mixed, default: undefined },
 		/** Arrival and Pose Saved rows: the pose, when the play or save was of one. */
 		poseId: { type: String, default: undefined },
 		/** Arrival rows: ms from the first read that answered to the arm standing still; null = still moving at the cap. */

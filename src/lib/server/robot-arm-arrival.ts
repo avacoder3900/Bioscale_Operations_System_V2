@@ -19,7 +19,7 @@
  */
 import { connectDB } from './db/connection';
 import { RobotArmMove, RobotArmMoveSet, RobotArmPose, RobotArmSequence } from './db/models';
-import { afterResponse, readServoRegisters, readServoTrace, readServosTimed, type TimedReading } from './robot-arm-client';
+import { afterResponse, readReplayMeasured, readServoRegisters, readServoTrace, readServosTimed, type TimedReading } from './robot-arm-client';
 import { currentArmActor } from './robot-arm-move-log';
 import { isSettled, type ServoReading } from '$lib/robot-arm/move-log';
 import {
@@ -28,6 +28,9 @@ import {
 	poseSaveLine,
 	poseSaveReport,
 	registerNote,
+	inPlayFrom,
+	inPlayNote,
+	inPlayTracking,
 	servoRegisterStates,
 	servoTraceFrom,
 	shakeNote,
@@ -174,10 +177,14 @@ export async function logPlayArrival(runId: string, source: 'after_play' | 'repl
 			note = 'Next Play Started';
 		}
 		const regs = last?.readings ? await readServoRegisters() : { raw: null, error: null };
+		// Where the arm was during the play (Pi samples after each frame; an older Pi answers 404).
+		const ip = await readReplayMeasured(runId);
+		const inPlay = inPlayFrom(ip.raw);
+		const tracking = inPlay && frames?.length ? inPlayTracking(inPlay, frames) : null;
 		const states = servoRegisterStates(regs.raw);
 		const report = arrivalReport(target, last?.readings ?? null, from);
 		const title = play?.what ?? doc?.name ?? null;
-		const notes = [note, shakeNote(read.motion), registerNote(states, target)].filter(Boolean).join('  ') || null;
+		const notes = [note, shakeNote(read.motion), inPlayNote(tracking), registerNote(states, target)].filter(Boolean).join('  ') || null;
 		const goals: Record<string, number> = {};
 		target.forEach((v, i) => {
 			if (typeof v === 'number') goals[String(i + 1)] = v;
@@ -204,12 +211,18 @@ export async function logPlayArrival(runId: string, source: 'after_play' | 'repl
 			runId,
 			moveId: play?._id,
 			readings: last?.readings ?? null,
-			arrival: { ...report, motion: read.motion },
+			arrival: { ...report, motion: read.motion, tracking },
+			inPlay: inPlay ?? undefined,
 			trace: read.trace ?? undefined,
 			servoState: states,
 			poseId: doc?.poseId ?? undefined,
 			settledMs,
-			detail: { source, registersError: regs.error ? regs.error.slice(0, 200) : null, traceError: read.traceError ? read.traceError.slice(0, 200) : null }
+			detail: {
+				source,
+				registersError: regs.error ? regs.error.slice(0, 200) : null,
+				traceError: read.traceError ? read.traceError.slice(0, 200) : null,
+				inPlayError: ip.error ? ip.error.slice(0, 200) : null
+			}
 		});
 	} catch (err) {
 		// 11000: the other end of the play wrote it first.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { arrivalLine, arrivalReport, poseSaveLine, poseSaveReport, registerNote, servoRegisterStates, servoTraceFrom, shakeNote, statusErrors, traceMotion, AT_POSE_STEPS } from './arrival';
+import { inPlayFrom, inPlayNote, inPlayTracking, arrivalLine, arrivalReport, poseSaveLine, poseSaveReport, registerNote, servoRegisterStates, servoTraceFrom, shakeNote, statusErrors, traceMotion, AT_POSE_STEPS, WOBBLE_EXTRA_TURNS } from './arrival';
 import type { ServoReading } from './move-log';
 
 const reading = (positions: number[], loads: number[] = []): ServoReading[] =>
@@ -130,5 +130,36 @@ describe('fast trace', () => {
 		expect(m.turns).toBe(0);
 		expect(m.shaking).toBe(false);
 		expect(m.steadyAfterS).toBe(0);
+	});
+});
+
+describe('in-play tracking', () => {
+	// 100 frames at 30 Hz: servo 2 goes 2000 -> 2300 and back; servo 3 holds 3000.
+	const N = 100;
+	const goals = Array.from({ length: N }, (_, i) => [2040, i < 50 ? 2000 + i * 6 : 2300 - (i - 50) * 6, 3000, 900, 500, 2150]);
+	const t = (i: number) => i / 30;
+	// Servo 2 lags 10 steps behind (no wobble); servo 3 wobbles +-6 around its still goal at 3 Hz.
+	const samples = goals.map((g, i) => [t(i), i, 1, g[0], g[1] - (i < 50 ? 10 : -10), Math.round(3000 + 6 * Math.sin(2 * Math.PI * 3 * t(i))), g[3], g[4], g[5]]);
+	const raw = { samples, skipped: 0, read_ms_avg: 8.2, read_ms_max: 11 };
+
+	it('reads the Pi answer, and nothing from an older Pi', () => {
+		const m = inPlayFrom(raw)!;
+		expect(m.samples.length).toBe(N);
+		expect(m.readMsAvg).toBe(8.2);
+		expect(inPlayFrom({ detail: 'no samples for that run' })).toBeNull();
+		expect(inPlayFrom({ samples: [] })).toBeNull();
+	});
+
+	it('tells lag (turns with its goal) from wobble (turns its goal never made)', () => {
+		const tk = inPlayTracking(inPlayFrom(raw)!, goals);
+		const s2 = tk.find((x) => x.servo === 2)!;
+		const s3 = tk.find((x) => x.servo === 3)!;
+		expect(s2).toMatchObject({ maxErr: -10, goalTurns: 1, actualTurns: 1, extraTurns: 0, wobble: false });
+		expect(s3.goalTurns).toBe(0);
+		expect(s3.actualTurns).toBeGreaterThanOrEqual(WOBBLE_EXTRA_TURNS);
+		expect(s3.wobble).toBe(true);
+		expect(Math.abs(s3.maxErr!)).toBe(6);
+		expect(inPlayNote(tk)).toMatch(/^In Play: Worst Servo 2 Max Error -10 At [\d.]+ s  ⚠ Wobble Servo 3 \+\d+ Turns$/);
+		expect(inPlayNote(null)).toBeNull();
 	});
 });

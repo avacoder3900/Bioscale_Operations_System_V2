@@ -30,6 +30,11 @@
 	 * right after the play; Show Servos adds each servo's swing, turns, speed
 	 * of the shake and when it went steady, and Show Trace opens every sample,
 	 * read on demand from ./trace.
+	 *
+	 * In Play (2026-11-11): an Arrival row keeps where each servo was during
+	 * the play (read on the Pi after each frame); Show Servos adds each
+	 * servo's largest error from its goals and its extra turns (wobble), and
+	 * Show In Play opens every sample against its goal, from ./inplay.
 	 */
 	import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 	import { goto } from '$app/navigation';
@@ -46,6 +51,24 @@
 	const servoReport = (m: (typeof data.moves)[number]) => m.arrival ?? m.poseSave?.arm ?? null;
 	const signedN = (v: number | null | undefined) => (v == null ? '' : `${v > 0 ? '+' : ''}${v}`);
 	const DIR_TITLES = { increasing: 'Increasing', decreasing: 'Decreasing', still: 'Still' } as const;
+	let openInPlay = $state<Record<string, { rows: { t: number; frame: number; pos: (number | null)[]; goal: (number | null)[] }[] | null; error: string | null; loading: boolean }>>({});
+	async function toggleInPlay(id: string) {
+		if (openInPlay[id]) {
+			delete openInPlay[id];
+			return;
+		}
+		openInPlay[id] = { rows: null, error: null, loading: true };
+		try {
+			const res = await fetch(`${BASE}/inplay?id=${encodeURIComponent(id)}`);
+			const body = await res.json();
+			const samples: (number | null)[][] = body?.inPlay?.samples ?? [];
+			const goals: (number | null)[][] = body?.goals ?? [];
+			const rows = samples.map((r) => ({ t: r[0] ?? 0, frame: r[1] ?? 0, pos: r.slice(3, 9), goal: goals[r[1] ?? -1] ?? [] }));
+			if (openInPlay[id]) openInPlay[id] = { rows, error: rows.length ? null : 'No In Play Samples Kept', loading: false };
+		} catch (err) {
+			if (openInPlay[id]) openInPlay[id] = { rows: null, error: err instanceof Error ? err.message : String(err), loading: false };
+		}
+	}
 	let openTrace = $state<Record<string, { trace: ServoTrace | null; error: string | null; loading: boolean }>>({});
 	async function toggleTrace(id: string) {
 		if (openTrace[id]) {
@@ -402,6 +425,17 @@
 												{openServos[m._id] ? 'Hide Servos' : 'Show Servos'}
 											</button>
 										{/if}
+										{#if m.arrival?.tracking?.length}
+											<button
+												type="button"
+												onclick={() => toggleInPlay(m._id)}
+												class="ml-2 rounded border px-1.5 py-px font-sans text-[10px]"
+												style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
+												aria-expanded={!!openInPlay[m._id]}
+											>
+												{openInPlay[m._id] ? 'Hide In Play' : 'Show In Play'}
+											</button>
+										{/if}
 										{#if m.arrival?.motion?.length}
 											<button
 												type="button"
@@ -436,6 +470,7 @@
 									{@const rep = servoReport(m)!}
 									{@const regs = m.servoState ?? null}
 									{@const motion = m.arrival?.motion ?? null}
+									{@const tracking = m.arrival?.tracking ?? null}
 									<tr>
 										<td colspan="8" class="pb-2 pl-6">
 											<div class="overflow-auto rounded border border-[var(--color-tron-border)]">
@@ -443,6 +478,7 @@
 													<thead style="color: var(--color-tron-text-secondary)">
 														<tr>
 															<th class="px-2 py-1">Servo</th><th class="pr-3">Goal</th><th class="pr-3">From</th><th class="pr-3">Asked</th><th class="pr-3">Moved</th><th class="pr-3">At</th><th class="pr-3">Off</th><th class="pr-3">Direction</th><th class="pr-3">Load</th><th class="pr-3">Speed</th><th class="pr-3">°C</th><th class="pr-3">Torque</th><th class="pr-3">Within {rep.toleranceSteps}</th>
+															{#if tracking}<th class="pr-3">In Play Max Error</th><th class="pr-3">At (s)</th><th class="pr-3">RMS Error</th><th class="pr-3">Goal Turns</th><th class="pr-3">Actual Turns</th><th class="pr-3">Extra Turns</th>{/if}
 															{#if motion}<th class="pr-3">Swing</th><th class="pr-3">Turns</th><th class="pr-3">Shake (Hz)</th><th class="pr-3">Steady After (s)</th><th class="pr-3">Load Range</th>{/if}
 															{#if regs}<th class="pr-3">Goal Register</th><th class="pr-3">Current (mA)</th><th class="pr-3">Moving</th><th class="pr-3">Errors</th><th class="pr-3">P</th><th class="pr-3">D</th><th class="pr-3">I</th><th class="pr-3">Torque Limit</th>{/if}
 														</tr>
@@ -451,6 +487,7 @@
 														{#each rep.servos as s (s.servo)}
 															{@const g = regs?.find((x) => x.id === s.servo)}
 															{@const mo = motion?.find((x) => x.servo === s.servo)}
+															{@const tk = tracking?.find((x) => x.servo === s.servo)}
 															<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
 																<td class="px-2">{s.servo} {jointTitle(s.servo)}</td>
 																<td class="pr-3">{s.target}</td>
@@ -465,6 +502,14 @@
 																<td class="pr-3">{s.temperature ?? ''}</td>
 																<td class="pr-3">{s.torque == null ? '' : s.torque ? 'On' : 'Off'}</td>
 																<td class="pr-3">{s.reached == null ? '' : s.reached ? 'Yes' : 'No'}</td>
+																{#if tracking}
+																	<td class="pr-3">{signedN(tk?.maxErr)}</td>
+																	<td class="pr-3">{tk?.maxErrAtS ?? ''}</td>
+																	<td class="pr-3">{tk?.rmsErr ?? ''}</td>
+																	<td class="pr-3">{tk?.goalTurns ?? ''}</td>
+																	<td class="pr-3">{tk?.actualTurns ?? ''}</td>
+																	<td class="pr-3" class:text-yellow-300={!!tk?.wobble}>{tk ? signedN(tk.extraTurns) : ''}</td>
+																{/if}
 																{#if motion}
 																	<td class="pr-3" class:text-yellow-300={!!mo?.shaking}>{mo?.swing ?? ''}</td>
 																	<td class="pr-3" class:text-yellow-300={!!mo?.shaking}>{mo?.turns ?? ''}</td>
@@ -487,6 +532,43 @@
 													</tbody>
 												</table>
 											</div>
+										</td>
+									</tr>
+								{/if}
+								{#if openInPlay[m._id]}
+									{@const o = openInPlay[m._id]}
+									<tr>
+										<td colspan="8" class="pb-2 pl-6">
+											{#if o.loading}
+												<p class="text-xs" style="color: var(--color-tron-text-secondary)">Loading In Play</p>
+											{:else if o.error || !o.rows}
+												<p class="text-xs text-red-300">{o.error ?? 'No In Play Samples Kept'}</p>
+											{:else}
+												<div class="max-h-96 overflow-auto rounded border border-[var(--color-tron-border)]">
+													<table class="w-full text-left font-mono text-[11px]">
+														<thead class="sticky top-0 bg-[var(--color-tron-surface)]" style="color: var(--color-tron-text-secondary)">
+															<tr>
+																<th class="px-2 py-1">Time</th><th class="pr-3">Frame</th>
+																{#each servos as s (s)}<th class="pr-3">Servo {s}</th><th class="pr-3">Error {s}</th>{/each}
+															</tr>
+														</thead>
+														<tbody>
+															{#each o.rows as r, i (i)}
+																<tr class="border-t border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">
+																	<td class="px-2">{r.t.toFixed(3)} s</td>
+																	<td class="pr-3">{r.frame + 1}</td>
+																	{#each servos as s (s)}
+																		{@const p = r.pos[s - 1]}
+																		{@const g = r.goal[s - 1]}
+																		<td class="pr-3">{p ?? ''}</td>
+																		<td class="pr-3" style="color: var(--color-tron-text-secondary)">{p != null && g != null ? signedN(p - g) : ''}</td>
+																	{/each}
+																</tr>
+															{/each}
+														</tbody>
+													</table>
+												</div>
+											{/if}
 										</td>
 									</tr>
 								{/if}

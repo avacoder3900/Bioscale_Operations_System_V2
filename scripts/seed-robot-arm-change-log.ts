@@ -104,7 +104,9 @@ const ROWS: Row[] = [
 	['2026-11-10T22:39:56Z', 'pi', 'servo', 'pi.router.servo_state', null, null, 'Installed', null, 'pi', 'GET /servos/state: goal register, current, status bits, gains (servo_config.py; backup .bak-pre-state-20261110)'],
 	['2026-11-11T15:23:49Z', 'pi', 'servo', 'pi.router.servo_trace', null, null, 'Installed', null, 'pi', 'GET /servos/trace: every servo sampled at up to 100 Hz after a play, yields to a waiting play (servo_config.py; backup .bak-pre-trace-20261111)'],
 	['2026-11-11T15:30:00Z', 'maintenance.moves', 'servo', 'log.arrival_trace', null, null, 'Added', null, 'code', 'Arrival rows keep a 3 s, 50 Hz trace with swing, turns and shake speed per servo; Show Trace'],
-	['2026-11-11T16:56:00Z', 'pi', 'servo', 'pi.torque_on_goal_sync', null, 'enable only', 'goal 0 or > 200 off set to position first', 'steps', 'pi', 'After a power loss every goal read 0; torque-on would drive the arm toward 0 (manual_control.py; backup .bak-pre-torque-sync-20261111)']
+	['2026-11-11T16:56:00Z', 'pi', 'servo', 'pi.torque_on_goal_sync', null, 'enable only', 'goal 0 or > 200 off set to position first', 'steps', 'pi', 'After a power loss every goal read 0; torque-on would drive the arm toward 0 (manual_control.py; backup .bak-pre-torque-sync-20261111)'],
+	['2026-11-11T21:20:00Z', 'pi', 'servo', 'pi.replay_inplay_samples', null, null, 'Added', null, 'pi', 'Every play reads the six positions after each frame (when time allows) and keeps them per run; GET /replay/measured/{run_id} (replay_settle.py, servo_config.py; backups .bak-pre-inplay-20261111)'],
+	['2026-11-11T21:25:00Z', 'maintenance.moves', 'servo', 'log.arrival_inplay', null, null, 'Added', null, 'code', 'Arrival rows keep where the arm was during the play: per servo max error from its goals and extra turns (wobble); Show In Play']
 ];
 
 async function main() {

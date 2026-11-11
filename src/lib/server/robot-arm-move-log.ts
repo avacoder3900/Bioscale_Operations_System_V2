@@ -277,6 +277,15 @@ export async function getArmMoveTrace(id: string): Promise<ServoTrace | null> {
 	return row?.trace ?? null;
 }
 
+/** One Arrival row's in-play samples and the play's goals, for Show In Play (2026-11-11). */
+export async function getArmMoveInPlay(id: string): Promise<{ inPlay: unknown; goals: (number | null)[][] | null } | null> {
+	await connectDB();
+	const row = (await RobotArmMove.findById(id).select('inPlay moveId').lean()) as { inPlay?: unknown; moveId?: string } | null;
+	if (!row?.inPlay) return null;
+	const play = row.moveId ? ((await RobotArmMove.findById(row.moveId).select('frames.goals').lean()) as { frames?: { goals?: (number | null)[][] } } | null) : null;
+	return { inPlay: row.inPlay, goals: play?.frames?.goals ?? null };
+}
+
 /** How many rows match, for "Showing 100 of 4210". */
 export async function countArmMoves(o: ArmMoveFilter = {}): Promise<number> {
 	await connectDB();

@@ -301,6 +301,15 @@ export async function readServoTrace(ms: number, hz: number): Promise<{ raw: unk
 	}
 }
 
+/** One play's in-play samples from the Pi (GET /replay/measured/{runId}, 2026-11-11). Never throws. */
+export async function readReplayMeasured(runId: string): Promise<{ raw: unknown; error: string | null }> {
+	try {
+		return { raw: await armFetchJson<unknown>(`/replay/measured/${encodeURIComponent(runId)}`, { timeoutMs: 10000 }), error: null };
+	} catch (err) {
+		return { raw: null, error: err instanceof Error ? err.message : String(err) };
+	}
+}
+
 /** Keep a promise running after the response on Vercel (its request context's waitUntil); elsewhere it just runs. */
 export function afterResponse(p: Promise<unknown>): void {
 	const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[
