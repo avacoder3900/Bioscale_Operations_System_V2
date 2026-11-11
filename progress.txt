@@ -27416,3 +27416,9 @@ user, because the arm had sagged 71 steps during a power cut. Elbow P32 D15, I 0
 into 16. from Remove Home 11-17 (I0) -> 9-13 (I1) -> 5 (I2) -> 1-5 (I3) -> 1 (I4) -> 0-1 (I6); at r.r.2 hover 12 -> 8
 -> 4-5 -> 2-3 -> 0-1 -> 1; at Remove Home -8/-9 -> -1. No shakes; I6 shows 7 turns at 2 steps (I4: 0), the start of a
 buzz. Max 45 C, elbow 41 C. Both joints back to P32 D15 I0 at the end (EEPROM unchanged). Data ~/gain-grid/elbow.jsonl.
+
+2026-11-11 19:57-20:27 UTC — wrist flex (servo 4) I test on the Pi (user's go-ahead). Shoulder and elbow on their new
+saved P32 D15 I4 (not touched by the runner); wrist P32 D30, I 0/1/2/3/4/6, 6-7 runs each, the same 9 moves, all
+joints logged. Wrist off on r.r.2 hover -> 16.: 7-9 (I0) -> 3-5 (I1) -> 1 (I2) -> 0-1 (I3, I4) -> 1 (I6); every wrist
+arrival within 1 from I3 up. No shakes or buzz (0 turns at every level), max 45 C, everything steady within the trace.
+Shoulder/elbow held within 1-4 throughout. Wrist back to P32 D30 I0 at the end. Data ~/gain-grid/wrist.jsonl.
