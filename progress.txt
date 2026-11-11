@@ -27359,3 +27359,14 @@ Source: branch master @ commit 4ab674af (fast-forwarded from feat/arm-arrival-lo
 Retrieve this exact code: git checkout master at commit 4ab674af
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Arrival rows with a fast Pi trace after every play (swing, turns, shake Hz), Show Trace
+
+================================================================================
+2026-11-11 — fix/tube-rack-no-hole-roles — Tube Rack tab no longer paints holes wax/reagent
+================================================================================
+Root cause: Deck Calibration Studio colours every hole by column parity (even = wax amber, odd = reagent blue).
+That is a cartridge-deck rule, but the canvas applied it to tube racks too, so the wax source tube A3 on
+cosmas_and_damian_drybath_tuberack showed blue "reagent". Display only: rack offsets were never role-keyed.
+Fix, Tube Rack tab only (kind 'tube' = drybath tube rack + custom_2ml_24_tube_rack): holes draw in one neutral
+colour, the hover title drops "(reagent)/(wax)", and the help line drops the amber/blue sentence. Cartridge
+decks and tip racks are unchanged. File: src/routes/manufacturing/cart-mfg/deck-calibration/+page.svelte.
+npm run check: 14 errors, same as master at 68af4f41 (none in this file).

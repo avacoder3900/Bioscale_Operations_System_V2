@@ -220,6 +220,9 @@
 	// Confirmed from the protocols: wax fills EVEN columns (2,4,…,24), reagent fills
 	// ODD columns (1,3,…,23). Well name = rowLetter+colNumber, so role = column parity.
 	// They need different fill accuracy, so calibration treats them separately.
+	// Tube racks (kind 'tube') carry no role: this is a cartridge-deck rule, and on a
+	// rack it painted the wax tube A3 as "reagent" (2026-11-11). The canvas draws
+	// tube-rack holes in one neutral colour with no role in the tooltip.
 	type Role = 'wax' | 'reagent';
 	function colOf(name: string): number { const m = name.match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0; }
 	function rowOf(name: string): string { const m = name.match(/^([A-Za-z]+)/); return m ? m[1] : ''; }
@@ -1739,7 +1742,7 @@
 					<button type="button" onclick={deselectAll} title="Deselect everything (or press Esc anywhere)" class="rounded border border-[var(--color-tron-border)] px-2 py-1 hover:border-[var(--color-tron-cyan)]" style="color: var(--color-tron-text)">Clear (Esc)</button>
 				</div>
 			</div>
-			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle. Wax holes are amber, reagent blue; the toggle restricts which you can select. Esc clears everything.</p>
+			<p class="mb-2 text-[11px]" style="color: var(--color-tron-text-secondary)">Drag a box to select a group (Shift adds). Click a hole to toggle.{kind === 'tube' ? '' : ' Wax holes are amber, reagent blue; the toggle restricts which you can select.'} Esc clears everything.</p>
 			<!-- The canvas box grows to fill the section (2026-08-28) so the deck no
 			     longer leaves dead space when the right rail is taller, and the
 			     graphic sits centred in whatever room it has. `safe center` keeps
@@ -1779,7 +1782,7 @@
 						{#each wells as w (w.name)}
 							{@const sel = selection.has(w.name)}
 							{@const active = isActiveRole(w.name)}
-							{@const role = roleOf(w.name)}
+							{@const role = kind === 'tube' ? null : roleOf(w.name)}
 							<circle
 								cx={w.x} cy={cy(w.y)} r={wellR}
 								fill={!active
@@ -1790,14 +1793,16 @@
 											? '#f59e0b'
 											: role === 'wax'
 												? 'rgba(217,160,80,0.6)'
-												: 'rgba(80,170,215,0.6)'}
+												: role === 'reagent'
+													? 'rgba(80,170,215,0.6)'
+													: 'rgba(170,180,195,0.6)'}
 								stroke={sel ? 'var(--color-tron-cyan)' : 'none'}
 								stroke-width="0.3"
 								style={active ? '' : 'pointer-events:none;'}
 								onpointerdown={(e) => { e.stopPropagation(); }}
 								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
 								role="button" tabindex="-1"
-							><title>{w.name} ({role}) — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{issueTitle(w.name)}</title></circle>
+							><title>{w.name}{role ? ` (${role})` : ''} — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{issueTitle(w.name)}</title></circle>
 						{/each}
 						<!-- Fill-mistake rings (reagent run-page well tracker), drawn over the dots. -->
 						{#each wells as w (`issue-${w.name}`)}
