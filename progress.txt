@@ -27394,3 +27394,18 @@ enabling, sets any goal that is 0 or > 200 steps from the servo's position to th
 the post-play lift back onto a pose still works), refuses if a position or goal write fails, and reports
 goals_synced. Backup manual_control.py.bak-pre-torque-sync-20261111; service restarted 16:5x UTC. manual_control.py
 is a Pi-only file (not in this repo). Torque has NOT been turned on; the grid waits for the user.
+
+================================================================================
+2026-11-11 — feat/arm-arrival-log — shoulder gain test round 2 (new poses) results
+================================================================================
+Round 1 (grid, 64 combos, old poses) finished on the Pi 17:36 UTC. 1. Shoulder Down and 6. Elbow rested on the floor
+(user saw it; shoulder load 0 at the goal), so round 2 used the user's poses: big pair 0. Remove Home <-> 16.
+(2040 2100 2700 1130 500 2500), small pair 16. <-> r.r.2 hover (2040 2240 2450 1230 500 2500); 1 s pause between pairs.
+Round 2: 7 good + 3 bad combinations, repeated 18:07-19:05 UTC (6-7 runs each). Step 8 (lift r.r.2 hover -> 16.,
+shoulder 2240 -> 2100) shoulder off: P32 D15 I0 19 every run; P24 D45 I0 25-26; P48 D8 I2 7-8; every I 4 combination
+(P32 D15, P32 D8, P40 D15, P48 D15, P40 D30, P48 D8) 2-3, all runs. P48 D8 I6 buzzed (41 turns, 6.9 Hz, swing 2) and was
+skipped. Settle: steady before the trace began everywhere (<= 1 s hold), max swing 4, max 45 C. Elbow sits ~12 steps
+off at r.r.2 hover at every shoulder setting (untuned). Runs: Pi ~/gain-grid/round2-newposes.jsonl.
+Pi interruptions: the Pi was unplugged 2 more times (18:10-18:14); torque-on goal-sync fix used each time, no motion.
+Removed the runner's "no load = resting" stop: after a lowering move the gearbox friction holds the arm and the
+shoulder reads load 0 in free air (two false stops). Shoulder left at P 32 D 15 I 0 (EEPROM unchanged all day).
