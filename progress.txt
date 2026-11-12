@@ -27615,3 +27615,10 @@ Retrieve this exact code: git checkout feat/spu-multi-build at commit e92b7886
 What this deployment is for: Build SPUs page (several SPUs at once, bucket QR registry, step-by-step part
   scans, one confirm per section) for review before the PR into master is merged. The docs-only commit that
   adds this log entry triggers one more preview of the same code.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/4gW2hM1zTjHPF1E1uPBpvNFX4FXN
+Source: branch master @ commit cbd4a542 (merge of PR #132, feat/spu-multi-build @ 675b30a2)
+Retrieve this exact code: git checkout master at commit cbd4a542
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Build SPUs page live in production — several SPUs at once, bucket QR registry
+  (Bucket 1 / Bucket 2 already registered), step-by-step part scans, one confirm per section. Deployed
+  2026-11-12 22:48 UTC. This docs-only log commit triggers one more production build of the same code.
