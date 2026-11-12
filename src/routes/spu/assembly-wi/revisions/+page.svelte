@@ -150,7 +150,11 @@
 							<td class="px-3 py-2">{p.performedBy?.username ?? '—'}</td>
 							<td class="px-3 py-2 whitespace-nowrap">{p.sectionNumber === 0 ? 'Setup' : `Sub-Assembly ${p.sectionNumber}`} · step {p.stepNumber} <span class="text-[var(--color-tron-text-secondary)]">(v{p.wiVersion})</span></td>
 							<td class="px-3 py-2"><span class="font-mono text-xs text-[var(--color-tron-cyan)]">{p.partNumber ?? '—'}</span> {p.name}</td>
-							<td class="px-3 py-2 text-right font-semibold text-red-300">−{p.quantity} {p.unit}</td>
+							{#if p.quantity < 0}
+								<td class="px-3 py-2 text-right font-semibold text-green-300">+{-p.quantity} {p.unit} returned</td>
+							{:else}
+								<td class="px-3 py-2 text-right font-semibold text-red-300">−{p.quantity} {p.unit}</td>
+							{/if}
 							<td class="px-3 py-2 text-right text-[var(--color-tron-text-secondary)]">{p.previousQuantity ?? '?'} → {p.newQuantity ?? '?'}</td>
 							<td class="px-3 py-2 font-mono text-xs">{p.deviceSerial ?? '—'}</td>
 							<td class="px-3 py-2 text-[var(--color-tron-text-secondary)]">{p.notes || ''}</td>

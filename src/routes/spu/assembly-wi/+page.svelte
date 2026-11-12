@@ -140,8 +140,14 @@
 				<p class="mt-1 text-sm text-[var(--color-tron-text-secondary)]">No work instruction imported yet. Upload the .docx to get started.</p>
 			{/if}
 		</div>
+		{#if data.wi && !data.canEdit}
+			<a href="/spu/assembly-wi/build" class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-sm font-semibold text-black hover:opacity-90">Build SPUs</a>
+		{/if}
 		{#if data.canEdit}
 			<div class="flex flex-wrap gap-2">
+				{#if data.wi}
+					<a href="/spu/assembly-wi/build" class="rounded bg-[var(--color-tron-cyan)] px-3 py-1.5 text-sm font-semibold text-black hover:opacity-90">Build SPUs</a>
+				{/if}
 				<button class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-sm text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" onclick={() => (showUpload = !showUpload)}>
 					{showUpload ? 'Hide upload' : 'Upload .docx'}
 				</button>
@@ -568,7 +574,7 @@
 									<div class="mb-1 font-semibold text-[var(--color-tron-text-secondary)]">Inventory pulls for this step</div>
 									{#each data.pullsByStep[step._id] as p (p._id)}
 										<div class="flex flex-wrap justify-between gap-2 border-t border-[var(--color-tron-border)]/60 py-1">
-											<span><span class="font-mono text-[var(--color-tron-cyan)]">{p.partNumber ?? ''}</span> {p.name} <span class="text-red-300">−{p.quantity} {p.unit}</span> <span class="text-[var(--color-tron-text-secondary)]">({p.previousQuantity} → {p.newQuantity})</span>{#if p.deviceSerial} · SPU {p.deviceSerial}{/if}</span>
+											<span><span class="font-mono text-[var(--color-tron-cyan)]">{p.partNumber ?? ''}</span> {p.name} {#if p.quantity < 0}<span class="text-green-300">+{-p.quantity} {p.unit} returned (undo)</span>{:else}<span class="text-red-300">−{p.quantity} {p.unit}</span>{/if} <span class="text-[var(--color-tron-text-secondary)]">({p.previousQuantity} → {p.newQuantity})</span>{#if p.deviceSerial} · SPU {p.deviceSerial}{/if}</span>
 											<span class="text-[var(--color-tron-text-secondary)]">{p.performedBy?.username} · {fmt(p.performedAt)}</span>
 										</div>
 									{/each}
