@@ -252,7 +252,8 @@ def report(rows: list[dict[str, Any]], wait: bool = False) -> int:
 
 # ── what the Pi reports ───────────────────────────────────────────────────
 
-GAIN_KEYS = {"P_Coefficient": "servo.p_coefficient", "D_Coefficient": "servo.d_coefficient", "I_Coefficient": "servo.i_coefficient"}
+GAIN_KEYS = {"P_Coefficient": "servo.p_coefficient", "D_Coefficient": "servo.d_coefficient", "I_Coefficient": "servo.i_coefficient",
+             "CW_Dead_Zone": "servo.cw_dead_zone", "CCW_Dead_Zone": "servo.ccw_dead_zone"}
 
 
 def gain_rows(results: list[dict[str, Any]], persist: bool) -> list[dict[str, Any]]:

@@ -80,6 +80,10 @@ GAIN_LIMITS: dict[str, tuple[int, int]] = {
     "P_Coefficient": (1, 64),
     "D_Coefficient": (0, 254),
     "I_Coefficient": (0, 254),
+    # 2026-11-12: the shoulder hunted 2-3 steps around its goal with I 4 (load 0 -> -139 every ~0.7 s);
+    # the dead zone is the fix under test. Capped at 3 so a wide band (lost accuracy) cannot be written by mistake.
+    "CW_Dead_Zone": (0, 3),
+    "CCW_Dead_Zone": (0, 3),
 }
 LOCK_ADDRESS = 55
 
@@ -126,6 +130,8 @@ class GainWrite(BaseModel):
     P_Coefficient: int | None = None
     D_Coefficient: int | None = None
     I_Coefficient: int | None = None
+    CW_Dead_Zone: int | None = None
+    CCW_Dead_Zone: int | None = None
 
 
 class GainsRequest(BaseModel):
