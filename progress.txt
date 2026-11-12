@@ -27608,3 +27608,10 @@ Verified on a throwaway in-memory MongoDB: 26 service tests and a headless-Chrom
 step 1 -> 2 -> 3 -> 4; confirm unlocks after the last part, then Sub-Assembly 2). npm run check
 13 errors / 451 warnings = baseline. Unit 1203 pass, 1 pre-existing fail (ot2-protocol.run.test.ts).
 Not committed or deployed.
+Deployment: preview — https://vercel.com/brevitest/bioscale-operations-system-mongodb/9NH1deUGQfMvW4A29GUm5CZuhnSA
+Source: branch feat/spu-multi-build @ commit e92b7886
+Retrieve this exact code: git checkout feat/spu-multi-build at commit e92b7886
+  (or: git log feat/spu-multi-build --oneline to find it if the branch has since moved on)
+What this deployment is for: Build SPUs page (several SPUs at once, bucket QR registry, step-by-step part
+  scans, one confirm per section) for review before the PR into master is merged. The docs-only commit that
+  adds this log entry triggers one more preview of the same code.
