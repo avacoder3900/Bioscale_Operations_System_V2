@@ -27444,3 +27444,15 @@ Source: branch master @ commit 7470f6a8 (fast-forwarded from feat/arm-arrival-lo
 Retrieve this exact code: git checkout master at commit 7470f6a8
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Arrival rows record where the arm was during the play (in-play samples, wobble), Show In Play
+
+================================================================================
+2026-11-12 — feat/arm-arrival-log — Shoulder + elbow D 30 vs D 45 at I 4: round 1 (test only)
+================================================================================
+User-approved arm test, no code change. Shoulder (2) and elbow (3) set together, temporarily, to
+P32 D30 I4 and then P32 D45 I4 (wrist flex left on its saved P32 D30 I4). Per setting: Go To Pose 16.,
+the round 2 9-move suite on the Pi (new runner pi_gain_pair.py in ~/gain-grid, log dtest.jsonl), then
+"place and remove" once from BIMS with in-play samples. Gains restored to the saved P32 D15 I4 after.
+Suite: every move reached (shoulder within 3, elbow within 2) at both D, no shake, max 44 C.
+Place and remove extra turns (shoulder / elbow / wrist / base): D15 108/56/15/20 (2026-11-11),
+D30 109/40/12/22, D45 44/38/14/14; I 0 reference 12/14/0/10. Wobble size about the same at every D.
+Runs: D30 H71DZ1yUFph8wWdc, D45 8yFMOcGI-nr_Lrty. Five rounds to follow. npm run check not run (no code).
