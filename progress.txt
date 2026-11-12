@@ -27475,3 +27475,143 @@ Test (shoulder only, temporary, 2 repeats each, 10 s 50 Hz trace after arriving;
   D I 2             no hunting, steady load -102, ends +5
   E D 45            0.9 s then quiet / quiet, ends +1
 Data: scratchpad run/hunt-results.jsonl. npm run check not run (Python + seed row only).
+
+================================================================================
+2026-11-12 — feat/spu-multi-build — Build several SPUs at once: one bucket per SPU, scan to switch
+================================================================================
+Implemented the "SPU Multi-Build Bucket Interface" design (claude.ai design canvas) as a new page,
+/spu/assembly-wi/build, linked from the SPU Assembly WI header ("Build SPUs"). Branched from
+origin/master (feat/wi-full-chat-control was fully merged and 747 commits behind).
+Flow: "Who is building?" gate (typed name, or a BDG- badge resolved server-side on every request) ->
+scan bar -> "Builds in progress" board -> one build: bucket switcher, section tabs with done/total,
+step cards with per-part scan state, "Mark step done" for steps with no parts, inventory deductions log.
+Scanning BKT-xxx opens that bucket's build; an unknown BKT- label asks "Start SPU N here?". Scanning the
+lot label on a bag (ReceivingLot lotId / bagBarcode / lotNumber) deducts that part against the first step
+in the open section of the open build that still needs it; part labels, unknown codes, rejected/returned
+lots and parts from another section are refused with a reason and nothing deducted.
+New: models/spu-build.ts (SpuBuild, collection spu_builds; unique buildNumber, unique bucketCode among
+in-progress builds), services/spu-build.ts, $lib/spu-build/progress.ts (+ progress.test.ts, 10 tests),
+routes/spu/assembly-wi/build/+page.server.ts + +page.svelte.
+Changed: device-assembly-wi-pulls.ts pullMaterialsForStep() takes optional lotId (written to the
+InventoryTransaction so lot consumption adds up) and spuBuildId, and returns materialPullId;
+DeviceAssemblyMaterialPull gains spuBuildId + lotId. Existing callers (WI page pull form, agent
+/api/agent/device-assembly/pull) unchanged. A scan claims its slot on the build before deducting, so a
+scanner that fires twice deducts once. Bucket codes live on the build, not ProductionBucket (that is
+the cartridge line's tub state machine).
+Verified on a throwaway in-memory MongoDB only (never the configured DB): 11-test service suite
+(double-fire, lot on transaction, build separation, completion, bucket reuse, old pull path) and a
+headless-Chrome walkthrough on a seeded dev server. Fixed from the walkthrough: unreadable selected
+bucket chip, invisible empty progress track, wrapping bucket cells, gate submitting before hydration.
+npm run check: 13 errors / 451 warnings = baseline, none in new files. npm run test:unit: 1197 pass,
+1 fail (ot2-protocol.run.test.ts "no BIMS labware ... stale") — fails identically on clean origin/master.
+Not committed or deployed yet.
+
+================================================================================
+2026-11-12 — feat/spu-multi-build — Build SPUs: undo a scan, reopen a step, cancel a build
+================================================================================
+Follow-up on the multi-build page: mistakes can now be corrected, never erased. Each correction needs a
+reason (pick list + note; "Other" needs the note) and is kept on the build (SpuBuild.corrections) and in
+the AuditLog.
+- Undo (on any scanned part): the scan goes recorded -> undoing -> undone and stays on the build with
+  who/when/why; its stock comes back through a NEW reversing InventoryTransaction (the original is
+  immutable), written like bucket-service's retract: negative 'consumption' on the same lot with the
+  retracted* fields set, so per-lot consumption sums net out; plus a reversing DeviceAssemblyMaterialPull
+  (negative quantity, new field reversesPullId). The step reopens, the part can be scanned again, and a
+  completed build goes back to in progress — refused, with nothing changed, if its bucket was reused.
+  Two taps at once return stock once (recorded -> undoing claim).
+- Reopen step: for steps marked done by hand; scan-completed steps say to undo the wrong scan.
+- Cancel build (in progress only): status 'cancelled', bucket freed at once; choose to put the scanned
+  parts back in stock or leave them deducted (used/scrapped). A part left deducted can still be undone
+  later from the cancelled build. Cancelled builds stay on the board for 24 h with a banner.
+WI page pull history and the revisions table show return rows as "+N returned".
+Files: models/spu-build.ts, models/device-assembly-material-pull.ts, services/spu-build.ts,
+$lib/spu-build/progress.ts (+2 tests), routes/spu/assembly-wi/build/+page.server.ts + +page.svelte,
+routes/spu/assembly-wi/+page.svelte, routes/spu/assembly-wi/revisions/+page.svelte.
+Verified on a throwaway in-memory MongoDB only: 7 new service tests (18 total) and a headless-Chrome
+walkthrough of undo, reopen and cancel. npm run check 13 errors / 451 warnings = baseline. Unit 1199 pass,
+1 fail (same pre-existing ot2-protocol.run.test.ts failure as origin/master). Not committed or deployed.
+
+================================================================================
+2026-11-12 — feat/spu-multi-build — Build SPUs: bucket scans "not letting me enter" fixed; scan box relabelled
+================================================================================
+User report: scanning a bucket barcode would not enter. Root causes (code review + scanner-style browser test):
+1. Only labels shaped like BKT-xxx counted as buckets. Tubs mostly wear UUID QR stickers (see
+   bucket-service resolveBucketId), so a sticker scan was treated as a bag lot label and refused with
+   "Scan a bucket barcode first". Now every scan goes to the new handleScan() (services/spu-build.ts):
+   bucket holding an SPU in progress -> open it; registered tub (by BKT- id or QR sticker, either case,
+   via resolveBucketId) -> offer a new SPU, stored under the tub id; bag lot label -> deduct against the
+   open build (or "scan the bucket first"); badge / part number / part label / cartridge label ->
+   explained, nothing recorded; anything else -> offered as a new bucket (any label format).
+   startBuild() refuses lot, part, cartridge and badge labels server-side too.
+2. The "New bucket ... Start SPU N?" confirm needed a mouse click; Enter on the empty field or scanning
+   the same bucket again (by any of its labels) now confirms.
+3. The Enter button was disabled while a scan saved, which also blocks Enter in the field, so a quick
+   second scan was dropped or ran into the first code. The button stays enabled; scans that arrive
+   while one is saving are queued and run in order; the field clears as soon as a scan is taken.
+Scan box label is now "Scan the Bucket Barcode" (placeholder "e.g. BKT-002"); bag lot labels still go in
+the same box and each part row still says "Scan the lot label on its bag".
+$lib/spu-build/progress.ts: isBucketCode replaced by normalizeBucketCode (tests updated).
+Verified on a throwaway in-memory MongoDB only: 7 new scan-routing tests (25 service tests total) and a
+headless-Chrome scanner walkthrough (sticker -> rescan confirms, free-form label -> Enter confirms,
+back-to-back bag scans both deducted). npm run check 13 errors / 451 warnings = baseline. Unit 1199 pass,
+1 pre-existing fail (ot2-protocol.run.test.ts, same on origin/master). Not committed or deployed.
+
+================================================================================
+2026-11-12 — feat/spu-multi-build — Build SPUs: bucket registry (QR code -> "Bucket N"); scan opens the steps
+================================================================================
+User clarified: SPU buckets are their own buckets with QR stickers (not cartridge-line ProductionBuckets).
+New flow: name/badge -> scan the bucket's QR code -> that bucket's SPU build steps open. A registered
+bucket with no SPU in progress starts the next SPU automatically; one with an SPU in progress opens it.
+- New model SpuBucket (collection spu_buckets): number (unique) + qrCode (unique, the sticker's UUID in
+  lower case — normalizeBucketCode now pulls a UUID out of whatever the scanner sends, links included).
+  SpuBuild gains bucketId + bucketNumber; bucketCode = the QR code (one in-progress build per bucket).
+- Adding buckets: scanning an unknown QR code offers "Add it as Bucket N and start SPU M" (Enter or a
+  re-scan confirms); "+ Add a new bucket" on the board registers a QR code without starting a build.
+  Lot, part, cartridge, badge and cartridge-line tub labels are refused as buckets.
+- Board shows the bucket list (Bucket 1 · SPU 3 in progress / empty); every screen says "Bucket N".
+- Two stations scanning the same empty bucket at once land on one SPU.
+Registered in the configured DB (bioscale) with scripts/register-spu-buckets-2026-11-12.ts (dry run,
+then APPLY=1; idempotent): Bucket 1 = 01883d73-e4dc-4530-b82a-54555d4c500f,
+Bucket 2 = fbc6f691-28dd-4741-a778-db1835f55fca (+ unique indexes, 2 audit_log rows). spu_builds and
+spu_buckets were both empty before. Undo: delete those two spu_buckets rows.
+Files: models/spu-bucket.ts (new), models/spu-build.ts, models/index.ts, services/spu-build.ts,
+$lib/spu-build/progress.ts (+tests), routes/spu/assembly-wi/build/+page.server.ts + +page.svelte,
+scripts/register-spu-buckets-2026-11-12.ts (new).
+Verified on a throwaway in-memory MongoDB: 9 new registry tests (27 service tests total) and a
+headless-Chrome walkthrough (scan Bucket 1 -> steps, Bucket 2, back to 1, add Bucket 3, unknown QR ->
+Bucket 4 + SPU). npm run check 13 errors / 451 warnings = baseline. Unit 1201 pass, 1 pre-existing fail (ot2-protocol.run.test.ts, same on origin/master). Not committed.
+
+================================================================================
+2026-11-12 — feat/spu-multi-build — Build SPUs: one confirm per section, instructions always shown, parts scanned step by step
+================================================================================
+User asks:
+1. No "Mark step done" per step: one "Confirm <Setup / Sub-Assembly N> complete" button after a
+   section's last step. It unlocks once every part in the section is scanned (Setup has none, so it is
+   ready at once) and marks all of the section's steps complete (completedSteps how:'section').
+   Scanning no longer completes steps on its own. When every section is confirmed the SPU is complete.
+   Confirming moves to the next section still to do. New completeSection() / reopenSection() replace
+   markStepDone() / reopenStep(); undoing a scan in a confirmed section reopens that section.
+2. No toggle: every step's instructions and photos show as soon as a tab opens.
+3. Parts scanned in WI order: the current step (first with a part still to scan) gets its own scan box;
+   a later step's part is refused ("PT-x is for step 4. Finish step 2 first: scan …"). Parts within a
+   step can go in any order. When a step's last part goes in, the cursor jumps to the next step's scan
+   box and scrolls to it; when the section's last part goes in, it scrolls to the confirm button but
+   focus goes back to the bucket scan bar (a scanner's Enter must never confirm a section). Only
+   kind:'part' materials are scanned; tools/supplies stay a listed line. In the build view, messages
+   show inside the current step's scan box (or the confirm panel) instead of at the top.
+$lib/spu-build/progress.ts: currentStep, partsLeft, sectionConfirmed, partsProgress; findStepForPart
+is now order-aware (out-of-order / section-scanned). Board progress also shows parts scanned.
+Files: $lib/spu-build/progress.ts (+tests), services/spu-build.ts, models/spu-build.ts (enums),
+routes/spu/assembly-wi/build/+page.server.ts + +page.svelte.
+Verified on a throwaway in-memory MongoDB: 26 service tests and a headless-Chrome scanner walkthrough
+(confirm Setup -> Sub-Assembly 1 with focus in step 1's box; step-2 part refused first; focus moves
+step 1 -> 2 -> 3 -> 4; confirm unlocks after the last part, then Sub-Assembly 2). npm run check
+13 errors / 451 warnings = baseline. Unit 1203 pass, 1 pre-existing fail (ot2-protocol.run.test.ts).
+Not committed or deployed.
+Deployment: preview — https://vercel.com/brevitest/bioscale-operations-system-mongodb/9NH1deUGQfMvW4A29GUm5CZuhnSA
+Source: branch feat/spu-multi-build @ commit e92b7886
+Retrieve this exact code: git checkout feat/spu-multi-build at commit e92b7886
+  (or: git log feat/spu-multi-build --oneline to find it if the branch has since moved on)
+What this deployment is for: Build SPUs page (several SPUs at once, bucket QR registry, step-by-step part
+  scans, one confirm per section) for review before the PR into master is merged. The docs-only commit that
+  adds this log entry triggers one more preview of the same code.

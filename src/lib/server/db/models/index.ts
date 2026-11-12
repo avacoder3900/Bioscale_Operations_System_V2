@@ -41,6 +41,8 @@ export { WorkInstruction } from './work-instruction.js';
 export { DeviceAssemblyWI } from './device-assembly-wi.js';
 export { DeviceAssemblyMaterialPull } from './device-assembly-material-pull.js';
 export { DeviceAssemblyWISnapshot } from './device-assembly-wi-snapshot.js';
+export { SpuBuild } from './spu-build.js';
+export { SpuBucket } from './spu-bucket.js';
 export { WorkInstructionImage } from './work-instruction-image.js';
 export { Document } from './document.js';
 export { DocumentRepository } from './document-repository.js';

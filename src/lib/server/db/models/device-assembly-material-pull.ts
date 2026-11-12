@@ -23,6 +23,10 @@ const deviceAssemblyMaterialPullSchema = new Schema({
 	unit: { type: String, default: 'ea' },
 	unitsBuilt: { type: Number, default: 1 },
 	deviceSerial: { type: String, default: null },
+	spuBuildId: { type: String, default: null },        // SpuBuild this was scanned into (multi-build)
+	lotId: { type: String, default: null },             // ReceivingLot._id of the bag scanned
+	// Set on a return row (negative quantity) written when a build scan is undone.
+	reversesPullId: { type: String, default: null },
 	inventoryTransactionId: { type: String, default: null },
 	previousQuantity: { type: Number, default: null },
 	newQuantity: { type: Number, default: null },

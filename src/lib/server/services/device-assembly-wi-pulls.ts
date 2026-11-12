@@ -22,10 +22,23 @@ export type PullResult = {
 	previousQuantity: number | null;
 	newQuantity: number | null;
 	inventoryTransactionId: string;
+	materialPullId: string;
 };
 
 export async function pullMaterialsForStep(
-	input: { sectionNumber: number; stepId: string; items: PullItem[]; unitsBuilt?: number; deviceSerial?: string | null; notes?: string | null },
+	input: {
+		sectionNumber: number;
+		stepId: string;
+		items: PullItem[];
+		unitsBuilt?: number;
+		deviceSerial?: string | null;
+		notes?: string | null;
+		// Multi-build scans (/spu/assembly-wi/build): the bag's ReceivingLot._id,
+		// written to the InventoryTransaction so lot consumption adds up, and the
+		// SpuBuild the part went into.
+		lotId?: string | null;
+		spuBuildId?: string | null;
+	},
 	actor: Actor
 ): Promise<{ results: PullResult[]; stepNumber: number; sectionTitle: string }> {
 	const wi: any = await DeviceAssemblyWI.findOne({}).sort({ createdAt: 1 }).lean();
@@ -67,13 +80,15 @@ export async function pullMaterialsForStep(
 			transactionType: 'consumption',
 			partDefinitionId: p.partDefinitionId,
 			quantity: p.quantity,
+			...(input.lotId ? { lotId: input.lotId } : {}),
 			operatorId: actor._id,
 			operatorUsername: actor.username,
 			notes: noteParts.join(' · ')
 		});
 		const tx = await InventoryTransaction.findById(txId).select('previousQuantity newQuantity').lean() as any;
+		const pullId = generateId();
 		await DeviceAssemblyMaterialPull.create({
-			_id: generateId(),
+			_id: pullId,
 			wiId: String(wi._id),
 			wiVersion: wi.currentVersion,
 			sectionNumber: section.number,
@@ -88,6 +103,8 @@ export async function pullMaterialsForStep(
 			unit: p.material.unit ?? 'ea',
 			unitsBuilt,
 			deviceSerial: serial,
+			spuBuildId: input.spuBuildId ?? null,
+			lotId: input.lotId ?? null,
 			inventoryTransactionId: txId,
 			previousQuantity: tx?.previousQuantity ?? null,
 			newQuantity: tx?.newQuantity ?? null,
@@ -103,7 +120,8 @@ export async function pullMaterialsForStep(
 			unit: p.material.unit ?? 'ea',
 			previousQuantity: tx?.previousQuantity ?? null,
 			newQuantity: tx?.newQuantity ?? null,
-			inventoryTransactionId: txId
+			inventoryTransactionId: txId,
+			materialPullId: pullId
 		});
 	}
 
@@ -120,6 +138,7 @@ export async function pullMaterialsForStep(
 			stepNumber: step.stepNumber,
 			unitsBuilt,
 			deviceSerial: serial,
+			...(input.spuBuildId ? { spuBuildId: input.spuBuildId, lotId: input.lotId ?? null } : {}),
 			parts: results.map((r) => ({ partNumber: r.partNumber, name: r.name, quantity: r.quantity, from: r.previousQuantity, to: r.newQuantity }))
 		},
 		changedAt: now,
