@@ -176,7 +176,9 @@ def run(protocol: protocol_api.ProtocolContext):
         protocol.comment(f"Source {i+1} ({SOURCE_WELLS[i]}): {have_ul/1000:.2f} mL loaded, {need_ul/1000:.2f} mL needed for {n} tubes.")
         starts_ul.append(have_ul)
 
-    dest_racks = [protocol.load_labware(DEST_RACK, DEST_SLOTS[i]) if n > 0 else None for i, n in enumerate(counts)]
+    # All three destination racks are always loaded (even for sources with 0 tubes) so a
+    # Labware Position Check on this protocol covers slots 7, 4 and 1 in one pass.
+    dest_racks = [protocol.load_labware(DEST_RACK, slot) for slot in DEST_SLOTS]
 
     protocol.comment(f"{cfg['name']} on the {cfg['mount']}: {vol:g} µL per tube, {tubes_per_trip} tube(s) per aspirate, {carry:g} µL carried back to the source each trip.")
 

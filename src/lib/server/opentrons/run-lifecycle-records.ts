@@ -53,6 +53,7 @@ import {
 	type ProtocolUploadBundle,
 	type ProcessType,
 	type Line,
+	type LegacyLabwareOffset,
 	type StepError
 } from '$lib/opentrons/ot2-protocol';
 import { getRobot, bridgeDeviceIdForRobot, withRequester } from './proxy';
@@ -68,6 +69,7 @@ import {
 	auditResync,
 	storedRunProtocol
 } from './protocol-freshness';
+import { storedOffsetsForLabware } from './lpc-offsets';
 import { resolveDeckBinding, DeckBindingError } from '$lib/server/services/deck-calibration/run-guard';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 import { recordTransaction, resolvePartId } from '$lib/server/services/inventory-transaction';
@@ -833,17 +835,22 @@ export async function startPrepare(
 	const expectedWells = await loadExpectedWells();
 	let runTimeParameterValues: Record<string, unknown> | null = null;
 	let createArgs: Record<string, unknown> | undefined;
+	// S5: the run-level offsets a DILUENT start sends (the LPC rows for the
+	// labware this upload's analysis lists). Wax/reagent carry theirs as RTPs.
+	let runOffsets: LegacyLabwareOffset[] | null = null;
 	if (current) {
 		const params = await computeRunParameters(kind, form, current.parametersSchema, ctx.robotId, ctx.deckBinding, run);
 		runTimeParameterValues = params.runTimeParameterValues;
+		if (kind === 'diluent') runOffsets = await storedOffsetsForLabware(ctx.robotId, current.labwareDefinitions);
 		createArgs = {
 			protocolId: current.opentronsProtocolId,
 			runTimeParameterValues: params.runTimeParameterValues,
 			protocolParameters: params.protocolParameters,
 			deckGeometry: ctx.deckBinding ?? null,
-			// CALIB-5 provenance: the rack offsets the RTPs above carry. The RTPs
-			// themselves are what the resume/adopt comparison sees.
-			labwareOffsets: params.labwareOffsets
+			// Provenance. CALIB-5 kinds: the rack offsets the RTPs above carry (the
+			// RTPs themselves are what the resume/adopt comparison sees). Diluent:
+			// the run-level offsets posted with the run.
+			labwareOffsets: runOffsets ?? params.labwareOffsets
 		};
 	}
 	const decision = priorIntentDecision(
@@ -871,7 +878,15 @@ export async function startPrepare(
 		}
 	);
 	return {
-		prepared: { token, processType, protocolId: current?.opentronsProtocolId ?? null, expectedWells, runTimeParameterValues, resumeRunId },
+		prepared: {
+			token,
+			processType,
+			protocolId: current?.opentronsProtocolId ?? null,
+			expectedWells,
+			runTimeParameterValues,
+			resumeRunId,
+			...(runOffsets ? { labwareOffsets: runOffsets } : {})
+		},
 		ctx
 	};
 }
@@ -912,7 +927,7 @@ export async function startRecordResync(
 	from: string | null,
 	reason: string,
 	user: User
-): Promise<{ runTimeParameterValues: Record<string, unknown> } | ActionFail> {
+): Promise<{ runTimeParameterValues: Record<string, unknown>; labwareOffsets?: LegacyLabwareOffset[] } | ActionFail> {
 	const uploaded = validUploadedResult(uploadedRaw);
 	if (!uploaded) return actionFail(400, 'upload result is malformed');
 	const ctx = await startContext(kind, form, user, { writeTestFillAudit: false });
@@ -927,6 +942,7 @@ export async function startRecordResync(
 	}
 	await recordResyncUpload(ctx.robotId, processType, fileName, uploaded, user.username);
 	const params = await computeRunParameters(kind, form, uploaded.parametersSchema, ctx.robotId, ctx.deckBinding, ctx.run);
+	const runOffsets = kind === 'diluent' ? await storedOffsetsForLabware(ctx.robotId, uploaded.labwareDefinitions) : null;
 	await model(kind).updateOne(
 		{ _id: ctx.runId, 'startIntent.token': token },
 		{
@@ -936,13 +952,13 @@ export async function startRecordResync(
 					runTimeParameterValues: params.runTimeParameterValues,
 					protocolParameters: params.protocolParameters,
 					deckGeometry: ctx.deckBinding ?? null,
-					labwareOffsets: params.labwareOffsets
+					labwareOffsets: runOffsets ?? params.labwareOffsets
 				},
 				'startIntent.resync': { from, to: uploaded.opentronsProtocolId, reason: String(reason).slice(0, 2000), audited: false }
 			}
 		}
 	);
-	return { runTimeParameterValues: params.runTimeParameterValues };
+	return { runTimeParameterValues: params.runTimeParameterValues, ...(runOffsets ? { labwareOffsets: runOffsets } : {}) };
 }
 
 async function auditPendingResync(kind: FillKind, run: any, username: string, line: Line) {
@@ -1758,7 +1774,7 @@ export function validStartObs(v: unknown): StartConfirmObs | null {
  *
  *   startPrepare       guards + RTP → startIntent; {token, protocolId, expectedWells, runTimeParameterValues}
  *   startBundle        {runId, token, staleDetail} → {bundle} (only when the check found stale)
- *   startRecordResync  the start form + {token, uploaded, from, reason} → {runTimeParameterValues}
+ *   startRecordResync  the start form + {token, uploaded, from, reason} → {runTimeParameterValues, labwareOffsets? (diluent)}
  *   startConfirm       {runId, token, obs, bridgeJobs?} (phase created | played | failed);
  *                      bridgeJobs='1' + line tailnet → played returns the auto_resume_run job
  *   finishConfirm      {runId, finalStatus, tips}

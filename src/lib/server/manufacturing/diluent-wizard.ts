@@ -12,6 +12,7 @@ import { WAX_PAGE_OWNED, REAGENT_PAGE_OWNED, DILUENT_PAGE_OWNED } from './run-st
 import { getRobot, robotGet } from '$lib/server/opentrons/proxy';
 import { requirePermission } from '$lib/server/permissions';
 import { finalizeDiluentRun, reconcileStartIntent, setRunRecordStatus } from '$lib/server/opentrons/run-lifecycle-records';
+import { listStoredOffsets, lpcTargets, type StoredOffsetRow } from '$lib/server/opentrons/lpc-offsets';
 import {
 	DILUENT_DEFAULT_VOLUME_UL,
 	DILUENT_PIPETTES,
@@ -65,11 +66,35 @@ function emptyState(robotId: string, loadError: string | null = null) {
 		run: null as DiluentWizardRun | null,
 		reagentLots: [] as DiluentLotOption[],
 		robotProtocols: [] as Array<{ opentronsProtocolId: string; protocolName: string; protocolType: string | null; analysisStatus: string | null; parametersSchema: any }>,
+		/** S5: position-check state for the labware the current diluent protocol loads (tip racks excluded). */
+		positionCheck: { protocolId: null as string | null, found: [] as DiluentPositionOffset[], missing: [] as Array<{ slotName: string; loadName: string }> },
 		opentronsRobotId: robotId,
 		defaults: { pipette: 'p1000' as DiluentPipette, volumeUl: DILUENT_DEFAULT_VOLUME_UL, tubesPerRack: DILUENT_TUBES_PER_RACK, tubesPerTrip: DILUENT_PIPETTES.p1000.maxTubesPerTrip },
 		lastTipState: null as null | { nextTipIndex: number | null; hostname: string | null; capturedAt: string | null },
 		recentLot: null as RecentDiluentLot | null
 	};
+}
+
+export interface DiluentPositionOffset {
+	slotName: string;
+	loadName: string;
+	vector: { x: number; y: number; z: number };
+	taughtAt: string | null;
+	taughtBy: string | null;
+}
+
+/** Which of the protocol's measurable labware has a stored (non-zero) offset on this robot, and which has none. */
+export function positionCheckState(rows: StoredOffsetRow[], analysisLabware: unknown): { found: DiluentPositionOffset[]; missing: Array<{ slotName: string; loadName: string }> } {
+	const found: DiluentPositionOffset[] = [];
+	const missing: Array<{ slotName: string; loadName: string }> = [];
+	for (const t of lpcTargets(analysisLabware)) {
+		const row = rows.find((r) => r.definitionUri === t.definitionUri && r.slotName === t.slotName);
+		if (row && (row.vector.x !== 0 || row.vector.y !== 0 || row.vector.z !== 0)) {
+			found.push({ slotName: t.slotName, loadName: t.loadName, vector: row.vector, taughtAt: row.taughtAt, taughtBy: row.taughtBy });
+		} else missing.push({ slotName: t.slotName, loadName: t.loadName });
+	}
+	const order = (a: { slotName: string }, b: { slotName: string }) => Number(b.slotName) - Number(a.slotName);
+	return { found: found.sort(order), missing: missing.sort(order) };
 }
 
 export async function loadDiluentWizard(locals: App.Locals, robotId: string) {
@@ -136,16 +161,24 @@ export async function loadDiluentWizard(locals: App.Locals, robotId: string) {
 				: Promise.resolve(null)
 		]);
 
-		const robotProtocols = ((robotDoc as any)?.protocols ?? [])
-			.map((p: any) => ({
-				opentronsProtocolId: p.opentronsProtocolId ?? null,
-				protocolName: p.protocolName ?? '',
-				protocolType: p.protocolType ?? null,
-				analysisStatus: p.analysisStatus ?? null,
-				parametersSchema: p.parametersSchema ?? null
-			}))
-			// Only the diluent protocol may start from this wizard.
-			.filter((p: any) => p.opentronsProtocolId && p.protocolType === 'diluent-filling');
+		const diluentEntries = ((robotDoc as any)?.protocols ?? []).filter((p: any) => p.opentronsProtocolId && p.protocolType === 'diluent-filling');
+		const robotProtocols = diluentEntries.map((p: any) => ({
+			opentronsProtocolId: p.opentronsProtocolId ?? null,
+			protocolName: p.protocolName ?? '',
+			protocolType: p.protocolType ?? null,
+			analysisStatus: p.analysisStatus ?? null,
+			parametersSchema: p.parametersSchema ?? null
+		}));
+		// S5: the newest diluent entry's analysis labware × this robot's stored offsets.
+		const currentEntry = [...diluentEntries].sort((a: any, b: any) => new Date(a.createdAt ?? 0).getTime() - new Date(b.createdAt ?? 0).getTime()).at(-1);
+		let positionCheck = { protocolId: (currentEntry?.opentronsProtocolId as string | undefined) ?? null, found: [] as DiluentPositionOffset[], missing: [] as Array<{ slotName: string; loadName: string }> };
+		if (currentEntry && robotId) {
+			try {
+				positionCheck = { ...positionCheck, ...positionCheckState(await listStoredOffsets(robotId), currentEntry.labwareDefinitions) };
+			} catch (e) {
+				console.error('[diluent load] stored offsets unavailable:', e instanceof Error ? e.message : e);
+			}
+		}
 
 		const reagentLots: DiluentLotOption[] = (finalizedLots as any[]).map((l) => ({
 			id: String(l._id),
@@ -200,6 +233,7 @@ export async function loadDiluentWizard(locals: App.Locals, robotId: string) {
 			run,
 			reagentLots,
 			robotProtocols,
+			positionCheck,
 			lastTipState: (lastTipRun as any)?.pipetteTipState?.after
 				? {
 						nextTipIndex: (lastTipRun as any).pipetteTipState.after.nextTipIndex ?? null,

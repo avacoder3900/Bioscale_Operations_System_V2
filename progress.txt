@@ -27692,3 +27692,39 @@ Live: 19:36:58Z — /_app/version.json 1794523759833 → 1794598516411; GitHub s
 What this deployment is for: DILUENT-FILL-1 — the Diluent Fill process (Robots page third row + "Start
   diluent", diluent-filling wizard, DiluentFillRun/DiluentLot, diluentFilling:* permissions). First
   test run with Alejandro on B14 after the P1000 pipette-offset calibration and the protocol import.
+
+2026-11-13 — feat/diluent-fill-prd (cont.) — S5: Labware Position Check offsets reach a diluent run
+Why: the user asked "after this push I should be able to deck calibrate right?" — and the answer was no:
+the clone LPC wizard kept its result only in sessionStorage (handed to the clone's own run create), and
+the manufacturing `run.create` posted protocolId + RTPs only. The Deck Calibration Studio cannot do the
+diluent racks either (whitelisted to the wax/reagent racks; the Falcon rack and the 1000 µL tips are
+Opentrons built-ins, not BIMS definitions). So a diluent run would have ignored any position check.
+What:
+  - lpc/+page.svelte: "Apply and create run" first POSTs the measured offsets to the new
+    /api/opentrons-lab/robots/[id]/labware-offsets (GET list / POST save); a failed save keeps the
+    operator on the review screen with the error and a retry; the sessionStorage hand-off is unchanged.
+  - $lib/server/opentrons/lpc-offsets.ts: saveLpcOffsets (upsert robot_labware_offsets per robot ×
+    definition URI × slot, source 'lpc' — enum widened on the model —, history capped at 10, one
+    AuditLog row), listStoredOffsets, storedOffsetsForLabware / legacyOffsetsFor (the run-level offsets
+    for the labware an analysis lists; zero vectors skipped), lpcTargets, checkLpcOffset (10 mm limit
+    via checkRackOffset, slots 1–11, URI shape).
+  - ot2-protocol.ts: LegacyLabwareOffset + validLegacyOffsets; run.create takes `labwareOffsets` and
+    posts them in RunCreate (malformed → 400, nothing sent); StartPrepared.labwareOffsets and
+    recordResync.labwareOffsets; startRunSequence passes them to run.create (after a re-sync the record
+    step's list wins); startRunTwoPhase forwards the server's list.
+  - run-lifecycle-records.ts: startPrepare / startRecordResync compute them for kind 'diluent' only
+    (wax/reagent carry theirs as set_offset RTPs — a run-level entry on top would double them) from the
+    entry's / upload's analysis labware; createArgs.labwareOffsets (OpentronsRunRecord provenance).
+  - diluent-wizard.ts + DiluentWizard.svelte: Load-deck step shows "Labware position check — on file for
+    slot 10 (x, y, z) date by …" and the slots with none, linking to the LPC for the current protocol.
+  - protocols/Sample_Diluent_Fill_v2.py: always loads the three heat-frame racks (7/4/1) so one LPC
+    covers them; simulated OK on 7.3.1. Re-deployed to B14 with scripts/deploy-diluent-protocol.cjs
+    (new this day: the diluent counterpart of deploy-reagent-protocol.cjs — upload .py + BIMS labware
+    library over the LAN, gate on a clean analysis with the 9 RTPs, repoint opentrons_robots.protocols[]
+    diluent-filling, audit_log row, STORE=1 → stored active OpentronProtocol for the freshness gate).
+Tests: +7 (lpc-offsets.test.ts 5; ot2-protocol.run.test.ts: run.create offsets body/refusal, sequence
+pass-through). 109/110 pass in the four diluent/lifecycle files — the one failure is the pre-existing
+"no BIMS labware in the analysis is stale…" (expects the message without the ": x" detail; untouched).
+npm run check: 16 errors (baseline).
+Not done: S8 (settings sub-tab). Operator role still needs diluentFilling:read/write granted in the
+roles admin. Falcon geometry / tip-descent placeholders still to measure.

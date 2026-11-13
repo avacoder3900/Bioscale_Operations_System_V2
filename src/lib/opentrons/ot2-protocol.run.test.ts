@@ -235,6 +235,21 @@ describe('run.create / run.list', () => {
 		expect(t.calls[0].opts?.timeoutMs).toBe(CREATE_RUN_TIMEOUT_MS);
 		expect(CREATE_RUN_TIMEOUT_MS).toBeGreaterThanOrEqual(90_000);
 	});
+	it('create: S5 run-level labware offsets ride in the body; malformed ones are refused', async () => {
+		const t = mockTransport(() => jres(201, { data: { id: 'run-new' } }));
+		const offsets = [{ definitionUri: 'custom_beta/3dprinted_2ml_tuberack_heat_frame/1', location: { slotName: '7' }, vector: { x: 0, y: 0.2, z: -1.1 } }];
+		expect(await runVerb(t, 'run.create', { protocolId: 'p1', runTimeParameterValues: { src_1_tubes: 40 }, labwareOffsets: offsets })).toEqual({
+			status: 200,
+			body: { opentronsRunId: 'run-new' }
+		});
+		expect(t.calls[0].body).toEqual({ data: { protocolId: 'p1', runTimeParameterValues: { src_1_tubes: 40 }, labwareOffsets: offsets } });
+		// An empty list adds nothing to the body (wax/reagent, or no check saved).
+		await runVerb(t, 'run.create', { protocolId: 'p1', labwareOffsets: [] });
+		expect(t.calls[1].body).toEqual({ data: { protocolId: 'p1' } });
+		const bad = await runVerb(t, 'run.create', { protocolId: 'p1', labwareOffsets: [{ definitionUri: 'x/y/1', location: { slotName: '13' }, vector: { x: 0, y: 0, z: 0 } }] });
+		expect(bad.status).toBe(400);
+		expect(t.calls).toHaveLength(2);
+	});
 	it('create: no answer at all → 502 with noAnswer (the POST may have landed)', async () => {
 		const t = mockTransport(() => {
 			throw new Error('signal timed out');
@@ -513,6 +528,28 @@ describe('startRunSequence', () => {
 		expect(seen[1]).toMatchObject({ protocolId: 'p-new', waitForCompletedMs: 120_000 });
 		expect(seen[2]).toEqual({ protocolId: 'p-new', runTimeParameterValues: { a: 2 } });
 		expect(confirms[0]).toEqual({ phase: 'created', opentronsRunId: 'run-2', protocolId: 'p-new' });
+	});
+	it('S5: prepared.labwareOffsets reach run.create; after a re-sync the record step decides them', async () => {
+		const offsets = [{ definitionUri: 'opentrons/opentrons_15_tuberack_falcon_15ml_conical/1', location: { slotName: '10' }, vector: { x: 0.3, y: -0.1, z: -0.4 } }];
+		const seen: any[] = [];
+		const fresh = startSteps(
+			{ prepare: async () => ({ token: 't', processType: 'diluent-filling', protocolId: 'p1', expectedWells: {}, runTimeParameterValues: { src_1_tubes: 40 }, labwareOffsets: offsets }) },
+			{ 'run.create': (a: any) => { seen.push(a); return { status: 200, body: { opentronsRunId: 'run-3' } }; } }
+		);
+		expect((await startRunSequence(fresh.steps)).ok).toBe(true);
+		expect(seen[0]).toEqual({ protocolId: 'p1', runTimeParameterValues: { src_1_tubes: 40 }, labwareOffsets: offsets });
+
+		// Stale: the NEW upload's offsets come from recordResync (none here → nothing sent).
+		let n = 0;
+		const stale = startSteps(
+			{ prepare: async () => ({ token: 't', processType: 'diluent-filling', protocolId: 'p1', expectedWells: {}, runTimeParameterValues: { src_1_tubes: 40 }, labwareOffsets: offsets }) },
+			{
+				'run.ensureFresh': () => (n++ === 0 ? { status: 200, body: { ok: false, detail: 'moved' } } : { status: 200, body: { ok: true, detail: 'ok' } }),
+				'run.create': (a: any) => { seen.push(a); return { status: 200, body: { opentronsRunId: 'run-4' } }; }
+			}
+		);
+		expect((await startRunSequence(stale.steps)).ok).toBe(true);
+		expect(seen[1]).toEqual({ protocolId: 'p-new', runTimeParameterValues: { a: 2 } });
 	});
 	it('verify still stale → freshness failure with the old message, nothing created', async () => {
 		const { steps, log } = startSteps({}, { 'run.ensureFresh': { status: 200, body: { ok: false, detail: 'moved' } } });

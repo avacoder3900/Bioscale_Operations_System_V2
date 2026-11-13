@@ -720,7 +720,7 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 		case 'run.list':
 			return runList(t);
 		case 'run.create':
-			return runCreate(t, args.protocolId, args.runTimeParameterValues);
+			return runCreate(t, args.protocolId, args.runTimeParameterValues, args.labwareOffsets);
 		case 'run.stop':
 			return runStop(t, args.rid);
 		case 'run.commands':
@@ -961,17 +961,22 @@ async function runList(t: Ot2Transport): Promise<VerbResult> {
 export const CREATE_RUN_TIMEOUT_MS = 90_000;
 
 /** POST /runs — was the fill pages' startRun "Create the OT-2 run" block. */
-async function runCreate(t: Ot2Transport, protocolId: unknown, rtp: unknown): Promise<VerbResult> {
+async function runCreate(t: Ot2Transport, protocolId: unknown, rtp: unknown, offsets?: unknown): Promise<VerbResult> {
 	if (!protocolId || typeof protocolId !== 'string') return fail(400, 'protocolId required');
 	if (rtp != null && (typeof rtp !== 'object' || Array.isArray(rtp))) return fail(400, 'runTimeParameterValues must be an object');
 	const runTimeParameterValues = (rtp ?? {}) as Record<string, unknown>;
+	// S5: run-level labware offsets (slot-only legacy shape). Malformed → refuse,
+	// never silently start a run without the calibration the caller meant to send.
+	const labwareOffsets = validLegacyOffsets(offsets);
+	if (!labwareOffsets) return fail(400, 'labwareOffsets must be an array of {definitionUri, location.slotName, vector{x,y,z}}');
 	try {
 		const createRes = await t.post(
 			'/runs',
 			{
 				data: {
 					protocolId,
-					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {})
+					...(Object.keys(runTimeParameterValues).length ? { runTimeParameterValues } : {}),
+					...(labwareOffsets.length ? { labwareOffsets } : {})
 				}
 			},
 			{ timeoutMs: CREATE_RUN_TIMEOUT_MS }
@@ -1430,6 +1435,39 @@ export type SequenceVerb = (verb: Ot2Verb, args: Record<string, unknown>) => Pro
 export type StartStepId = 'checking' | 'uploading' | 'verifying' | 'creating' | 'running';
 export type StartStepStatus = 'active' | 'done' | 'failed' | 'skipped';
 
+/**
+ * A run-level labware offset in the robot's legacy (slot-only) shape — what
+ * POST /runs `labwareOffsets` takes (DILUENT-FILL-1 S5). Only protocols that
+ * do NOT call Labware.set_offset themselves may carry these: the wax/reagent
+ * .py apply their rack offsets via RTPs, and a run-level entry on top would
+ * double them. The diluent .py has no set_offset, so its start passes the
+ * offsets the BIMS Labware Position Check saved for this robot.
+ */
+export interface LegacyLabwareOffset {
+	definitionUri: string;
+	location: { slotName: string };
+	vector: { x: number; y: number; z: number };
+}
+
+const OT2_SLOTS = new Set(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11']);
+const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/** The well-formed offsets in `raw`, or null when `raw` is not an array of them. Empty array → []. */
+export function validLegacyOffsets(raw: unknown): LegacyLabwareOffset[] | null {
+	if (raw == null) return [];
+	if (!Array.isArray(raw)) return null;
+	const out: LegacyLabwareOffset[] = [];
+	for (const o of raw as any[]) {
+		const uri = o?.definitionUri;
+		const slot = o?.location?.slotName;
+		const v = o?.vector;
+		if (typeof uri !== 'string' || !uri || typeof slot !== 'string' || !OT2_SLOTS.has(slot)) return null;
+		if (!v || !finite(v.x) || !finite(v.y) || !finite(v.z)) return null;
+		out.push({ definitionUri: uri, location: { slotName: slot }, vector: { x: v.x, y: v.y, z: v.z } });
+	}
+	return out;
+}
+
 export interface StartPrepared {
 	token: string;
 	processType: ProcessType;
@@ -1444,6 +1482,11 @@ export interface StartPrepared {
 	 * creating a second run, if the robot still lists it idle.
 	 */
 	resumeRunId?: string | null;
+	/**
+	 * S5: the stored labware offsets this run should carry (diluent only; the
+	 * wax/reagent starts leave it unset because their .py apply offsets itself).
+	 */
+	labwareOffsets?: LegacyLabwareOffset[];
 }
 
 export type StartConfirmObs =
@@ -1461,7 +1504,7 @@ export interface StartRunSteps {
 		uploaded: UploadedProtocolResult,
 		from: string | null,
 		reason: string
-	): Promise<{ runTimeParameterValues: Record<string, unknown> } | StepError>;
+	): Promise<{ runTimeParameterValues: Record<string, unknown>; labwareOffsets?: LegacyLabwareOffset[] } | StepError>;
 	confirm(token: string, obs: StartConfirmObs): Promise<Record<string, unknown> | StepError>;
 	verb: SequenceVerb;
 	onStep?(step: StartStepId, status: StartStepStatus, detail?: string): void;
@@ -1501,6 +1544,8 @@ export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult
 	step('checking', 'active');
 	let protocolId = prepared.protocolId;
 	let rtp = prepared.runTimeParameterValues;
+	// S5: the stored labware offsets for the run (diluent); [] for the kinds whose .py apply their own.
+	let offsets: LegacyLabwareOffset[] = prepared.labwareOffsets ?? [];
 	let staleDetail = 'no protocol entry on robot';
 	let fresh = false;
 	if (protocolId) {
@@ -1539,6 +1584,7 @@ export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult
 		step('verifying', 'done');
 		protocolId = uploaded.opentronsProtocolId;
 		rtp = rec.runTimeParameterValues;
+		offsets = rec.labwareOffsets ?? [];
 	}
 
 	// 3. The OT-2 run: resume the one an earlier start created and never played
@@ -1559,7 +1605,7 @@ export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult
 		}
 	}
 	if (!opentronsRunId) {
-		const c = await s.verb('run.create', { protocolId, runTimeParameterValues: rtp ?? {} });
+		const c = await s.verb('run.create', { protocolId, runTimeParameterValues: rtp ?? {}, ...(offsets.length ? { labwareOffsets: offsets } : {}) });
 		opentronsRunId = (c.body as any)?.opentronsRunId as string | undefined;
 		if (c.status !== 200 || !opentronsRunId) {
 			const message = bodyMsg(c, "Couldn't create run on robot");
@@ -1743,7 +1789,9 @@ export async function startRunTwoPhase(o: {
 				reason,
 				line
 			});
-			return r.ok ? { runTimeParameterValues: (r.data?.runTimeParameterValues ?? {}) as Record<string, unknown> } : stepErr(r);
+			if (!r.ok) return stepErr(r);
+			const labwareOffsets = validLegacyOffsets(r.data?.labwareOffsets) ?? [];
+			return { runTimeParameterValues: (r.data?.runTimeParameterValues ?? {}) as Record<string, unknown>, ...(labwareOffsets.length ? { labwareOffsets } : {}) };
 		},
 		confirm: async (token, obs) => {
 			const r = await o.post('startConfirm', { runId, token, obs: JSON.stringify(obs), line, ...(bridge ? { bridgeJobs: '1' } : {}) });

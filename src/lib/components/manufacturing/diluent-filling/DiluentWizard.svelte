@@ -310,6 +310,7 @@
 	<!-- ── 2. Load deck ──────────────────────────────────────────────────────── -->
 	{@const used = run.sources.filter((s) => s.tubesPlanned > 0)}
 	{@const spec = DILUENT_PIPETTES[run.pipette]}
+	{@const pc = data.positionCheck}
 	<div class="{card} space-y-4">
 		<div class="flex items-center justify-between gap-2">
 			<h2 class="text-sm font-semibold uppercase tracking-wide text-[var(--color-tron-cyan)]">2. Load the deck</h2>
@@ -331,6 +332,25 @@
 				<div class="rounded border border-dashed border-[var(--color-tron-border)]/50 p-2 text-[var(--color-tron-text-secondary)]">{slot + 2} (covered)</div>
 			{/each}
 		</div>
+
+		<!-- S5: labware position check on file for this robot — what the start will send with the run. -->
+		{#if pc.protocolId}
+			<div class="rounded border p-2 text-xs {pc.missing.length === 0 && pc.found.length > 0 ? 'border-emerald-500/60 bg-emerald-900/15' : 'border-amber-500/40 bg-amber-900/10 text-amber-100'}">
+				<strong>Labware position check</strong>
+				{#if pc.found.length === 0 && pc.missing.length === 0}
+					— nothing to check for this protocol.
+				{:else}
+					{#if pc.found.length > 0}
+						— on file for
+						{#each pc.found as o, i (o.slotName)}{i > 0 ? ', ' : ' '}slot {o.slotName} <span class="font-mono">({o.vector.x.toFixed(2)}, {o.vector.y.toFixed(2)}, {o.vector.z.toFixed(2)})</span>{o.taughtAt ? ` ${new Date(o.taughtAt).toLocaleDateString()}` : ''}{o.taughtBy ? ` by ${o.taughtBy}` : ''}{/each}.
+					{/if}
+					{#if pc.missing.length > 0}
+						<span class="block mt-1">No check saved on this robot for slot{pc.missing.length === 1 ? '' : 's'} {pc.missing.map((m) => m.slotName).join(', ')} — those racks run at the uncorrected deck position.
+							<a class="underline" href={resolve('/opentrons-clone/[robotId]/protocols/[protocolId]/lpc', { robotId: data.robotId, protocolId: pc.protocolId })}>Run the position check</a>, then reload this page.</span>
+					{/if}
+				{/if}
+			</div>
+		{/if}
 
 		<ul class="space-y-1 text-sm text-[var(--color-tron-text)]">
 			<li>• {spec.label} is mounted; <strong>{spec.tiprackLabel}</strong> rack in slot 11, full or with its first column free.</li>

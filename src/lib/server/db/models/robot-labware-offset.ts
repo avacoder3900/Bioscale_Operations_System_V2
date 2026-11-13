@@ -32,7 +32,7 @@ const offsetHistoryEntry = new Schema(
 		vector: { type: vec, default: () => ({ x: 0, y: 0, z: 0 }) },
 		taughtBy: { type: operatorRef },
 		taughtAt: { type: Date, default: Date.now },
-		source: { type: String, enum: ['studio', 'migration', 'manual', 'revert'], default: 'studio' },
+		source: { type: String, enum: ['studio', 'migration', 'manual', 'revert', 'lpc'], default: 'studio' },
 		note: { type: String, default: null }
 	},
 	{ _id: false }
@@ -45,12 +45,12 @@ const robotLabwareOffsetSchema = new Schema({
 	loadName: { type: String, required: true },
 	/** namespace/loadName/version — the identity Opentrons keys offsets on. */
 	definitionUri: { type: String, required: true },
-	/** OT-2 slot the rack is loaded in: '10' (tube rack) or '11' (tip rack). */
+	/** OT-2 slot the labware is loaded in: '10' / '11' for the Studio's racks; any slot for a Labware Position Check row (source 'lpc', DILUENT-FILL-1 S5). */
 	slotName: { type: String, required: true },
 	vector: { type: vec, required: true },
 	taughtBy: { type: operatorRef },
 	taughtAt: { type: Date, default: Date.now },
-	source: { type: String, enum: ['studio', 'migration', 'manual', 'revert'], default: 'studio' },
+	source: { type: String, enum: ['studio', 'migration', 'manual', 'revert', 'lpc'], default: 'studio' },
 	note: { type: String, default: null },
 	history: { type: [offsetHistoryEntry], default: [] }
 });

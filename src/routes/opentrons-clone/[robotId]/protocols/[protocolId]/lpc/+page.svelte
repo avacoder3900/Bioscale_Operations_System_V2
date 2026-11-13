@@ -488,13 +488,46 @@
 		}
 	}
 
-	function applyOffsetsAndReturn() {
+	// DILUENT-FILL-1 S5: the measured offsets also go to BIMS (per robot,
+	// definition URI × slot) so a manufacturing start can send them to the
+	// robot. Without this the result lived only in this tab.
+	let bimsSave = $state<'idle' | 'saving' | 'saved' | 'failed'>('idle');
+	let bimsSaveError = $state('');
+
+	async function saveOffsetsToBims(collected: Offset[]): Promise<boolean> {
+		bimsSave = 'saving';
+		bimsSaveError = '';
+		try {
+			const res = await fetch(`/api/opentrons-lab/robots/${encodeURIComponent(robotId)}/labware-offsets`, {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify({
+					protocolId: data.protocolId,
+					offsets: collected.map((o) => ({ definitionUri: o.definitionUri, loadName: o.loadName, displayName: o.displayName, slotName: o.slotName, vector: o.vector }))
+				})
+			});
+			if (!res.ok) {
+				const body = await res.json().catch(() => ({}));
+				throw new Error(body?.message ?? `BIMS answered ${res.status}`);
+			}
+			bimsSave = 'saved';
+			return true;
+		} catch (e) {
+			bimsSave = 'failed';
+			bimsSaveError = e instanceof Error ? e.message : 'unknown error';
+			return false;
+		}
+	}
+
+	async function applyOffsetsAndReturn() {
 		const collected = Object.values(offsets);
 		if (collected.length === 0) {
 			// Nothing to apply — just return.
 			goto(`/opentrons-clone/${robotId}/protocols/${data.protocolId}`);
 			return;
 		}
+		// Save to BIMS first; stay here on failure so nothing measured is lost.
+		if (bimsSave !== 'saved' && !(await saveOffsetsToBims(collected))) return;
 		// LegacyLabwareOffsetCreate shape — slotName-only location.
 		const payload = collected.map((o) => ({
 			definitionUri: o.definitionUri,
@@ -834,14 +867,25 @@
 				</tbody>
 			</table>
 		{/if}
+		{#if Object.keys(offsets).length > 0}
+			<p class="text-xs text-gray-500 mt-3">
+				{#if bimsSave === 'saved'}
+					Saved to BIMS for this robot — a diluent fill started from the Robots page will send these offsets with the run.
+				{:else if bimsSave === 'failed'}
+					<span class="text-red-700">Could not save to BIMS: {bimsSaveError}. Nothing was lost — retry below, or discard.</span>
+				{:else}
+					Apply saves these offsets to BIMS for this robot (manufacturing runs use them) and carries them into the run you create next.
+				{/if}
+			</p>
+		{/if}
 		<div class="flex flex-wrap gap-2 mt-4">
 			<button
 				type="button"
-				disabled={phase !== 'review' || busy}
+				disabled={phase !== 'review' || busy || bimsSave === 'saving'}
 				onclick={applyOffsetsAndReturn}
 				class="px-3 py-1.5 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 disabled:opacity-50"
 			>
-				Apply and create run
+				{bimsSave === 'saving' ? 'Saving to BIMS…' : bimsSave === 'failed' ? 'Retry save and create run' : 'Apply and create run'}
 			</button>
 			<a
 				href={`/opentrons-clone/${robotId}/protocols/${data.protocolId}`}

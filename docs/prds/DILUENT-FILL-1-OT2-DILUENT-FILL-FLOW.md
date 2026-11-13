@@ -1,8 +1,8 @@
 # DILUENT-FILL-1 — Sample diluent fill on the OT-2 as a BIMS process
 
-**Date:** 2026-11-13 · **Owner:** Alejandro · **Status:** Built (S1–S4, S6, S7) on `feat/diluent-fill-prd`,
-2026-11-13 — first test run with Alejandro after B14's P1000 pipette-offset calibration and a position check.
-S5 (stored labware offsets on manufacturing starts) and S8 (settings sub-tab) are deferred until after that run.
+**Date:** 2026-11-13 · **Owner:** Alejandro · **Status:** Built (S1–S7) on `feat/diluent-fill-prd`,
+2026-11-13 — first test run with Alejandro after B14's P1000 pipette-offset calibration (done 20:02Z) and a
+position check. S5 landed the same day (see Calibration and offsets); S8 (settings sub-tab) is deferred.
 Protocol questions for Jacob (deck orientation, 40 vs 80 tubes per rack, tube brand, default pipette) stay open;
 the build assumes the answers in Decisions below.
 **Depends on:** OT2-BRIDGE-3 (cloud → robot protocol upload), OT2-TAILNET-5 (run lines), LABWARE-LIBRARY-AUTO-BUNDLE
@@ -107,13 +107,24 @@ a robot busy with wax/reagent is unavailable, and vice versa) →
   P1000; the P1000 has none. BIMS shows this on the robot page but has no flow for it — not worth building for
   a once-per-pipette task.
 - **Labware position** (per labware/slot): after import, run the clone LPC wizard
-  (`/opentrons-clone/[robotId]/protocols/[protocolId]/lpc`) on B14 for the tip rack, the 15-tube rack and the
-  three heat-frame racks. Offsets land in the robot's `/labwareOffsets` store.
-- **Gap to close (S5):** `runCreate` in `ot2-protocol.ts` posts only `protocolId` + `runTimeParameterValues`,
-  so runs started from manufacturing pages ignore stored offsets (wax/reagent compensate by editing the labware
-  definitions in the Deck Calibration Studio instead). Add a generic step: before create, look up stored offsets
-  for the protocol's labware (`POST /labwareOffsets/searches`, fallback `GET /labwareOffsets`), include them in
-  `RunCreate.labwareOffsets`, and record them on `OpentronsRunRecord.labwareOffsets` (field already exists).
+  (`/opentrons-clone/[robotId]/protocols/[protocolId]/lpc`) on B14. It measures every slot-based, non-tiprack
+  labware in the protocol's analysis — the 15-tube rack (10) and the three heat-frame racks (7, 4, 1; the
+  protocol always loads all three so one check covers them). Tip racks are not measured (the P1000's
+  pipette-offset calibration with the 1000 µL rack covers pick-up).
+- **S5 (built 2026-11-13):** the wizard's result used to live only in the browser tab (sessionStorage → the
+  clone's own run create), so a manufacturing start never saw it. Now:
+  - "Apply and create run" first POSTs the offsets to `/api/opentrons-lab/robots/[id]/labware-offsets`, which
+    upserts `robot_labware_offsets` rows per robot × definition URI × slot (source `lpc`, history, AuditLog) —
+    the CALIB-5 store the Studio uses for its slot 10/11 racks. A failed save keeps the operator on the review
+    screen (nothing measured is lost).
+  - A **diluent** `startPrepare` / `startRecordResync` reads those rows for the labware the upload's analysis
+    lists (`storedOffsetsForLabware`, `lpc-offsets.ts`), puts them on `createArgs.labwareOffsets` (provenance on
+    `OpentronsRunRecord`) and on `prepared.labwareOffsets`; the start sequence passes them to `run.create`, which
+    posts them as `RunCreate.labwareOffsets` (legacy slot shape). Empty store → nothing added.
+  - Wax/reagent starts do NOT send run-level offsets: their .py apply the slot 10/11 offsets via RTPs
+    (`set_offset`), and a run-level entry on top would double them.
+  - The diluent wizard's Load-deck step shows which slots have a check on file (vector, date, who) and which
+    do not, with a link to the LPC for the current protocol.
   Alternative for the heat-frame rack only: whitelist it in the Studio's `TUBE_RACKS` so its definition can be
   jog-corrected like the other racks.
 
@@ -125,7 +136,7 @@ a robot busy with wax/reagent is unavailable, and vice versa) →
 | S2 | Models + permissions | `DiluentFillRun`, `DiluentLot`, enum widenings, `diluentFilling:*` permissions; `npm run check` stays at baseline. |
 | S3 | Diluent Fill tab, Setup + Load deck | Robot cards shared with wax/reagent; per-source rows with lot dropdown, tube count, loaded mL; computed minimum shown; Start disabled below it. |
 | S4 | Run via run-lifecycle | `FillKind 'diluent'` through `startPrepare/startConfirm/finishConfirm/stop*`; RTPs come from the record; tests mirror the reagent `cartridges` tests. |
-| S5 | Stored labware offsets on manufacturing starts | `runCreate` includes the robot's stored offsets for the protocol's labware; recorded on the run record; no-op when the store is empty. Unit test with a fake transport. |
+| S5 | Stored labware offsets on manufacturing starts | LPC saves to `robot_labware_offsets` (source `lpc`); a diluent `run.create` includes the rows for the protocol's labware; recorded on the run record; no-op when nothing is saved. Tests: `lpc-offsets.test.ts` (matcher, targets, limits), `ot2-protocol.run.test.ts` (verb body, sequence pass-through). **Built 2026-11-13.** |
 | S6 | Done: lot + inventory | Terminal status → per-rack tube counts from commands → `DiluentLot` + PT-CT-107 FIFO consumption (`lotRemaining/fifoLot`) + `ReagentLot.remainingVolume` decrement, all idempotent on re-entry. |
 | S7 | Robot availability | A diluent run blocks wax/reagent on that robot and vice versa (`robot-cards.ts`, both `services/*/robots.ts`). |
 | S8 | Settings sub-tab | `defaultVolumeUl`, `tubesPerRack` editable; Setup reads them. |
@@ -147,5 +158,6 @@ a robot busy with wax/reagent is unavailable, and vice versa) →
   deck map on the Load-deck step and the fixed slot mapping in the protocol.
 - A short source tube pipettes air silently on the OT-2 (no liquid sensing). Mitigation: loaded-volume
   parameter + pre-flight refusal in the protocol and in BIMS.
-- Offsets: until S5 lands, a BIMS-started run ignores the LPC. Do S5 before the first production run.
+- Offsets: a BIMS-started diluent run sends the LPC offsets saved on this robot (S5). A check done before
+  2026-11-13 (sessionStorage only) is not on file — run it again from the protocol's page.
 - Placeholders: Falcon geometry and tip descent must be measured; a 20-minute job with a graduated tube.
