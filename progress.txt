@@ -27683,3 +27683,12 @@ Deferred: S5 (pass the robot's stored labware offsets on manufacturing run start
 use nominal labware positions until then), S8 (settings sub-tab; defaults live in diluent-fill.ts).
 Before the first run on B14: pipette-offset calibration for the P1000 (Opentrons App), import
 protocols/Sample_Diluent_Fill_v2.py from the robot's protocols page, LPC in the clone.
+
+Deployment (production) — 2026-11-13
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/6tnfNTbN2huRvEeLQFtD8ZYF5TMn
+Source: master @ commit 7d07eb1f (fast-forward of feat/diluent-fill-prd)
+Retrieve this exact code: git checkout 7d07eb1f
+Live: 19:36:58Z — /_app/version.json 1794523759833 → 1794598516411; GitHub status success.
+What this deployment is for: DILUENT-FILL-1 — the Diluent Fill process (Robots page third row + "Start
+  diluent", diluent-filling wizard, DiluentFillRun/DiluentLot, diluentFilling:* permissions). First
+  test run with Alejandro on B14 after the P1000 pipette-offset calibration and the protocol import.
