@@ -20,15 +20,16 @@
 	import { resolve } from '$app/paths';
 	import WaxWizard from '$lib/components/manufacturing/wax-filling/WaxWizard.svelte';
 	import ReagentWizard from '$lib/components/manufacturing/reagent-filling/ReagentWizard.svelte';
+	import DiluentWizard from '$lib/components/manufacturing/diluent-filling/DiluentWizard.svelte';
 	import ReagentWellHeatmap from '$lib/components/manufacturing/reagent-filling/ReagentWellHeatmap.svelte';
-	import { SETUP_PATH, withOpen, withoutOpen, type BoardProcess } from '$lib/manufacturing/robot-panels';
+	import { SETUP_PATH, withOpen, withoutOpen, processLabel, type BoardProcess } from '$lib/manufacturing/robot-panels';
 	import type { WellIssueHeatmap } from '$lib/server/manufacturing/reagent-well-heatmap';
 
 	let { data } = $props();
 
 	const count = $derived(data.panels.length);
 	const gridClass = $derived(count >= 3 ? 'xl:grid-cols-3' : count === 2 ? 'xl:grid-cols-2' : '');
-	const label = (p: BoardProcess) => (p === 'wax' ? 'Wax' : 'Reagent');
+	const label = processLabel;
 	// Plain paths (resolve() wants a literal route); SETUP_PATH holds both.
 	const setupHref = (p: BoardProcess, robotId: string) => `${SETUP_PATH[p]}?robot=${encodeURIComponent(robotId)}`;
 
@@ -94,7 +95,7 @@
 	<div class="grid grid-cols-1 gap-4 {gridClass}">
 		{#each data.panels as panel (panel.robotId)}
 			{@const hm = heatmapOf(panel.robotId)}
-			{@const inlineSetup = panel.kind === 'wax-setup' || panel.kind === 'reagent-setup'}
+			{@const inlineSetup = panel.kind === 'wax-setup' || panel.kind === 'reagent-setup' || panel.kind === 'diluent-setup'}
 			<section
 				id="panel-{panel.robotId}"
 				class="min-w-0 scroll-mt-20 rounded-lg border bg-[var(--color-tron-surface)]/40 p-3 {panel.live
@@ -190,6 +191,10 @@
 					<WaxWizard data={panel.data} mode="panel" />
 				{:else if panel.kind === 'reagent-setup'}
 					<ReagentWizard data={panel.data} mode="panel" />
+				{:else if panel.kind === 'diluent'}
+					<DiluentWizard data={panel.data} robotName={panel.robotName} mode="run" />
+				{:else if panel.kind === 'diluent-setup'}
+					<DiluentWizard data={panel.data} robotName={panel.robotName} mode="panel" />
 				{:else if panel.kind === 'setup'}
 					<!-- A run in setup whose process this user may not read: the link-only view. -->
 					<div class="rounded-lg border border-amber-500/40 bg-amber-900/10 p-4 text-center">
@@ -221,6 +226,11 @@
 							{#if data.may.reagent}
 								<button type="button" onclick={() => openSetup(panel.robotId, 'reagent')} disabled={opening !== null} class={startBtn}>
 									{opening?.robotId === panel.robotId && opening.process === 'reagent' ? 'Opening…' : 'Start reagent'}
+								</button>
+							{/if}
+							{#if data.may.diluent}
+								<button type="button" onclick={() => openSetup(panel.robotId, 'diluent')} disabled={opening !== null} class={startBtn}>
+									{opening?.robotId === panel.robotId && opening.process === 'diluent' ? 'Opening…' : 'Start diluent'}
 								</button>
 							{/if}
 						</div>

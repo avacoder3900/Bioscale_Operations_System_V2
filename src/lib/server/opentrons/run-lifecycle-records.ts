@@ -28,6 +28,7 @@ import {
 	WaxFillingRun,
 	ReagentBatchRecord,
 	CartridgeRecord, FillLot,
+	DiluentFillRun, DiluentLot, nextDiluentLotNumber, ReagentLot,
 	Equipment,
 	ManufacturingSettings,
 	Ot2BridgeCommand,
@@ -75,8 +76,17 @@ import { hardDeleteUnfinalizedCartridges } from '$lib/server/services/cartridge-
 import { returnCarts } from '$lib/server/services/bucket-service';
 import { notifyRunLifecycle } from '$lib/server/notifications';
 import { estimateReagentRunSeconds } from '$lib/manufacturing/reagent-run-estimate';
+import {
+	diluentRunTimeParameters,
+	diluentEstimateSeconds,
+	diluentTubesTotal,
+	validateDiluentSetup,
+	DILUENT_PIPETTES,
+	DILUENT_SOURCE_RACK,
+	isDiluentPipette
+} from '$lib/manufacturing/diluent-fill';
 
-export type FillKind = 'wax' | 'reagent';
+export type FillKind = 'wax' | 'reagent' | 'diluent';
 export type { Line };
 type User = { _id: string; username: string };
 /** A form-action failure: the page action returns fail(status, { error }). */
@@ -100,9 +110,18 @@ const K = {
 		noRobot: 'Reagent run has no robot assigned',
 		noOtRun: 'This reagent run has no OT-2 run linked',
 		log: 'reagent-filling'
+	},
+	// DILUENT-FILL-1 (2026-11-13): the sample-diluent fill, third FillKind.
+	diluent: {
+		processType: 'diluent-filling' as ProcessType,
+		table: 'diluent_fill_runs',
+		notFound: 'Diluent run not found',
+		noRobot: 'Diluent run has no robot assigned',
+		noOtRun: 'This diluent run has no OT-2 run linked',
+		log: 'diluent-filling'
 	}
 };
-const model = (kind: FillKind): any => (kind === 'wax' ? WaxFillingRun : ReagentBatchRecord);
+const model = (kind: FillKind): any => (kind === 'wax' ? WaxFillingRun : kind === 'diluent' ? DiluentFillRun : ReagentBatchRecord);
 
 /** Minutes after which an unresolved start intent is shown as interrupted. */
 export const START_INTENT_BANNER_MS = 10 * 60_000;
@@ -557,16 +576,33 @@ export async function computeRunParameters(
 		}
 	}
 
+	if (kind === 'diluent' && run) {
+		// The record is the whole request (DILUENT-FILL-1): pipette, tubes and loaded
+		// volume per source, volume per tube, tubes per aspirate. The Start panel shows
+		// them read-only and whatever it posts is ignored — same rule as `cartridges`.
+		const declared = new Set(paramSchema.map((d) => d.variableName));
+		for (const [k, v] of Object.entries(diluentRunTimeParameters(run))) {
+			if (!declared.has(k)) continue;
+			runTimeParameterValues[k] = v;
+			protocolParameters[k] = v;
+		}
+	}
+
 	// PRD 6: inject the BIMS-native calibration params (global offset +
 	// calibrator point) for robots that have a captured offset. No-op for the
 	// pre-cutover protocol (none of these RTPs declared) — see calibration-rtps.
 	// Deck-keyed calibrator (2026-08-28): the fixture is bolted to the carriage,
 	// so the run gets the point taught for the deck that is physically mounted —
 	// deckBinding.particleDeviceId is the same id the .py reads at run start.
-	const calRtps = await calibrationRtpValues(String(robotId), K[kind].processType, paramSchema as any, {
-		deckKey: deckBinding?.particleDeviceId,
-		deckLoadName: deckBinding?.deckLoadName
-	});
+	// The diluent protocol declares none of the calibrator RTPs and has no deck or
+	// fixture: skip the lookup (it would be a no-op for the schema anyway).
+	const calRtps =
+		kind === 'diluent'
+			? {}
+			: await calibrationRtpValues(String(robotId), K[kind].processType as 'wax-filling' | 'reagent-filling', paramSchema as any, {
+					deckKey: deckBinding?.particleDeviceId,
+					deckLoadName: deckBinding?.deckLoadName
+				});
 	Object.assign(runTimeParameterValues, calRtps);
 	Object.assign(protocolParameters, calRtps);
 
@@ -589,6 +625,11 @@ export function rackLoadNamesFor(kind: FillKind, rtp: Record<string, unknown>, d
 		// .py declaring z_cal_p300) loads the p300's 200 uL rack in slot 11 (2026-11-06).
 		const tip11 = declared.has('z_cal_p300') ? 'cosmas_and_damian_biotix_96_200ul_tiprack' : 'cosmasanddamian_96_tiprack_20ul';
 		return { '10': 'cosmas_and_damian_drybath_tuberack', '11': tip11 };
+	}
+	if (kind === 'diluent') {
+		// Falcon 15 mL conicals in the Opentrons 15-tube rack; the tip rack follows the pipette choice.
+		const pip = isDiluentPipette(rtp['pipette']) ? rtp['pipette'] : 'p1000';
+		return { '10': DILUENT_SOURCE_RACK, '11': DILUENT_PIPETTES[pip].tiprack };
 	}
 	const incubator = String(rtp['tube_rack'] ?? 'standard') === 'incubator';
 	return {
@@ -666,6 +707,14 @@ async function startContext(
 		// the record (computeRunParameters): nothing scanned = nothing to fill,
 		// and the robot would refuse the run anyway.
 		return actionFail(400, 'This run has no scanned cartridges on record — scan the deck + cartridges first (the robot refuses a run for 0 cartridges).');
+	}
+
+	if (kind === 'diluent') {
+		// The protocol refuses a short source itself; refuse here first so the operator
+		// reads the message on the Start button instead of in a robot error.
+		const problems = validateDiluentSetup(run);
+		if (problems.length) return actionFail(400, `Setup is incomplete: ${problems.join(' ')}`);
+		if (!run.deckConfirmedAt) return actionFail(400, 'Confirm the deck is loaded (racks, source tubes, tips) before starting.');
 	}
 
 	const robot = await getRobot(robotId);
@@ -1074,6 +1123,34 @@ export async function startConfirm(
 		return { success: true, opentronsRunId, ...withJob };
 	}
 
+	if (kind === 'diluent') {
+		const runStartTime = new Date();
+		const runEndTime = new Date(runStartTime.getTime() + diluentEstimateSeconds(run) * 1000);
+		await DiluentFillRun.findByIdAndUpdate(runId, {
+			$set: {
+				status: 'Running',
+				runStartTime,
+				runEndTime,
+				opentronsRunId,
+				protocolParameters,
+				'pipetteTipState.before': beforeSnap,
+				'pipetteTipState.rackRefilledDuringRun': refilled
+			},
+			$unset: { startIntent: '' }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: K.diluent.table,
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: user.username,
+			changedAt: runStartTime,
+			newData: { status: 'Running', runStartTime, opentronsRunId, protocolParameters, pipetteTipBefore: beforeSnap.nextTipIndex, line, ...viaBridge }
+		});
+		await setRunRecordStatus(runId, opentronsRunId, 'running', runStartTime);
+		return { success: true, opentronsRunId, ...withJob };
+	}
+
 	// Estimated finish time. Driven by how many wells the selected reagent rows
 	// will actually fill, not by cartridge count alone — see
 	// src/lib/manufacturing/reagent-run-estimate.ts for the model and the fit.
@@ -1225,6 +1302,14 @@ export async function finishConfirm(kind: FillKind, run: any, obs: FinishObserva
 		return { success: true, consumed, nextTipIndex: finalIndex, advanced, autoCompleted: finalStatus === 'succeeded' };
 	}
 
+	if (kind === 'diluent') {
+		// A succeeded diluent run IS the lot: every planned tube got its volume.
+		// Stopped/failed runs stay Running for the operator to complete with the
+		// real tube counts, or cancel/abort.
+		if (finalStatus === 'succeeded') await finalizeDiluentRun(runId, user, 'auto (run finished)');
+		return { success: true, consumed, nextTipIndex: finalIndex, autoCompleted: finalStatus === 'succeeded' };
+	}
+
 	// AUTO-COMPLETE (2026-08-28, parity with wax): a reagent run that lands
 	// `succeeded` IS done — finalize immediately so the robot frees the
 	// moment the .py finishes instead of waiting for a Complete click.
@@ -1243,7 +1328,7 @@ export async function recordRunFinishedQueue(kind: FillKind, runId: string, fina
 		// Pull commands. The OT-2 paginates — one large page covers a typical run.
 		obs = await observeRunFinished((v, a) => runVerb(serverTransport(pre.robot), v, a), pre.run.opentronsRunId, finalStatusRaw);
 	} catch (err) {
-		console.error(`[${kind === 'wax' ? 'WAX-FILLING' : 'REAGENT-FILLING'}] recordRunFinished: command fetch failed:`, err);
+		console.error(`[${K[kind].log.toUpperCase()}] recordRunFinished: command fetch failed:`, err);
 		obs = { finalStatus: String(finalStatusRaw ?? '').toLowerCase(), tips: { nextTipIndex: null, pickUpTipCount: 0 } };
 	}
 	return finishConfirm(kind, pre.run, obs, user, 'queue');
@@ -1272,6 +1357,12 @@ export async function stopPrecheck(kind: FillKind, action: StopAction, runId: st
 		}
 		const run = (await WaxFillingRun.findById(runId).select(WAX_STOP_SELECT).lean()) as any;
 		return { run };
+	}
+	if (kind === 'diluent') {
+		const existing = (await DiluentFillRun.findById(runId).select('robotReleasedAt opentronsRunId robot status').lean()) as any;
+		if (!existing) return actionFail(404, K.diluent.notFound);
+		if (existing.robotReleasedAt) return actionFail(400, 'Cannot cancel: the OT-2 has already completed this run and its lot is recorded.');
+		return { run: existing };
 	}
 	if (action === 'cancel') {
 		// Per-cartridge rejection happens later on the Reagent Inspect page.
@@ -1309,7 +1400,7 @@ async function enqueueAutoResume(kind: FillKind, robotId: string, robot: any, op
 		});
 		return true;
 	} catch (e) {
-		console.warn(`[${kind === 'wax' ? 'startRun' : 'reagent startRun'}] could not enqueue auto_resume_run:`, e instanceof Error ? e.message : e);
+		console.warn(`[${K[kind].log} startRun] could not enqueue auto_resume_run:`, e instanceof Error ? e.message : e);
 		return false;
 	}
 }
@@ -1463,6 +1554,24 @@ export async function stopConfirm(
 			operator: user.username,
 			reason
 		});
+		return { success: true, warning };
+	}
+
+	if (kind === 'diluent') {
+		const status = action === 'cancel' ? 'Cancelled' : 'Aborted';
+		await DiluentFillRun.findByIdAndUpdate(runId, {
+			$set: { status, abortReason: reason, runEndTime: now, ...(fields.photoUrl ? { abortPhotoUrl: fields.photoUrl } : {}) }
+		});
+		await AuditLog.create({
+			_id: generateId(),
+			tableName: K.diluent.table,
+			recordId: runId,
+			action: 'UPDATE',
+			changedBy: user.username,
+			changedAt: now,
+			newData: { status, abortReason: reason, line }
+		});
+		await setRunRecordStatus(runId, run?.opentronsRunId, 'stopped', now);
 		return { success: true, warning };
 	}
 
@@ -1657,7 +1766,7 @@ export function validStartObs(v: unknown): StartConfirmObs | null {
  *   abortConfirm       {runId, reason, photoUrl, stopWarning, filledWells}
  */
 export function lifecycleActions(kind: FillKind) {
-	const perm = kind === 'wax' ? 'waxFilling:write' : 'reagentFilling:write';
+	const perm = kind === 'wax' ? 'waxFilling:write' : kind === 'diluent' ? 'diluentFilling:write' : 'reagentFilling:write';
 	type Ev = { request: Request; locals: App.Locals };
 	const begin = async ({ request, locals }: Ev): Promise<{ form: FormData; user: User }> => {
 		if (!locals.user) redirect(302, '/login');
@@ -1754,4 +1863,99 @@ async function stopConfirmAction(kind: FillKind, action: StopAction, { form, use
 		photoUrl: (form.get('photoUrl') as string | null) || null
 	};
 	return stopConfirm(kind, action, runId, pre.run, fields, { stopWarning, filledWells }, user, validLine(form.get('line')));
+}
+
+// ── diluent finalize (DILUENT-FILL-1) ─────────────────────────────────────────
+
+/**
+ * Close a diluent run: tube counts per source (planned on a clean finish, the
+ * operator's counts otherwise), the DiluentLot, the 2 mL tube consumption
+ * (PT-CT-107, one per tube) and the audit row. Idempotent: a second call for a
+ * Completed run returns {ok} and writes nothing. The source ReagentLot's
+ * remainingVolume is NOT decremented here: the lot is finalized and sacred —
+ * the dispensed volume is recorded on the DiluentLot instead (PRD open item).
+ */
+export async function finalizeDiluentRun(
+	runId: string,
+	user: User,
+	trigger: string,
+	opts: { tubesFilled?: Record<string, number> } = {}
+): Promise<{ ok: true; lotNumber: string | null } | { notFound: true }> {
+	await connectDB();
+	const run = (await DiluentFillRun.findById(runId).lean()) as any;
+	if (!run) return { notFound: true };
+	if (run.status === 'Completed' || run.finalizedAt) return { ok: true, lotNumber: run.diluentLotNumber ?? null };
+
+	const now = new Date();
+	const finalStatus = String(run.opentronsRunFinalStatus ?? '').toLowerCase();
+	const sources = ((run.sources ?? []) as any[]).map((s) => {
+		const planned = Math.max(0, Math.floor(Number(s.tubesPlanned) || 0));
+		const override = opts.tubesFilled?.[String(s.well)];
+		const filled =
+			override != null && Number.isFinite(override)
+				? Math.max(0, Math.min(planned, Math.floor(override)))
+				: finalStatus === 'succeeded'
+					? planned
+					: 0;
+		return { ...s, tubesPlanned: planned, tubesFilled: filled };
+	});
+	const tubesTotal = sources.reduce((n, s) => n + s.tubesFilled, 0);
+
+	const lotNumber = await nextDiluentLotNumber(now);
+	const lot = await DiluentLot.create({
+		_id: generateId(),
+		lotNumber,
+		runId: String(run._id),
+		robot: { _id: run.robot?._id, name: run.robot?.name },
+		operator: run.operator,
+		pipette: run.pipette,
+		volumeUl: run.diluentVolumeUl,
+		sources: sources
+			.filter((s) => s.tubesFilled > 0)
+			.map((s) => ({ well: s.well, reagentLotId: s.reagentLotId, reagentLotBarcode: s.reagentLotBarcode, templateName: s.templateName, tubes: s.tubesFilled })),
+		tubesTotal,
+		status: 'active'
+	});
+
+	await DiluentFillRun.findByIdAndUpdate(runId, {
+		$set: {
+			status: 'Completed',
+			sources,
+			diluentLotId: String(lot._id),
+			diluentLotNumber: lotNumber,
+			robotReleasedAt: now,
+			runEndTime: run.runEndTime && new Date(run.runEndTime) < now ? run.runEndTime : now,
+			finalizedAt: now
+		}
+	});
+
+	// 2 mL tubes (PT-CT-107): one per tube filled.
+	if (tubesTotal > 0) {
+		try {
+			const tubePartId = await resolvePartId('PT-CT-107');
+			await recordTransaction({
+				transactionType: 'consumption',
+				partDefinitionId: tubePartId ?? undefined,
+				quantity: tubesTotal,
+				manufacturingStep: 'diluent_filling',
+				manufacturingRunId: String(run._id),
+				operatorId: run.operator?._id,
+				operatorUsername: run.operator?.username,
+				notes: `Diluent fill ${lotNumber} — ${tubesTotal} x 2 mL tubes at ${run.diluentVolumeUl} µL (${run.robot?.name ?? 'robot'})`
+			});
+		} catch (e) {
+			console.error('[diluent finalize] tube consumption failed:', e instanceof Error ? e.message : e);
+		}
+	}
+
+	await AuditLog.create({
+		_id: generateId(),
+		tableName: K.diluent.table,
+		recordId: runId,
+		action: 'UPDATE',
+		changedBy: user.username,
+		changedAt: now,
+		newData: { status: 'Completed', diluentLotNumber: lotNumber, tubesTotal, tubesFilled: sources.map((s) => ({ well: s.well, tubes: s.tubesFilled })), trigger }
+	});
+	return { ok: true, lotNumber };
 }

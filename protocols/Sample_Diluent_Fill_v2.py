@@ -1,3 +1,5 @@
+import math
+
 from opentrons import protocol_api
 
 # Sample Diluent Fill v2 — derived from Luke Dulworth's "Cartridge Diluent Protocol"
@@ -159,7 +161,8 @@ def run(protocol: protocol_api.ProtocolContext):
         if n == 0:
             starts_ul.append(0.0)
             continue
-        need_ul = n * vol + carry + floor_ul
+        # Rounded UP to 10 µL (0.01 mL): the same number BIMS shows the operator.
+        need_ul = math.ceil((n * vol + carry + floor_ul) / 10.0 - 1e-9) * 10.0
         have_ul = loaded_ml[i] * 1000.0
         if have_ul <= 0:
             have_ul = need_ul

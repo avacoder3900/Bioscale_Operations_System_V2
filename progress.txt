@@ -27646,3 +27646,40 @@ Robot facts (B14, read 2026-11-13): P300 left + P1000 right (P1KSV222023061402);
 opentrons_96_tiprack_1000ul exists (78.1 mm, 2025-12-18); the right-mount pipette-offset cal on file
 (2025-11-21) is the old P20's — the P1000 has none; no labware offsets for any diluent labware.
 Status: draft — pending Jacob's sign-off (deck orientation, 40 vs 80, tube brand, pipette). Not deployed.
+
+================================================================================
+2026-11-13 — feat/diluent-fill-prd (cont.) — the Diluent Fill process in BIMS (DILUENT-FILL-1 S1–S4, S6, S7)
+================================================================================
+Built on the PRD above. A third fill process beside wax and reagent, same machinery:
+  - FillKind 'diluent' in run-lifecycle-records.ts: K.diluent (processType 'diluent-filling', table
+    diluent_fill_runs), model(), computeRunParameters (the record dictates pipette / src_N_tubes /
+    src_N_ml / diluent_vol / tubes_per_trip — the posted form is ignored, like reagent `cartridges`),
+    rackLoadNamesFor (Falcon 15-tube rack in 10, tip rack by pipette in 11), startContext guard
+    (validateDiluentSetup + deck confirmed), startConfirm / finishConfirm / stopPrecheck / stopConfirm
+    branches, lifecycleActions perm diluentFilling:write, finalizeDiluentRun (planned counts on
+    `succeeded`, operator counts otherwise → DiluentLot DL-YYYYMMDD-NNN + PT-CT-107 consumption, one
+    tube each, manufacturingStep 'diluent_filling'). The source ReagentLot's remainingVolume is NOT
+    decremented (finalized + sacred) — recorded on the lot instead.
+  - Models DiluentFillRun (diluent_fill_runs, robot_active_unique partial index, sacred) and
+    DiluentLot (diluent_lots); enums widened: OpentronProtocol.processType, OpentronsRunRecord
+    .manufacturingRunType, ProcessType, InventoryTransaction.manufacturingStep; upload route maps a
+    filename containing 'diluent' → 'diluent-filling'.
+  - $lib/manufacturing/diluent-fill.ts: the protocol's constants + geometry in TS (minimum source
+    volume = tubes × vol + carry-back + unreachable bottom, rounded UP to 10 µL in BOTH the .py and
+    BIMS so the operator reads exactly what the robot checks: P1000/40 tubes = 5.51 mL, P300 = 10.26).
+  - Robots page: BoardProcess 'diluent' (robot-panels, robot-board, RobotBoard third row, resource-locks
+    cross-process conflict), panels 'diluent-setup' / 'diluent' with DiluentWizard, "Start diluent".
+  - (robots)/diluent-filling route: setup page + actions createRun, saveSetup, backToSetup, confirmDeck,
+    startRun, recordRunFinished, completeRun (per-source counts after a non-succeeded run), cancelRun,
+    abortRun, ...lifecycleActions('diluent'); loadDiluentWizard; DiluentWizard.svelte (Setup → Load
+    deck with deck map → Start via ProtocolStartPanel, queue line → Running with EmbeddedRunController).
+  - Permissions: group diluentFilling (:read/:write) + Operator legacy list. Existing Operator ROLES in
+    Mongo do not get the new strings automatically — grant diluentFilling:read/write on the Operator
+    role in the roles admin before operators can see "Start diluent" (admins see it via the wildcard).
+Tests: +11 (diluent-fill.test.ts 10, run-lifecycle-records.test.ts 3: record-driven RTPs, short source
+refused with the 5.51 mL message, unconfirmed deck refused); 48 pass in the two files. npm run check:
+16 errors (baseline). Pre-existing failing test "no BIMS labware in the analysis is stale…" untouched.
+Deferred: S5 (pass the robot's stored labware offsets on manufacturing run starts — runs started here
+use nominal labware positions until then), S8 (settings sub-tab; defaults live in diluent-fill.ts).
+Before the first run on B14: pipette-offset calibration for the P1000 (Opentrons App), import
+protocols/Sample_Diluent_Fill_v2.py from the robot's protocols page, LPC in the clone.

@@ -1420,7 +1420,7 @@ async function mxCommand(t: Ot2Transport, args: Record<string, unknown>): Promis
 // A step returning {error} stops the sequence; its message is what the page shows.
 
 export type Line = 'queue' | 'tailnet';
-export type ProcessType = 'wax-filling' | 'reagent-filling';
+export type ProcessType = 'wax-filling' | 'reagent-filling' | 'diluent-filling';
 export type StepError = { error: string; status?: number };
 export const isStepError = (v: unknown): v is StepError => !!v && typeof (v as any).error === 'string';
 

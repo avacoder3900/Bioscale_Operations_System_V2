@@ -8,7 +8,7 @@ const opentronsProtocolSchema = new Schema({
 	protocolName: { type: String, required: true },
 	version: { type: Number, default: 1 },
 	description: String,
-	processType: { type: String, enum: ['wax-filling', 'reagent-filling', 'other'] },
+	processType: { type: String, enum: ['wax-filling', 'reagent-filling', 'diluent-filling', 'other'] },
 
 	// File storage
 	fileName: String,

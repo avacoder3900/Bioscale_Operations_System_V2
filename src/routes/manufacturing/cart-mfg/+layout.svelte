@@ -19,7 +19,7 @@
 		// three sibling entries that each showed a different slice of the same three
 		// OT-2s. They are one page now — the board at /robots with both wizards
 		// under it — so the menu has one entry, kept lit on either wizard route.
-		{ href: '/manufacturing/cart-mfg/robots', label: 'Robots', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z', also: ['/manufacturing/cart-mfg/wax-filling', '/manufacturing/cart-mfg/reagent-filling'] },
+		{ href: '/manufacturing/cart-mfg/robots', label: 'Robots', icon: 'M9 3v2m6-2v2M9 19v2m6-2v2M5 9H3m2 6H3m18-6h-2m2 6h-2M7 19h10a2 2 0 002-2V7a2 2 0 00-2-2H7a2 2 0 00-2 2v10a2 2 0 002 2zM9 9h6v6H9V9z', also: ['/manufacturing/cart-mfg/wax-filling', '/manufacturing/cart-mfg/reagent-filling', '/manufacturing/cart-mfg/diluent-filling'] },
 		// WAX-SIMPLIFY-2: Wax Inspect (CV) is out of the menu but still reachable by URL.
 		{ href: '/manufacturing/cart-mfg/wax-reject', label: 'Wax Reject', icon: 'M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z' },
 		{ href: '/manufacturing/cart-mfg/qa-qc', label: 'QA/QC', icon: 'M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z' },

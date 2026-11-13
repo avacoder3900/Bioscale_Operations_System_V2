@@ -1,7 +1,10 @@
 # DILUENT-FILL-1 — Sample diluent fill on the OT-2 as a BIMS process
 
-**Date:** 2026-11-13 · **Owner:** Alejandro · **Status:** Draft — pending Jacob's sign-off on the protocol
-(deck orientation, 40 vs 80 tubes per rack, tube brand, default pipette)
+**Date:** 2026-11-13 · **Owner:** Alejandro · **Status:** Built (S1–S4, S6, S7) on `feat/diluent-fill-prd`,
+2026-11-13 — first test run with Alejandro after B14's P1000 pipette-offset calibration and a position check.
+S5 (stored labware offsets on manufacturing starts) and S8 (settings sub-tab) are deferred until after that run.
+Protocol questions for Jacob (deck orientation, 40 vs 80 tubes per rack, tube brand, default pipette) stay open;
+the build assumes the answers in Decisions below.
 **Depends on:** OT2-BRIDGE-3 (cloud → robot protocol upload), OT2-TAILNET-5 (run lines), LABWARE-LIBRARY-AUTO-BUNDLE
 
 ## Problem

@@ -16,7 +16,7 @@ export const load: LayoutServerLoad = async ({ locals }) => {
 	if (!locals.user) redirect(302, '/login');
 	// The board is readable by anyone who may read either filling process (the
 	// two wizards keep their own waxFilling:read / reagentFilling:read gates).
-	if (!hasAnyPermission(locals.user, ['manufacturing:read', 'waxFilling:read', 'reagentFilling:read'])) {
+	if (!hasAnyPermission(locals.user, ['manufacturing:read', 'waxFilling:read', 'reagentFilling:read', 'diluentFilling:read'])) {
 		error(403, 'Forbidden');
 	}
 

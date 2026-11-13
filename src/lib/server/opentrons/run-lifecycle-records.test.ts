@@ -12,6 +12,7 @@ type Doc = Record<string, any>;
 const db = {
 	wax: new Map<string, Doc>(),
 	reagent: new Map<string, Doc>(),
+	diluent: new Map<string, Doc>(),
 	writes: [] as Array<{ model: string; op: string; args: any[] }>,
 	audits: [] as Doc[],
 	runRecords: [] as Doc[],
@@ -28,7 +29,7 @@ function chain(v: () => unknown) {
 	};
 	return c;
 }
-function modelMock(name: 'wax' | 'reagent') {
+function modelMock(name: 'wax' | 'reagent' | 'diluent') {
 	const store = () => db[name];
 	return {
 		findById: (id: string) => chain(() => structuredClone(store().get(id) ?? null)),
@@ -61,6 +62,10 @@ vi.mock('$lib/server/db', () => ({
 	AuditLog: { create: async (d: Doc) => db.audits.push(d) },
 	WaxFillingRun: modelMock('wax'),
 	ReagentBatchRecord: modelMock('reagent'),
+	DiluentFillRun: modelMock('diluent'),
+	DiluentLot: { create: async (d: Doc) => { db.writes.push({ model: 'diluentLot', op: 'create', args: [d] }); return { _id: 'lot1', ...d }; } },
+	nextDiluentLotNumber: async () => 'DL-20261113-001',
+	ReagentLot: { find: () => ({ select: () => ({ lean: async () => [] }) }) },
 	CartridgeRecord: {
 		bulkWrite: async (ops: any[]) => {
 			db.writes.push({ model: 'cart', op: 'bulkWrite', args: [ops] });
@@ -545,5 +550,59 @@ describe('reagent `cartridges` comes from the record (B07 2026-11-03: the page p
 		expect((r as any).fail.status).toBe(400);
 		expect((r as any).fail.error).toMatch(/no scanned cartridges/);
 		expect(db.writes.filter((w) => w.model === 'reagent')).toEqual([]);
+	});
+});
+
+describe('diluent run-time parameters come from the record (DILUENT-FILL-1)', () => {
+	const schema = [
+		{ variableName: 'pipette', type: 'str', default: 'p1000' },
+		{ variableName: 'src_1_tubes', type: 'int', default: 40 },
+		{ variableName: 'src_2_tubes', type: 'int', default: 0 },
+		{ variableName: 'src_3_tubes', type: 'int', default: 0 },
+		{ variableName: 'src_1_ml', type: 'float', default: 0 },
+		{ variableName: 'src_2_ml', type: 'float', default: 0 },
+		{ variableName: 'src_3_ml', type: 'float', default: 0 },
+		{ variableName: 'diluent_vol', type: 'float', default: 104.5 },
+		{ variableName: 'tubes_per_trip', type: 'int', default: 8 }
+	];
+	const run = {
+		_id: 'D1',
+		robot: { _id: 'rb', name: 'B14' },
+		pipette: 'p1000',
+		diluentVolumeUl: 104.5,
+		tubesPerTrip: 8,
+		deckConfirmedAt: new Date(),
+		sources: [
+			{ well: 'A1', reagentLotId: 'lot1', tubesPlanned: 40, loadedMl: 6 },
+			{ well: 'A2', reagentLotId: 'lot2', tubesPlanned: 13, loadedMl: 3 },
+			{ well: 'A3', tubesPlanned: 0, loadedMl: 0 }
+		]
+	};
+
+	it('the record decides every parameter; the posted form is ignored', async () => {
+		const r = await computeRunParameters(
+			'diluent',
+			formOf({ param_src_1_tubes: '1', param_diluent_vol: '190', param_pipette: 'p300' }),
+			schema, 'rb', null, run
+		);
+		expect(r.runTimeParameterValues).toMatchObject({
+			pipette: 'p1000', diluent_vol: 104.5, tubes_per_trip: 8,
+			src_1_tubes: 40, src_1_ml: 6, src_2_tubes: 13, src_2_ml: 3, src_3_tubes: 0, src_3_ml: 0
+		});
+		expect(r.protocolParameters.src_1_tubes).toBe(40);
+	});
+
+	it('a short source is refused before the robot is touched, with the minimum in the message', async () => {
+		db.diluent.set('D0', { ...run, _id: 'D0', sources: [{ well: 'A1', reagentLotId: 'lot1', tubesPlanned: 40, loadedMl: 3 }] });
+		const r = await startPrepare('diluent', formOf({ runId: 'D0', opentronsProtocolId: 'p1' }), USER, 'queue');
+		expect(isActionFail(r)).toBe(true);
+		expect((r as any).fail.error).toMatch(/A1: 3 mL loaded but 40 tubes need at least 5.51 mL/);
+	});
+
+	it('an unconfirmed deck is refused', async () => {
+		db.diluent.set('D2', { ...run, _id: 'D2', deckConfirmedAt: undefined });
+		const r = await startPrepare('diluent', formOf({ runId: 'D2', opentronsProtocolId: 'p1' }), USER, 'queue');
+		expect(isActionFail(r)).toBe(true);
+		expect((r as any).fail.error).toMatch(/Confirm the deck is loaded/);
 	});
 });

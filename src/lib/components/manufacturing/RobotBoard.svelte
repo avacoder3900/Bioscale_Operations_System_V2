@@ -29,8 +29,10 @@
 
 	let { rows, openPanels = {} }: Props = $props();
 
-	const processLabel = (p: BoardProcess) => (p === 'wax' ? 'Wax' : 'Reagent');
-	const otherProcess = (p: BoardProcess): BoardProcess => (p === 'wax' ? 'reagent' : 'wax');
+	const processLabel = (p: BoardProcess) => (p === 'wax' ? 'Wax' : p === 'reagent' ? 'Reagent' : 'Diluent');
+	// The process whose run is holding this robot (DILUENT-FILL-1: three processes, so "the other one" is looked up).
+	const busyWith = (row: RobotBoardRow, p: BoardProcess): BoardProcess | null =>
+		(['wax', 'reagent', 'diluent'] as BoardProcess[]).find((q) => q !== p && !!row[q]) ?? null;
 
 	// --- Robot health (ready / busy / hung / offline) --------------------------
 	// Polled from a lightweight endpoint so the dots stay fresh WITHOUT a full
@@ -188,9 +190,10 @@
 		return min < 60 ? `${min}m` : `${Math.floor(min / 60)}h ${min % 60}m`;
 	}
 
-	function runDetail(run: BoardRun): string {
+	function runDetail(run: BoardRun, process: BoardProcess): string {
 		const parts: string[] = [];
-		if (run.cartridgeCount > 0) parts.push(`${run.cartridgeCount} cart${run.cartridgeCount === 1 ? '' : 's'}`);
+		const unit = process === 'diluent' ? 'tube' : 'cart';
+		if (run.cartridgeCount > 0) parts.push(`${run.cartridgeCount} ${unit}${run.cartridgeCount === 1 ? '' : 's'}`);
 		const el = elapsedLabel(run.startTime);
 		if (el) parts.push(el);
 		if (run.assayTypeName) parts.push(run.assayTypeName);
@@ -267,8 +270,9 @@
 					</div>
 
 					<!-- One row per process -->
-					{@render processRow(row, 'wax', row.wax, row.reagent)}
-					{@render processRow(row, 'reagent', row.reagent, row.wax)}
+					{@render processRow(row, 'wax', row.wax)}
+					{@render processRow(row, 'reagent', row.reagent)}
+					{@render processRow(row, 'diluent', row.diluent)}
 
 					{#if messages[row.robotId]}
 						<p class="text-[11px] text-[var(--color-tron-text-secondary)]">{messages[row.robotId]}</p>
@@ -279,9 +283,10 @@
 	{/if}
 </div>
 
-{#snippet processRow(row: RobotBoardRow, process: BoardProcess, run: BoardRun | null, other: BoardRun | null)}
+{#snippet processRow(row: RobotBoardRow, process: BoardProcess, run: BoardRun | null)}
 	{@const open = openPanels[row.robotId]}
 	{@const shown = open?.process === process}
+	{@const other = run ? null : busyWith(row, process)}
 	{@const blocked = !run && !!other}
 	<div
 		class="flex items-center gap-2 rounded border px-2.5 py-2 {shown
@@ -292,9 +297,9 @@
 		<span class="shrink-0 rounded px-1.5 py-0.5 text-[11px] {stageBadgeClass(run?.stage)}">{run ? run.stage : 'Idle'}</span>
 		<span class="min-w-0 flex-1 truncate text-[11px] text-[var(--color-tron-text-secondary)]">
 			{#if run}
-				{runDetail(run)}
+				{runDetail(run, process)}
 			{:else if blocked}
-				busy with {otherProcess(process)} filling
+				busy with {other} filling
 			{/if}
 		</span>
 		{#if shown && open}

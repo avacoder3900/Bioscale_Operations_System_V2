@@ -10,6 +10,8 @@ export { ReagentProtocolTemplate } from './reagent-protocol-template.js';
 export { ReagentLot } from './reagent-lot.js';
 export { ReagentSetLot } from './reagent-set-lot.js';
 export { FillLot, fillLotNumber, fillLotDay, findOrOpenDayFillLot, NON_CALIBRATED_REAGENT_LOT, NON_CALIBRATED_LOT_LABEL } from './fill-lot.js';
+export { DiluentFillRun } from './diluent-fill-run.js';
+export { DiluentLot, nextDiluentLotNumber } from './diluent-lot.js';
 
 // Tier 2: Operational — Receiving & Inspection
 export { ReceivingLot } from './receiving-lot.js';

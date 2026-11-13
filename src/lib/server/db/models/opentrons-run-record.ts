@@ -6,7 +6,7 @@ const opentronsRunRecordSchema = new Schema({
 
 	// Link to BIMS manufacturing
 	manufacturingRunId: String,
-	manufacturingRunType: { type: String, enum: ['wax-filling', 'reagent-filling'] },
+	manufacturingRunType: { type: String, enum: ['wax-filling', 'reagent-filling', 'diluent-filling'] },
 
 	// Link to OT-2
 	robotId: { type: String, ref: 'OpentronsRobot' },

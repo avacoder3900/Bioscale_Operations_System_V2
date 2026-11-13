@@ -20,6 +20,7 @@ import { hasPermission } from '$lib/server/permissions';
 import { OPEN_PARAM, parseOpen, type BoardProcess } from '$lib/manufacturing/robot-panels';
 import { loadWaxWizard, type WaxWizardData } from '$lib/server/manufacturing/wax-wizard';
 import { loadReagentWizard, type ReagentWizardData } from '$lib/server/manufacturing/reagent-wizard';
+import { loadDiluentWizard, type DiluentWizardData } from '$lib/server/manufacturing/diluent-wizard';
 import { connectDB, ReagentBatchRecord } from '$lib/server/db';
 import { POST_RUN_WELL_LOG_HOURS } from '$lib/manufacturing/reagent-well-issues';
 import type { PageServerLoad } from './$types';
@@ -35,17 +36,22 @@ export type RobotPanel =
 	| (PanelBase & { kind: 'wax-setup'; process: 'wax'; live: false; data: WaxWizardData })
 	| (PanelBase & { kind: 'reagent-setup'; process: 'reagent'; live: false; data: ReagentWizardData })
 	| (PanelBase & { kind: 'wax'; process: 'wax'; live: true; data: WaxWizardData })
-	| (PanelBase & { kind: 'reagent'; process: 'reagent'; live: true; data: ReagentWizardData });
+	| (PanelBase & { kind: 'reagent'; process: 'reagent'; live: true; data: ReagentWizardData })
+	// DILUENT-FILL-1: the diluent wizard in setup and in run mode.
+	| (PanelBase & { kind: 'diluent-setup'; process: 'diluent'; live: false; data: DiluentWizardData })
+	| (PanelBase & { kind: 'diluent'; process: 'diluent'; live: true; data: DiluentWizardData });
 
 const WAX_LIVE = new Set(['Running', 'running', 'Awaiting Removal', 'awaiting_removal', 'cooling']);
 const REAGENT_LIVE = new Set(['Running', 'running']);
+const DILUENT_LIVE = new Set(['Running']);
 
 export const load: PageServerLoad = async ({ locals, parent, url }) => {
 	if (!locals.user) redirect(302, '/login');
 	const { board } = await parent();
 	const may: Record<BoardProcess, boolean> = {
 		wax: hasPermission(locals.user, 'waxFilling:read'),
-		reagent: hasPermission(locals.user, 'reagentFilling:read')
+		reagent: hasPermission(locals.user, 'reagentFilling:read'),
+		diluent: hasPermission(locals.user, 'diluentFilling:read')
 	};
 	const open = parseOpen(url.searchParams.get(OPEN_PARAM));
 	await connectDB();
@@ -63,6 +69,9 @@ export const load: PageServerLoad = async ({ locals, parent, url }) => {
 				if (process === 'reagent' && may.reagent) {
 					return { ...base, kind: 'reagent-setup', process: 'reagent', stage, live: false, data: await loadReagentWizard(locals, row.robotId) };
 				}
+				if (process === 'diluent' && may.diluent) {
+					return { ...base, kind: 'diluent-setup', process: 'diluent', stage, live: false, data: await loadDiluentWizard(locals, row.robotId) };
+				}
 				return { ...base, kind: 'setup', process, stage, live: false };
 			};
 
@@ -79,6 +88,13 @@ export const load: PageServerLoad = async ({ locals, parent, url }) => {
 					return { ...base, kind: 'reagent', process: 'reagent', stage, live: true, data: await loadReagentWizard(locals, row.robotId) };
 				}
 				return setupPanel('reagent', stage);
+			}
+			if (row.diluent) {
+				const stage = row.diluent.stage;
+				if (DILUENT_LIVE.has(stage) && may.diluent) {
+					return { ...base, kind: 'diluent', process: 'diluent', stage, live: true, data: await loadDiluentWizard(locals, row.robotId) };
+				}
+				return setupPanel('diluent', stage);
 			}
 			// Idle: open only if the operator asked for it (?open=) and may read it.
 			const want = open[row.robotId];

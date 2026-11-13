@@ -58,6 +58,7 @@ export const LEGACY_PERMISSION_GROUPS: { group: string; permissions: string[] }[
 	{ group: 'manufacturing', permissions: ['manufacturing:read', 'manufacturing:write', 'manufacturing:admin'] },
 	{ group: 'waxFilling', permissions: ['waxFilling:read', 'waxFilling:write'] },
 	{ group: 'reagentFilling', permissions: ['reagentFilling:read', 'reagentFilling:write'] },
+	{ group: 'diluentFilling', permissions: ['diluentFilling:read', 'diluentFilling:write'] },
 	{ group: 'workInstruction', permissions: ['workInstruction:read', 'workInstruction:write', 'workInstruction:approve'] },
 	{ group: 'documentRepo', permissions: ['documentRepo:read', 'documentRepo:write'] },
 	{ group: 'productionRun', permissions: ['productionRun:read', 'productionRun:write'] },
@@ -106,6 +107,8 @@ export const OPERATOR_ROLE_PERMISSIONS: string[] = [
 	'kanban:read', 'spu:read', 'manufacturing:read',
 	'waxFilling:read', 'waxFilling:write',
 	'reagentFilling:read', 'reagentFilling:write',
+	// DILUENT-FILL-1 (2026-11-13): the third fill process, same footing as the other two.
+	'diluentFilling:read', 'diluentFilling:write',
 	'cartridge:read', 'inventory:read',
 	// Reached the one dual-role operator (zane) accidentally, via the research
 	// app's role, until BIMS stopped counting research-owned roles (PERM-02).

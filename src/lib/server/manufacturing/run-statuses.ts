@@ -31,6 +31,12 @@ export const REAGENT_PAGE_OWNED = [
 	'setup', 'loading', 'running', 'inspection'
 ] as const;
 
+/**
+ * Diluent runs the operator is actively driving (DILUENT-FILL-1). The schema has a
+ * real enum, PascalCase only — no legacy casings to carry.
+ */
+export const DILUENT_PAGE_OWNED = ['Setup', 'Loading', 'Running'] as const;
+
 // === Filling-active: OT-2 is physically executing the protocol ===
 
 /** Wax run statuses where the OT-2 is physically executing the protocol. */
@@ -58,6 +64,9 @@ export const REAGENT_NON_TERMINAL = [
 	'Setup', 'Loading', 'Running', 'Inspection',
 	'setup', 'loading', 'running', 'inspection'
 ] as const;
+
+/** Diluent run statuses that are not terminal (a diluent run ends at Running → Completed). */
+export const DILUENT_NON_TERMINAL = ['Setup', 'Loading', 'Running'] as const;
 
 // === Terminal sets — for wax AND reagent ===
 

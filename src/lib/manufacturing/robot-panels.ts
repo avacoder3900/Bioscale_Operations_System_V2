@@ -12,12 +12,17 @@
  * wax-filling / reagent-filling pages still exist as full-page fallbacks
  * (SETUP_PATH) — nothing was removed from them.
  */
-export type BoardProcess = 'wax' | 'reagent';
+/** The three OT-2 fill processes (diluent: DILUENT-FILL-1, 2026-11-13). */
+export type BoardProcess = 'wax' | 'reagent' | 'diluent';
+export const BOARD_PROCESSES: readonly BoardProcess[] = ['wax', 'reagent', 'diluent'];
+export const isBoardProcess = (v: unknown): v is BoardProcess => v === 'wax' || v === 'reagent' || v === 'diluent';
+export const processLabel = (p: BoardProcess): string => (p === 'wax' ? 'Wax' : p === 'reagent' ? 'Reagent' : 'Diluent');
 
 export const ROBOTS_PATH = '/manufacturing/cart-mfg/robots';
 export const SETUP_PATH: Record<BoardProcess, string> = {
 	wax: '/manufacturing/cart-mfg/wax-filling',
-	reagent: '/manufacturing/cart-mfg/reagent-filling'
+	reagent: '/manufacturing/cart-mfg/reagent-filling',
+	diluent: '/manufacturing/cart-mfg/diluent-filling'
 };
 
 export const panelAnchor = (robotId: string) => `#panel-${robotId}`;
@@ -34,7 +39,7 @@ export function parseOpen(raw: string | null | undefined): Record<string, BoardP
 		if (i <= 0) continue;
 		const robotId = part.slice(0, i);
 		const process = part.slice(i + 1);
-		if (process === 'wax' || process === 'reagent') out[robotId] = process;
+		if (isBoardProcess(process)) out[robotId] = process;
 	}
 	return out;
 }

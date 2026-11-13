@@ -20,7 +20,7 @@ const inventoryTransactionSchema = new Schema({
 	spuId: String,
 	manufacturingStep: {
 		type: String,
-		enum: ['cut_thermoseal', 'laser_cut', 'backing', 'wax_filling', 'reagent_filling',
+		enum: ['cut_thermoseal', 'laser_cut', 'backing', 'wax_filling', 'reagent_filling', 'diluent_filling',
 			'top_seal', 'storage', 'qa_qc', 'scrap']
 	},
 	manufacturingRunId: String,

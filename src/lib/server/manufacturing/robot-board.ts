@@ -10,10 +10,10 @@
  * the old opentrons/+page.server.ts (robot-cards.ts, whose wax queue nothing
  * rendered any more, went with them).
  */
-import { Equipment, WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { Equipment, WaxFillingRun, ReagentBatchRecord, DiluentFillRun } from '$lib/server/db';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import type { BoardProcess } from '$lib/manufacturing/robot-panels';
-import { WAX_PAGE_OWNED, REAGENT_PAGE_OWNED } from './run-statuses';
+import { WAX_PAGE_OWNED, REAGENT_PAGE_OWNED, DILUENT_PAGE_OWNED } from './run-statuses';
 
 export type { RobotHealth } from '$lib/server/opentrons/health';
 export type { BoardProcess } from '$lib/manufacturing/robot-panels';
@@ -37,6 +37,8 @@ export interface RobotBoardRow {
 	health: RobotHealth | null;
 	wax: BoardRun | null;
 	reagent: BoardRun | null;
+	/** Diluent runs (DILUENT-FILL-1): cartridgeCount carries the planned tube count. */
+	diluent: BoardRun | null;
 	/** The process this robot ran most recently (null = never ran). */
 	lastProcess: BoardProcess | null;
 }
@@ -50,7 +52,7 @@ export interface RobotBoard {
 const iso = (d: unknown): string | null => (d ? new Date(d as string | number | Date).toISOString() : null);
 
 /** robotId → createdAt (ms) of that robot's newest run in a collection. */
-async function newestRunByRobot(model: typeof WaxFillingRun | typeof ReagentBatchRecord): Promise<Map<string, number>> {
+async function newestRunByRobot(model: typeof WaxFillingRun | typeof ReagentBatchRecord | typeof DiluentFillRun): Promise<Map<string, number>> {
 	const rows = (await model
 		.aggregate([{ $sort: { createdAt: -1 } }, { $group: { _id: '$robot._id', at: { $first: '$createdAt' } } }])
 		.catch(() => [])) as { _id: unknown; at: unknown }[];
@@ -63,7 +65,7 @@ async function newestRunByRobot(model: typeof WaxFillingRun | typeof ReagentBatc
 }
 
 export async function loadRobotBoard(): Promise<RobotBoard> {
-	const [robots, waxRuns, reagentRuns, lastWaxAt, lastReagentAt] = await Promise.all([
+	const [robots, waxRuns, reagentRuns, diluentRuns, lastWaxAt, lastReagentAt, lastDiluentAt] = await Promise.all([
 		Equipment.find({ equipmentType: 'robot', isActive: true }, { _id: 1, name: 1, robotSide: 1 })
 			.sort({ name: 1 })
 			.lean(),
@@ -79,8 +81,15 @@ export async function loadRobotBoard(): Promise<RobotBoard> {
 		)
 			.lean()
 			.catch(() => [] as any[]),
+		DiluentFillRun.find(
+			{ status: { $in: [...DILUENT_PAGE_OWNED] } },
+			{ 'robot._id': 1, status: 1, runStartTime: 1, sources: 1 }
+		)
+			.lean()
+			.catch(() => [] as any[]),
 		newestRunByRobot(WaxFillingRun),
-		newestRunByRobot(ReagentBatchRecord)
+		newestRunByRobot(ReagentBatchRecord),
+		newestRunByRobot(DiluentFillRun)
 	]);
 
 	// Bridge-heartbeat health (ready / busy / hung / offline) per robot — the
@@ -93,8 +102,12 @@ export async function loadRobotBoard(): Promise<RobotBoard> {
 		const robotId = String(r._id);
 		const w = (waxRuns as any[]).find((x) => String(x.robot?._id) === robotId);
 		const g = (reagentRuns as any[]).find((x) => String(x.robot?._id) === robotId);
+		const d = (diluentRuns as any[]).find((x) => String(x.robot?._id) === robotId);
 		const wAt = lastWaxAt.get(robotId) ?? 0;
 		const gAt = lastReagentAt.get(robotId) ?? 0;
+		const dAt = lastDiluentAt.get(robotId) ?? 0;
+		const lastProcess: BoardProcess | null =
+			wAt === 0 && gAt === 0 && dAt === 0 ? null : dAt >= wAt && dAt >= gAt ? 'diluent' : wAt >= gAt ? 'wax' : 'reagent';
 		return {
 			robotId,
 			name: r.name ?? '',
@@ -120,7 +133,17 @@ export async function loadRobotBoard(): Promise<RobotBoard> {
 						assayTypeName: g.assayType?.name ?? null
 					}
 				: null,
-			lastProcess: wAt === 0 && gAt === 0 ? null : wAt >= gAt ? 'wax' : 'reagent'
+			diluent: d
+				? {
+						runId: String(d._id),
+						stage: String(d.status ?? ''),
+						startTime: iso(d.runStartTime),
+						cartridgeCount: ((d.sources ?? []) as any[]).reduce((n, s) => n + (Number(s.tubesPlanned) || 0), 0),
+						deckId: null,
+						assayTypeName: null
+					}
+				: null,
+			lastProcess
 		};
 	});
 

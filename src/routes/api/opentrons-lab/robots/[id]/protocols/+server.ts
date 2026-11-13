@@ -25,8 +25,9 @@ import { validUploadedResult, type UploadedProtocolResult } from '$lib/opentrons
 // The bridged upload + on-robot analysis round-trip can exceed the 30s default.
 export const config = { maxDuration: 120 };
 
-function deriveProtocolType(fileName: string): 'wax-filling' | 'reagent-filling' | 'other' {
+function deriveProtocolType(fileName: string): 'wax-filling' | 'reagent-filling' | 'diluent-filling' | 'other' {
 	const f = fileName.toLowerCase();
+	if (f.includes('diluent')) return 'diluent-filling';
 	if (f.includes('wax')) return 'wax-filling';
 	if (f.includes('reagent')) return 'reagent-filling';
 	return 'other';

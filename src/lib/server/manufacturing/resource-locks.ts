@@ -13,35 +13,38 @@
  *
  * All helpers return null on success or an error message string on conflict.
  */
-import { WaxFillingRun, ReagentBatchRecord } from '$lib/server/db';
+import { WaxFillingRun, ReagentBatchRecord, DiluentFillRun } from '$lib/server/db';
 import {
-	WAX_PAGE_OWNED, REAGENT_PAGE_OWNED,
+	WAX_PAGE_OWNED, REAGENT_PAGE_OWNED, DILUENT_PAGE_OWNED,
 	WAX_NON_TERMINAL, REAGENT_NON_TERMINAL
 } from './run-statuses';
 
 /** The run holding a robot: which collection, which run, and the message checkRobotConflict gives for it. */
 export interface RobotConflict {
-	kind: 'wax' | 'reagent';
+	kind: 'wax' | 'reagent' | 'diluent';
 	runId: string;
 	status: string;
 	message: string;
 }
 
-/** The wax OR reagent run holding this robot in a page-owned stage, if any (wax first). */
+/** The wax, reagent OR diluent run holding this robot in a page-owned stage, if any (wax first). */
 export async function findRobotConflict(robotId: string): Promise<RobotConflict | null> {
 	if (!robotId) return null;
-	const [wax, reagent] = await Promise.all([
+	const [wax, reagent, diluent] = await Promise.all([
 		WaxFillingRun.findOne({ 'robot._id': robotId, status: { $in: WAX_PAGE_OWNED } })
 			.select('_id status').lean() as any,
 		ReagentBatchRecord.findOne({ 'robot._id': robotId, status: { $in: REAGENT_PAGE_OWNED } })
-			.select('_id status').lean() as any
+			.select('_id status').lean() as any,
+		DiluentFillRun.findOne({ 'robot._id': robotId, status: { $in: DILUENT_PAGE_OWNED } })
+			.select('_id status').lean().catch(() => null) as any
 	]);
 	if (wax) return { kind: 'wax', runId: String(wax._id), status: wax.status, message: `Robot already has an active wax run (${wax.status}). Finish or cancel it first.` };
 	if (reagent) return { kind: 'reagent', runId: String(reagent._id), status: reagent.status, message: `Robot already has an active reagent run (${reagent.status}). Finish or cancel it first.` };
+	if (diluent) return { kind: 'diluent', runId: String(diluent._id), status: diluent.status, message: `Robot already has an active diluent run (${diluent.status}). Finish or cancel it first.` };
 	return null;
 }
 
-/** Is any wax OR reagent run on this robot in a page-owned stage? */
+/** Is any wax, reagent OR diluent run on this robot in a page-owned stage? */
 export async function checkRobotConflict(robotId: string): Promise<string | null> {
 	return (await findRobotConflict(robotId))?.message ?? null;
 }
