@@ -27728,3 +27728,13 @@ pass-through). 109/110 pass in the four diluent/lifecycle files — the one fail
 npm run check: 16 errors (baseline).
 Not done: S8 (settings sub-tab). Operator role still needs diluentFilling:read/write granted in the
 roles admin. Falcon geometry / tip-descent placeholders still to measure.
+
+Deployment (production) — 2026-11-13
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/BGfDCkubM9CD2mPtPTJX6cVeQmhf
+Source: master @ commit 9e138032 (fast-forward of feat/diluent-fill-prd)
+Retrieve this exact code: git checkout 9e138032
+Live: 22:16:41Z — /_app/version.json 1794607315287 → 1794608078378; GitHub status success.
+What this deployment is for: DILUENT-FILL-1 S5 — the Labware Position Check saves its offsets to BIMS
+  (robot_labware_offsets, source 'lpc') and a diluent run start sends them to the robot with the run;
+  the diluent wizard's Load-deck step shows which slots have a check on file. Needed before Alejandro's
+  position check on B14 (protocol 2a51b7a3, all three heat-frame racks loaded) and the first test run.
