@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+	UNTRACKED_LOT_ID,
 	diluentFloorUl,
 	diluentMinSourceUl,
 	diluentTubesPerTrip,
@@ -71,6 +72,10 @@ describe('run-time parameters from the record', () => {
 describe('setup validation', () => {
 	it('accepts a complete setup', () => {
 		expect(validateDiluentSetup(run)).toEqual([]);
+	});
+	it('accepts the untracked placeholder lot (2026-11-13: diluent stock is not a tracked lot yet)', () => {
+		const placeholder = { ...run, sources: [{ well: 'A1', reagentLotId: UNTRACKED_LOT_ID, reagentLotBarcode: 'bench diluent 11/13', tubesPlanned: 40, loadedMl: 6 }] };
+		expect(validateDiluentSetup(placeholder)).toEqual([]);
 	});
 	it('refuses a source that is short, missing its lot, or over 40 tubes', () => {
 		const short = { ...run, sources: [{ well: 'A1', reagentLotId: 'lot1', tubesPlanned: 40, loadedMl: 3 }] };

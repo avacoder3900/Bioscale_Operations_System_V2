@@ -27,7 +27,8 @@ import {
 	DILUENT_PIPETTES,
 	diluentTubesPerTrip,
 	validateDiluentSetup,
-	isDiluentPipette
+	isDiluentPipette,
+	UNTRACKED_LOT_ID
 } from '$lib/manufacturing/diluent-fill';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -89,12 +90,24 @@ export const actions: Actions = {
 		const diluentVolumeUl = num(form.get('volumeUl'), 0);
 		const tubesPerTrip = diluentTubesPerTrip(pipette, num(form.get('tubesPerTrip'), DILUENT_PIPETTES[pipette].maxTubesPerTrip), diluentVolumeUl || 1);
 
-		const lotIds = DILUENT_SOURCE_WELLS.map((_, i) => String(form.get(`src_${i + 1}_lot`) ?? '').trim()).filter(Boolean);
+		const lotIds = DILUENT_SOURCE_WELLS.map((_, i) => String(form.get(`src_${i + 1}_lot`) ?? '').trim()).filter((id) => id && id !== UNTRACKED_LOT_ID);
 		const lots = lotIds.length
 			? ((await ReagentLot.find({ _id: { $in: lotIds }, status: 'finalized' }).select('_id lotBarcode templateName').lean()) as any[])
 			: [];
 		const sources = DILUENT_SOURCE_WELLS.map((well, i) => {
 			const lotId = String(form.get(`src_${i + 1}_lot`) ?? '').trim();
+			if (lotId === UNTRACKED_LOT_ID) {
+				// Placeholder source (2026-11-13): the diluent stock is not a tracked lot yet.
+				const label = String(form.get(`src_${i + 1}_lot_label`) ?? '').trim().slice(0, 80);
+				return {
+					well,
+					reagentLotId: UNTRACKED_LOT_ID,
+					reagentLotBarcode: label || 'untracked diluent',
+					templateName: null,
+					tubesPlanned: Math.max(0, Math.floor(num(form.get(`src_${i + 1}_tubes`), 0))),
+					loadedMl: Math.max(0, Math.round(num(form.get(`src_${i + 1}_ml`), 0) * 100) / 100)
+				};
+			}
 			const lot = lots.find((l) => String(l._id) === lotId);
 			return {
 				well,

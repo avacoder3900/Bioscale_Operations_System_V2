@@ -23,7 +23,7 @@ integer parameter (190 default) while the method calls for 104.5 µL.
 | # | Topic | Decision |
 |---|---|---|
 | 1 | What a run leaves behind | A **Diluent Lot** record (lot number, tubes per source, volume per tube, source reagent lots, robot, operator, run id) **plus inventory**: 2 mL tubes consumed FIFO from the oldest accepted PT-CT-107 receiving lot (same pattern as the reagent fill), and the source ReagentLot's `remainingVolume` decremented by what was dispensed. |
-| 2 | Where the source diluent comes from | A **BIMS ReagentLot picked from a dropdown**, one per source position (A1 / A2 / A3). Finalized lots only. Gives lineage back to the buffer prep. |
+| 2 | Where the source diluent comes from | A **BIMS ReagentLot picked from a dropdown**, one per source position (A1 / A2 / A3). Finalized lots only. Gives lineage back to the buffer prep. **Amended 2026-11-13:** the diluent stock is not tracked as a lot yet, so the dropdown also offers **"Untracked diluent (placeholder)"** with a free-text label (recorded as the source barcode with id `untracked`). The intended end state is an import from the research system — QR-code the stock bottle before aliquoting into the source tubes, scan it here (S9). |
 | 3 | Protocol | **`protocols/Sample_Diluent_Fill_v2.py`** (this branch): Falcon 15 mL conicals in the Opentrons 15-tube rack (slot 10, A1–A3); **source N → heat-frame rack in slot 7 / 4 / 1**; 40 tubes per rack; pipette is a run-time choice (P1000 right, 8 tubes per aspirate · P300 left, 1 per aspirate); the loaded volume of each source is a run-time parameter and the run refuses to start if it is short; per-tube volume is a float, default **104.5 µL**. API level stays 2.19 so it analyzes on all three robots. |
 | 4 | Pipette | **P1000 on B14** (already mounted on the right, tip-length calibrated for Opentrons 1000 µL tips). The P300 stays selectable for B07/R04 but leaves ~5 mL unreachable in a 15 mL tube. |
 | 5 | Delivery | PRD first (this document), build after approval. |
@@ -140,6 +140,7 @@ a robot busy with wax/reagent is unavailable, and vice versa) →
 | S6 | Done: lot + inventory | Terminal status → per-rack tube counts from commands → `DiluentLot` + PT-CT-107 FIFO consumption (`lotRemaining/fifoLot`) + `ReagentLot.remainingVolume` decrement, all idempotent on re-entry. |
 | S7 | Robot availability | A diluent run blocks wax/reagent on that robot and vice versa (`robot-cards.ts`, both `services/*/robots.ts`). |
 | S8 | Settings sub-tab | `defaultVolumeUl`, `tubesPerRack` editable; Setup reads them. |
+| S9 | Diluent stock from the research system | The stock bottle gets a QR code when it is made (research system); Setup scans it per source instead of the dropdown / placeholder, and the lot's lineage resolves to that stock. Needs: what the research system exposes for a stock (id, name, made-on, volume) and whether BIMS mirrors it as a ReagentLot. Open with Alejandro. |
 
 ## Open questions (for Jacob)
 

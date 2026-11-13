@@ -30,7 +30,8 @@
 		diluentTubesTotal,
 		validateDiluentSetup,
 		ulToMlUp,
-		type DiluentPipette
+		type DiluentPipette,
+		UNTRACKED_LOT_ID
 	} from '$lib/manufacturing/diluent-fill';
 	import type { DiluentWizardData } from '$lib/server/manufacturing/diluent-wizard';
 
@@ -48,7 +49,7 @@
 	let pipette = $state<DiluentPipette>('p1000');
 	let volumeUl = $state(104.5);
 	let tubesPerTrip = $state(8);
-	let rows = $state(DILUENT_SOURCE_WELLS.map((well) => ({ well, lotId: '', tubes: 0, ml: 0 })));
+	let rows = $state(DILUENT_SOURCE_WELLS.map((well) => ({ well, lotId: '', lotLabel: '', tubes: 0, ml: 0 })));
 	let seededFor = $state<string | null>(null);
 	$effect(() => {
 		// Re-seed when the run changes (new run, reload), never while the operator is typing.
@@ -60,7 +61,13 @@
 		tubesPerTrip = seed?.tubesPerTrip ?? DILUENT_PIPETTES[pipette].maxTubesPerTrip;
 		rows = DILUENT_SOURCE_WELLS.map((well, i) => {
 			const s = seed?.sources.find((x) => x.well === well);
-			return { well, lotId: s?.reagentLotId ?? '', tubes: s?.tubesPlanned ?? (i === 0 ? 40 : 0), ml: s?.loadedMl ?? 0 };
+			return {
+				well,
+				lotId: s?.reagentLotId ?? '',
+				lotLabel: s?.reagentLotId === UNTRACKED_LOT_ID ? (s?.reagentLotBarcode ?? '') : '',
+				tubes: s?.tubesPlanned ?? (i === 0 ? 40 : 0),
+				ml: s?.loadedMl ?? 0
+			};
 		});
 	});
 	// A pipette change resets tubes-per-trip to that pipette's maximum.
@@ -135,6 +142,7 @@
 			const fields: Record<string, string> = { runId: runId ?? '', pipette, volumeUl: String(volumeUl), tubesPerTrip: String(tubesPerTrip) };
 			rows.forEach((r, i) => {
 				fields[`src_${i + 1}_lot`] = r.lotId;
+				fields[`src_${i + 1}_lot_label`] = r.lotId === UNTRACKED_LOT_ID ? r.lotLabel.trim() : '';
 				fields[`src_${i + 1}_tubes`] = String(r.tubes);
 				fields[`src_${i + 1}_ml`] = String(r.ml);
 			});
@@ -182,6 +190,7 @@
 
 	const fmtTime = (iso: string | null) => (iso ? new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '—');
 	const lotLabel = (id: string) => {
+		if (id === UNTRACKED_LOT_ID) return 'untracked diluent';
 		const l = data.reagentLots.find((x) => x.id === id);
 		return l ? `${l.lotBarcode}${l.templateName ? ` — ${l.templateName}` : ''}` : id;
 	};
@@ -275,10 +284,14 @@
 								<td class="py-2 pr-2">
 									<select class={input} bind:value={row.lotId} disabled={submitting}>
 										<option value="">— {Number(row.tubes) > 0 ? 'pick a lot' : 'unused'} —</option>
+										<option value={UNTRACKED_LOT_ID}>Untracked diluent (placeholder)</option>
 										{#each data.reagentLots as lot (lot.id)}
 											<option value={lot.id}>{lot.lotBarcode}{lot.templateName ? ` — ${lot.templateName}` : ''}{lot.volume ? ` (${lot.volume} ${lot.volumeUnit ?? ''})` : ''}</option>
 										{/each}
 									</select>
+									{#if row.lotId === UNTRACKED_LOT_ID}
+										<input class="{input} mt-1" type="text" maxlength="80" placeholder="what's in the tube, e.g. bench diluent 11/13" bind:value={row.lotLabel} disabled={submitting} />
+									{/if}
 								</td>
 								<td class="py-2 pr-2"><input class={input} type="number" min="0" max={DILUENT_TUBES_PER_RACK} step="1" bind:value={row.tubes} disabled={submitting} /></td>
 								<td class="py-2 pr-2"><input class="{input} {short ? 'border-red-500/70' : ''}" type="number" min="0" max="15" step="0.1" bind:value={row.ml} disabled={submitting} /></td>
@@ -291,6 +304,9 @@
 			<p class="text-xs text-[var(--color-tron-text-secondary)]">
 				{totalTubes} tube{totalTubes === 1 ? '' : 's'} at {volumeUl} µL · {DILUENT_PIPETTES[pipette].label}, {effectiveTubesPerTrip} tube{effectiveTubesPerTrip === 1 ? '' : 's'} per aspirate.
 				"Needs ≥" is tubes × volume plus what the tip cannot reach at the bottom — the robot refuses a shorter source.
+				<strong>Loaded (mL)</strong> is what is actually in the 15 mL tube (read the graduation): the robot starts its tip just under
+				that liquid level and follows it down, so overstating it aspirates air — err low, but stay above "Needs ≥".
+				"Untracked diluent" is a placeholder until the stock is a tracked lot; the label you type is recorded on the run and the lot.
 			</p>
 			{#if setupProblems.length && (totalTubes > 0 || rows.some((r) => r.lotId || r.ml))}
 				<ul class="list-inside list-disc text-xs text-amber-300">

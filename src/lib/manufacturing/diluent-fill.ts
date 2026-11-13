@@ -67,6 +67,15 @@ export const DILUENT_PIPETTES: Record<DiluentPipette, DiluentPipetteSpec> = {
 
 export const isDiluentPipette = (v: unknown): v is DiluentPipette => v === 'p1000' || v === 'p300';
 
+/**
+ * Placeholder source lot (2026-11-13): the sample diluent stock is not yet a
+ * tracked BIMS ReagentLot, so Setup may pick "untracked" and type what is in
+ * the tube. The run and the DiluentLot record that label as the barcode with
+ * this id. Replace with the research-system import (QR-coded stock) later.
+ */
+export const UNTRACKED_LOT_ID = 'untracked';
+export const isUntrackedLot = (id: unknown): boolean => id === UNTRACKED_LOT_ID;
+
 // ── 15 mL Falcon conical geometry (PLACEHOLDERS until measured; same values as the .py) ──
 const TUBE_DEPTH_MM = 117.5;
 const CONE_HEIGHT_MM = 21.5;

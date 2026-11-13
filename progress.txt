@@ -27738,3 +27738,15 @@ What this deployment is for: DILUENT-FILL-1 S5 — the Labware Position Check sa
   (robot_labware_offsets, source 'lpc') and a diluent run start sends them to the robot with the run;
   the diluent wizard's Load-deck step shows which slots have a check on file. Needed before Alejandro's
   position check on B14 (protocol 2a51b7a3, all three heat-frame racks loaded) and the first test run.
+
+2026-11-13 — feat/diluent-fill-prd (cont.) — placeholder source lot + "Loaded (mL)" wording
+Why: the sample diluent stock is not a tracked BIMS ReagentLot yet (the dropdown only lists finalized
+reagent prep lots), so the first test runs had nothing valid to pick. Alejandro's intended end state is
+an import from the research system (QR-code the stock bottle before aliquoting into the 15 mL source
+tubes) — PRD story S9, not built.
+What: diluent-fill.ts UNTRACKED_LOT_ID='untracked' / isUntrackedLot; Setup dropdown gets "Untracked
+diluent (placeholder)" + a free-text label (≤80 chars) posted as src_N_lot_label; saveSetup records
+reagentLotId 'untracked' + the label as reagentLotBarcode (default 'untracked diluent'); the Load-deck
+line and the DiluentLot sources show the label; finalize is unchanged (it never looks the lot up).
+Setup footnote now explains "Loaded (mL)" (what is actually in the tube; the robot follows that level
+down, so err low but above Needs ≥) and the placeholder. Test +1 (validate accepts the sentinel).
