@@ -67,6 +67,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 	const startedAt = isoOrBlank(session.startedAt);
 	const completedAt = isoOrBlank(session.completedAt ?? session.createdAt);
 
+	// Which physical magnetometer took the sweep. Blank = not recorded.
+	const magBarcode: string = session.magnetometer?.barcode ?? '';
+	const magLabel: string = session.magnetometer?.label ?? '';
+	const magSource: string = session.magnetometer?.source ?? '';
+
 	const mag = session.magResults ?? {};
 	const wells: Record<string, Record<string, any>> = mag.wells ?? {};
 	const wellNumbers: number[] =
@@ -109,7 +114,11 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 			'Slope Span Y End',
 			'Points',
 			'Y Min',
-			'Y Max'
+			'Y Max',
+			// Appended last so existing column positions do not move.
+			'Magnetometer',
+			'Magnetometer Barcode',
+			'Magnetometer Source'
 		]
 	];
 
@@ -154,7 +163,10 @@ export const GET: RequestHandler = async ({ url, locals }) => {
 				isSlope && Array.isArray(p.slopeSpanY) ? num(p.slopeSpanY[1]) : '',
 				num(p.points),
 				num(p.yMin),
-				num(p.yMax)
+				num(p.yMax),
+				magLabel,
+				magBarcode,
+				magSource
 			]);
 		}
 	}

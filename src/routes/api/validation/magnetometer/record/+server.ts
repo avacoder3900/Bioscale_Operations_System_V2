@@ -10,7 +10,7 @@ export const config = {
 /**
  * Server-side magnetometer capture (remote record).
  *
- * NOT the firmware stage sweep (serial cmd 77) -- that is a USB-only bench
+ * NOT the firmware stage sweep (serial cmd 79) -- that is a USB-only bench
  * diagnostic with no cloud function. This reads the existing magnet test's
  * `magnet_validation` variable and records it.
  *
@@ -34,6 +34,8 @@ async function handleRecord(params: {
 	udis?: string[];
 	spuId?: string;
 	all?: boolean;
+	/** Which magnetometer the bench says took these tests; optional, never required. */
+	magnetometer?: unknown;
 }) {
 	await connectDB();
 
@@ -82,7 +84,8 @@ async function handleRecord(params: {
 			spuUdi: spu.udi,
 			particleDeviceId,
 			actor,
-			source: 'auto-record'
+			source: 'auto-record',
+			magnetometer: params.magnetometer ? { value: params.magnetometer, source: 'bench' } : null
 		});
 
 		if (result.status === 'new_result' && result.session) {
@@ -149,7 +152,9 @@ export const POST: RequestHandler = async ({ request }) => {
 		udi: body.udi,
 		udis: body.udis,
 		spuId: body.spuId,
-		all: body.all === true
+		all: body.all === true,
+		// magnetometer | instrument | magBarcode — see $lib/server/magnetometer-identity.
+		magnetometer: body.magnetometer ?? body.instrument ?? body.magBarcode ?? undefined
 	});
 
 	return json(result, result.ok ? undefined : { status: 404 });
@@ -164,7 +169,9 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const result = await handleRecord({
 		udi: url.searchParams.get('udi') ?? undefined,
 		spuId: url.searchParams.get('spuId') ?? undefined,
-		all: url.searchParams.get('all') === 'true'
+		all: url.searchParams.get('all') === 'true',
+		magnetometer:
+			url.searchParams.get('magnetometer') ?? url.searchParams.get('instrument') ?? url.searchParams.get('magBarcode') ?? undefined
 	});
 
 	return json(result, result.ok ? undefined : { status: 404 });

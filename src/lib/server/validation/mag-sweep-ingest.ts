@@ -33,6 +33,9 @@ import {
 	MAX_ASSEMBLED_BYTES,
 	type ChunkEnvelope
 } from '$lib/server/validation/mag-sweep-chunks';
+import { buildMagnetometerRecord } from '$lib/server/magnetometer-identity';
+import { fillMagnetometerFromDeviceLogs, reconcileMagnetometers } from '$lib/server/magnetometer-identity-fill';
+
 /** How long a partially delivered sweep is kept before Mongo reaps it. */
 const SWEEP_BUFFER_TTL_MS = 24 * 60 * 60 * 1000;
 
@@ -210,6 +213,11 @@ async function assembleSweep(buffer: any): Promise<AssembleResult> {
 			}
 		},
 		magResults,
+		// Header `mag=` (firmware v110+). Null when the device did not say, in
+		// which case the device-log fallback below tries to fill it.
+		magnetometer: decoded.magnetometer
+			? buildMagnetometerRecord(decoded.magnetometer, 'device', 'particle-webhook')
+			: null,
 		// A sweep is a characterisation run, not a pass/fail gate.
 		overallPassed: undefined,
 		failureReasons: [],
@@ -238,11 +246,19 @@ async function assembleSweep(buffer: any): Promise<AssembleResult> {
 			fields: decoded.fields,
 			scale: decoded.scale,
 			rowsPlaceholder: decoded.placeholderRows,
-			fieldSpecMismatch: decoded.fieldSpecMismatch
+			fieldSpecMismatch: decoded.fieldSpecMismatch,
+			magnetometer: decoded.magnetometer ? { barcode: decoded.magnetometer.barcode, source: 'device' } : null
 		},
 		changedAt: new Date(),
 		changedBy: 'particle-webhook'
 	});
+
+	// Best-effort; neither call can throw. The sweep is already stored.
+	if (!decoded.magnetometer) await fillMagnetometerFromDeviceLogs(session._id);
+	// Other recent sweeps whose device log has since arrived (logs are also
+	// written to Mongo from outside BIMS). Sweeps only, bounded, so this stays
+	// cheap on a webhook request.
+	await reconcileMagnetometers({ days: 30, types: ['mag_sweep'], limit: 40 });
 
 	// Chunks are redundant once the session holds every row verbatim.
 	await SweepUpload.updateOne({ _id: buffer._id }, {

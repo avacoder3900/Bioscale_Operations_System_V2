@@ -20,6 +20,7 @@ import {
 	MAX_ROWS,
 	type SweepEnd
 } from './mag-sweep.js';
+import { pickMagnetometer, type MagnetometerId } from '../magnetometer-identity.js';
 
 /** Hard ceilings. A sweep is ~980 rows; these exist to bound abuse, not use. */
 export const MAX_CHUNKS = 2000;
@@ -369,6 +370,11 @@ export type DecodedSweep = {
 	errors: string[];
 	/** An SPU identifier the device put in its header, if any. */
 	spuToken: string | null;
+	/**
+	 * The magnetometer the device named (header `mag=` etc., or a top-level JSON
+	 * field), canonicalised. Null when absent or malformed — never an error.
+	 */
+	magnetometer: MagnetometerId | null;
 	/** False when the payload carried no fields= header and the spec was assumed. */
 	fieldsDeclared: boolean;
 	/**
@@ -380,6 +386,11 @@ export type DecodedSweep = {
 };
 
 const KV_NUMERIC = /^-?\d+(\.\d+)?$/;
+/**
+ * Header keys whose value is an identifier, kept as the string the device sent
+ * even if it happens to look like a number (firmware v110: `mag=MAG-001-<hex>`).
+ */
+const KV_STRING_KEYS = new Set(['mag', 'magnetometer', 'instrument', 'jig']);
 
 function parseTokens(tokens: string[]): Record<string, unknown> {
 	const out: Record<string, unknown> = {};
@@ -388,7 +399,7 @@ function parseTokens(tokens: string[]): Record<string, unknown> {
 		if (eq <= 0) continue;
 		const k = tok.slice(0, eq).trim();
 		const v = tok.slice(eq + 1).trim();
-		out[k] = KV_NUMERIC.test(v) ? Number(v) : v;
+		out[k] = KV_NUMERIC.test(v) && !KV_STRING_KEYS.has(k.toLowerCase()) ? Number(v) : v;
 	}
 	return out;
 }
@@ -415,7 +426,8 @@ function finish(
 	end: SweepEnd,
 	errors: string[],
 	spuToken: string | null,
-	fieldsDeclared: boolean
+	fieldsDeclared: boolean,
+	magnetometer: MagnetometerId | null = null
 ): DecodedSweep {
 	if (rows.length === 0) throw new Error('payload contained no data rows');
 	if (rows.length > MAX_ROWS) throw new Error(`payload has ${rows.length} rows, exceeding the ${MAX_ROWS} limit`);
@@ -465,6 +477,7 @@ function finish(
 		placeholderRows: projected.placeholders,
 		errors,
 		spuToken,
+		magnetometer,
 		fieldsDeclared,
 		// Reported, never corrected. The stored fields[] stays exactly what the
 		// device said its columns were.
@@ -499,7 +512,7 @@ function decodeJsonPayload(text: string): DecodedSweep {
 	const meta = doc?.meta && typeof doc.meta === 'object' ? doc.meta : null;
 	const spuToken = doc?.spu ?? doc?.udi ?? meta?.spu ?? meta?.udi ?? null;
 
-	return finish(fields, rows, meta, doc?.end ?? null, [], spuToken ? String(spuToken) : null, fieldsDeclared);
+	return finish(fields, rows, meta, doc?.end ?? null, [], spuToken ? String(spuToken) : null, fieldsDeclared, pickMagnetometer(doc, meta));
 }
 
 function decodeTextPayload(text: string): DecodedSweep {
@@ -551,5 +564,5 @@ function decodeTextPayload(text: string): DecodedSweep {
 	// them is the same call cleanRawRows() makes on the agent path.
 	const kept = rows.filter((r) => r.length >= fields.length).map((r) => r.slice(0, fields.length));
 
-	return finish(fields, kept, meta, end, errors, spuToken ? String(spuToken) : null, declared !== null);
+	return finish(fields, kept, meta, end, errors, spuToken ? String(spuToken) : null, declared !== null, pickMagnetometer(null, meta));
 }

@@ -14,6 +14,8 @@ import { appendSpuJournal } from '$lib/server/spu-journal';
 import { autoEnterValidating } from '$lib/server/spu-auto-validate';
 import { parseSweepText } from './parse';
 import { analyzeSweep } from './analyze';
+import { pickMagnetometer, buildMagnetometerRecord } from '$lib/server/magnetometer-identity';
+import { fillMagnetometerFromDeviceLogs, reconcileMagnetometers } from '$lib/server/magnetometer-identity-fill';
 
 export async function ingestSweepText(particleDeviceId: string, chunkId: string, text: string, receivedAt: Date): Promise<{ sessionId: string } | { error: string }> {
 	const parsed = parseSweepText(text);
@@ -53,6 +55,10 @@ export async function ingestSweepText(particleDeviceId: string, chunkId: string,
 	const idNum = Number(parsed.meta.id ?? chunkId);
 	const testRanAt = Number.isFinite(idNum) && idNum > 1_600_000_000 ? new Date(idNum * 1000) : null;
 
+	// Header `mag=` (firmware v110+). A missing or malformed value is not an
+	// error: the sweep is stored without it and the device log is tried below.
+	const picked = pickMagnetometer(null, parsed.meta);
+
 	const sessionId = generateId();
 	await ValidationSession.create({
 		_id: sessionId,
@@ -66,6 +72,7 @@ export async function ingestSweepText(particleDeviceId: string, chunkId: string,
 		testRanAt,
 		rawData: { ...parsed, sourceFile: `cloud:${chunkId}` },
 		magResults: analysis,
+		magnetometer: picked ? buildMagnetometerRecord(picked, 'device', 'particle-webhook', { recordedAt: receivedAt }) : null,
 		overallPassed,
 		failureReasons,
 		criteriaUsed: judged ? { minGradient, minForceIndex } : null,
@@ -123,5 +130,11 @@ export async function ingestSweepText(particleDeviceId: string, chunkId: string,
 			{ source: 'validation', refKind: 'validation_session', refId: sessionId, refLabel: 'Magnet sweep' }
 		);
 	}
+	// Best-effort; neither call can throw. The sweep is already stored.
+	if (!picked) await fillMagnetometerFromDeviceLogs(sessionId);
+	// Other recent sweeps whose device log has since arrived (logs are also
+	// written to Mongo from outside BIMS). Sweeps only, bounded, so this stays
+	// cheap on a webhook request.
+	await reconcileMagnetometers({ days: 30, types: ['mag_sweep'], limit: 40 });
 	return { sessionId };
 }

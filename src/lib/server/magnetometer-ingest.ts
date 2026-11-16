@@ -14,7 +14,7 @@
  *
  * Note this reads the `magnet_validation` cloud variable, i.e. the output of the
  * EXISTING magnet test. It has nothing to do with the firmware stage sweep
- * (serial cmd 77), which is a bench diagnostic and is deliberately not reachable
+ * (serial cmd 79), which is a bench diagnostic and is deliberately not reachable
  * from BIMS. An earlier name for the record route implied otherwise.
  */
 import crypto from 'crypto';
@@ -23,6 +23,13 @@ import { getVariable, getDevice } from '$lib/server/particle';
 import { extractMagTestTime } from '$lib/server/magnetometer-time';
 import { withFieldMagnitudes, summarizeField, type MagWellMagnitudes } from '$lib/server/magnetometer-field';
 import { autoEnterValidating } from '$lib/server/spu-auto-validate';
+import {
+	buildMagnetometerRecord,
+	extractMagnetometerFromMagPayload,
+	normaliseMagnetometerBarcode,
+	type MagnetometerSource
+} from '$lib/server/magnetometer-identity';
+import { fillMagnetometerFromDeviceLogs } from '$lib/server/magnetometer-identity-fill';
 
 export interface IngestActor {
 	_id: string;
@@ -42,6 +49,12 @@ export interface IngestOptions {
 	 *  operator-captured ones. Must match validationSessionSchema.source's enum
 	 *  or Mongoose rejects the write. */
 	source: 'auto-poll' | 'auto-record';
+	/**
+	 * Which magnetometer the caller says took the test (any spelling of the
+	 * barcode; validated here, ignored when malformed). When absent, the
+	 * payload's trailing `mag=` line is used, then the device log.
+	 */
+	magnetometer?: { value: unknown; source: MagnetometerSource } | null;
 }
 
 export interface IngestResult {
@@ -89,6 +102,7 @@ export async function resolveLastActiveUser(): Promise<IngestActor | null> {
  */
 export async function ingestMagnetValidation(opts: IngestOptions): Promise<IngestResult> {
 	const { spuId, spuUdi, particleDeviceId, lastHash, seedOnly, actor, source } = opts;
+	const callerMag = opts.magnetometer ? normaliseMagnetometerBarcode(opts.magnetometer.value) : null;
 
 	await connectDB();
 
@@ -174,6 +188,16 @@ export async function ingestMagnetValidation(opts: IngestOptions): Promise<Inges
 		// would drop it on the floor without complaining.
 		const fieldSummary = summarizeField(parsed);
 
+		// Caller-supplied identity first, then the trailing `mag=` line the
+		// device writes after the well rows (firmware v110+). Neither present is normal today — the device-log
+		// fallback after the write covers it.
+		const headerMag = callerMag ? null : extractMagnetometerFromMagPayload(rawResult);
+		const magnetometer = callerMag
+			? buildMagnetometerRecord(callerMag, opts.magnetometer!.source, actor?._id ?? null, { recordedAt: pulledAt })
+			: headerMag
+				? buildMagnetometerRecord(headerMag, 'device', actor?._id ?? null, { recordedAt: pulledAt })
+				: null;
+
 		const sessionId = generateId();
 		await ValidationSession.create({
 			_id: sessionId,
@@ -192,8 +216,12 @@ export async function ingestMagnetValidation(opts: IngestOptions): Promise<Inges
 			overallPassed,
 			failureReasons,
 			criteriaUsed: { minZ, maxZ },
-			source
+			source,
+			magnetometer
 		});
+
+		// Best-effort and cannot throw; the session is already stored.
+		if (!magnetometer) await fillMagnetometerFromDeviceLogs(sessionId);
 
 		// Roll the result up onto the SPU DHR. Both outcomes are recorded;
 		// qcStatus is only promoted on a pass (same rules as the manual read).

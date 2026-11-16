@@ -27817,3 +27817,88 @@ What this deployment is for: cart-mfg dashboard after Alejandro's physical-count
   Flow, Seal tile dropped, Reagent Fill = in progress, Stored = reagent-filled not yet run.
   Data the same day: 3 'sealed' test rows hidden via checkout (pqIep3Nqd9WR6ATuz9ikX); stray cart
   4c3fbb44… pulled from the reconciliation checkout (now 30) and set Loose for a new bucket.
+
+================================================================================
+2026-11-16 — feat/magnetometer-identity — record WHICH magnetometer took each magnetometer reading
+================================================================================
+Why: there are two magnetometers (MAG-001-e00fce685d49ee5dc2a29545 and MAG-002-<24 hex>) and nothing
+stored which one took a sweep or a five-point test, so their readings could not be told apart. The full
+barcode is the identity (a 2023 unit was also called MAG-001 with a different suffix); the short label
+is for display.
+What:
+  - Schema: validation_sessions.magnetometer { barcode, label, source, recordedAt, recordedBy,
+    scannedAt } (_id: false, optional, default null). source = device | bench | device-log | manual |
+    inferred. No new index.
+  - src/lib/server/magnetometer-identity.ts (pure): normalise/validate MAG-ddd[-hex] (case-insensitive),
+    pick it out of a body/meta, read the five-point file's trailing mag= line, extract timed barcode
+    scans from device-log lines, choose the scan that applies to a reading.
+  - src/lib/server/magnetometer-identity-fill.ts (DB): fillMagnetometerFromDeviceLogs (promote a mag=
+    value already sitting in the stored rawData, else match the device-log scan), reconcileMagnetometers
+    (retry recent sessions with no identity), setMagnetometerManually (audited). None of them can throw
+    into an ingest.
+  - Ingest, all tolerant — a missing or malformed identity never fails or rejects a reading:
+      bench sweep   POST /api/agent/validation/mag-sweep
+      device sweep  sweep/parse.ts + sweep/ingest.ts (binary chunk path) and
+                    validation/mag-sweep-chunks.ts + mag-sweep-ingest.ts (text/alias path)
+      five-point    magnetometer-ingest.ts (poll + record routes), run/+page.server.ts,
+                    [sessionId] readResults
+  - Device-log fallback: runs when a sweep / mag test is stored, when a log arrives through BIMS
+    (POST /api/device/logs, Particle webhook event device-log), after each sweep store for other recent
+    sweeps, and on demand ("Look up in device log" on the sweep page). Timing: only scans the log
+    itself dates are used — the state-transition line's device clock (UTC), the validation-file epoch
+    written seconds after the scan, or a "Time:" line in the same boot. uploadedAt - maxMs + ms is NOT
+    used: one upload routinely holds several boots. Window: scan <= 90 min before a sweep, <= 10 min
+    before a five-point test (which needs testRanAt); otherwise the field stays empty.
+  - Manual: setMagnetometer action on /validation/magnetometer/sweep and
+    /validation/magnetometer/[sessionId] (spu:write, AuditLog UPDATE on validation_sessions; empty
+    barcode clears). validation_sessions is not under the sacred/immutable middleware.
+  - Shown: label on the sweep picker chips and the sweep header (full barcode + source), on the mag
+    session page; sweep export Summary sheet gains three trailing columns (Magnetometer, Magnetometer
+    Barcode, Magnetometer Source).
+  - scripts/backfill-sweep-magnetometer.ts (report by default, --apply to write, --mag002=<barcode>):
+    classifies stored sweeps by the sensors' resting offsets, writes source 'inferred', never replaces
+    another source, promotes rawData.meta.mag as 'device' where present, refuses --apply if the expected
+    group B list is not reproduced or a device log disagrees.
+  - Comments that said the sweep is serial command 77 now say 79 in the files touched (77 is the
+    optical scan).
+
+WIRE CONTRACT (firmware v110 and the bench script are changed elsewhere):
+  Sweep, device:  SWPBEGIN header token  mag=MAG-001-e00fce685d49ee5dc2a29545  (last token on the
+                  serial fmt=2 line; after pitch / before format in the uploaded fmt=3 /sweep file;
+                  omitted when unknown). Kept verbatim as a string at rawData.meta.mag and promoted to
+                  magnetometer with source 'device'. Also accepted as header keys: magnetometer,
+                  instrument, jig.
+  Sweep, bench:   POST /api/agent/validation/mag-sweep — top-level body field magnetometer |
+                  instrument | magBarcode (source 'bench'), or meta.mag | meta.magnetometer |
+                  meta.instrument | meta.jig (source 'device'). Body wins. The response now returns
+                  data.magnetometer.
+  Five-point:     one trailing line  mag=MAG-001-e00fce685d49ee5dc2a29545  after the five well rows of
+                  /validation/magnet-<epoch>.txt. FIRST full-line match of
+                  ^mag=(MAG-\d{3}-[0-9a-f]{24})\s*$ only, and only directly after a well row — the
+                  device's 1024-byte buffer is not cleared, so later lines and fragments are stale.
+                  POST /api/validation/magnetometer/record also takes magnetometer | instrument |
+                  magBarcode (source 'bench'); the poll route takes the same (source 'manual').
+  Shape: MAG-\d{3}(-[0-9a-f]+)? case-insensitive; stored as MAG-ddd-<lowercase hex>.
+
+Backfill report (read-only run against production, NOT applied): 64 mag_sweep sessions, 59 usable,
+5 skipped (3 partial, 0223 Sep 30 sensor 5A peak z 910, known-bad 0247 Sep 25). Group A / MAG-001: 36
+(projection -0.48 .. 0.08). Group B / MAG-002: 23 (0.73 .. 1.12). Unassigned: 0. The expected group B
+list (22 sweeps stored up to Nov 16 midday) is reproduced exactly; the 23rd is 0255, stored Nov 16
+18:03Z. Device-log cross-check: 6 sweeps have a barcode scan in a log within 90 min, 6 agree.
+MAG-002's full barcode is still unknown — run --apply with --mag002=<barcode> once it is read off the
+unit, otherwise group B is stored as the bare label MAG-002.
+
+Files: src/lib/server/magnetometer-identity.ts (new), magnetometer-identity-fill.ts (new),
+magnetometer-identity.test.ts (new), db/models/validation-session.ts, magnetometer-ingest.ts,
+sweep/parse.ts, sweep/ingest.ts, validation/mag-sweep-chunks.ts, validation/mag-sweep-ingest.ts;
+src/routes/api/agent/validation/mag-sweep/+server.ts, api/device/logs/+server.ts,
+api/particle/webhook/+server.ts, api/validation/magnetometer/poll/+server.ts and record/+server.ts,
+validation/magnetometer/run/+page.server.ts, [sessionId]/+page.server.ts + +page.svelte,
+sweep/+page.server.ts + +page.svelte + export/+server.ts; scripts/backfill-sweep-magnetometer.ts (new).
+Tests: src/lib/server/magnetometer-identity.test.ts, 38 tests (barcode normalising, body/meta picking,
+SWPBEGIN mag= on both parsers, five-point trailing line incl. stale-buffer cases, device-log scan
+extraction and timing, scan choice). npm run check: 13 errors (baseline 13), 451 warnings (baseline 451).
+Not done / open: nothing was written to production (no --apply, no write endpoint exercised), so the
+DB write paths (fill, reconcile, manual set) are type-checked and unit-tested at the pure layer only.
+device_logs and the device-log device_events appear to be written to Mongo from outside BIMS, so the
+"log arrived" hook in BIMS may rarely fire — the after-sweep reconcile and the page button cover that.

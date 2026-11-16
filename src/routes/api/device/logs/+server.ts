@@ -2,6 +2,7 @@ import { json } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, DeviceLog } from '$lib/server/db';
+import { reconcileMagnetometers } from '$lib/server/magnetometer-identity-fill';
 
 export const POST: RequestHandler = async ({ request }) => {
 	requireAgentApiKey(request);
@@ -25,6 +26,10 @@ export const POST: RequestHandler = async ({ request }) => {
 		firstLine: body.firstLine || '',
 		lastLine: body.lastLine || ''
 	});
+
+	// The log names the magnetometer the unit scanned; a sweep or mag test stored
+	// before this upload may be waiting on exactly that. Best-effort, cannot throw.
+	if (body.deviceId) await reconcileMagnetometers({ deviceId: String(body.deviceId) });
 
 	return json({ success: true, logId: deviceLog._id });
 };

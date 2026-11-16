@@ -1,6 +1,8 @@
-import { requirePermission } from '$lib/server/permissions';
+import { fail } from '@sveltejs/kit';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
 import { connectDB, ValidationSession } from '$lib/server/db';
-import type { PageServerLoad } from './$types';
+import { fillMagnetometerFromDeviceLogs, setMagnetometerManually } from '$lib/server/magnetometer-identity-fill';
+import type { Actions, PageServerLoad } from './$types';
 
 /**
  * Sweep viewer. Sweeps land as ValidationSession documents with a top-level
@@ -150,6 +152,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			startedAt: 1,
 			completedAt: 1,
 			createdAt: 1,
+			'magnetometer.barcode': 1,
+			'magnetometer.label': 1,
+			'magnetometer.source': 1,
 			'magResults.wellNumbers': 1,
 			'magResults.rowsIngested': 1
 		}
@@ -161,6 +166,8 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const empty = {
 		sessions: [] as any[],
 		selected: null,
+		canWrite: hasPermission(locals.user, 'spu:write'),
+		knownMagnetometers: [] as string[],
 		magResults: null,
 		series: {} as SeriesByWell
 	};
@@ -193,6 +200,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			startedAt: 1,
 			completedAt: 1,
 			magResults: 1,
+			magnetometer: 1,
 			'rawData.format': 1,
 			'rawData.fields': 1,
 			'rawData.rows': 1
@@ -205,6 +213,11 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	const mag = full.magResults ?? null;
 
+	// Barcodes already seen on recent sweeps, offered as suggestions in the form.
+	const knownMagnetometers = [
+		...new Set(sessions.map((s: any) => s.magnetometer?.barcode).filter((b: unknown) => typeof b === 'string' && b))
+	].sort() as string[];
+
 	// rawData.rows is dropped from the payload on purpose — up to 20000 raw rows
 	// would dwarf the derived series the page actually plots.
 	return JSON.parse(JSON.stringify({
@@ -215,8 +228,19 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			spuUdi: full.spuUdi ?? null,
 			status: full.status ?? null,
 			startedAt: full.startedAt ?? null,
-			completedAt: full.completedAt ?? null
+			completedAt: full.completedAt ?? null,
+			// Which physical magnetometer took the sweep; null = not recorded.
+			magnetometer: full.magnetometer?.barcode
+				? {
+						barcode: full.magnetometer.barcode,
+						label: full.magnetometer.label ?? full.magnetometer.barcode,
+						source: full.magnetometer.source ?? null,
+						recordedAt: full.magnetometer.recordedAt ?? null
+					}
+				: null
 		},
+		canWrite: hasPermission(locals.user, 'spu:write'),
+		knownMagnetometers,
 		magResults: mag
 			? {
 					wells: flagUnreliablePeaks(mag.wells, deriveCoverage(mag).coverageComplete),
@@ -238,6 +262,49 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			: null,
 		series: buildSeries(full.rawData, mag?.channels ?? [])
 	}));
+};
+
+export const actions: Actions = {
+	/** Set, correct or (with an empty barcode) clear the magnetometer on a sweep. */
+	setMagnetometer: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const sessionId = data.get('sessionId')?.toString() ?? '';
+		const barcode = data.get('barcode')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'sessionId is required' });
+
+		const r = await setMagnetometerManually(
+			sessionId,
+			barcode,
+			{ _id: locals.user!._id, username: locals.user!.username },
+			['mag_sweep']
+		);
+		if (!r.ok) return fail(r.status, { error: r.error });
+		return { success: true, magnetometer: r.magnetometer };
+	},
+
+	/**
+	 * Look for the barcode scan in the device's uploaded logs. Device logs are
+	 * also written to Mongo from outside BIMS, so a log can arrive without any
+	 * BIMS code running; this is the way to pick one up on demand.
+	 */
+	findMagnetometer: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const sessionId = data.get('sessionId')?.toString() ?? '';
+		if (!sessionId) return fail(400, { error: 'sessionId is required' });
+
+		const hit = (await ValidationSession.findOne({ _id: sessionId, type: 'mag_sweep' }, { _id: 1 }).lean()) as any;
+		if (!hit) return fail(404, { error: 'Session not found' });
+
+		const r = await fillMagnetometerFromDeviceLogs(sessionId);
+		if (!r.filled) return fail(400, { error: `Nothing found in the reading or the device log: ${r.reason}.` });
+		return { success: true, magnetometer: { barcode: r.barcode, label: r.label, source: r.source } };
+	}
 };
 
 /**

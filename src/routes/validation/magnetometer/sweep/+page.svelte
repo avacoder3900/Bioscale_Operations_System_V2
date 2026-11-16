@@ -1,11 +1,20 @@
 <script lang="ts">
+	import { enhance } from '$app/forms';
 	import SweepFieldChart from './SweepFieldChart.svelte';
+
+	/** Which physical magnetometer took a sweep. Absent = not recorded. */
+	interface Magnetometer {
+		barcode: string;
+		label?: string | null;
+		source?: string | null;
+	}
 
 	interface SessionListItem {
 		_id: string;
 		spuUdi?: string | null;
 		startedAt?: string | null;
 		status?: string | null;
+		magnetometer?: Magnetometer | null;
 	}
 
 	interface SessionMeta {
@@ -14,6 +23,7 @@
 		spuUdi?: string | null;
 		startedAt?: string | null;
 		completedAt?: string | null;
+		magnetometer?: Magnetometer | null;
 	}
 
 	interface Profile {
@@ -56,12 +66,28 @@
 		data: {
 			sessions?: SessionListItem[] | null;
 			selected?: SessionMeta | null;
+			canWrite?: boolean;
+			knownMagnetometers?: string[] | null;
 			magResults?: MagResults | null;
 			series?: Record<string, Record<string, Point[]>> | null;
 		};
+		form?: { error?: string; success?: boolean } | null;
 	}
 
-	let { data }: Props = $props();
+	let { data, form }: Props = $props();
+
+	// How the identity is known, in words an operator would use.
+	const SOURCE_LABELS: Record<string, string> = {
+		device: 'sent by the device',
+		bench: 'sent by the bench computer',
+		'device-log': 'from the device log',
+		manual: 'set by hand',
+		inferred: 'inferred from the data'
+	};
+
+	function sourceLabel(source: string | null | undefined): string {
+		return source ? (SOURCE_LABELS[source] ?? source) : '';
+	}
 
 	const sessions = $derived(data.sessions ?? []);
 	const session = $derived(data.selected ?? null);
@@ -199,6 +225,11 @@
 						<span class="block text-slate-400 dark:text-slate-400">
 							{fmtDate(s.startedAt)}{s.status ? ' · ' + s.status : ''}
 						</span>
+						{#if s.magnetometer?.barcode}
+							<span class="block text-slate-400 dark:text-slate-400" title={s.magnetometer.barcode}>
+								{s.magnetometer.label ?? s.magnetometer.barcode}
+							</span>
+						{/if}
 					</a>
 				{/each}
 			</div>
@@ -231,6 +262,74 @@
 					</div>
 				{/each}
 			</dl>
+
+			<!-- Which physical magnetometer took this sweep -->
+			<div class="mt-4 border-t border-slate-700/60 pt-3 text-sm">
+				<span class="text-xs text-slate-400 dark:text-slate-400">Magnetometer</span>
+				{#if session.magnetometer?.barcode}
+					<span class="ml-2 font-semibold text-slate-100 dark:text-slate-100">
+						{session.magnetometer.label ?? session.magnetometer.barcode}
+					</span>
+					<span class="ml-2 font-mono text-xs text-slate-400 dark:text-slate-400">
+						{session.magnetometer.barcode}
+					</span>
+					{#if session.magnetometer.source}
+						<span class="ml-2 text-xs text-slate-400 dark:text-slate-400">
+							· {sourceLabel(session.magnetometer.source)}
+						</span>
+					{/if}
+				{:else}
+					<span class="ml-2 text-slate-400 dark:text-slate-400">not recorded</span>
+				{/if}
+
+				{#if data.canWrite}
+					<details class="mt-2">
+						<summary class="cursor-pointer text-xs text-slate-400 hover:text-slate-200">
+							{session.magnetometer?.barcode ? 'Change' : 'Set'} magnetometer
+						</summary>
+						<div class="mt-2 flex flex-wrap items-end gap-2">
+							<form method="POST" action="?/setMagnetometer" use:enhance class="flex flex-wrap items-end gap-2">
+								<input type="hidden" name="sessionId" value={session._id} />
+								<label class="text-xs text-slate-400">
+									<span class="block">Barcode (empty clears it)</span>
+									<input
+										name="barcode"
+										list="known-magnetometers"
+										value={session.magnetometer?.barcode ?? ''}
+										placeholder="MAG-001-e00fce685d49ee5dc2a29545"
+										autocomplete="off"
+										class="mt-1 w-80 max-w-full rounded border border-slate-700/60 bg-slate-900/60 px-2 py-1 font-mono text-xs text-slate-100"
+									/>
+								</label>
+								<datalist id="known-magnetometers">
+									{#each data.knownMagnetometers ?? [] as b (b)}
+										<option value={b}></option>
+									{/each}
+								</datalist>
+								<button
+									type="submit"
+									class="rounded border border-slate-700/60 px-3 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-slate-100"
+								>
+									Save
+								</button>
+							</form>
+							<form method="POST" action="?/findMagnetometer" use:enhance>
+								<input type="hidden" name="sessionId" value={session._id} />
+								<button
+									type="submit"
+									class="rounded border border-slate-700/60 px-3 py-1 text-xs text-slate-300 hover:border-slate-500 hover:text-slate-100"
+									title="Look for the magnetometer barcode scan in this device's uploaded logs"
+								>
+									Look up in device log
+								</button>
+							</form>
+						</div>
+						{#if form?.error}
+							<p class="mt-2 text-xs" style="color: var(--color-tron-red, #f87171);">{form.error}</p>
+						{/if}
+					</details>
+				{/if}
+			</div>
 		</section>
 
 		<a

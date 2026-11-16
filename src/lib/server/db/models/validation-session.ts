@@ -79,6 +79,29 @@ const validationSessionSchema = new Schema({
 		default: null,
 		_id: false
 	},
+	// Which physical magnetometer took a 'mag' / 'mag_sweep' reading (2026-11-16).
+	// barcode is the FULL barcode (MAG-001-<hex>) — that is the identity; label is
+	// the short display form. source says how we know:
+	//   device      sent with the reading (firmware header)
+	//   bench       sent by the bench pusher
+	//   device-log  matched from the barcode scan in an uploaded device log
+	//   manual      set by a person on the sweep / session page
+	//   inferred    assigned by the data-fingerprint backfill
+	// Optional: sessions stored before this existed have none. Declared for the
+	// same strict-mode reason as fieldSummary above. See $lib/server/magnetometer-identity.
+	magnetometer: {
+		type: {
+			barcode: String,
+			label: String,
+			source: { type: String, enum: ['device', 'bench', 'device-log', 'manual', 'inferred'] },
+			recordedAt: Date,
+			recordedBy: String,
+			// device-log only: when the device scanned the barcode.
+			scannedAt: Date
+		},
+		default: null,
+		_id: false
+	},
 	createdAt: { type: Date, default: Date.now }
 }, { timestamps: false });
 

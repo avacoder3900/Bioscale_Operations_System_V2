@@ -30,6 +30,7 @@ import { parseChunkEnvelope, storeChunk, assembleChunks, markJob, recordProgress
 // mag_sweep_chunk BINARY, which only the chunk store above decodes, so this is
 // reached only for the alias spellings it accepts.
 import { handleSweepChunk, isSweepChunkEvent } from '$lib/server/validation/mag-sweep-ingest';
+import { reconcileMagnetometers } from '$lib/server/magnetometer-identity-fill';
 import type { RequestHandler } from './$types';
 
 /** Strip an optional "bioscale/" prefix so both spellings route the same. */
@@ -246,6 +247,12 @@ export const POST: RequestHandler = async ({ request }) => {
 		errorMessage: parsedData?.error ?? parsedData?.errorMessage ?? null,
 		createdAt: publishedAt ? new Date(publishedAt) : new Date()
 	});
+
+	// A device-log upload names the magnetometer the unit scanned; a sweep or mag
+	// test stored before it may be waiting on that. Best-effort, cannot throw.
+	if (eventType === 'device-log' || eventType === 'bioscale/device-log') {
+		await reconcileMagnetometers({ deviceId });
+	}
 
 	// Update device last-heard timestamp
 	await ParticleDevice.updateOne(

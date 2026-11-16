@@ -46,6 +46,14 @@ export interface SweepMeta {
 	 */
 	seg: number;
 	pitch: number;
+	/**
+	 * Which magnetometer took the sweep, firmware v110+: the header token
+	 * `mag=MAG-001-<hex>` (full barcode), omitted by the device when unknown.
+	 * Kept VERBATIM as a string — never coerced to a number, never validated
+	 * here; null when the header has no such token. The spellings magnetometer=,
+	 * instrument= and jig= are accepted too.
+	 */
+	mag: string | null;
 }
 
 export interface SweepRawData {
@@ -101,7 +109,8 @@ export function parseSweepText(text: string): SweepRawData | { error: string } {
 		zscale: num(h.zscale, 0.25),
 		format: h.format ?? null,
 		seg: Math.max(1, num(h.seg, 1)),
-		pitch: num(h.pitch, 0)
+		pitch: num(h.pitch, 0),
+		mag: h.mag ?? h.magnetometer ?? h.instrument ?? h.jig ?? null
 	};
 
 	const rows: number[][] = [];

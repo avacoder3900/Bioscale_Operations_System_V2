@@ -5,6 +5,8 @@ import { getVariable, callFunction, getDevice } from '$lib/server/particle';
 import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
 import { withFieldMagnitudes, summarizeField, type MagWellMagnitudes } from '$lib/server/magnetometer-field';
 import { autoEnterValidating } from '$lib/server/spu-auto-validate';
+import { buildMagnetometerRecord, extractMagnetometerFromMagPayload } from '$lib/server/magnetometer-identity';
+import { fillMagnetometerFromDeviceLogs } from '$lib/server/magnetometer-identity-fill';
 import type { Actions, PageServerLoad } from './$types';
 
 /**
@@ -31,7 +33,7 @@ const SWEEP_FULL_PARAMS = '';
 const SWEEP_PARAMS_LABEL = 'firmware defaults (full sweep)';
 
 /** First firmware exposing `run_sweep` as a cloud function. Below this the sweep
- *  exists only as serial command 77 and BIMS cannot start it at all. */
+ *  exists only as serial command 79 and BIMS cannot start it at all. */
 const SWEEP_MIN_FIRMWARE = 98;
 
 /** DeviceMode::IDLE. The enum's 0-10 numbering is deliberately stable — see the
@@ -170,6 +172,9 @@ export const actions: Actions = {
 			// Mongoose strict mode drops it without a word.
 			const fieldSummary = summarizeField(parsed);
 
+			// Trailing `mag=` line after the well rows (firmware v110+).
+			const headerMag = extractMagnetometerFromMagPayload(rawResult);
+
 			const sessionId = generateId();
 			await ValidationSession.create({
 				_id: sessionId,
@@ -187,8 +192,11 @@ export const actions: Actions = {
 				fieldSummary,
 				overallPassed,
 				failureReasons,
-				criteriaUsed: { minZ, maxZ }
+				criteriaUsed: { minZ, maxZ },
+				magnetometer: headerMag ? buildMagnetometerRecord(headerMag, 'device', locals.user!._id, { recordedAt: pulledAt }) : null
 			});
+			// Otherwise the barcode scan in the device's own log. Cannot throw.
+			if (!headerMag) await fillMagnetometerFromDeviceLogs(sessionId);
 
 			// Update the SPU DHR rollup on BOTH outcomes — a failed test is part of
 			// the unit's record too (failures used to stay 'pending' forever).
@@ -291,7 +299,7 @@ export const actions: Actions = {
 
 		try {
 			// `run_sweep` does not exist before firmware v98 — the sweep was serial-only
-			// (command 77) until then. Calling it on an older device fails deep inside the
+			// (command 79) until then. Calling it on an older device fails deep inside the
 			// Particle API with an opaque error, so check the reported version first and
 			// say plainly what is wrong. GET /v1/devices/:id carries firmware_version
 			// (this is PRODUCT_VERSION, which this firmware keeps in step with
@@ -308,7 +316,7 @@ export const actions: Actions = {
 			const fw = Number(info.firmware_version);
 			if (Number.isFinite(fw) && fw < SWEEP_MIN_FIRMWARE) {
 				return fail(400, {
-					error: `SPU ${spu.udi} is on firmware v${fw}. The sweep needs v${SWEEP_MIN_FIRMWARE} or later — below that it is a serial-only bench command (command 77) and cannot be started from BIMS.`
+					error: `SPU ${spu.udi} is on firmware v${fw}. The sweep needs v${SWEEP_MIN_FIRMWARE} or later — below that it is a serial-only bench command (command 79) and cannot be started from BIMS.`
 				});
 			}
 

@@ -27,6 +27,9 @@
 				username: string | null;
 				spuUdi: string | null;
 				particleDeviceId: string | null;
+				/** Which physical magnetometer took the reading. Null = not recorded. */
+				magnetometer?: { barcode: string; label: string; source: string | null } | null;
+				canSetMagnetometer?: boolean;
 			};
 			result: {
 				id: string;
@@ -261,6 +264,39 @@
 				<div>
 					<span class="tron-text-muted block text-xs uppercase">Operator</span>
 					<span class="tron-text-primary font-medium">{data.session.username ?? 'N/A'}</span>
+				</div>
+				<div class="col-span-2">
+					<span class="tron-text-muted block text-xs uppercase">Magnetometer</span>
+					{#if data.session.magnetometer}
+						<span class="tron-text-primary font-mono font-medium">{data.session.magnetometer.label}</span>
+						<span class="tron-text-muted ml-1 text-xs">
+							{data.session.magnetometer.barcode}{data.session.magnetometer.source ? ' · ' + data.session.magnetometer.source : ''}
+						</span>
+					{:else}
+						<span class="tron-text-muted">not recorded</span>
+					{/if}
+					{#if data.session.canSetMagnetometer}
+						<details class="mt-1">
+							<summary class="tron-text-muted cursor-pointer text-xs">
+								{data.session.magnetometer ? 'Change' : 'Set'} magnetometer
+							</summary>
+							<form method="POST" action="?/setMagnetometer" use:enhance class="mt-2 flex flex-wrap items-center gap-2">
+								<input
+									name="barcode"
+									value={data.session.magnetometer?.barcode ?? ''}
+									placeholder="MAG-001-e00fce685d49ee5dc2a29545"
+									autocomplete="off"
+									aria-label="Magnetometer barcode (empty clears it)"
+									class="tron-text-primary w-80 max-w-full rounded border bg-black/30 px-2 py-1 font-mono text-xs"
+									style="border-color: var(--color-tron-border);"
+								/>
+								<TronButton type="submit">Save</TronButton>
+							</form>
+							{#if form?.error}
+								<p class="mt-1 text-xs" style="color: var(--color-tron-red);">{form.error}</p>
+							{/if}
+						</details>
+					{/if}
 				</div>
 			</div>
 		</div>

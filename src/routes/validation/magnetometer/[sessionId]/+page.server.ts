@@ -1,6 +1,8 @@
 import { error, fail } from '@sveltejs/kit';
 import bcrypt from 'bcryptjs';
-import { requirePermission } from '$lib/server/permissions';
+import { requirePermission, hasPermission } from '$lib/server/permissions';
+import { buildMagnetometerRecord, extractMagnetometerFromMagPayload } from '$lib/server/magnetometer-identity';
+import { fillMagnetometerFromDeviceLogs, setMagnetometerManually } from '$lib/server/magnetometer-identity-fill';
 import { connectDB, ValidationSession, User, Spu, AuditLog, generateId } from '$lib/server/db';
 import { getVariable } from '$lib/server/particle';
 import { extractMagTestTime, pullDelaySeconds } from '$lib/server/magnetometer-time';
@@ -100,6 +102,15 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			spuId: session.spuId ?? null,
 			particleDeviceId: session.particleDeviceId ?? null,
 			overallPassed: session.overallPassed ?? null,
+			// Which physical magnetometer took the reading; null = not recorded.
+			magnetometer: session.magnetometer?.barcode
+				? {
+						barcode: session.magnetometer.barcode as string,
+						label: (session.magnetometer.label ?? session.magnetometer.barcode) as string,
+						source: (session.magnetometer.source ?? null) as string | null
+					}
+				: null,
+			canSetMagnetometer: hasPermission(locals.user, 'spu:write'),
 			override: session.override ? {
 				by: session.override.by,
 				at: session.override.at?.toISOString() ?? null,
@@ -167,6 +178,11 @@ export const actions: Actions = {
 			const magResults = withMagnitudes(parsed);
 			const fieldSummary = summarizeField(magResults);
 
+			// The payload's trailing `mag=` line (firmware v110+) names the
+			// magnetometer that took THIS reading, so it replaces whatever was
+			// recorded before. Without one the existing value is left alone.
+			const payloadMag = extractMagnetometerFromMagPayload(rawResult);
+
 			await ValidationSession.updateOne(
 				{ _id: params.sessionId },
 				{
@@ -180,15 +196,35 @@ export const actions: Actions = {
 						fieldSummary,
 						overallPassed,
 						failureReasons,
-						criteriaUsed: { minZ, maxZ }
+						criteriaUsed: { minZ, maxZ },
+						...(payloadMag
+							? { magnetometer: buildMagnetometerRecord(payloadMag, 'device', locals.user!._id) }
+							: {})
 					}
 				}
 			);
+			// Otherwise try the barcode scan in the device's own log. Cannot throw.
+			if (!payloadMag) await fillMagnetometerFromDeviceLogs(params.sessionId);
 
 			return { success: true, overallPassed };
 		} catch (err) {
 			return { error: `Failed to read device: ${err instanceof Error ? err.message : String(err)}` };
 		}
+	},
+
+	/** Set, correct or (with an empty barcode) clear the magnetometer on this session. */
+	setMagnetometer: async ({ request, locals, params }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+
+		const data = await request.formData();
+		const r = await setMagnetometerManually(
+			params.sessionId,
+			data.get('barcode')?.toString() ?? '',
+			{ _id: locals.user!._id, username: locals.user!.username }
+		);
+		if (!r.ok) return fail(r.status, { error: r.error });
+		return { success: true, magnetometerSet: true };
 	},
 
 	overrideApproval: async ({ request, locals, params }) => {

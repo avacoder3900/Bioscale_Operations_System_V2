@@ -2,12 +2,14 @@ import { json, error } from '@sveltejs/kit';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { connectDB, ValidationSession, Spu, AuditLog, generateId } from '$lib/server/db';
 import { cleanRawRows, summarise, MAX_ROWS, RAW_FIELDS } from '$lib/server/validation/mag-sweep';
+import { pickMagnetometer, buildMagnetometerRecord } from '$lib/server/magnetometer-identity';
+import { fillMagnetometerFromDeviceLogs, reconcileMagnetometers } from '$lib/server/magnetometer-identity-fill';
 import type { RequestHandler } from './$types';
 
 /**
  * Magnetometer stage-sweep ingest.
  *
- * The SPU streams sweep rows over serial (command 77), which never touches the
+ * The SPU streams sweep rows over serial (command 79), which never touches the
  * cloud. A bench-side pusher parses the SWPBEGIN/S/SWPEND text and POSTs it
  * here so the run lands in Mongo alongside normal validation sessions.
  *
@@ -67,6 +69,16 @@ export const POST: RequestHandler = async ({ request }) => {
 
 	const startedAt = new Date();
 
+	// Which magnetometer took the sweep, when the sender says so: a top-level
+	// body field (magnetometer | instrument | magBarcode) is the bench pusher
+	// speaking, a header key (meta.mag | magnetometer | instrument | jig) is the
+	// firmware's own SWPBEGIN line passed through. Missing or malformed is not
+	// an error — the sweep is stored without it and filled from the device log.
+	const picked = pickMagnetometer(body, meta);
+	const magnetometer = picked
+		? buildMagnetometerRecord(picked, picked.where === 'body' ? 'bench' : 'device', 'agent-api')
+		: null;
+
 	const session = await ValidationSession.create({
 		_id: generateId(),
 		type: 'mag_sweep',
@@ -89,6 +101,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			rows: clean
 		},
 		magResults,
+		magnetometer,
 		// A sweep is a characterisation run, not a pass/fail gate.
 		overallPassed: undefined,
 		failureReasons: [],
@@ -113,11 +126,26 @@ export const POST: RequestHandler = async ({ request }) => {
 			spuUdi: target.udi,
 			rows: clean.length,
 			wells: wellNumbers,
-			sourceFile: sourceFile ?? null
+			sourceFile: sourceFile ?? null,
+			magnetometer: magnetometer ? { barcode: magnetometer.barcode, source: magnetometer.source } : null
 		},
 		changedAt: new Date(),
 		changedBy: 'agent-api'
 	});
+
+	// No identity from the sender: try the barcode scan in the device's own log.
+	// Both calls swallow their errors — the sweep is already stored.
+	let magnetometerOut: { barcode: string; label: string; source: string } | null = magnetometer
+		? { barcode: magnetometer.barcode, label: magnetometer.label, source: magnetometer.source }
+		: null;
+	if (!magnetometer) {
+		const fill = await fillMagnetometerFromDeviceLogs(session._id);
+		if (fill.filled) magnetometerOut = { barcode: fill.barcode, label: fill.label, source: fill.source };
+	}
+	// Other recent sweeps whose device log has since arrived (logs are also
+	// written to Mongo from outside BIMS). Sweeps only, bounded, so this stays
+	// cheap on a webhook request.
+	await reconcileMagnetometers({ days: 30, types: ['mag_sweep'], limit: 40 });
 
 	return json({
 		success: true,
@@ -127,6 +155,7 @@ export const POST: RequestHandler = async ({ request }) => {
 			spuUdi: target.udi,
 			rowsIngested: clean.length,
 			wells: wellNumbers,
+			magnetometer: magnetometerOut,
 			summary: wells
 		}
 	}, { status: 201 });
@@ -155,7 +184,7 @@ export const GET: RequestHandler = async ({ request, url }) => {
 
 	const limit = Math.min(parseInt(url.searchParams.get('limit') || '25'), 100);
 	const sessions = await ValidationSession.find(filter, {
-		spuId: 1, spuUdi: 1, status: 1, startedAt: 1, completedAt: 1, magResults: 1, createdAt: 1
+		spuId: 1, spuUdi: 1, status: 1, startedAt: 1, completedAt: 1, magResults: 1, magnetometer: 1, createdAt: 1
 	}).sort({ createdAt: -1 }).limit(limit).lean() as any[];
 
 	return json({ success: true, data: { sessions, count: sessions.length } });
