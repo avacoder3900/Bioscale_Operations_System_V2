@@ -27931,3 +27931,13 @@ What this deployment is for: no chute scan warning while the scanner is unplugge
 Pi: barcode.py copied (backup barcode.py.bak-pre-unplugged), robot-arm restarted idle; /barcode/status
 interface "missing". Check: scan_after_fire on the Pi -> row GJ71_KNKoIGg-k778IRTU scannerMissing, Movement
 Log "Skipped: scanner not plugged in", chuteScanWarning null.
+
+2026-11-16 — master — fix(monitor): monitor-flag retry moved to the route the Lambda reports on (aca60ca4)
+dd22c9af put the retry in /api/particle/webhook only. upload-test and device-log reach BIMS through the
+Lambda's POST to /api/device/events, so it never fired: 0210, 0212 and 0239 stayed 'offline' through 8 test
+uploads on 11/16 (their device flags were set directly that afternoon, so monitoring itself was unaffected).
+- src/routes/api/device/events/+server.ts: retryMonitorFlagIfPending after the response.
+- src/lib/server/after-response.ts: runAfterResponse shared by both device routes.
+Checked: vitest 8 pass; svelte-check shows no errors in these files.
+Verify live: particleLink.monitorFlagState goes offline -> synced on 0210 / 0212 / 0239 at their next test upload.
+Source: branch master (from fix/monitor-flag-retry)
