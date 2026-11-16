@@ -27777,3 +27777,20 @@ Live: 16:30:00Z — /_app/version.json 1794845805243 → 1794846470708; GitHub s
 What this deployment is for: DILUENT-FILL-1 — "Untracked diluent (placeholder)" source lot with a free-text
   label in the diluent Setup (the stock is not a tracked ReagentLot yet; research-system import = S9),
   and the Loaded (mL) explanation. The merge also carries master's robot-arm / SPU Wi-Fi commits unchanged.
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — Chute barcode scanner on the arm Pi (command-triggered)
+================================================================================
+Alejandro plugged a Waveshare Barcode Scanner Module (SKU 14810, USB 0218:0210 "USBScn Module") into
+arm-pi to read each cartridge as the trapdoor solenoids drop it from the chute, before the arm grabs it.
+The OT-2's own barcode scan stays as the check that the cartridge is in the slot.
+Hardware check (read-only, over Tailscale): factory mode is a USB keyboard at
+/dev/input/by-id/usb-USBScn_Chip_USBScn_Module_2027300413413333-event-kbd; brevitest3 is in the `input`
+group. Button scans of two labels, 5 reads: every one a whole 36-char UUID + Enter, ~0.2 s, repeats identical.
+Decision: Command trigger. Scanner set once to USB Virtual Port (setup code, Setting Manual V2.1 p. 18), then
+register 0x0000 bits 1-0 := 01 (Command mode) over serial; trigger 7E 00 08 01 00 02 01 AB CD.
+- services/robot-arm/src/server/barcode.py (new): /barcode/status|scan|recent|command-mode; scan_blocking()
+  for the fires/replay path; label rule mirrors BIMS isCartBarcode; stop command on a no-read.
+- services/robot-arm/scripts/install_barcode_router.py (new, conveyor-installer pattern).
+- services/robot-arm/tests_local/test_barcode.py: 12 pass (fake serial port).
+Not yet on the Pi; not yet in BIMS. npm run check not run (Python only).
