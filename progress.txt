@@ -27806,3 +27806,14 @@ Tests: none added (stageCounts / inOvenCarts are DB-bound; no bucket-service uni
   - (cont.) Pipeline Flow now starts with "In Oven" (bucketCounts.inOven: backed carts on no open pass,
     checkouts excluded) ahead of Wax Fill (user, 2026-11-16). Backed on the buckets strip = in buckets +
     in oven; both drop as wax filling scans carts, so no cart is counted twice.
+
+Deployment (production) — 2026-11-16
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/2XpFKGcjG21cWkdnWzivZGxKn2LV
+Source: master @ commit b908e1f9 (fast-forward of fix/cart-mfg-counts)
+Retrieve this exact code: git checkout b908e1f9
+Live: 18:04:26Z — /_app/version.json 1794846656162 → 1794852156332; GitHub status success.
+What this deployment is for: cart-mfg dashboard after Alejandro's physical-count reconciliation —
+  Backed / In oven exclude manual checkouts (was still 51, now 20), "In Oven" tile leads the Pipeline
+  Flow, Seal tile dropped, Reagent Fill = in progress, Stored = reagent-filled not yet run.
+  Data the same day: 3 'sealed' test rows hidden via checkout (pqIep3Nqd9WR6ATuz9ikX); stray cart
+  4c3fbb44… pulled from the reconciliation checkout (now 30) and set Loose for a new bucket.
