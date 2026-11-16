@@ -3,6 +3,7 @@
 	import { page } from '$app/stores';
 	import { enhance } from '$app/forms';
 	import { TronCard, TronBadge, TronButton } from '$lib/components/ui';
+	import SpuWifiPanel from '$lib/components/spu/SpuWifiPanel.svelte';
 	import { getCheckpointName } from '$lib/checkpoint-codes';
 
 	let { data, form } = $props();
@@ -260,6 +261,8 @@
 			{/if}
 			<p class="tron-text-muted text-xs mt-2">While on, firmware v103 uploads the session log after every test, screen, error and boot (no 60 s polling). The 07:30 UTC review compares this unit with the control units and files findings in the Findings tab.</p>
 		</TronCard>
+
+		<SpuWifiPanel spuId={data.spu.id} />
 	{/if}
 
 	{#if !data.particleDeviceId}
