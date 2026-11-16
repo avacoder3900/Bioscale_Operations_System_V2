@@ -27752,3 +27752,8 @@ saved untick turns it off. The saved setting on production was already ticked, s
 - arm-loop-drive.test.ts: settings mock made per-test; covers no document, no field, saved on, saved off.
 Checked: vitest arm-loop-drive 5 pass; npm run check 14 errors / 451 warnings, none in these files (all in
 assembly, magnetometer, Ask BIMS, research-proxy, r2 — the current master baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/DTeRtQm1SbjcwNayzzAWnHMogpuD
+Source: branch master @ commit 85c098d8 (from feat/arm-pi-drives-default)
+Retrieve this exact code: git checkout master at commit 85c098d8
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Setup "Arm Pi Drives The Loop" is on unless saved off.
