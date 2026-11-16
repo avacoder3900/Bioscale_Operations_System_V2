@@ -27794,3 +27794,11 @@ register 0x0000 bits 1-0 := 01 (Command mode) over serial; trigger 7E 00 08 01 0
 - services/robot-arm/scripts/install_barcode_router.py (new, conveyor-installer pattern).
 - services/robot-arm/tests_local/test_barcode.py: 12 pass (fake serial port).
 Not yet on the Pi; not yet in BIMS. npm run check not run (Python only).
+Installed on arm-pi 2026-11-16 ~17:30 UTC with Alejandro's OK: barcode.py + install_barcode_router.py copied,
+installer added the import + include_router (backup app.py.bak-barcode), robot-arm restarted with
+/sessions/active null and no fire run. Alejandro scanned the USB Virtual Port setup code: the scanner re-enumerated
+as 0218:0212 cdc_acm ttyACM1 (/dev/serial/by-id/usb-USBScn_Chip_USBScn_Module_2027300413413333-if00); the
+follower BusLinker stays /dev/buslinker-follower -> ttyACM0. POST /barcode/command-mode: reg 0x0000 212 -> 213
+(manual -> command), saved to flash. Reg 0x0060 = 0x01 (pure data + CR). Triggered scans with a label in view:
+3/3 read 9bfb7605-291f-43a6-a028-72234c15f19f whole (label:true), 1146 / 101 / 51 ms.
+Next: a Scan Barcode step after the trapdoor fire in a move set, the result saved with the run in BIMS.
