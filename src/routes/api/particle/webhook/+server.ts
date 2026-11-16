@@ -30,19 +30,8 @@ import { parseChunkEnvelope, storeChunk, assembleChunks, markJob, recordProgress
 // mag_sweep_chunk BINARY, which only the chunk store above decodes, so this is
 // reached only for the alias spellings it accepts.
 import { handleSweepChunk, isSweepChunkEvent } from '$lib/server/validation/mag-sweep-ingest';
+import { runAfterResponse } from '$lib/server/after-response';
 import type { RequestHandler } from './$types';
-
-/**
- * Keep `p` running after the response. On Vercel this is the runtime's waitUntil (what
- * @vercel/functions reads, without the dependency); elsewhere the promise simply runs on.
- * Same helper as the robot-arm webhook.
- */
-function runAfterResponse(p: Promise<unknown>) {
-	const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[
-		Symbol.for('@vercel/request-context')
-	]?.get?.();
-	ctx?.waitUntil?.(p);
-}
 
 /** Strip an optional "bioscale/" prefix so both spellings route the same. */
 function bare(eventName: string): string {
