@@ -21,7 +21,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, DeviceEvent, ParticleDevice, Spu, OpticalBlankRun, generateId } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { syncServiceFlag, syncMonitorFlag } from '$lib/server/service-flag';
+import { syncServiceFlag, syncMonitorFlag, retryMonitorFlagIfPending } from '$lib/server/service-flag';
 import { parseTestPayload, parseTestRecordBuffer } from '$lib/server/test-payload';
 import { ingestScreenEvent, attachScreenRecord } from '$lib/server/screen/ingest';
 import { ingestSweepText } from '$lib/server/sweep/ingest';
@@ -31,6 +31,18 @@ import { parseChunkEnvelope, storeChunk, assembleChunks, markJob, recordProgress
 // reached only for the alias spellings it accepts.
 import { handleSweepChunk, isSweepChunkEvent } from '$lib/server/validation/mag-sweep-ingest';
 import type { RequestHandler } from './$types';
+
+/**
+ * Keep `p` running after the response. On Vercel this is the runtime's waitUntil (what
+ * @vercel/functions reads, without the dependency); elsewhere the promise simply runs on.
+ * Same helper as the robot-arm webhook.
+ */
+function runAfterResponse(p: Promise<unknown>) {
+	const ctx = (globalThis as Record<symbol, { get?: () => { waitUntil?: (p: Promise<unknown>) => void } } | undefined>)[
+		Symbol.for('@vercel/request-context')
+	]?.get?.();
+	ctx?.waitUntil?.(p);
+}
 
 /** Strip an optional "bioscale/" prefix so both spellings route the same. */
 function bare(eventName: string): string {
@@ -257,6 +269,11 @@ export const POST: RequestHandler = async ({ request }) => {
 			}
 		}
 	);
+
+	// A monitor-flag push that timed out mid-test is retried here, when the device's own
+	// event shows it is connected. Runs after the response so a slow device call can never
+	// hold up (and fail) Particle's webhook delivery.
+	runAfterResponse(retryMonitorFlagIfPending(deviceId, eventType));
 
 	// Device came (back) online → re-push the service-flag LED bit so a status
 	// change made while it was unplugged takes effect now (SPU-INV-08).
