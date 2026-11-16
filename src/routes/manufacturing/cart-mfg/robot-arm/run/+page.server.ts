@@ -180,7 +180,7 @@ export const actions: Actions = {
 		const { d, user } = await writer(ev, true);
 		try {
 			const started = await startLoop(user, field(d, 'runs'), { startAt: field(d, 'startAt'), barcode: field(d, 'barcode'), tiprackRefilled: field(d, 'tiprackRefilled') });
-			// Setup "Arm Pi Drives The Loop" (off by default): the Pi runs the steps; else, or when it cannot, the browser does.
+			// Setup "Arm Pi Drives The Loop" (on by default): the Pi runs the steps; else, or when it cannot, the browser does.
 			if (await armPiDrives()) {
 				await startArmDriver(started._id);
 				return { loop: json(await getLoop(started._id)) };
