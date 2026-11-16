@@ -27738,3 +27738,17 @@ What this deployment is for: DILUENT-FILL-1 S5 — the Labware Position Check sa
   (robot_labware_offsets, source 'lpc') and a diluent run start sends them to the robot with the run;
   the diluent wizard's Load-deck step shows which slots have a check on file. Needed before Alejandro's
   position check on B14 (protocol 2a51b7a3, all three heat-frame racks loaded) and the first test run.
+
+================================================================================
+2026-11-16 — feat/arm-pi-drives-default — Setup "Arm Pi Drives The Loop" is on by default
+================================================================================
+Alejandro: "I'd prefer it to be on by default." The switch was off by default (2026-11-08, 630e0ebb). Now it
+follows "Use Cable Link To The OT-2": a settings document without the field, or no document, means on; only a
+saved untick turns it off. The saved setting on production was already ticked, so live behaviour does not change.
+- src/lib/server/db/models/arm-wax-fill-settings.ts: armPiDrives default true.
+- src/lib/server/arm-loop-drive.ts armPiDrives(): `!== false` (was `=== true`); header comment.
+- src/lib/server/arm-wax-fill.ts settingsView + saveSettings: `!== false`; comment.
+- run/+page.server.ts comment.
+- arm-loop-drive.test.ts: settings mock made per-test; covers no document, no field, saved on, saved off.
+Checked: vitest arm-loop-drive 5 pass; npm run check 14 errors / 451 warnings, none in these files (all in
+assembly, magnetometer, Ask BIMS, research-proxy, r2 — the current master baseline).

@@ -269,7 +269,7 @@ export interface SettingsView {
 	chainGrab: boolean;
 	/** Robot calls and the loop's instructions go through the arm Pi's cable link when it is up (2026-11-06). */
 	useArmLink: boolean;
-	/** The arm Pi drives the loop's steps; the browser only watches (2026-11-06, off by default). */
+	/** The arm Pi drives the loop's steps; the browser only watches (2026-11-06; on by default since 2026-11-16). */
 	armPiDrives: boolean;
 	/**
 	 * Barcode present only (2026-11-06): the scan only asks whether a barcode is
@@ -299,7 +299,7 @@ function settingsView(d: any): SettingsView {
 		gateVolumes: gateVolumesFrom(d?.gateVolumes),
 		chainGrab: d?.chainGrab !== false,
 		useArmLink: d?.useArmLink !== false,
-		armPiDrives: d?.armPiDrives === true,
+		armPiDrives: d?.armPiDrives !== false,
 		scanPresenceOnly: d?.scanPresenceOnly === true,
 		grabAnimation: animRef(d?.grabAnimation),
 		withdrawAnimation: animRef(d?.withdrawAnimation),
@@ -359,7 +359,7 @@ export async function saveSetup(
 	}
 	const chainGrab = input.chainGrab !== false;
 	const useArmLink = input.useArmLink !== false;
-	const armPiDrives = input.armPiDrives === true;
+	const armPiDrives = input.armPiDrives !== false;
 	const presenceOnly = input.scanPresenceOnly === true;
 	const robot = (await OpentronsRobot.findById(robotId).select('_id name isActive').lean()) as any;
 	if (!robot || robot.isActive === false) throw new ArmWaxFillError('That robot is not active.', 404);

@@ -1,11 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 let loopDoc: any = null;
+let settingsDoc: any = null;
 vi.mock('$env/dynamic/private', () => ({ env: { ROBOT_ARM_API_KEY: 'pi-key-123' } }));
 vi.mock('$lib/server/db', () => ({
 	connectDB: async () => undefined,
 	ArmWaxFillRun: { findById: () => ({ select: () => ({ lean: async () => loopDoc }) }), updateOne: async () => undefined },
-	ArmWaxFillSettings: { findById: () => ({ select: () => ({ lean: async () => ({ armPiDrives: false }) }) }) }
+	ArmWaxFillSettings: { findById: () => ({ select: () => ({ lean: async () => settingsDoc }) }) }
 }));
 vi.mock('./robot-arm-client', () => ({ robotArmFetchRaw: async () => ({ ok: true, status: 200, text: '{}', headers: new Headers() }) }));
 vi.mock('./robot-arm-animation', () => ({ afterPlay: async () => ({}), playbackActive: async () => null }));
@@ -43,7 +44,14 @@ describe('arm Pi loop driver endpoint', () => {
 		expect(isArmPiKey(new Request('http://x', { headers: { 'x-api-key': 'pi-key-124' } }))).toBe(false);
 		expect(isArmPiKey(new Request('http://x'))).toBe(false);
 	});
-	it('is off unless Setup turns it on', async () => {
+	it('is on unless Setup turns it off', async () => {
+		settingsDoc = null;
+		expect(await armPiDrives()).toBe(true);
+		settingsDoc = {};
+		expect(await armPiDrives()).toBe(true);
+		settingsDoc = { armPiDrives: true };
+		expect(await armPiDrives()).toBe(true);
+		settingsDoc = { armPiDrives: false };
 		expect(await armPiDrives()).toBe(false);
 	});
 });

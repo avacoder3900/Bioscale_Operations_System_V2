@@ -1,7 +1,7 @@
 /**
  * The arm Pi drives the robot-arm wax-fill loop (2026-11-06) — OPTIONAL.
  *
- * Off unless Setup's "Arm Pi Drives The Loop" is on. Then startLoop hands the
+ * On unless Setup's "Arm Pi Drives The Loop" is unticked (on by default, 2026-11-16). Then startLoop hands the
  * loop to the Pi's driver (services/robot-arm/src/server/loop_driver.py,
  * POST /ot2/loop-driver/start), which runs the SAME steps the Run tab's
  * browser runs, one at a time, through POST /api/robot-arm/wax-fill/drive →
@@ -133,11 +133,11 @@ export async function runDriveStep(loopId: string, action: string, extra: Record
 	}
 }
 
-/** Setup's switch. */
+/** Setup's switch: on unless saved off (2026-11-16). */
 export async function armPiDrives(): Promise<boolean> {
 	await connectDB();
 	const s = (await ArmWaxFillSettings.findById('default').select('armPiDrives').lean()) as { armPiDrives?: boolean } | null;
-	return s?.armPiDrives === true;
+	return s?.armPiDrives !== false;
 }
 
 /**
