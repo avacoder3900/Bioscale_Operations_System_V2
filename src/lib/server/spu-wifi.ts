@@ -8,7 +8,8 @@
  *   variable wifi_scan   {"v":1,"seq":N,"fw":109,"n":[["ssid",rssi,security,channel],...],"more":0|1} or {"seq":N,"error":"..."}
  *   variable wifi_status {"v":1,"ready","ssid","rssi","cloud","cell","sw","swseq","target","scanseq","saved":[...]}
  *
- * New networks are ADDED on the device; previously saved networks stay as fallback.
+ * BIMS replaces the saved networks on a switch (see replaceAndSwitch): Device OS always joins the
+ * strongest SAVED network, so the selected one must be the only one saved.
  * The password is passed straight through to Particle and is never stored or logged here.
  */
 import { callFunction, getVariable } from '$lib/server/particle';
@@ -168,6 +169,54 @@ export function validateCredentials(
 	if (sec >= 2 && (pw.length < 8 || pw.length > 63)) return { ok: false, error: 'WPA passwords are 8–63 characters.' };
 	if (pw.length > 64) return { ok: false, error: 'Password is too long.' };
 	return { ok: true, ssid, password: pw, security: sec };
+}
+
+/** DeviceMode ordinals from DeviceState.h: IDLE = 0, BARCODE_SCANNING = 3. */
+const AT_REST_MODES = new Set([0, 3]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Make `ssid` the SPU's only saved network, then join it.
+ *
+ * Device OS (WifiNetworkManager::connect, Device OS 6.4.0) scans, sorts by RSSI and joins the
+ * STRONGEST saved network in range, with no priority setting. So with the old network still
+ * saved, a weaker new one is never picked (seen on SPU 247, 2026-11-16). This deletes every
+ * saved network first, using the existing empty-argument set_wifi_credentials, then adds the
+ * new one. No firmware change.
+ *
+ * The password is not tested before the old networks are deleted, so a wrong one leaves the
+ * unit with no Wi-Fi. This is only allowed while cellular is up (the cloud stays reachable for
+ * a retry) and the unit is at rest (the delete command itself does not check for a running test).
+ */
+export async function replaceAndSwitch(
+	deviceId: string,
+	ssid: string,
+	password: string,
+	security: number
+): Promise<{ ok: true; seq: number | null } | { ok: false; error: string }> {
+	const wifi = await readWifi(deviceId);
+	if (!wifi.supported) return { ok: false, error: 'This SPU runs firmware older than v109.' };
+	if (!wifi.status) return { ok: false, error: `Could not read the SPU's Wi-Fi status${wifi.error ? `: ${wifi.error}` : ''}.` };
+	if (!wifi.status.cellular) {
+		return { ok: false, error: 'Cellular is not connected on this SPU, so switching Wi-Fi could leave it unreachable.' };
+	}
+	const { return_value: mode } = await callFunction(deviceId, 'get_state', '');
+	if (!AT_REST_MODES.has(mode)) {
+		return { ok: false, error: 'SPU is busy (running a test or other routine). Try again when it is idle.' };
+	}
+
+	// Empty argument = WiFi.clearCredentials() + disconnect; returns -1 by design.
+	await callFunction(deviceId, 'set_wifi_credentials', '');
+	await sleep(2000);
+
+	try {
+		const r = await requestSwitch(deviceId, ssid, password, security);
+		if (!r.ok) return { ok: false, error: `⚠ Saved networks were cleared, but ${ssid} was not saved: ${r.error}` };
+		return r;
+	} catch (e) {
+		const m = e instanceof Error ? e.message : String(e);
+		return { ok: false, error: `⚠ Saved networks were cleared, but ${ssid} was not sent: ${m}` };
+	}
 }
 
 export async function requestSwitch(

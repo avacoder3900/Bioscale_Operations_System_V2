@@ -2,7 +2,7 @@ import { json, error } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, Spu } from '$lib/server/db';
 import { getDevice } from '$lib/server/particle';
-import { readWifi, requestScan, requestSwitch, validateCredentials } from '$lib/server/spu-wifi';
+import { readWifi, requestScan, replaceAndSwitch, validateCredentials } from '$lib/server/spu-wifi';
 import { appendSpuJournal } from '$lib/server/spu-journal';
 import type { RequestHandler } from './$types';
 
@@ -66,7 +66,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		if (!v.ok) return json({ error: v.error }, { status: 400 });
 		let r;
 		try {
-			r = await requestSwitch(deviceId, v.ssid, v.password, v.security);
+			r = await replaceAndSwitch(deviceId, v.ssid, v.password, v.security);
 		} catch (e) {
 			return json({ error: `Could not reach the SPU: ${msg(e)}` }, { status: 502 });
 		}
@@ -76,7 +76,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		const actor = { _id: locals.user!._id, username: locals.user!.username };
 		await appendSpuJournal(
 			params.spuId,
-			`Wi-Fi: switched ${udi} to network "${v.ssid}" (previously saved networks kept as fallback)`,
+			`Wi-Fi: switched ${udi} to network "${v.ssid}" (other saved networks removed)`,
 			actor,
 			{ source: 'service', refKind: 'wifi' }
 		);
