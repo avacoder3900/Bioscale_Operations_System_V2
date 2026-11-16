@@ -27903,3 +27903,11 @@ Alejandro: the shortest delay from the hardware, and a delay set in BIMS like th
 - BIMS stores the delay on each chute scan (delayMs) and in the Movement Log row params (scanDelayMs).
 Checked: vitest robot-arm + arm server 396 pass; Pi tests 19 + 5 pass; npm run check 13 errors / 451
 warnings, none in these files (master baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/7xxJkqEvjCovTa6BSoVUd2BjFCCh
+Source: branch master @ commit 3af5768e (from feat/arm-barcode-scanner)
+Retrieve this exact code: git checkout master at commit 3af5768e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Scan Delay (ms) per trapdoor fire step, set in BIMS (Vercel status success).
+Pi side installed on arm-pi with Alejandro's OK: replay_settle.py, fires.py, barcode.py (backups
+*.bak-pre-scan-delay), robot-arm restarted with /sessions/active null. Measured on the Pi with Scan Delay 0
+(no solenoid fired, nothing sent to BIMS): pulse end -> scanner trigger sent, median 1.5 ms, max 61 ms over 10.
