@@ -27768,3 +27768,12 @@ Source: branch master @ commit 85c098d8 (from feat/arm-pi-drives-default)
 Retrieve this exact code: git checkout master at commit 85c098d8
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Setup "Arm Pi Drives The Loop" is on unless saved off.
+
+Deployment (production) — 2026-11-16
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/2Tm3h8ATuaDjBEjLqwKfDFAgPfM4
+Source: master @ commit 35de5b9d (merge of feat/diluent-fill-prd 2d19790f with master 7ac3c307)
+Retrieve this exact code: git checkout 35de5b9d
+Live: 16:30:00Z — /_app/version.json 1794845805243 → 1794846470708; GitHub status success.
+What this deployment is for: DILUENT-FILL-1 — "Untracked diluent (placeholder)" source lot with a free-text
+  label in the diluent Setup (the stock is not a tracked ReagentLot yet; research-system import = S9),
+  and the Loaded (mL) explanation. The merge also carries master's robot-arm / SPU Wi-Fi commits unchanged.
