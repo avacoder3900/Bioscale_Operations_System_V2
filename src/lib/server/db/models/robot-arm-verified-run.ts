@@ -33,7 +33,7 @@ const stepSchema = new Schema(
 		calibrationId: { type: String, default: null },
 		tolerances: { type: tolerancesSchema, default: null },
 		/** A fire step (cartridge trapdoor): never verified, fired inside its chunk's play. */
-		fire: { type: new Schema({ solenoid: String, pulseMs: Number, scan: { type: Boolean, default: undefined } }, { _id: false }), default: undefined }
+		fire: { type: new Schema({ solenoid: String, pulseMs: Number, scan: { type: Boolean, default: undefined }, scanDelayMs: { type: Number, default: undefined } }, { _id: false }), default: undefined }
 	},
 	{ _id: false }
 );

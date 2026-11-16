@@ -25,7 +25,7 @@ sys.modules.update({"src": src, "src.server": server, "src.server.barcode": fake
 
 
 def frames(scan):
-    return [{"t": 0.0, "fire": {"pin": 17, "ms": 100, "solenoid": "A", **({"scan": True} if scan else {})}}, {"t": 0.5}]
+    return [{"t": 0.0, "fire": {"pin": 17, "ms": 100, "solenoid": "A", **({"scan": True, "scan_delay_ms": 250} if scan else {})}}, {"t": 0.5}]
 
 
 class TestFireScan(unittest.TestCase):
@@ -45,8 +45,13 @@ class TestFireScan(unittest.TestCase):
 
     def test_scan_after_a_good_fire(self):
         t = self.play(True)
-        self.assertEqual(calls, [{"solenoid": "A", "pin": 17, "run_id": "R1", "title": "Drop A"}])
+        self.assertEqual(calls, [{"solenoid": "A", "pin": 17, "run_id": "R1", "title": "Drop A", "delay_ms": 250}])
         self.assertEqual(t.results[0]["scan"], "started")
+
+    def test_bad_delay_is_zero(self):
+        self.assertEqual(rs._scan_delay({"scan_delay_ms": "x"}), 0)
+        self.assertEqual(rs._scan_delay({"scan_delay_ms": 99999}), 10000)
+        self.assertEqual(rs._scan_delay({}), 0)
 
     def test_no_scan_without_the_flag(self):
         self.play(False)

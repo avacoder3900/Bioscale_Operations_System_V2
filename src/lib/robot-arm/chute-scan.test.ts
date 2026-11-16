@@ -15,13 +15,13 @@ describe('chute scans', () => {
 		const { host, scans } = parseChuteScansBody({
 			host: 'alejandrospi3',
 			scans: [
-				{ id: 'x1', at: '2026-11-16T18:00:00Z', ok: true, code: LABEL, elapsed_ms: 80, solenoid: 'A', pin: 17, run_id: 'R1', title: 'Drop A' },
+				{ id: 'x1', at: '2026-11-16T18:00:00Z', ok: true, code: LABEL, elapsed_ms: 80, delay_ms: 150, solenoid: 'A', pin: 17, run_id: 'R1', title: 'Drop A' },
 				{ id: 'x2', ok: true, code: LABEL.slice(0, 30) },
 				{ id: 'x3', ok: false, error: 'no barcode read' }
 			]
 		});
 		expect(host).toBe('alejandrospi3');
-		expect(scans[0]).toMatchObject({ ok: true, code: LABEL, label: true, error: null, elapsedMs: 80, solenoid: 'A', pin: 17, runId: 'R1', title: 'Drop A', piScanId: 'x1' });
+		expect(scans[0]).toMatchObject({ ok: true, code: LABEL, label: true, error: null, elapsedMs: 80, delayMs: 150, solenoid: 'A', pin: 17, runId: 'R1', title: 'Drop A', piScanId: 'x1' });
 		expect(scans[1]).toMatchObject({ ok: false, label: false, error: 'not a whole cartridge label' });
 		expect(scans[2]).toMatchObject({ ok: false, code: null, error: 'no barcode read' });
 		expect(parseChuteScansBody(null).scans).toEqual([]);

@@ -27877,3 +27877,16 @@ Pi side installed on arm-pi the same hour with Alejandro's OK: replay_settle.py,
 End-to-end check without firing a solenoid: barcode.scan_after_fire(A, 17, run test-2026-11-16) on the Pi, no
 label in view -> row uYPCPIJ63HssCwp0ga8Oo (no barcode read) + Movement Log chute_scan row; the warning
 "Chute Scan Failed: no barcode read after Solenoid A in Chute Scan Test" is live (left for Alejandro to Close).
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — Scan Delay (ms) per fire step, set in BIMS; no Pi-side wait
+================================================================================
+Alejandro: the shortest delay from the hardware, and a delay set in BIMS like the pulse and belt times.
+- FireSpec.scanDelayMs (0–10000 ms, default 0), "Scan Delay (ms)" box under Scan Barcode After on a
+  Solenoid A/B fire step; counted from the end of the pulse. Saved in move sets and verified-run steps;
+  sent to the Pi as fire.scan_delay_ms on the replay frame and in /fires/play.
+- Pi: replay_settle passes the step's delay to barcode.scan_after_fire(delay_ms); the Pi's own default
+  went 500 -> 0 ms (BARCODE_SCAN_AFTER_DELAY_MS only for a caller that sends none); 0 = no sleep at all.
+- BIMS stores the delay on each chute scan (delayMs) and in the Movement Log row params (scanDelayMs).
+Checked: vitest robot-arm + arm server 396 pass; Pi tests 19 + 5 pass; npm run check 13 errors / 451
+warnings, none in these files (master baseline).

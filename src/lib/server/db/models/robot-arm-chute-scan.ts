@@ -26,6 +26,8 @@ const robotArmChuteScanSchema = new Schema(
 		label: { type: Boolean, default: false },
 		error: { type: String, default: null },
 		elapsedMs: { type: Number, default: null },
+		/** The step's Scan Delay (ms): the wait after the pulse before the scanner was triggered. */
+		delayMs: { type: Number, default: null },
 		solenoid: { type: String, default: null },
 		pin: { type: Number, default: null },
 		/** The Pi's run id (replay or fires- run) and the play's title, when known. */

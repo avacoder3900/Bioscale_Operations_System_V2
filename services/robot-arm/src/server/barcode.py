@@ -41,7 +41,7 @@ Rules:
 
 After a trapdoor fire (2026-11-16): replay_settle.FireTimer calls
 scan_after_fire() for a fire step with BIMS's "Scan Barcode After". It waits
-BARCODE_SCAN_AFTER_DELAY_MS (500) for the cartridge to land, scans for up to
+the step's Scan Delay (ms) from BIMS (no wait of its own), scans for up to
 BARCODE_SCAN_AFTER_TIMEOUT_MS (3000), and POSTs the result to BIMS
 /api/robot-arm/chute-scans (URL from BIMS_CHANGES_URL, key ROBOT_ARM_API_KEY).
 A row BIMS could not take waits in ~/.bims-arm/chute-scans-pending.jsonl and
@@ -243,18 +243,32 @@ def scan_blocking(timeout_ms: int = DEFAULT_TIMEOUT_MS, source: str = "api", wai
 
 # ---------------------------------------------------------------- after a trapdoor fire
 
-#: The wait after the trapdoor pulse before scanning, so the cartridge has landed.
-SCAN_AFTER_DELAY_MS = int(os.environ.get("BARCODE_SCAN_AFTER_DELAY_MS", "500"))
+#: Only for a caller that sends no delay. BIMS sends each step's Scan Delay (ms);
+#: the Pi adds no wait of its own (Alejandro, 2026-11-16).
+SCAN_AFTER_DELAY_MS = int(os.environ.get("BARCODE_SCAN_AFTER_DELAY_MS", "0"))
+MAX_SCAN_AFTER_DELAY_MS = 10000
 SCAN_AFTER_TIMEOUT_MS = int(os.environ.get("BARCODE_SCAN_AFTER_TIMEOUT_MS", "3000"))
 PENDING = Path(os.environ.get("BARCODE_PENDING", str(Path.home() / ".bims-arm" / "chute-scans-pending.jsonl")))
 _send_lock = threading.Lock()
 
 
-def scan_after_fire(solenoid: Optional[str] = None, pin: Optional[int] = None, run_id: Optional[str] = None, title: Optional[str] = None) -> None:
-    """Scan the chute on a thread of its own and send the result to BIMS. Returns at once."""
+def scan_after_fire(
+    solenoid: Optional[str] = None,
+    pin: Optional[int] = None,
+    run_id: Optional[str] = None,
+    title: Optional[str] = None,
+    delay_ms: Optional[int] = None,
+) -> None:
+    """Scan the chute on a thread of its own and send the result to BIMS. Returns at once.
+
+    delay_ms: the step's Scan Delay from BIMS, counted from the end of the pulse.
+    """
+    d = SCAN_AFTER_DELAY_MS if delay_ms is None else int(delay_ms)
+    d = max(0, min(MAX_SCAN_AFTER_DELAY_MS, d))
 
     def work() -> None:
-        time.sleep(max(0, SCAN_AFTER_DELAY_MS) / 1000.0)
+        if d:
+            time.sleep(d / 1000.0)
         # Wait out a scan already running (another fire, a page test) instead of skipping.
         r = scan_blocking(SCAN_AFTER_TIMEOUT_MS, source="fire", wait_s=SCAN_AFTER_TIMEOUT_MS / 1000.0 + 2.0)
         row = {
@@ -269,6 +283,7 @@ def scan_after_fire(solenoid: Optional[str] = None, pin: Optional[int] = None, r
             "pin": pin,
             "run_id": run_id,
             "title": title,
+            "delay_ms": d,
         }
         r["reported"] = report_to_bims([row])
 

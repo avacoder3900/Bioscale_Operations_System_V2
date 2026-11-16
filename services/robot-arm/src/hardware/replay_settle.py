@@ -174,14 +174,22 @@ def fire_schedule(frames: list[dict]) -> list[dict]:
     """`{t, pin, ms, solenoid, scan}` for every frame that fires, in time order.
 
     `scan` (2026-11-16): BIMS's "Scan Barcode After" on a trapdoor step — scan
-    the chute after the pulse (src/server/barcode.py).
+    the chute `scan_delay_ms` after the pulse ends (src/server/barcode.py).
     """
     out = [
-        {"t": f["t"], "pin": int(f["fire"]["pin"]), "ms": int(f["fire"]["ms"]), "solenoid": f["fire"].get("solenoid"), "scan": f["fire"].get("scan") is True}
+        {"t": f["t"], "pin": int(f["fire"]["pin"]), "ms": int(f["fire"]["ms"]), "solenoid": f["fire"].get("solenoid"), "scan": f["fire"].get("scan") is True, "scan_delay_ms": _scan_delay(f["fire"])}
         for f in frames
         if f.get("fire")
     ]
     return sorted(out, key=lambda x: x["t"])
+
+
+def _scan_delay(fire: dict) -> int:
+    """BIMS's Scan Delay (ms) for the step: 0..10000, 0 when missing or bad."""
+    try:
+        return max(0, min(10000, int(fire.get("scan_delay_ms") or 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 class FireTimer(threading.Thread):
@@ -236,7 +244,7 @@ class FireTimer(threading.Thread):
                 try:
                     from src.server import barcode
 
-                    barcode.scan_after_fire(solenoid=f.get("solenoid"), pin=f["pin"], run_id=self.run_id, title=self.title)
+                    barcode.scan_after_fire(solenoid=f.get("solenoid"), pin=f["pin"], run_id=self.run_id, title=self.title, delay_ms=f.get("scan_delay_ms", 0))
                     r["scan"] = "started"
                 except Exception as exc:  # no scanner module: the fire still counts
                     r["scan"] = f"unavailable: {exc}"

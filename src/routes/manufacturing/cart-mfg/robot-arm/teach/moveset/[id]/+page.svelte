@@ -41,6 +41,9 @@
 		MAX_HOLD_S,
 		maxPulseMs,
 		canScanAfter,
+		DEFAULT_SCAN_DELAY_MS,
+		MIN_SCAN_DELAY_MS,
+		MAX_SCAN_DELAY_MS,
 		MAX_TRANSITION_S,
 		MIN_FIRE_WAIT_S,
 		MIN_PULSE_MS,
@@ -344,7 +347,7 @@
 							{#if selected === i}
 								<div class="mt-2 space-y-2 text-[11px]" style={muted}>
 									<label class="block">Target
-										<select bind:value={f.solenoid} onchange={() => { f.pulseMs = Math.min(f.pulseMs, maxPulseMs(f.solenoid)); if (!canScanAfter(f.solenoid)) delete f.scan; }} class="{input} mt-1 w-full" style={inputStyle}>
+										<select bind:value={f.solenoid} onchange={() => { f.pulseMs = Math.min(f.pulseMs, maxPulseMs(f.solenoid)); if (!canScanAfter(f.solenoid)) { delete f.scan; delete f.scanDelayMs; } }} class="{input} mt-1 w-full" style={inputStyle}>
 											{#each FIRE_TARGETS as s (s.id)}<option value={s.id}>{s.label} · GPIO {s.pin}</option>{/each}
 										</select>
 									</label>
@@ -360,14 +363,21 @@
 									</label>
 									{#if canScanAfter(f.solenoid)}
 										<label class="flex items-center gap-2">
-											<input type="checkbox" checked={!!f.scan} onchange={(e) => { if (e.currentTarget.checked) f.scan = true; else delete f.scan; }} />
+											<input type="checkbox" checked={!!f.scan} onchange={(e) => { if (e.currentTarget.checked) { f.scan = true; f.scanDelayMs ??= DEFAULT_SCAN_DELAY_MS; } else { delete f.scan; delete f.scanDelayMs; } }} />
 											<span>Scan Barcode After</span>
 										</label>
+										{#if f.scan}
+											<label class="block">Scan Delay (ms)
+												<span class="mt-1 flex items-center gap-2">
+													<input type="number" min={MIN_SCAN_DELAY_MS} max={MAX_SCAN_DELAY_MS} step="10" value={f.scanDelayMs ?? DEFAULT_SCAN_DELAY_MS} onchange={(e) => (f.scanDelayMs = Math.round(clamp(Number(e.currentTarget.value), MIN_SCAN_DELAY_MS, MAX_SCAN_DELAY_MS)))} class="{input} w-28 font-mono" style={inputStyle} aria-label="Scan delay in ms" />
+												</span>
+											</label>
+										{/if}
 									{/if}
 									<p>Step takes {fireStepS(k).toFixed(1)} s. The arm holds on {holdsOn(i)}.</p>
 								</div>
 							{:else}
-								<div class="mt-0.5 pl-7 text-[11px]" style={muted}>GPIO {solenoidPin(f.solenoid)} · {f.pulseMs} ms pulse · then wait {k.holdS} s{f.scan ? ' · Scan Barcode' : ''}</div>
+								<div class="mt-0.5 pl-7 text-[11px]" style={muted}>GPIO {solenoidPin(f.solenoid)} · {f.pulseMs} ms pulse · then wait {k.holdS} s{f.scan ? ` · Scan Barcode ${f.scanDelayMs ?? DEFAULT_SCAN_DELAY_MS} ms After` : ''}</div>
 							{/if}
 						</li>
 					{:else}

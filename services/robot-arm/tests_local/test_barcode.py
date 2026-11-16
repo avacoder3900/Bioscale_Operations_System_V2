@@ -204,11 +204,11 @@ class TestAfterFire(Base):
         bc.time.sleep = _t.sleep
         self.tmp.cleanup()
 
-    def run_after_fire(self):
+    def run_after_fire(self, delay_ms=0):
         import threading
 
         before = set(threading.enumerate())
-        bc.scan_after_fire(solenoid="A", pin=17, run_id="R1", title="Drop A")
+        bc.scan_after_fire(solenoid="A", pin=17, run_id="R1", title="Drop A", delay_ms=delay_ms)
         for t in set(threading.enumerate()) - before:
             t.join(5)
 
@@ -219,6 +219,20 @@ class TestAfterFire(Base):
         self.assertEqual(row["code"], LABEL)
         self.assertEqual((row["solenoid"], row["pin"], row["run_id"], row["title"]), ("A", 17, "R1", "Drop A"))
         self.assertFalse(bc.PENDING.exists())
+
+    def test_step_delay_is_waited_and_sent(self):
+        slept = []
+        bc.time.sleep = lambda s: slept.append(s)
+        self.run_after_fire(delay_ms=250)
+        self.assertEqual(slept[0], 0.25)
+        self.assertEqual(self.posts[0][0]["delay_ms"], 250)
+
+    def test_zero_delay_does_not_wait(self):
+        slept = []
+        bc.time.sleep = lambda s: slept.append(s)
+        self.run_after_fire(delay_ms=0)
+        self.assertEqual(slept, [])
+        self.assertEqual(self.posts[0][0]["delay_ms"], 0)
 
     def test_no_read_is_sent_as_failed(self):
         FakeSerial.reply_code = None

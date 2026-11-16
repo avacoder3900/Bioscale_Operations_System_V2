@@ -55,7 +55,7 @@ export async function recordChuteScans(host: string | null, scans: ChuteScanInpu
 				from: 'arm-pi',
 				movedBy: { _id: 'arm-pi', username: host ?? 'arm-pi' },
 				runId: s.runId ?? undefined,
-				params: { solenoid: s.solenoid, pin: s.pin, title: s.title, scanId: id }
+				params: { solenoid: s.solenoid, pin: s.pin, title: s.title, scanDelayMs: s.delayMs, scanId: id }
 			});
 		} catch (err) {
 			console.warn('[chute-scan] movement log row failed:', err instanceof Error ? err.message : err);

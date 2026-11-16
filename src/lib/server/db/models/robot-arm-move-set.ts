@@ -14,7 +14,9 @@ const fireSchema = new Schema(
 		solenoid: { type: String, enum: ['A', 'B', 'conveyor'], required: true },
 		pulseMs: { type: Number, required: true },
 		/** Trapdoor only: scan the chute barcode after the pulse (2026-11-16). */
-		scan: { type: Boolean, default: undefined }
+		scan: { type: Boolean, default: undefined },
+		/** With scan: ms after the pulse ends before the scanner is triggered. */
+		scanDelayMs: { type: Number, default: undefined }
 	},
 	{ _id: false }
 );

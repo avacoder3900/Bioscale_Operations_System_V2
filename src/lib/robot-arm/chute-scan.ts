@@ -20,6 +20,8 @@ export interface ChuteScanInput {
 	label: boolean;
 	error: string | null;
 	elapsedMs: number | null;
+	/** The step's Scan Delay (ms) the Pi waited after the pulse. */
+	delayMs: number | null;
 	solenoid: string | null;
 	pin: number | null;
 	runId: string | null;
@@ -53,6 +55,7 @@ export function parseChuteScansBody(body: unknown): { host: string | null; scans
 			label,
 			error: ok ? null : error,
 			elapsedMs: int(s.elapsed_ms),
+			delayMs: int(s.delay_ms),
 			solenoid: str(s.solenoid, 20),
 			pin: int(s.pin),
 			runId: str(s.run_id, 80),

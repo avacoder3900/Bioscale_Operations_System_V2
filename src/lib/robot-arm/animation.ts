@@ -132,7 +132,17 @@ export interface FireSpec {
 	 * raises a warning on the arm pages and never stops the run.
 	 */
 	scan?: boolean;
+	/**
+	 * With scan: how long after the pulse ends the Pi triggers the scanner
+	 * (2026-11-16, set per step like the pulse). 0 = straight away.
+	 */
+	scanDelayMs?: number;
 }
+
+/** Scan Delay range; 0 by default so the scanner starts as soon as the trapdoor pulse ends. */
+export const DEFAULT_SCAN_DELAY_MS = 0;
+export const MIN_SCAN_DELAY_MS = 0;
+export const MAX_SCAN_DELAY_MS = 10000;
 
 /** A fire step may scan the chute only when it drops a cartridge (solenoid A or B). */
 export function canScanAfter(s: FireTarget): boolean {
@@ -403,7 +413,13 @@ function cleanFireStep(k: any, i: number): Keyframe {
 	if (!Number.isFinite(waitS) || waitS < MIN_FIRE_WAIT_S || waitS > MAX_HOLD_S)
 		throw new Error(`step ${i + 1}: the wait after firing must be ${MIN_FIRE_WAIT_S}–${MAX_HOLD_S} s`);
 	const fire: FireSpec = { solenoid, pulseMs };
-	if (k.fire?.scan === true && canScanAfter(solenoid)) fire.scan = true;
+	if (k.fire?.scan === true && canScanAfter(solenoid)) {
+		fire.scan = true;
+		const d = Math.round(Number(k.fire?.scanDelayMs ?? DEFAULT_SCAN_DELAY_MS));
+		if (!Number.isFinite(d) || d < MIN_SCAN_DELAY_MS || d > MAX_SCAN_DELAY_MS)
+			throw new Error(`step ${i + 1}: the scan delay must be ${MIN_SCAN_DELAY_MS}–${MAX_SCAN_DELAY_MS} ms`);
+		fire.scanDelayMs = d;
+	}
 	return { poseId: '', holdS: roundTenth(waitS), durationS: 0, easing: 'linear', fire };
 }
 
@@ -661,8 +677,14 @@ export interface FireFlag {
 	pin: number;
 	ms: number;
 	solenoid: FireTarget;
-	/** Scan the chute barcode after this pulse (FireSpec.scan). */
+	/** Scan the chute barcode after this pulse (FireSpec.scan), scanDelayMs after it ends. */
 	scan?: boolean;
+	scanDelayMs?: number;
+}
+
+/** The scan part of a fire as the Pi takes it: `scan` + `scan_delay_ms`. */
+export function scanFields(f: { scan?: boolean; scanDelayMs?: number }): { scan?: true; scan_delay_ms?: number } {
+	return f.scan ? { scan: true, scan_delay_ms: Math.max(0, Math.round(f.scanDelayMs ?? DEFAULT_SCAN_DELAY_MS)) } : {};
 }
 
 /**
@@ -671,11 +693,11 @@ export interface FireFlag {
  * fire's pulse + wait later), and the whole run's length. Null when a step
  * is a pose — that list plays on the arm.
  */
-export function fireOnlySchedule(kfs: { holdS: number; fire?: FireSpec }[]): { fires: { t: number; pin: number; ms: number; solenoid: FireTarget; scan?: boolean }[]; durationS: number } | null {
+export function fireOnlySchedule(kfs: { holdS: number; fire?: FireSpec }[]): { fires: { t: number; pin: number; ms: number; solenoid: FireTarget; scan?: true; scan_delay_ms?: number }[]; durationS: number } | null {
 	if (!kfs.length || kfs.some((k) => !k.fire)) return null;
 	let t = 0;
 	const fires = kfs.map((k) => {
-		const f = { t: Math.round(t * 1000) / 1000, pin: solenoidPin(k.fire!.solenoid), ms: k.fire!.pulseMs, solenoid: k.fire!.solenoid, ...(k.fire!.scan ? { scan: true } : {}) };
+		const f = { t: Math.round(t * 1000) / 1000, pin: solenoidPin(k.fire!.solenoid), ms: k.fire!.pulseMs, solenoid: k.fire!.solenoid, ...scanFields(k.fire!) };
 		t += fireStepS(k);
 		return f;
 	});
@@ -689,7 +711,7 @@ export function fireFrames(p: RenderedPath): FireFlag[] {
 		.filter((m) => m.fire)
 		.map((m) => {
 			const frame = Math.min(last, Math.round(m.t * p.rateHz));
-			return { frame, t: p.t[frame], pin: m.fire!.pin, ms: m.fire!.pulseMs, solenoid: m.fire!.solenoid, ...(m.fire!.scan ? { scan: true } : {}) };
+			return { frame, t: p.t[frame], pin: m.fire!.pin, ms: m.fire!.pulseMs, solenoid: m.fire!.solenoid, ...(m.fire!.scan ? { scan: true, scanDelayMs: m.fire!.scanDelayMs ?? DEFAULT_SCAN_DELAY_MS } : {}) };
 		});
 }
 
@@ -720,7 +742,7 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 		const fire = fireAt.get(i);
 		// Plain frames only: no "settle" flags, so the Pi replays the goals exactly (2026-11-06).
 		const frame: Record<string, unknown> = { event: 'frame', t: p.t[i], goal: p.goal[i] };
-		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid, ...(fire.scan ? { scan: true } : {}) };
+		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid, ...scanFields(fire) };
 		lines.push(JSON.stringify(frame));
 	}
 	lines.push(JSON.stringify({ event: 'footer', duration_s: p.durationS, frames: p.goal.length }));

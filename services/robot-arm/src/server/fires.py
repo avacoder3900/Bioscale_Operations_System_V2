@@ -46,6 +46,8 @@ class FireIn(BaseModel):
     solenoid: Optional[str] = None
     #: Trapdoor only: scan the chute barcode after the pulse (barcode.py, 2026-11-16).
     scan: bool = False
+    #: With scan: ms after the pulse ends before the scanner is triggered (BIMS Scan Delay).
+    scan_delay_ms: int = Field(0, ge=0, le=10000)
 
 
 class PlayRequest(BaseModel):
@@ -92,7 +94,7 @@ async def fires_play(req: PlayRequest) -> dict:
     with _lock:
         if _run.active:
             raise HTTPException(status_code=409, detail="fire steps are already playing")
-        frames = [{"t": f.t, "fire": {"pin": f.pin, "ms": f.ms, "solenoid": f.solenoid, "scan": f.scan and f.pin in coil_pins}} for f in req.fires]
+        frames = [{"t": f.t, "fire": {"pin": f.pin, "ms": f.ms, "solenoid": f.solenoid, "scan": f.scan and f.pin in coil_pins, "scan_delay_ms": f.scan_delay_ms}} for f in req.fires]
         fires = fire_schedule(frames)
         belt_fires = [f for f in fires if f["pin"] == belt_pin]
         coil_fires = [f for f in fires if f["pin"] != belt_pin]
