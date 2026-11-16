@@ -27803,3 +27803,6 @@ checkout — ManualCartridgeRemoval row + CHECKOUT AuditLog per cart, statuses u
     'stored' rows await Alejandro's call (void / check out).
 Tests: none added (stageCounts / inOvenCarts are DB-bound; no bucket-service unit file). npm run check:
 16 errors (baseline).
+  - (cont.) Pipeline Flow now starts with "In Oven" (bucketCounts.inOven: backed carts on no open pass,
+    checkouts excluded) ahead of Wax Fill (user, 2026-11-16). Backed on the buckets strip = in buckets +
+    in oven; both drop as wax filling scans carts, so no cart is counted twice.

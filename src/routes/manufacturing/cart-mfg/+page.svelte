@@ -61,7 +61,12 @@
 	// nobody scans carts into a fridge, so "Stored" = reagent-filled carts that have
 	// not been run (a run moves a cart to linked / underway / completed). The legacy
 	// 'stored' status rows count there too until they are reconciled.
+	// In Oven (user, 2026-11-16) leads the flow: backed carts on no open pass, waiting
+	// for wax filling to scan them onto a deck. The same carts are inside the Backed
+	// number on the Production Buckets strip (Backed = in buckets + in oven); a cart
+	// leaves both the moment wax filling scans it, so nothing is counted twice.
 	const pipelineStages = $derived([
+		{ label: 'In Oven', count: data.bucketCounts?.inOven ?? 0, sub: 'backed, waiting for wax fill', color: 'text-[var(--color-tron-purple)]' },
 		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'text-[var(--color-tron-yellow)]' },
 		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: `usable · ${data.pipeline.waxFilling.waxRejected ?? 0} rejected`, color: 'text-[var(--color-tron-blue)]' },
 		{ label: 'Reagent Fill', count: data.pipeline.reagentFilling.inProgress, sub: 'on the robot', color: 'text-[var(--color-tron-orange)]' },
