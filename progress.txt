@@ -27778,6 +27778,45 @@ What this deployment is for: DILUENT-FILL-1 — "Untracked diluent (placeholder)
   label in the diluent Setup (the stock is not a tracked ReagentLot yet; research-system import = S9),
   and the Loaded (mL) explanation. The merge also carries master's robot-arm / SPU Wi-Fi commits unchanged.
 
+2026-11-16 — fix/cart-mfg-counts — cart-mfg dashboard: checkouts out of Backed, "in oven" shown, Seal dropped, Stored redefined
+Why: Alejandro reconciled the floor to BIMS (see below) and asked what the tiles mean. Findings: every tile
+is a live cartridge_records status count minus manual checkouts — except the Production Buckets "Backed"
+tile and the board's "In oven" list (bucket-service.stageCounts / inOvenCarts), which did not subtract
+checkouts and kept showing 51 after the reconciliation. Oven tracking was removed app-wide 2026-09-23,
+so "in oven" existed only as a dropdown on the bucket board. "Seal" counted the retired 'sealed' status
+(3 June-2026 leftovers; top-sealing is implicit in reagent_filled). Nobody scans carts into a fridge, so
+"Store" (status 'stored', set only by the admin Storage page) was stale (102 rows, Apr–Jul 2026).
+What:
+  - bucket-service: stageCounts(excludeIds?) and inOvenCarts(limit, excludeIds?) exclude manual checkouts
+    (getCheckedOutCartridgeIds when not passed); StageCounts.inOven = backed carts on no open pass.
+  - cart-mfg/+page.server.ts passes its checkedOutIds; +page.svelte: Backed tile sub "N buckets · M in
+    oven"; pipeline tiles are now Wax Fill · Wax-Filled · Reagent Fill (on the robot) · Stored
+    (reagent_filled + legacy stored = reagent-filled, not yet run — a run moves the cart to
+    linked/underway/completed). Seal tile removed.
+Data (production, by Alejandro's decision, scripts in the session scratchpad, mirrors the Scrap page's
+checkout — ManualCartridgeRemoval row + CHECKOUT AuditLog per cart, statuses untouched):
+  - 95 wax_filled carts checked out (removal kBDwr9z0dUn6jIWX60b0c); the 27 kept are R04 runs
+    RW0izX-JPn7PbaYRnLEtt (Nov 12) and CsIO9ZEJtiuEACL-SqudH (Nov 11).
+  - 31 backing carts checked out (removal 9Qu2V7o8CDE9JyyJjvK8Z); the 20 kept were scanned in the oven
+    (BKT-000008 pass of Nov 12).
+  - Dashboard: Wax-Filled 27, Backed / In oven 20. Pending: the 3 'sealed' rows (test data) and the 102
+    'stored' rows await Alejandro's call (void / check out).
+Tests: none added (stageCounts / inOvenCarts are DB-bound; no bucket-service unit file). npm run check:
+16 errors (baseline).
+  - (cont.) Pipeline Flow now starts with "In Oven" (bucketCounts.inOven: backed carts on no open pass,
+    checkouts excluded) ahead of Wax Fill (user, 2026-11-16). Backed on the buckets strip = in buckets +
+    in oven; both drop as wax filling scans carts, so no cart is counted twice.
+
+Deployment (production) — 2026-11-16
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/2XpFKGcjG21cWkdnWzivZGxKn2LV
+Source: master @ commit b908e1f9 (fast-forward of fix/cart-mfg-counts)
+Retrieve this exact code: git checkout b908e1f9
+Live: 18:04:26Z — /_app/version.json 1794846656162 → 1794852156332; GitHub status success.
+What this deployment is for: cart-mfg dashboard after Alejandro's physical-count reconciliation —
+  Backed / In oven exclude manual checkouts (was still 51, now 20), "In Oven" tile leads the Pipeline
+  Flow, Seal tile dropped, Reagent Fill = in progress, Stored = reagent-filled not yet run.
+  Data the same day: 3 'sealed' test rows hidden via checkout (pqIep3Nqd9WR6ATuz9ikX); stray cart
+  4c3fbb44… pulled from the reconciliation checkout (now 30) and set Loose for a new bucket.
 ================================================================================
 2026-11-16 — feat/arm-barcode-scanner — Chute barcode scanner on the arm Pi (command-triggered)
 ================================================================================

@@ -57,12 +57,20 @@
 
 	// Starts at Wax Fill: the Backed stage is the last tile of the Production Buckets
 	// strip further down, so repeating it here was a third copy of the same count.
+	// Seal dropped (user, 2026-11-16): top-sealing is implicit in reagent-filled and
+	// nobody scans carts into a fridge, so "Stored" = reagent-filled carts that have
+	// not been run (a run moves a cart to linked / underway / completed). The legacy
+	// 'stored' status rows count there too until they are reconciled.
+	// In Oven (user, 2026-11-16) leads the flow: backed carts on no open pass, waiting
+	// for wax filling to scan them onto a deck. The same carts are inside the Backed
+	// number on the Production Buckets strip (Backed = in buckets + in oven); a cart
+	// leaves both the moment wax filling scans it, so nothing is counted twice.
 	const pipelineStages = $derived([
+		{ label: 'In Oven', count: data.bucketCounts?.inOven ?? 0, sub: 'backed, waiting for wax fill', color: 'text-[var(--color-tron-purple)]' },
 		{ label: 'Wax Fill', count: data.pipeline.waxFilling.inProgress, sub: 'filling', color: 'text-[var(--color-tron-yellow)]' },
 		{ label: 'Wax-Filled', count: data.pipeline.waxFilling.waxStage, sub: `usable · ${data.pipeline.waxFilling.waxRejected ?? 0} rejected`, color: 'text-[var(--color-tron-blue)]' },
-		{ label: 'Reagent', count: data.pipeline.reagentFilling.inProgress + data.pipeline.reagentFilling.reagentFilled, sub: `${data.pipeline.reagentFilling.inProgress} filling`, color: 'text-[var(--color-tron-orange)]' },
-		{ label: 'Seal', count: data.pipeline.reagentFilling.sealed, sub: 'sealed', color: 'text-[var(--color-tron-cyan)]' },
-		{ label: 'Store', count: data.pipeline.storage.stored, sub: `${data.pipeline.storage.voided} voided`, color: 'text-[var(--color-tron-green)]' }
+		{ label: 'Reagent Fill', count: data.pipeline.reagentFilling.inProgress, sub: 'on the robot', color: 'text-[var(--color-tron-orange)]' },
+		{ label: 'Stored', count: data.pipeline.reagentFilling.reagentFilled + data.pipeline.storage.stored, sub: 'reagent-filled, not yet run', color: 'text-[var(--color-tron-green)]' }
 	]);
 
 	async function runCartridgeLookup() {
@@ -265,7 +273,7 @@
 			{ key: 'available', label: 'Available', count: bc.available, sub: 'empty buckets', color: 'text-[var(--color-tron-text)]' },
 			{ key: 'barcoded', label: 'Barcoded', count: bc.stages.barcoded.cartridges, sub: `${bc.stages.barcoded.buckets} bucket${bc.stages.barcoded.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
 			{ key: 'unpressed', label: 'Unpressed', count: bc.stages.unpressed.cartridges, sub: `${bc.stages.unpressed.buckets} bucket${bc.stages.unpressed.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-cyan)]' },
-			{ key: 'backing', label: 'Backed', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'}`, color: 'text-[var(--color-tron-purple)]' }
+			{ key: 'backing', label: 'Backed', count: bc.stages.backing.cartridges, sub: `${bc.stages.backing.buckets} bucket${bc.stages.backing.buckets === 1 ? '' : 's'} · ${bc.inOven} in oven`, color: 'text-[var(--color-tron-purple)]' }
 		]}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-4">
 			<div class="mb-4 flex items-center justify-between">

@@ -52,6 +52,7 @@ import { generateBarcode } from './barcode-generator';
 import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, type ConsumeResult } from './thermoseal-service';
 import { lotRemaining, fifoLot } from './lot-remaining';
 import { LOOSE_STATUS, LOOSE_LABEL, partitionMissingActions, type MissingAction, type LooseDecision } from './bucket-loose';
+import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
 export { LOOSE_STATUS, LOOSE_LABEL, type MissingAction, type LooseDecision } from './bucket-loose';
 
 export const BUCKET_STAGES = ['barcoded', 'unpressed', 'backing'] as const;
@@ -1380,11 +1381,17 @@ export async function moveToOven(input: MoveToOvenInput): Promise<{ cycleId: str
  * dropdown inside the board's Backed column, never as a card of its own (user,
  * 2026-09-25). They stay here until wax filling scans them in.
  */
-export async function inOvenCarts(limit = 200): Promise<{ count: number; ids: string[] }> {
+export async function inOvenCarts(limit = 200, excludeIds?: string[]): Promise<{ count: number; ids: string[] }> {
 	await connectDB();
-	const open = await BucketCycle.find({ status: 'open', stage: BACKED_STAGE }).select('cartridgeIds').lean() as any[];
+	const [open, checkedOut] = await Promise.all([
+		BucketCycle.find({ status: 'open', stage: BACKED_STAGE }).select('cartridgeIds').lean() as any as Promise<any[]>,
+		excludeIds ? Promise.resolve(excludeIds) : getCheckedOutCartridgeIds()
+	]);
 	const inBucket = open.flatMap(c => (c.cartridgeIds ?? []) as string[]);
-	const q = { status: BACKED_STATUS, ...(inBucket.length ? { _id: { $nin: inBucket } } : {}) };
+	// Manually checked-out carts (physical-count reconciliation, trash) are gone
+	// from the oven too — the same exclusion every dashboard count applies.
+	const notThese = [...inBucket, ...checkedOut];
+	const q = { status: BACKED_STATUS, ...(notThese.length ? { _id: { $nin: notThese } } : {}) };
 	const [count, rows] = await Promise.all([
 		CartridgeRecord.countDocuments(q),
 		CartridgeRecord.find(q).select('_id').sort({ statusUpdatedOn: -1 }).limit(limit).lean() as any as Promise<{ _id: string }[]>
@@ -2461,21 +2468,28 @@ export interface StageCounts {
 	 * Per stage: open passes and their member carts. Backed is the exception —
 	 * its `cartridges` is EVERY cart at status 'backing', in a bucket or not
 	 * (user, 2026-09-25: one category, no separate "no bucket" count). Carts
-	 * freed by Move to oven are still 'backing' and still count here.
+	 * freed by Move to oven are still 'backing' and still count here. Manually
+	 * checked-out carts are excluded (2026-11-16), as on every other dashboard
+	 * count, so a physical-count reconciliation shows here too.
 	 */
 	stages: Record<BucketStage, { buckets: number; cartridges: number }>;
+	/** Backed carts on no open pass — freed by Move to oven, waiting for wax filling (checkouts excluded). */
+	inOven: number;
 	available: number;
 	inUse: number;
 	quarantined: number;
 	retired: number;
 }
 
-export async function stageCounts(): Promise<StageCounts> {
+export async function stageCounts(excludeIds?: string[]): Promise<StageCounts> {
 	await connectDB();
-	const [cycleAgg, bucketAgg, backedTotal] = await Promise.all([
+	const checkedOut = excludeIds ?? (await getCheckedOutCartridgeIds());
+	const notCheckedOut = checkedOut.length ? { _id: { $nin: checkedOut } } : {};
+	const [cycleAgg, bucketAgg, backedTotal, inOven] = await Promise.all([
 		BucketCycle.aggregate([{ $match: { status: 'open' } }, { $group: { _id: '$stage', buckets: { $sum: 1 }, cartridges: { $sum: '$quantity' } } }]) as any as Promise<any[]>,
 		ProductionBucket.aggregate([{ $group: { _id: '$state', n: { $sum: 1 } } }]) as any as Promise<any[]>,
-		CartridgeRecord.countDocuments({ status: BACKED_STATUS })
+		CartridgeRecord.countDocuments({ status: BACKED_STATUS, ...notCheckedOut }),
+		inOvenCarts(1, checkedOut).then((r) => r.count)
 	]);
 	const stages = Object.fromEntries(BUCKET_STAGES.map(s => [s, { buckets: 0, cartridges: 0 }])) as StageCounts['stages'];
 	for (const row of cycleAgg) {
@@ -2486,6 +2500,7 @@ export async function stageCounts(): Promise<StageCounts> {
 	const byState = new Map(bucketAgg.map(r => [r._id, r.n ?? 0]));
 	return {
 		stages,
+		inOven,
 		available: byState.get('available') ?? 0,
 		inUse: byState.get('in_use') ?? 0,
 		quarantined: byState.get('quarantined') ?? 0,
