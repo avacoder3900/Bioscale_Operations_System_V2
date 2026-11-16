@@ -27866,3 +27866,14 @@ ChuteScanWarning.svelte, api/robot-arm/chute-scans (+ /close). Pi: barcode.py, r
 tests_local/test_barcode.py (17), test_fire_scan.py (4).
 Checked: vitest robot-arm + arm server 395 pass; npm run check 13 errors / 451 warnings, none in these files
 (assembly, magnetometer, Ask BIMS, research-proxy, r2 — the master baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CWSetqxtPJthdgXVgmShfrpZSh3s
+Source: branch master @ commit ffc0bbae (from feat/arm-barcode-scanner)
+Retrieve this exact code: git checkout master at commit ffc0bbae
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Scan Barcode After on trapdoor fire steps; chute scan warning (Close / Hide).
+Live 2026-11-16 ~18:15 UTC (/_app/version.json 1794852871810; POST /api/robot-arm/chute-scans 401 without key).
+Pi side installed on arm-pi the same hour with Alejandro's OK: replay_settle.py, fires.py, barcode.py copied
+(backups *.bak-pre-chute-scan), robot-arm restarted with /sessions/active null; scanner still Command mode.
+End-to-end check without firing a solenoid: barcode.scan_after_fire(A, 17, run test-2026-11-16) on the Pi, no
+label in view -> row uYPCPIJ63HssCwp0ga8Oo (no barcode read) + Movement Log chute_scan row; the warning
+"Chute Scan Failed: no barcode read after Solenoid A in Chute Scan Test" is live (left for Alejandro to Close).
