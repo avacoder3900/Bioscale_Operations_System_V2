@@ -4,7 +4,8 @@
  *   recordChuteScans  the Pi's POST: one robot_arm_chute_scans row + one
  *                     Movement Log row (kind chute_scan) per scan
  *   chuteScanWarning  the newest failed scan not yet closed, with how many
- *                     failed since the last Close (last 24 h)
+ *                     failed since the last Close (last 24 h); scans the Pi
+ *                     skipped because the scanner was unplugged never count
  *   closeChuteWarning Close: every failed scan up to now is dismissed for everyone
  */
 import { connectDB } from './db/connection';
@@ -66,7 +67,8 @@ export async function recordChuteScans(host: string | null, scans: ChuteScanInpu
 
 export async function chuteScanWarning(now: Date = new Date()): Promise<ChuteScanWarning | null> {
 	await connectDB();
-	const q = { ok: false, dismissedAt: null, at: { $gte: new Date(now.getTime() - WARNING_WINDOW_MS) } };
+	// An unplugged scanner is not a failed scan: no warning until it is plugged back in.
+	const q = { ok: false, scannerMissing: { $ne: true }, dismissedAt: null, at: { $gte: new Date(now.getTime() - WARNING_WINDOW_MS) } };
 	const latest = await RobotArmChuteScan.findOne(q).sort({ at: -1 }).select('at code error solenoid title').lean<{
 		_id: string;
 		at: Date;

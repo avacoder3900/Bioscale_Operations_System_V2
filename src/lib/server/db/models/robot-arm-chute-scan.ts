@@ -36,6 +36,8 @@ const robotArmChuteScanSchema = new Schema(
 		host: { type: String, default: null },
 		/** The Pi's own id for the scan, so a re-sent row is not stored twice. */
 		piScanId: { type: String, default: null },
+		/** The scanner was unplugged and the Pi skipped the scan: kept for the log, never a warning. */
+		scannerMissing: { type: Boolean, default: false },
 		dismissedAt: { type: Date, default: null },
 		dismissedBy: { type: operatorRef, default: null }
 	},

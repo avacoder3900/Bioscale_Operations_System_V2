@@ -27,6 +27,8 @@ export interface ChuteScanInput {
 	runId: string | null;
 	title: string | null;
 	piScanId: string | null;
+	/** The scanner was unplugged, so the Pi skipped the scan: logged, never a warning (2026-11-16). */
+	scannerMissing: boolean;
 }
 
 const str = (v: unknown, max = 200): string | null => (typeof v === 'string' && v.trim() ? v.trim().slice(0, max) : null);
@@ -60,15 +62,17 @@ export function parseChuteScansBody(body: unknown): { host: string | null; scans
 			pin: int(s.pin),
 			runId: str(s.run_id, 80),
 			title: str(s.title, 200),
-			piScanId: str(s.id, 80)
+			piScanId: str(s.id, 80),
+			scannerMissing: s.scanner_missing === true
 		};
 	});
 	return { host: str(b.host, 80), scans };
 }
 
 /** The Movement Log line for a scan. */
-export function chuteScanLine(s: Pick<ChuteScanInput, 'ok' | 'code' | 'error' | 'solenoid'>): string {
+export function chuteScanLine(s: Pick<ChuteScanInput, 'ok' | 'code' | 'error' | 'solenoid'> & { scannerMissing?: boolean }): string {
 	const where = s.solenoid ? ` After Solenoid ${s.solenoid}` : '';
+	if (s.scannerMissing) return `Chute Barcode Scan${where}  Skipped: scanner not plugged in`;
 	return s.ok ? `Chute Barcode Scan${where}  ${s.code}` : `Chute Barcode Scan${where}  Failed: ${s.error ?? 'no barcode read'}${s.code ? ` (${s.code})` : ''}`;
 }
 

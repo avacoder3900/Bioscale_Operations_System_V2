@@ -25,6 +25,8 @@ describe('chute scans', () => {
 		expect(scans[1]).toMatchObject({ ok: false, label: false, error: 'not a whole cartridge label' });
 		expect(scans[2]).toMatchObject({ ok: false, code: null, error: 'no barcode read' });
 		expect(parseChuteScansBody(null).scans).toEqual([]);
+		expect(parseChuteScansBody({ scans: [{ ok: false, error: 'scanner not plugged in', scanner_missing: true }] }).scans[0].scannerMissing).toBe(true);
+		expect(chuteScanLine({ ok: false, code: null, error: 'scanner not plugged in', solenoid: 'A', scannerMissing: true })).toBe('Chute Barcode Scan After Solenoid A  Skipped: scanner not plugged in');
 	});
 
 	it('lines and warning text', () => {

@@ -267,6 +267,16 @@ def scan_after_fire(
     d = max(0, min(MAX_SCAN_AFTER_DELAY_MS, d))
 
     def work() -> None:
+        if interface() == "missing":
+            # Unplugged on purpose (2026-11-16): skip the scan and say so; BIMS logs it
+            # without a warning. A scanner in keyboard mode still scans and warns.
+            report_to_bims([{
+                "id": uuid.uuid4().hex, "at": _now_iso(), "ok": False, "code": None, "label": False,
+                "error": "scanner not plugged in", "scanner_missing": True, "elapsed_ms": 0,
+                "solenoid": solenoid, "pin": pin, "run_id": run_id, "title": title, "delay_ms": d,
+            }])
+            print("[barcode] fire: scanner not plugged in, scan skipped", flush=True)
+            return
         if d:
             time.sleep(d / 1000.0)
         # Wait out a scan already running (another fire, a page test) instead of skipping.

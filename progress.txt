@@ -27911,3 +27911,15 @@ What this deployment is for: Scan Delay (ms) per trapdoor fire step, set in BIMS
 Pi side installed on arm-pi with Alejandro's OK: replay_settle.py, fires.py, barcode.py (backups
 *.bak-pre-scan-delay), robot-arm restarted with /sessions/active null. Measured on the Pi with Scan Delay 0
 (no solenoid fired, nothing sent to BIMS): pulse end -> scanner trigger sent, median 1.5 ms, max 61 ms over 10.
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — No chute scan warnings while the scanner is unplugged
+================================================================================
+Alejandro unplugged the scanner for now: "hide all warnings until it is plugged back in".
+- Pi barcode.scan_after_fire: scanner missing on USB -> no scan, row sent with scanner_missing:true
+  ("scanner not plugged in"). Keyboard mode (plugged in but not set up) still scans and warns.
+- BIMS: robot_arm_chute_scans.scannerMissing; chuteScanWarning skips those rows; Movement Log line
+  "Chute Barcode Scan After Solenoid A  Skipped: scanner not plugged in". Warnings return by themselves
+  once the scanner is plugged back in (it keeps USB Virtual Port + Command mode in its flash).
+- The 18:17 test warning had already been closed with Close by Giovanni Victorio at 18:32 UTC.
+Checked: vitest 391 pass; Pi tests pass; npm run check 13 errors (baseline, none in these files).

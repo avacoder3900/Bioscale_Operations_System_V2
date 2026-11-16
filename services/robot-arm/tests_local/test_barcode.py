@@ -262,6 +262,18 @@ class TestAfterFire(Base):
         self.assertEqual(len(self.posts[0]), 2)
         self.assertFalse(bc.PENDING.exists())
 
+    def test_unplugged_scanner_is_skipped_and_marked(self):
+        real = bc.interface
+        bc.interface = lambda: "missing"
+        try:
+            self.run_after_fire()
+        finally:
+            bc.interface = real
+        row = self.posts[0][0]
+        self.assertTrue(row["scanner_missing"])
+        self.assertEqual(row["error"], "scanner not plugged in")
+        self.assertNotIn(bc.TRIGGER, FakeSerial.writes)
+
     def test_url_from_changes_url(self):
         os.environ["BIMS_CHANGES_URL"] = "https://x.example/api/robot-arm/changes"
         try:
