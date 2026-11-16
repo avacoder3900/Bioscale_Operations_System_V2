@@ -171,13 +171,25 @@ def parse_frames(lines: list[dict]) -> list[dict]:
 
 
 def fire_schedule(frames: list[dict]) -> list[dict]:
-    """`{t, pin, ms, solenoid}` for every frame that fires, in time order."""
+    """`{t, pin, ms, solenoid, scan}` for every frame that fires, in time order.
+
+    `scan` (2026-11-16): BIMS's "Scan Barcode After" on a trapdoor step — scan
+    the chute `scan_delay_ms` after the pulse ends (src/server/barcode.py).
+    """
     out = [
-        {"t": f["t"], "pin": int(f["fire"]["pin"]), "ms": int(f["fire"]["ms"]), "solenoid": f["fire"].get("solenoid")}
+        {"t": f["t"], "pin": int(f["fire"]["pin"]), "ms": int(f["fire"]["ms"]), "solenoid": f["fire"].get("solenoid"), "scan": f["fire"].get("scan") is True, "scan_delay_ms": _scan_delay(f["fire"])}
         for f in frames
         if f.get("fire")
     ]
     return sorted(out, key=lambda x: x["t"])
+
+
+def _scan_delay(fire: dict) -> int:
+    """BIMS's Scan Delay (ms) for the step: 0..10000, 0 when missing or bad."""
+    try:
+        return max(0, min(10000, int(fire.get("scan_delay_ms") or 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 class FireTimer(threading.Thread):
@@ -189,9 +201,22 @@ class FireTimer(threading.Thread):
     instead. It fires one at a time, in order, through gpio.pulse_blocking,
     which shares the coil lock with the REST routes: two coils are never on
     together. `halt` (replay stopped) cancels whatever has not fired yet.
+
+    A fire with `scan` (2026-11-16) starts a chute barcode scan once its pulse
+    went through (barcode.scan_after_fire, on its own thread so later fires
+    keep their times). The scan reports to BIMS and never stops the run.
     """
 
-    def __init__(self, fires: list[dict], t0: float, halt: threading.Event, pulse: Callable[..., dict], loop: int) -> None:
+    def __init__(
+        self,
+        fires: list[dict],
+        t0: float,
+        halt: threading.Event,
+        pulse: Callable[..., dict],
+        loop: int,
+        run_id: Optional[str] = None,
+        title: Optional[str] = None,
+    ) -> None:
         super().__init__(name="replay-fire", daemon=True)
         self.fires = fires
         self.t0 = t0
@@ -199,6 +224,9 @@ class FireTimer(threading.Thread):
         self.pulse = pulse
         self.loop = loop
         self.results: list[dict] = []
+        # Built on the session thread, which carries the replay's run id.
+        self.run_id = run_id if run_id is not None else _current_run_id()
+        self.title = title
 
     def run(self) -> None:
         for f in self.fires:
@@ -212,6 +240,15 @@ class FireTimer(threading.Thread):
             r.update({"t": f["t"], "solenoid": f["solenoid"], "late_ms": late_ms, "loop": self.loop})
             self.results.append(r)
             print(f"[replay_settle] fire {f['solenoid'] or ''} GPIO {f['pin']} {f['ms']} ms at t={f['t']}: {'ok' if r.get('ok') else r.get('error')}", flush=True)
+            if f.get("scan") and r.get("ok"):
+                try:
+                    from src.server import barcode
+
+                    barcode.scan_after_fire(solenoid=f.get("solenoid"), pin=f["pin"], run_id=self.run_id, title=self.title, delay_ms=f.get("scan_delay_ms", 0))
+                    r["scan"] = "started"
+                except Exception as exc:  # no scanner module: the fire still counts
+                    r["scan"] = f"unavailable: {exc}"
+                    print(f"[replay_settle] chute scan unavailable: {exc}", flush=True)
         skipped = len(self.fires) - len(self.results)
         if skipped:
             self.results.append({"skipped": skipped, "loop": self.loop, "reason": "replay stopped"})
@@ -522,7 +559,7 @@ def _replay_session_settling_unlocked(
             if coil_fires and pulse is not None or belt_fires and belt_pulse is not None:
                 halt.clear()
             if coil_fires and pulse is not None:
-                timers.append(FireTimer(coil_fires, t_loop_start, halt, pulse, loop_idx + 1))
+                timers.append(FireTimer(coil_fires, t_loop_start, halt, pulse, loop_idx + 1, title=header.get("animated")))
             if belt_fires and belt_pulse is not None:
                 timers.append(FireTimer(belt_fires, t_loop_start, halt, belt_pulse, loop_idx + 1))
             for t in timers:

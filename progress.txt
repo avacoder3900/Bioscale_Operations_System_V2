@@ -27902,3 +27902,118 @@ Not done / open: nothing was written to production (no --apply, no write endpoin
 DB write paths (fill, reconcile, manual set) are type-checked and unit-tested at the pure layer only.
 device_logs and the device-log device_events appear to be written to Mongo from outside BIMS, so the
 "log arrived" hook in BIMS may rarely fire — the after-sweep reconcile and the page button cover that.
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — Chute barcode scanner on the arm Pi (command-triggered)
+================================================================================
+Alejandro plugged a Waveshare Barcode Scanner Module (SKU 14810, USB 0218:0210 "USBScn Module") into
+arm-pi to read each cartridge as the trapdoor solenoids drop it from the chute, before the arm grabs it.
+The OT-2's own barcode scan stays as the check that the cartridge is in the slot.
+Hardware check (read-only, over Tailscale): factory mode is a USB keyboard at
+/dev/input/by-id/usb-USBScn_Chip_USBScn_Module_2027300413413333-event-kbd; brevitest3 is in the `input`
+group. Button scans of two labels, 5 reads: every one a whole 36-char UUID + Enter, ~0.2 s, repeats identical.
+Decision: Command trigger. Scanner set once to USB Virtual Port (setup code, Setting Manual V2.1 p. 18), then
+register 0x0000 bits 1-0 := 01 (Command mode) over serial; trigger 7E 00 08 01 00 02 01 AB CD.
+- services/robot-arm/src/server/barcode.py (new): /barcode/status|scan|recent|command-mode; scan_blocking()
+  for the fires/replay path; label rule mirrors BIMS isCartBarcode; stop command on a no-read.
+- services/robot-arm/scripts/install_barcode_router.py (new, conveyor-installer pattern).
+- services/robot-arm/tests_local/test_barcode.py: 12 pass (fake serial port).
+Not yet on the Pi; not yet in BIMS. npm run check not run (Python only).
+Installed on arm-pi 2026-11-16 ~17:30 UTC with Alejandro's OK: barcode.py + install_barcode_router.py copied,
+installer added the import + include_router (backup app.py.bak-barcode), robot-arm restarted with
+/sessions/active null and no fire run. Alejandro scanned the USB Virtual Port setup code: the scanner re-enumerated
+as 0218:0212 cdc_acm ttyACM1 (/dev/serial/by-id/usb-USBScn_Chip_USBScn_Module_2027300413413333-if00); the
+follower BusLinker stays /dev/buslinker-follower -> ttyACM0. POST /barcode/command-mode: reg 0x0000 212 -> 213
+(manual -> command), saved to flash. Reg 0x0060 = 0x01 (pure data + CR). Triggered scans with a label in view:
+3/3 read 9bfb7605-291f-43a6-a028-72234c15f19f whole (label:true), 1146 / 101 / 51 ms.
+Next: a Scan Barcode step after the trapdoor fire in a move set, the result saved with the run in BIMS.
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — Scan Barcode After on trapdoor fire steps + chute scan warning
+================================================================================
+Alejandro: after a trapdoor dispense, scan the chute; a failed scan is a warning only (never stops anything),
+with Close and Hide.
+How it flows: a fire step on Solenoid A/B has "Scan Barcode After" (FireSpec.scan; move-set + verified-run
+schemas; cleanKeyframes keeps it only on a trapdoor). BIMS writes it on the replay frame's fire and in the
+fires-only /fires/play body. On the Pi, replay_settle.FireTimer calls barcode.scan_after_fire() once the pulse
+went through, on its own thread (later fires keep their times): 500 ms for the cartridge to land, scan up to
+3 s, POST /api/robot-arm/chute-scans (URL from BIMS_CHANGES_URL, key ROBOT_ARM_API_KEY); a row BIMS could
+not take waits in ~/.bims-arm/chute-scans-pending.jsonl and goes with the next scan.
+BIMS: robot_arm_chute_scans (indexes created by hand for this collection only: at, piScanId unique), one
+Movement Log row per scan (kind chute_scan, group "Chute Barcode Scan"). ok is recomputed from the code
+(whole label only). ChuteScanWarning in RobotArmConnectionPanel (every robot arm page) polls every 10 s:
+"⚠ Chute Scan Failed: ..." with Hide (Show Warning chip, this browser, a newer failure shows again) and Close
+(dismisses every failed scan for everyone, AuditLog robot_arm.chute_scan.close_warning).
+Also fixed: loadMoveSet's fire rebuild (robot-arm-animation.ts) and verified-run steps would have dropped scan.
+Files: animation.ts, robot-arm-move-set.ts, robot-arm-verified-run.ts, robot-arm-animation.ts,
+robot-arm-verified.ts, robot-arm-client.ts, move-log.ts, move-types.ts, teach/moveset/[id]/+page.svelte,
+RobotArmConnectionPanel.svelte; new chute-scan.ts (+test), robot-arm-chute-scan.ts (model + service),
+ChuteScanWarning.svelte, api/robot-arm/chute-scans (+ /close). Pi: barcode.py, replay_settle.py, fires.py,
+tests_local/test_barcode.py (17), test_fire_scan.py (4).
+Checked: vitest robot-arm + arm server 395 pass; npm run check 13 errors / 451 warnings, none in these files
+(assembly, magnetometer, Ask BIMS, research-proxy, r2 — the master baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CWSetqxtPJthdgXVgmShfrpZSh3s
+Source: branch master @ commit ffc0bbae (from feat/arm-barcode-scanner)
+Retrieve this exact code: git checkout master at commit ffc0bbae
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Scan Barcode After on trapdoor fire steps; chute scan warning (Close / Hide).
+Live 2026-11-16 ~18:15 UTC (/_app/version.json 1794852871810; POST /api/robot-arm/chute-scans 401 without key).
+Pi side installed on arm-pi the same hour with Alejandro's OK: replay_settle.py, fires.py, barcode.py copied
+(backups *.bak-pre-chute-scan), robot-arm restarted with /sessions/active null; scanner still Command mode.
+End-to-end check without firing a solenoid: barcode.scan_after_fire(A, 17, run test-2026-11-16) on the Pi, no
+label in view -> row uYPCPIJ63HssCwp0ga8Oo (no barcode read) + Movement Log chute_scan row; the warning
+"Chute Scan Failed: no barcode read after Solenoid A in Chute Scan Test" is live (left for Alejandro to Close).
+
+2026-11-16 — master — fix(monitor): monitor-flag push retries when the device's own event arrives (dd22c9af)
+A flag push made mid-test times out (firmware drops the cloud session for the whole test) and was stored as
+'offline' with nothing to retry it: the spark/status hook it relied on is not in the Particle product.
+BT-M01-0000-0210 was enabled 10/19 with the device flag still 0; 0211 had no sync record at all.
+- src/lib/server/monitor-flag-retry.ts (+ test, 8 pass): pure decision — which events, which units, 60 s gap.
+- src/lib/server/service-flag.ts: retryMonitorFlagIfPending(deviceId, eventType).
+- src/routes/api/particle/webhook/+server.ts: called after the response (waitUntil) for upload-test /
+  device-log / blank-test. Units never configured for monitoring are not called.
+- spu/[spuId]/diagnostics: 'offline' label now says the unit is unreachable during a test and retries by itself.
+Checked: vitest 8 pass; npm run check 14 errors / 451 warnings, none in these files (master baseline).
+Not yet verified live: confirm particleLink.monitorFlagState = synced on 0210 after its next test upload.
+Source: branch master (from fix/monitor-flag-retry)
+What this deployment is for: monitor mode actually reaches units that are run back to back.
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — Scan Delay (ms) per fire step, set in BIMS; no Pi-side wait
+================================================================================
+Alejandro: the shortest delay from the hardware, and a delay set in BIMS like the pulse and belt times.
+- FireSpec.scanDelayMs (0–10000 ms, default 0), "Scan Delay (ms)" box under Scan Barcode After on a
+  Solenoid A/B fire step; counted from the end of the pulse. Saved in move sets and verified-run steps;
+  sent to the Pi as fire.scan_delay_ms on the replay frame and in /fires/play.
+- Pi: replay_settle passes the step's delay to barcode.scan_after_fire(delay_ms); the Pi's own default
+  went 500 -> 0 ms (BARCODE_SCAN_AFTER_DELAY_MS only for a caller that sends none); 0 = no sleep at all.
+- BIMS stores the delay on each chute scan (delayMs) and in the Movement Log row params (scanDelayMs).
+Checked: vitest robot-arm + arm server 396 pass; Pi tests 19 + 5 pass; npm run check 13 errors / 451
+warnings, none in these files (master baseline).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/7xxJkqEvjCovTa6BSoVUd2BjFCCh
+Source: branch master @ commit 3af5768e (from feat/arm-barcode-scanner)
+Retrieve this exact code: git checkout master at commit 3af5768e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Scan Delay (ms) per trapdoor fire step, set in BIMS (Vercel status success).
+Pi side installed on arm-pi with Alejandro's OK: replay_settle.py, fires.py, barcode.py (backups
+*.bak-pre-scan-delay), robot-arm restarted with /sessions/active null. Measured on the Pi with Scan Delay 0
+(no solenoid fired, nothing sent to BIMS): pulse end -> scanner trigger sent, median 1.5 ms, max 61 ms over 10.
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — No chute scan warnings while the scanner is unplugged
+================================================================================
+Alejandro unplugged the scanner for now: "hide all warnings until it is plugged back in".
+- Pi barcode.scan_after_fire: scanner missing on USB -> no scan, row sent with scanner_missing:true
+  ("scanner not plugged in"). Keyboard mode (plugged in but not set up) still scans and warns.
+- BIMS: robot_arm_chute_scans.scannerMissing; chuteScanWarning skips those rows; Movement Log line
+  "Chute Barcode Scan After Solenoid A  Skipped: scanner not plugged in". Warnings return by themselves
+  once the scanner is plugged back in (it keeps USB Virtual Port + Command mode in its flash).
+- The 18:17 test warning had already been closed with Close by Giovanni Victorio at 18:32 UTC.
+Checked: vitest 391 pass; Pi tests pass; npm run check 13 errors (baseline, none in these files).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/G6AWy6hAG9hfasZWRaQk8pospnK8
+Source: branch master @ commit 5d40511a (from feat/arm-barcode-scanner)
+Retrieve this exact code: git checkout master at commit 5d40511a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: no chute scan warning while the scanner is unplugged (Vercel status success).
+Pi: barcode.py copied (backup barcode.py.bak-pre-unplugged), robot-arm restarted idle; /barcode/status
+interface "missing". Check: scan_after_fire on the Pi -> row GJ71_KNKoIGg-k778IRTU scannerMissing, Movement
+Log "Skipped: scanner not plugged in", chuteScanWarning null.

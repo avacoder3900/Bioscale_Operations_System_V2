@@ -1106,7 +1106,7 @@ export const robotArm = {
 
 	// Fire steps without the arm (services/robot-arm fires.py): a fires-only move set
 	// plays here, not through the replay, so it works with the arm's power off.
-	firesPlay: (body: { fires: { t: number; pin: number; ms: number; solenoid?: string }[]; title?: string }) =>
+	firesPlay: (body: { fires: { t: number; pin: number; ms: number; solenoid?: string; scan?: boolean; scan_delay_ms?: number }[]; title?: string }) =>
 		robotArmFetch<{ run_id: string; duration_s: number; fires: number }>('/fires/play', { method: 'POST', body, timeoutMs: 6000 }),
 	firesStatus: () => robotArmFetch<{ active: string | null }>('/fires/status', { timeoutMs: 4000 }),
 	firesStop: () => robotArmFetch<{ stopped_run_id: string | null }>('/fires/stop', { method: 'POST', timeoutMs: 6000 }),
