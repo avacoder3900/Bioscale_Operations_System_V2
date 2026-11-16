@@ -27923,3 +27923,11 @@ Alejandro unplugged the scanner for now: "hide all warnings until it is plugged 
   once the scanner is plugged back in (it keeps USB Virtual Port + Command mode in its flash).
 - The 18:17 test warning had already been closed with Close by Giovanni Victorio at 18:32 UTC.
 Checked: vitest 391 pass; Pi tests pass; npm run check 13 errors (baseline, none in these files).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/G6AWy6hAG9hfasZWRaQk8pospnK8
+Source: branch master @ commit 5d40511a (from feat/arm-barcode-scanner)
+Retrieve this exact code: git checkout master at commit 5d40511a
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: no chute scan warning while the scanner is unplugged (Vercel status success).
+Pi: barcode.py copied (backup barcode.py.bak-pre-unplugged), robot-arm restarted idle; /barcode/status
+interface "missing". Check: scan_after_fire on the Pi -> row GJ71_KNKoIGg-k778IRTU scannerMissing, Movement
+Log "Skipped: scanner not plugged in", chuteScanWarning null.
