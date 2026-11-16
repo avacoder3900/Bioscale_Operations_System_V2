@@ -27878,6 +27878,19 @@ End-to-end check without firing a solenoid: barcode.scan_after_fire(A, 17, run t
 label in view -> row uYPCPIJ63HssCwp0ga8Oo (no barcode read) + Movement Log chute_scan row; the warning
 "Chute Scan Failed: no barcode read after Solenoid A in Chute Scan Test" is live (left for Alejandro to Close).
 
+2026-11-16 — master — fix(monitor): monitor-flag push retries when the device's own event arrives (dd22c9af)
+A flag push made mid-test times out (firmware drops the cloud session for the whole test) and was stored as
+'offline' with nothing to retry it: the spark/status hook it relied on is not in the Particle product.
+BT-M01-0000-0210 was enabled 10/19 with the device flag still 0; 0211 had no sync record at all.
+- src/lib/server/monitor-flag-retry.ts (+ test, 8 pass): pure decision — which events, which units, 60 s gap.
+- src/lib/server/service-flag.ts: retryMonitorFlagIfPending(deviceId, eventType).
+- src/routes/api/particle/webhook/+server.ts: called after the response (waitUntil) for upload-test /
+  device-log / blank-test. Units never configured for monitoring are not called.
+- spu/[spuId]/diagnostics: 'offline' label now says the unit is unreachable during a test and retries by itself.
+Checked: vitest 8 pass; npm run check 14 errors / 451 warnings, none in these files (master baseline).
+Not yet verified live: confirm particleLink.monitorFlagState = synced on 0210 after its next test upload.
+Source: branch master (from fix/monitor-flag-retry)
+What this deployment is for: monitor mode actually reaches units that are run back to back.
 ================================================================================
 2026-11-16 — feat/arm-barcode-scanner — Scan Delay (ms) per fire step, set in BIMS; no Pi-side wait
 ================================================================================
