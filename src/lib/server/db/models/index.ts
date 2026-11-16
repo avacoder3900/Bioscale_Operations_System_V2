@@ -231,3 +231,5 @@ export { RobotArmMotion } from './robot-arm-motion.js';
 export { RobotArmMove } from './robot-arm-move.js';
 export { Ot2MoveSync } from './ot2-move-sync.js';
 export { RobotArmUnitRun } from './robot-arm-unit-run.js';
+// Chute barcode scans after a trapdoor fire (2026-11-16).
+export { RobotArmChuteScan } from './robot-arm-chute-scan.js';

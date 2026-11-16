@@ -27802,3 +27802,28 @@ follower BusLinker stays /dev/buslinker-follower -> ttyACM0. POST /barcode/comma
 (manual -> command), saved to flash. Reg 0x0060 = 0x01 (pure data + CR). Triggered scans with a label in view:
 3/3 read 9bfb7605-291f-43a6-a028-72234c15f19f whole (label:true), 1146 / 101 / 51 ms.
 Next: a Scan Barcode step after the trapdoor fire in a move set, the result saved with the run in BIMS.
+
+================================================================================
+2026-11-16 — feat/arm-barcode-scanner — Scan Barcode After on trapdoor fire steps + chute scan warning
+================================================================================
+Alejandro: after a trapdoor dispense, scan the chute; a failed scan is a warning only (never stops anything),
+with Close and Hide.
+How it flows: a fire step on Solenoid A/B has "Scan Barcode After" (FireSpec.scan; move-set + verified-run
+schemas; cleanKeyframes keeps it only on a trapdoor). BIMS writes it on the replay frame's fire and in the
+fires-only /fires/play body. On the Pi, replay_settle.FireTimer calls barcode.scan_after_fire() once the pulse
+went through, on its own thread (later fires keep their times): 500 ms for the cartridge to land, scan up to
+3 s, POST /api/robot-arm/chute-scans (URL from BIMS_CHANGES_URL, key ROBOT_ARM_API_KEY); a row BIMS could
+not take waits in ~/.bims-arm/chute-scans-pending.jsonl and goes with the next scan.
+BIMS: robot_arm_chute_scans (indexes created by hand for this collection only: at, piScanId unique), one
+Movement Log row per scan (kind chute_scan, group "Chute Barcode Scan"). ok is recomputed from the code
+(whole label only). ChuteScanWarning in RobotArmConnectionPanel (every robot arm page) polls every 10 s:
+"⚠ Chute Scan Failed: ..." with Hide (Show Warning chip, this browser, a newer failure shows again) and Close
+(dismisses every failed scan for everyone, AuditLog robot_arm.chute_scan.close_warning).
+Also fixed: loadMoveSet's fire rebuild (robot-arm-animation.ts) and verified-run steps would have dropped scan.
+Files: animation.ts, robot-arm-move-set.ts, robot-arm-verified-run.ts, robot-arm-animation.ts,
+robot-arm-verified.ts, robot-arm-client.ts, move-log.ts, move-types.ts, teach/moveset/[id]/+page.svelte,
+RobotArmConnectionPanel.svelte; new chute-scan.ts (+test), robot-arm-chute-scan.ts (model + service),
+ChuteScanWarning.svelte, api/robot-arm/chute-scans (+ /close). Pi: barcode.py, replay_settle.py, fires.py,
+tests_local/test_barcode.py (17), test_fire_scan.py (4).
+Checked: vitest robot-arm + arm server 395 pass; npm run check 13 errors / 451 warnings, none in these files
+(assembly, magnetometer, Ask BIMS, research-proxy, r2 — the master baseline).

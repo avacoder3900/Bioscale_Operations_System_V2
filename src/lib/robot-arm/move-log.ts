@@ -39,7 +39,8 @@ export type ArmMoveKind =
 	| 'conveyor'
 	| 'conveyor_stop'
 	| 'fires_play'
-	| 'fires_stop';
+	| 'fires_stop'
+	| 'chute_scan';
 
 export interface ArmMoveEntry {
 	kind: ArmMoveKind;
@@ -77,7 +78,8 @@ const KIND_TITLES: Record<ArmMoveKind, string> = {
 	conveyor: 'Conveyor Belt Fire',
 	conveyor_stop: 'Conveyor Belt Stop',
 	fires_play: 'Fire Steps',
-	fires_stop: 'Fire Steps Stop'
+	fires_stop: 'Fire Steps Stop',
+	chute_scan: 'Chute Barcode Scan'
 };
 
 /** Conveyor Belt and Trapdoor Solenoid rows: GPIO, no servo moves, so no servo readings around them. */

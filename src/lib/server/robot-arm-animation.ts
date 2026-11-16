@@ -59,6 +59,7 @@ import {
 	keyframePositions,
 	pathStats,
 	isFireTarget,
+	canScanAfter,
 	solenoidLabel,
 	solenoidPin,
 	DEFAULT_RATE_HZ,
@@ -904,7 +905,7 @@ function moveSetSummary(d: any): MoveSetSummary {
 					console.warn(`robot-arm move set "${d.name}" (${d._id}): step ${i + 1} fires unknown target ${JSON.stringify(k.fire.solenoid ?? null)} — dropped`);
 					return [];
 				}
-				return [{ poseId: '', holdS: Number(k.holdS ?? 0), durationS: 0, easing: 'linear', fire: { solenoid: k.fire.solenoid, pulseMs: Number(k.fire.pulseMs) } }];
+				return [{ poseId: '', holdS: Number(k.holdS ?? 0), durationS: 0, easing: 'linear', fire: { solenoid: k.fire.solenoid, pulseMs: Number(k.fire.pulseMs), ...(k.fire.scan === true && canScanAfter(k.fire.solenoid) ? { scan: true } : {}) } }];
 			}
 			const out: Keyframe = { poseId: String(k.poseId), holdS: Number(k.holdS ?? 0), durationS: Number(k.durationS ?? 1), easing: isEasing(k.easing) ? k.easing : 'ease' };
 			const offsets = cleanOffsets(k.offsets, MAX_OFFSET_STEPS);

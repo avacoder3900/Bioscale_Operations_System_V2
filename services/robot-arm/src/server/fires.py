@@ -44,6 +44,8 @@ class FireIn(BaseModel):
     pin: int
     ms: int = Field(..., ge=1)
     solenoid: Optional[str] = None
+    #: Trapdoor only: scan the chute barcode after the pulse (barcode.py, 2026-11-16).
+    scan: bool = False
 
 
 class PlayRequest(BaseModel):
@@ -90,7 +92,7 @@ async def fires_play(req: PlayRequest) -> dict:
     with _lock:
         if _run.active:
             raise HTTPException(status_code=409, detail="fire steps are already playing")
-        frames = [{"t": f.t, "fire": {"pin": f.pin, "ms": f.ms, "solenoid": f.solenoid}} for f in req.fires]
+        frames = [{"t": f.t, "fire": {"pin": f.pin, "ms": f.ms, "solenoid": f.solenoid, "scan": f.scan and f.pin in coil_pins}} for f in req.fires]
         fires = fire_schedule(frames)
         belt_fires = [f for f in fires if f["pin"] == belt_pin]
         coil_fires = [f for f in fires if f["pin"] != belt_pin]
@@ -103,7 +105,7 @@ async def fires_play(req: PlayRequest) -> dict:
         _run.started = time.perf_counter()
         _run.timers = []
         if coil_fires:
-            _run.timers.append(FireTimer(coil_fires, _run.started, _run.halt, coil_pulse, 1))
+            _run.timers.append(FireTimer(coil_fires, _run.started, _run.halt, coil_pulse, 1, run_id=_run.run_id, title=req.title))
         if belt_fires:
             _run.timers.append(FireTimer(belt_fires, _run.started, _run.halt, belt_pulse, 1))
         for t in _run.timers:

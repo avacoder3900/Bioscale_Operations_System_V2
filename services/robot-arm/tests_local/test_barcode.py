@@ -184,5 +184,77 @@ class TestSettings(Base):
         self.assertEqual(r["single_scan_s"], 5.0)
 
 
+class TestAfterFire(Base):
+    def setUp(self):
+        super().setUp()
+        import tempfile
+        from pathlib import Path
+
+        self.tmp = tempfile.TemporaryDirectory()
+        bc.PENDING = Path(self.tmp.name) / "pending.jsonl"
+        bc.SCAN_AFTER_DELAY_MS = 0
+        self.posts = []
+        self.answer = True
+        bc._post = lambda rows: (self.posts.append(list(rows)), self.answer)[1]
+        bc.time.sleep = lambda s: None  # no retry back-off in tests
+
+    def tearDown(self):
+        import time as _t
+
+        bc.time.sleep = _t.sleep
+        self.tmp.cleanup()
+
+    def run_after_fire(self):
+        import threading
+
+        before = set(threading.enumerate())
+        bc.scan_after_fire(solenoid="A", pin=17, run_id="R1", title="Drop A")
+        for t in set(threading.enumerate()) - before:
+            t.join(5)
+
+    def test_good_scan_is_sent(self):
+        self.run_after_fire()
+        row = self.posts[0][0]
+        self.assertTrue(row["ok"])
+        self.assertEqual(row["code"], LABEL)
+        self.assertEqual((row["solenoid"], row["pin"], row["run_id"], row["title"]), ("A", 17, "R1", "Drop A"))
+        self.assertFalse(bc.PENDING.exists())
+
+    def test_no_read_is_sent_as_failed(self):
+        FakeSerial.reply_code = None
+        bc.SCAN_AFTER_TIMEOUT_MS = 300
+        try:
+            self.run_after_fire()
+        finally:
+            bc.SCAN_AFTER_TIMEOUT_MS = 3000
+        row = self.posts[0][0]
+        self.assertFalse(row["ok"])
+        self.assertEqual(row["error"], "no barcode read")
+
+    def test_partial_code_is_failed(self):
+        FakeSerial.reply_code = LABEL[:20]
+        self.run_after_fire()
+        row = self.posts[0][0]
+        self.assertFalse(row["ok"])
+        self.assertEqual(row["error"], "not a whole cartridge label")
+
+    def test_unsent_row_waits_and_goes_with_the_next(self):
+        self.answer = False
+        self.run_after_fire()
+        self.assertTrue(bc.PENDING.exists())
+        self.answer = True
+        self.posts.clear()
+        self.run_after_fire()
+        self.assertEqual(len(self.posts[0]), 2)
+        self.assertFalse(bc.PENDING.exists())
+
+    def test_url_from_changes_url(self):
+        os.environ["BIMS_CHANGES_URL"] = "https://x.example/api/robot-arm/changes"
+        try:
+            self.assertEqual(bc.bims_url(), "https://x.example/api/robot-arm/chute-scans")
+        finally:
+            del os.environ["BIMS_CHANGES_URL"]
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

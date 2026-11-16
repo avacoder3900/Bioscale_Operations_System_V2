@@ -126,6 +126,17 @@ export interface SolenoidStatus {
 export interface FireSpec {
 	solenoid: FireTarget;
 	pulseMs: number;
+	/**
+	 * Trapdoor only (2026-11-16): after the pulse the arm Pi triggers the chute
+	 * barcode scanner (barcode.py) and sends the read to BIMS. A failed read
+	 * raises a warning on the arm pages and never stops the run.
+	 */
+	scan?: boolean;
+}
+
+/** A fire step may scan the chute only when it drops a cartridge (solenoid A or B). */
+export function canScanAfter(s: FireTarget): boolean {
+	return isSolenoid(s);
 }
 
 export function isSolenoid(v: unknown): v is Solenoid {
@@ -391,7 +402,9 @@ function cleanFireStep(k: any, i: number): Keyframe {
 	const waitS = Number(k.holdS ?? DEFAULT_FIRE_WAIT_S);
 	if (!Number.isFinite(waitS) || waitS < MIN_FIRE_WAIT_S || waitS > MAX_HOLD_S)
 		throw new Error(`step ${i + 1}: the wait after firing must be ${MIN_FIRE_WAIT_S}–${MAX_HOLD_S} s`);
-	return { poseId: '', holdS: roundTenth(waitS), durationS: 0, easing: 'linear', fire: { solenoid, pulseMs } };
+	const fire: FireSpec = { solenoid, pulseMs };
+	if (k.fire?.scan === true && canScanAfter(solenoid)) fire.scan = true;
+	return { poseId: '', holdS: roundTenth(waitS), durationS: 0, easing: 'linear', fire };
 }
 
 /**
@@ -648,6 +661,8 @@ export interface FireFlag {
 	pin: number;
 	ms: number;
 	solenoid: FireTarget;
+	/** Scan the chute barcode after this pulse (FireSpec.scan). */
+	scan?: boolean;
 }
 
 /**
@@ -656,11 +671,11 @@ export interface FireFlag {
  * fire's pulse + wait later), and the whole run's length. Null when a step
  * is a pose — that list plays on the arm.
  */
-export function fireOnlySchedule(kfs: { holdS: number; fire?: FireSpec }[]): { fires: { t: number; pin: number; ms: number; solenoid: FireTarget }[]; durationS: number } | null {
+export function fireOnlySchedule(kfs: { holdS: number; fire?: FireSpec }[]): { fires: { t: number; pin: number; ms: number; solenoid: FireTarget; scan?: boolean }[]; durationS: number } | null {
 	if (!kfs.length || kfs.some((k) => !k.fire)) return null;
 	let t = 0;
 	const fires = kfs.map((k) => {
-		const f = { t: Math.round(t * 1000) / 1000, pin: solenoidPin(k.fire!.solenoid), ms: k.fire!.pulseMs, solenoid: k.fire!.solenoid };
+		const f = { t: Math.round(t * 1000) / 1000, pin: solenoidPin(k.fire!.solenoid), ms: k.fire!.pulseMs, solenoid: k.fire!.solenoid, ...(k.fire!.scan ? { scan: true } : {}) };
 		t += fireStepS(k);
 		return f;
 	});
@@ -674,7 +689,7 @@ export function fireFrames(p: RenderedPath): FireFlag[] {
 		.filter((m) => m.fire)
 		.map((m) => {
 			const frame = Math.min(last, Math.round(m.t * p.rateHz));
-			return { frame, t: p.t[frame], pin: m.fire!.pin, ms: m.fire!.pulseMs, solenoid: m.fire!.solenoid };
+			return { frame, t: p.t[frame], pin: m.fire!.pin, ms: m.fire!.pulseMs, solenoid: m.fire!.solenoid, ...(m.fire!.scan ? { scan: true } : {}) };
 		});
 }
 
@@ -705,7 +720,7 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 		const fire = fireAt.get(i);
 		// Plain frames only: no "settle" flags, so the Pi replays the goals exactly (2026-11-06).
 		const frame: Record<string, unknown> = { event: 'frame', t: p.t[i], goal: p.goal[i] };
-		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid };
+		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid, ...(fire.scan ? { scan: true } : {}) };
 		lines.push(JSON.stringify(frame));
 	}
 	lines.push(JSON.stringify({ event: 'footer', duration_s: p.durationS, frames: p.goal.length }));

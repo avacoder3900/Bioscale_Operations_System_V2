@@ -39,19 +39,31 @@ Rules:
     are returned with label=false and must not be used to name a cartridge.
   * The servo bus is never touched; this is its own USB device.
 
-scan_blocking() is the same scan for other Pi modules (fires/replay) to call
-from a worker thread after a trapdoor fire.
+After a trapdoor fire (2026-11-16): replay_settle.FireTimer calls
+scan_after_fire() for a fire step with BIMS's "Scan Barcode After". It waits
+BARCODE_SCAN_AFTER_DELAY_MS (500) for the cartridge to land, scans for up to
+BARCODE_SCAN_AFTER_TIMEOUT_MS (3000), and POSTs the result to BIMS
+/api/robot-arm/chute-scans (URL from BIMS_CHANGES_URL, key ROBOT_ARM_API_KEY).
+A row BIMS could not take waits in ~/.bims-arm/chute-scans-pending.jsonl and
+goes with the next scan. A failed scan is a warning in BIMS; it never stops
+the run.
 """
 
 from __future__ import annotations
 
 import glob
+import json
 import os
 import re
+import socket
 import threading
 import time
+import urllib.error
+import urllib.request
+import uuid
 from collections import deque
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -227,6 +239,98 @@ def scan_blocking(timeout_ms: int = DEFAULT_TIMEOUT_MS, source: str = "api", wai
     _recent.appendleft(result)
     print(f"[barcode] {source}: {result.get('code') or result.get('error')} ({result['elapsed_ms']} ms)", flush=True)
     return result
+
+
+# ---------------------------------------------------------------- after a trapdoor fire
+
+#: The wait after the trapdoor pulse before scanning, so the cartridge has landed.
+SCAN_AFTER_DELAY_MS = int(os.environ.get("BARCODE_SCAN_AFTER_DELAY_MS", "500"))
+SCAN_AFTER_TIMEOUT_MS = int(os.environ.get("BARCODE_SCAN_AFTER_TIMEOUT_MS", "3000"))
+PENDING = Path(os.environ.get("BARCODE_PENDING", str(Path.home() / ".bims-arm" / "chute-scans-pending.jsonl")))
+_send_lock = threading.Lock()
+
+
+def scan_after_fire(solenoid: Optional[str] = None, pin: Optional[int] = None, run_id: Optional[str] = None, title: Optional[str] = None) -> None:
+    """Scan the chute on a thread of its own and send the result to BIMS. Returns at once."""
+
+    def work() -> None:
+        time.sleep(max(0, SCAN_AFTER_DELAY_MS) / 1000.0)
+        # Wait out a scan already running (another fire, a page test) instead of skipping.
+        r = scan_blocking(SCAN_AFTER_TIMEOUT_MS, source="fire", wait_s=SCAN_AFTER_TIMEOUT_MS / 1000.0 + 2.0)
+        row = {
+            "id": uuid.uuid4().hex,
+            "at": r.get("at") or _now_iso(),
+            "ok": bool(r.get("ok")) and bool(r.get("label")),
+            "code": r.get("code"),
+            "label": bool(r.get("label")),
+            "error": None if (r.get("ok") and r.get("label")) else (r.get("error") or ("not a whole cartridge label" if r.get("code") else "no barcode read")),
+            "elapsed_ms": r.get("elapsed_ms"),
+            "solenoid": solenoid,
+            "pin": pin,
+            "run_id": run_id,
+            "title": title,
+        }
+        r["reported"] = report_to_bims([row])
+
+    threading.Thread(target=work, name="chute-scan", daemon=True).start()
+
+
+def bims_url() -> Optional[str]:
+    url = os.environ.get("BIMS_CHUTE_SCANS_URL")
+    if url:
+        return url
+    changes = os.environ.get("BIMS_CHANGES_URL") or ""
+    if changes.endswith("/changes"):
+        return changes[: -len("/changes")] + "/chute-scans"
+    base = os.environ.get("BIMS_URL")
+    return base.rstrip("/") + "/api/robot-arm/chute-scans" if base else None
+
+
+def _post(rows: list[dict]) -> bool:
+    url = bims_url()
+    key = os.environ.get("ROBOT_ARM_API_KEY")
+    if not url or not key:
+        print("[barcode] BIMS not configured (BIMS_CHANGES_URL / ROBOT_ARM_API_KEY); scan kept pending", flush=True)
+        return False
+    body = json.dumps({"host": socket.gethostname(), "scans": rows}).encode()
+    req = urllib.request.Request(url, data=body, method="POST", headers={"content-type": "application/json", "x-api-key": key})
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            ans = json.loads(resp.read() or b"{}")
+        return not ans.get("failed")
+    except urllib.error.HTTPError as exc:
+        print(f"[barcode] BIMS refused the scan: {exc.code}", flush=True)
+        return 400 <= exc.code < 500 and exc.code not in (401, 403, 408, 429)  # a bad row is dropped, auth/outage kept
+    except Exception as exc:
+        print(f"[barcode] BIMS unreachable: {exc}", flush=True)
+        return False
+
+
+def report_to_bims(rows: list[dict]) -> bool:
+    """Send rows plus anything still pending; what fails stays in PENDING for the next send."""
+    with _send_lock:
+        pending: list[dict] = []
+        try:
+            if PENDING.exists():
+                pending = [json.loads(line) for line in PENDING.read_text(encoding="utf-8").splitlines() if line.strip()]
+        except Exception as exc:
+            print(f"[barcode] pending file unreadable: {exc}", flush=True)
+        todo = pending + rows
+        for attempt in range(3):
+            while todo and _post(todo[:50]):
+                todo = todo[50:]
+            if not todo:
+                break
+            time.sleep(2 * (attempt + 1))
+        try:
+            PENDING.parent.mkdir(parents=True, exist_ok=True)
+            if todo:
+                PENDING.write_text("".join(json.dumps(r) + "\n" for r in todo), encoding="utf-8")
+            elif PENDING.exists():
+                PENDING.unlink()
+        except Exception as exc:
+            print(f"[barcode] pending file not written: {exc}", flush=True)
+        return not todo
 
 
 def read_settings() -> dict:

@@ -287,6 +287,39 @@ describe('bulkPoseMessage', () => {
 	});
 });
 
+describe('chute barcode scan after a trapdoor fire', () => {
+	const scanFire = (solenoid: 'A' | 'B' | 'conveyor'): ResolvedKeyframe => ({
+		poseId: '',
+		name: `Fire ${solenoid}`,
+		positions: [],
+		holdS: 1,
+		durationS: 0,
+		easing: 'linear',
+		fire: { solenoid, pulseMs: 100, scan: true }
+	});
+
+	it('cleanKeyframes keeps Scan Barcode After on a trapdoor and drops it on the belt', () => {
+		const [a, belt, b] = cleanKeyframes([
+			{ fire: { solenoid: 'A', pulseMs: 100, scan: true }, holdS: 1 },
+			{ fire: { solenoid: 'conveyor', pulseMs: 600, scan: true }, holdS: 1 },
+			{ fire: { solenoid: 'B', pulseMs: 100, scan: 'yes' }, holdS: 1 }
+		]);
+		expect(a.fire).toEqual({ solenoid: 'A', pulseMs: 100, scan: true });
+		expect(belt.fire).toEqual({ solenoid: 'conveyor', pulseMs: 600 });
+		expect(b.fire).toEqual({ solenoid: 'B', pulseMs: 100 });
+	});
+
+	it('the replay frame and the fires-only schedule carry scan', () => {
+		const p = buildPath([kf('a', A, { holdS: 0.5 }), scanFire('A'), kf('b', B)], { rateHz: 10 });
+		const line = composeAnimationJsonl(p, { jointNames: ['a', 'b', 'c', 'd', 'e', 'f'], title: 't' })
+			.jsonl.split('\n')
+			.map((l) => (l ? JSON.parse(l) : null))
+			.find((r) => r?.fire);
+		expect(line.fire).toEqual({ pin: 17, ms: 100, solenoid: 'A', scan: true });
+		expect(fireOnlySchedule([scanFire('B')])!.fires[0]).toEqual({ t: 0, pin: 27, ms: 100, solenoid: 'B', scan: true });
+	});
+});
+
 describe('fire steps (cartridge trapdoor solenoids)', () => {
 	function fire(solenoid: 'A' | 'B' | 'conveyor', o: Partial<ResolvedKeyframe> = {}): ResolvedKeyframe {
 		const k = newFireStep(solenoid);

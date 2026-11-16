@@ -28,6 +28,7 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	{ id: 'arm:arrival', device: 'arm', title: 'Arrival', kinds: ['arrival'] },
 	{ id: 'arm:pose', device: 'arm', title: 'Pose Saved', kinds: ['pose_save'] },
 	{ id: 'arm:fire', device: 'arm', title: 'Conveyor Belt And Trapdoor Solenoids', kinds: ['fire', 'fire_sequence', 'conveyor', 'conveyor_stop', 'fires_play', 'fires_stop'] },
+	{ id: 'arm:scan', device: 'arm', title: 'Chute Barcode Scan', kinds: ['chute_scan'] },
 	{
 		id: 'ot2:movement',
 		device: 'ot2',
