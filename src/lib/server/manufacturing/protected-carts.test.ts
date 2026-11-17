@@ -83,6 +83,22 @@ describe('findProtectedCarts', () => {
 		expect(await findProtectedCarts(['a'])).toEqual([]);
 	});
 
+	it('flags cancelled as test-side', async () => {
+		state.carts = [{ _id: 'k', status: 'cancelled' }];
+		const [p] = await findProtectedCarts(['k']);
+		expect(p.reasons).toEqual(['status is cancelled — the device side owns it now']);
+	});
+
+	it('says when a customer app linked the cart; a research link does not say so', async () => {
+		state.carts = [
+			{ _id: 'c', status: 'linked', checkpoints: { linked: { who: 'app:h_abcdefghijklmnop', via: 'bioscale-business' } } },
+			{ _id: 'r', status: 'linked', checkpoints: { linked: { who: 'chris' } } }
+		];
+		const out = await findProtectedCarts(['c', 'r']);
+		expect(out[0].reasons).toEqual(['linked by a customer through a Bioscale app', 'status is linked — the device side owns it now']);
+		expect(out[1].reasons).toEqual(['status is linked — the device side owns it now']);
+	});
+
 	it('keeps the scanned order', async () => {
 		state.carts = [{ _id: 'x', status: 'linked' }, { _id: 'y', status: 'linked' }, { _id: 'z', status: 'linked' }];
 		const out = await findProtectedCarts(['z', 'x', 'y']);

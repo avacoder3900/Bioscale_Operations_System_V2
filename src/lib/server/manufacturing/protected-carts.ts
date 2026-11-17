@@ -1,12 +1,16 @@
 import { AppUser, CartridgeOwnership, CartridgeRecord, Customer } from '$lib/server/db';
+import { isCustomerHeld, HELD_PROBE_FIELDS } from './customer-held';
 
 /**
  * Protected carts — carts a bulk status tool must not move silently.
  *
  * A cart is protected when any of these hold:
  *  - it is linked into a research experiment (`experiment` set by the research app);
- *  - its status is test-side (linked / underway / completed) — brevitest-cloud
- *    owns it from there and the device only runs carts at linked/underway;
+ *  - its status is test-side (linked / underway / completed / cancelled) —
+ *    brevitest-cloud owns it from there and the device only runs carts at
+ *    linked/underway;
+ *  - a customer app linked it (customer-held.ts: test-side status plus a
+ *    customer-app link checkpoint);
  *  - an app account (or a clinic customer) has an open ownership row on it.
  *
  * Used by the State Change page (2026-10-21) after five carts linked to
@@ -15,7 +19,7 @@ import { AppUser, CartridgeOwnership, CartridgeRecord, Customer } from '$lib/ser
  * Pure lookup: nothing here writes.
  */
 
-export const TEST_SIDE_STATUSES = ['linked', 'underway', 'completed'] as const;
+export const TEST_SIDE_STATUSES = ['linked', 'underway', 'completed', 'cancelled'] as const;
 
 export type ProtectedCart = {
 	barcode: string;
@@ -38,7 +42,7 @@ export type ProtectedCart = {
 export async function findProtectedCarts(barcodes: string[]): Promise<ProtectedCart[]> {
 	if (!barcodes.length) return [];
 	const [carts, owners] = await Promise.all([
-		CartridgeRecord.find({ _id: { $in: barcodes } }).select('_id status experiment arm').lean() as Promise<any[]>,
+		CartridgeRecord.find({ _id: { $in: barcodes } }).select(`_id experiment arm ${HELD_PROBE_FIELDS}`).lean() as Promise<any[]>,
 		CartridgeOwnership.find({ cartridgeId: { $in: barcodes }, open: true })
 			.select('cartridgeId accountId customerId').lean() as Promise<any[]>
 	]);
@@ -60,6 +64,7 @@ export async function findProtectedCarts(barcodes: string[]): Promise<ProtectedC
 		const own = ownerByCart.get(cart._id as string);
 		const reasons: string[] = [];
 		if (experiment) reasons.push(`linked to experiment "${experiment}"${arm ? ` (arm "${arm}")` : ''}`);
+		if (isCustomerHeld(cart)) reasons.push('linked by a customer through a Bioscale app');
 		if ((TEST_SIDE_STATUSES as readonly string[]).includes(status)) reasons.push(`status is ${status} — the device side owns it now`);
 		if (own) {
 			const who = own.accountId
