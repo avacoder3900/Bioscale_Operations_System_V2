@@ -16,6 +16,7 @@ import { fail, redirect } from '@sveltejs/kit';
 import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, AuditLog, generateId } from '$lib/server/db';
 import { assertNotBucketLabel } from '$lib/server/services/bucket-service';
+import { isCustomerHeld, withNotCustomerHeld, HELD_PROBE_FIELDS } from '$lib/server/manufacturing/locked-cartridges';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals }) => {
@@ -52,7 +53,12 @@ export const actions: Actions = {
 
 		for (const barcode of barcodes) {
 			try {
-				const cart = (await CartridgeRecord.findById(barcode).select('_id status').lean()) as any;
+				const cart = (await CartridgeRecord.findById(barcode).select(`_id ${HELD_PROBE_FIELDS}`).lean()) as any;
+				const HELD_REASON = 'a customer has linked this cartridge — not moved';
+				if (isCustomerHeld(cart)) {
+					failed.push({ barcode, reason: HELD_REASON });
+					continue;
+				}
 
 				if (!cart) {
 					// A bucket's QR sticker must never be born as a cartridge (throws → failed below).
@@ -87,8 +93,9 @@ export const actions: Actions = {
 				}
 
 				const from = cart.status ?? 'none';
-				await CartridgeRecord.updateOne(
-					{ _id: barcode },
+				// Guard in the filter too: a customer may have linked it since the read.
+				const res = await CartridgeRecord.updateOne(
+					withNotCustomerHeld({ _id: barcode }) as any,
 					{
 						$set: { status: 'wax_filled', priorStatus: from, usedForTestFill: true },
 						$push: {
@@ -102,6 +109,10 @@ export const actions: Actions = {
 						}
 					}
 				);
+				if ((res as any)?.matchedCount === 0) {
+					failed.push({ barcode, reason: HELD_REASON });
+					continue;
+				}
 				await AuditLog.create({
 					_id: generateId(),
 					tableName: 'cartridge_records',
