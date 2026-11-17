@@ -6,7 +6,9 @@ import { getDeviceAssemblyWI } from '$lib/server/services/device-assembly-wi';
 import { BadgeError, badgeHolderCan, resolveBadge } from '$lib/server/services/badge-service';
 import {
 	BuildError,
+	answerQuestion,
 	cancelBuild,
+	changeAnswer,
 	handleScan,
 	loadBoard,
 	completeSection,
@@ -158,6 +160,28 @@ export const actions: Actions = {
 		const materialId = str(form.get('materialId'));
 		if (!buildId || sectionNumber == null || !stepId || !materialId) return fail(400, { error: 'Part reference missing. Reload the page.' });
 		return respond(async () => recordUncataloguedPart({ buildId, sectionNumber, stepId, materialId }, await operatorFrom(form, locals)));
+	},
+
+	// A step's Yes/No question (e.g. "Is the heat shield already on the heater block?").
+	answer: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const buildId = str(form.get('buildId'));
+		const sectionNumber = num(form.get('sectionNumber'));
+		const stepId = str(form.get('stepId'));
+		if (!buildId || sectionNumber == null || !stepId) return fail(400, { error: 'Step reference missing. Reload the page.' });
+		return respond(async () => answerQuestion({ buildId, sectionNumber, stepId, answer: str(form.get('answer')) }, await operatorFrom(form, locals)));
+	},
+
+	changeAnswer: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const buildId = str(form.get('buildId'));
+		const stepId = str(form.get('stepId'));
+		if (!buildId || !stepId) return fail(400, { error: 'Step reference missing. Reload the page.' });
+		return respond(async () => changeAnswer({ buildId, stepId, reason: reasonFrom(form) }, await operatorFrom(form, locals)));
 	},
 
 	// One button at the end of a section's steps: the operator confirms the whole section done.

@@ -36,6 +36,11 @@ const materialSchema = new Schema({
 	rawText: { type: String, default: '' }              // original bullet text from the .docx
 }, { _id: false });
 
+const branchSchema = new Schema({
+	question: { type: String, required: true },       // "Is the heat shield already on the heater block?"
+	noSectionId: { type: String, required: true }     // _id of the procedure section to do on "No"
+}, { _id: false });
+
 const stepSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
 	stepNumber: { type: Number, required: true },
@@ -45,12 +50,19 @@ const stepSchema = new Schema({
 	images: { type: [imageSchema], default: [] },
 	materials: { type: [materialSchema], default: [] },
 	requiresEsd: { type: Boolean, default: false },
-	dhrFields: { type: [String], default: [] }           // e.g. "Stepper Motor Serial Number"
+	dhrFields: { type: [String], default: [] },          // e.g. "Stepper Motor Serial Number"
+	// Optional Yes/No question the operator answers on Build SPUs. Yes = the step
+	// is done; No = the procedure section noSectionId has to be done first
+	// (e.g. "Is the heat shield already on the heater block?" → Cricut: Heat Shield).
+	branch: { type: branchSchema, default: null }
 }, { _id: false });
 
 const sectionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-	type: { type: String, enum: ['setup', 'subassembly'], default: 'subassembly' },
+	// 'procedure' = a side procedure (e.g. "Cricut: Heat Shield") reached from a step's
+	// Yes/No question. It keeps its own tab after the sub-assemblies, doesn't take a
+	// sub-assembly number, and a build only needs it when the operator answers No.
+	type: { type: String, enum: ['setup', 'subassembly', 'procedure'], default: 'subassembly' },
 	number: { type: Number, required: true },           // 0 = setup, 1..N = Sub-Assembly N
 	title: { type: String, default: '' },               // e.g. "Bottom (Pulley, Rail, Wi-Fi, etc.)"
 	tabLabel: { type: String, default: '' },            // optional custom tab text; '' = "Sub-Assembly N" / "Setup"

@@ -4,20 +4,22 @@ import { getDeviceAssemblyWI, findSection, findStep, type Actor } from './device
 import { pullMaterialsForStep } from './device-assembly-wi-pulls';
 import { resolveBucketId } from './bucket-service';
 import {
+	answerFor,
 	currentStep,
 	bucketLabel,
 	buildProgress,
 	deducts,
 	doneStepIds,
 	findStepForPart,
+	neededProcedureIds,
 	normalizeBucketCode,
-	partsLeft,
 	partsOf,
 	scanKey,
 	scannedKeys,
 	sectionConfirmed,
 	sectionsUsingPart,
 	SLOT_HOLDING_STATUSES,
+	stepNeed,
 	tabLabel,
 	type WiMaterial,
 	type WiStep
@@ -352,13 +354,13 @@ export async function recordLotScan(
 
 	const part = { partDefinitionId: lot.part?._id ?? null, partNumber: lot.part?.partNumber ?? null };
 	const pn = part.partNumber || lot.part?.name || `Lot ${lotName(lot)}`;
-	const hit = findStepForPart(section, build, part);
-	const needs = (st: WiStep) => partsLeft(st, build).map(partLabel).join(', ');
+	const hit = findStepForPart(section, build, part, wi);
+	const needs = (st: WiStep) => whatStepNeeds(st, build, wi);
 	if (hit.kind === 'section-scanned') return warn(`Every part for ${label} is already scanned on SPU ${build.buildNumber}. Confirm ${label} complete at the end of its steps. Nothing deducted.`);
-	if (hit.kind === 'out-of-order') return warn(`${pn} is for step ${hit.step.stepNumber}. Finish step ${hit.current.stepNumber} first: scan ${needs(hit.current)}. Nothing deducted.`);
+	if (hit.kind === 'out-of-order') return warn(`${pn} is for step ${hit.step.stepNumber}. Finish step ${hit.current.stepNumber} first: ${needs(hit.current)}. Nothing deducted.`);
 	if (hit.kind === 'already-scanned') {
-		const current = currentStep(section, build);
-		return warn(`${pn} is already scanned on SPU ${build.buildNumber}.${current ? ` Step ${current.stepNumber} needs ${needs(current)}.` : ''} Nothing deducted.`);
+		const current = currentStep(section, build, wi);
+		return warn(`${pn} is already scanned on SPU ${build.buildNumber}.${current ? ` Step ${current.stepNumber}: ${needs(current)}.` : ''} Nothing deducted.`);
 	}
 	if (hit.kind === 'not-in-section') {
 		const elsewhere = sectionsUsingPart(wi, part).map((s) => tabLabel(s));
@@ -367,6 +369,16 @@ export async function recordLotScan(
 			: `${pn} is not a part on this work instruction. Nothing deducted.`);
 	}
 	return applyPart({ build, wi, section, step: hit.step, material: hit.material, lot, scannedCode: code }, op);
+}
+
+/** What the current step is waiting on, as an instruction: "scan A, B" / "answer …" / "finish Cricut: Heat Shield". */
+function whatStepNeeds(step: WiStep, build: any, wi: any): string {
+	const need = stepNeed(step, build, wi);
+	if (!need) return 'nothing';
+	if (need.kind === 'parts') return `scan ${need.parts.map(partLabel).join(', ')}`;
+	if (need.kind === 'answer') return `answer "${need.question}"`;
+	const proc = wi.sections.find((x: any) => x._id === need.sectionId);
+	return `finish ${proc ? tabLabel(proc) : 'its procedure'} and confirm it`;
 }
 
 /** A part that isn't in the catalog has no lot label to scan: record its use without a deduction. */
@@ -379,7 +391,7 @@ export async function recordUncataloguedPart(input: { buildId: string; sectionNu
 	const material = partsOf(step).find((m) => m._id === input.materialId);
 	if (!material) throw new BuildError('That part is no longer on this step. Reload the page.');
 	if (material.partDefinitionId) throw new BuildError(`${partLabel(material)} is in the catalog. Scan the lot label on its bag.`);
-	const current = currentStep(section, build);
+	const current = currentStep(section, build, wi);
 	if (current && current._id !== step._id) throw new BuildError(`Finish step ${current.stepNumber} first, then record ${partLabel(material)} for step ${step.stepNumber}.`);
 	return applyPart({ build, wi, section, step, material, lot: null, scannedCode: null }, op);
 }
@@ -478,8 +490,8 @@ async function applyPart(
 	}
 
 	// Say where to go next: the rest of this step, the next step, or the section's confirm button.
-	const fresh = await SpuBuild.findById(build._id).select('scans').lean() as any;
-	const next = fresh ? currentStep(section, fresh) : null;
+	const fresh = await SpuBuild.findById(build._id).select('scans answers completedSteps').lean() as any;
+	const next = fresh ? currentStep(section, fresh, wi) : null;
 	const label = tabLabel(section);
 	const tail = !next
 		? ` Every part for ${label} is in. Confirm ${label} complete at the end of its steps.`
@@ -503,13 +515,16 @@ async function applyPart(
  * button at the end of its steps, once every part in it is scanned. That marks
  * all of its steps complete; when every section is confirmed, the SPU is complete.
  */
-export async function completeSection(input: { buildId: string; sectionNumber: number }, op: BuildOperator): Promise<BuildOutcome> {
+export async function completeSection(input: { buildId: string; sectionNumber: number }, op: BuildOperator): Promise<BuildOutcome & { openSection?: number }> {
 	const build = await loadOpenBuild(input.buildId);
 	const wi = await requireWi();
 	const section = sectionOrThrow(wi, input.sectionNumber);
 	const label = tabLabel(section);
 	if (!section.steps.length) throw new BuildError(`${label} has no steps to confirm.`);
 	if (sectionConfirmed(section, build)) return warn(`${label} is already confirmed complete on SPU ${build.buildNumber}.`);
+	if (section.type === 'procedure' && !neededProcedureIds(wi, build).has(section._id)) {
+		throw new BuildError(`${label} isn't needed for SPU ${build.buildNumber}: nobody answered No to the question that leads here.`);
+	}
 
 	// Every part must be recorded — a scan still in flight doesn't count yet.
 	const recorded = scannedKeys(build, { recordedOnly: true });
@@ -518,6 +533,12 @@ export async function completeSection(input: { buildId: string; sectionNumber: n
 		const left = partsOf(unfinished).filter((m) => !recorded.has(scanKey(unfinished._id, m._id))).map(partLabel).join(', ');
 		throw new BuildError(`${label} isn't finished: step ${unfinished.stepNumber} still needs ${left}. Scan every part before confirming.`);
 	}
+	// Every Yes/No question answered, and after a No its procedure confirmed first.
+	const waiting = section.steps.find((st: WiStep) => {
+		const need = stepNeed(st, build, wi);
+		return need && need.kind !== 'parts';
+	});
+	if (waiting) throw new BuildError(`${label} isn't finished: step ${waiting.stepNumber}, ${whatStepNeeds(waiting, build, wi)}.`);
 
 	const now = new Date();
 	const done = doneStepIds(build);
@@ -532,14 +553,97 @@ export async function completeSection(input: { buildId: string; sectionNumber: n
 	if (!r.modifiedCount) return warn(`${label} was just confirmed on SPU ${build.buildNumber}.`);
 	await audit('UPDATE', build, op, { operation: 'spu_build_section_done', section: label, steps: section.steps.length });
 	const finished = await completeBuildIfDone(build, wi, op, now);
+	if (finished) return { kind: 'ok', message: `${label} confirmed complete. SPU ${build.buildNumber} is complete.` };
+	// A procedure done: send the operator back to the step whose question led here.
+	if (section.type === 'procedure') {
+		const from = wi.sections.find((x: any) => x.steps.some((st: any) => st.branch?.noSectionId === section._id && answerFor(build, st._id) === 'no'));
+		const step = from?.steps.find((st: any) => st.branch?.noSectionId === section._id);
+		if (from && step) return { kind: 'ok', message: `${label} confirmed complete. Back to ${tabLabel(from)} step ${step.stepNumber}.`, openSection: from.number };
+	}
+	return { kind: 'ok', message: `${label} confirmed complete on SPU ${build.buildNumber}.` };
+}
+
+// ── Yes/No questions ───────────────────────────────────────────────────────
+
+/**
+ * The operator answers a step's Yes/No question (WI step.branch), in step order.
+ * Yes: the step is done. No: the step's procedure (e.g. Cricut: Heat Shield)
+ * becomes part of this SPU and opens; the step waits until it is confirmed.
+ */
+export async function answerQuestion(
+	input: { buildId: string; sectionNumber: number; stepId: string; answer: string },
+	op: BuildOperator
+): Promise<BuildOutcome & { openSection?: number }> {
+	const answer = input.answer === 'yes' ? 'yes' : input.answer === 'no' ? 'no' : null;
+	if (!answer) throw new BuildError('Answer Yes or No.');
+	const build = await loadOpenBuild(input.buildId);
+	const wi = await requireWi();
+	const section = sectionOrThrow(wi, input.sectionNumber);
+	const step = findStep(section, { stepId: input.stepId });
+	if (!step) throw new BuildError('That step is no longer in this section. Reload the page.');
+	if (!step.branch) throw new BuildError(`Step ${step.stepNumber} has no Yes/No question. Reload the page.`);
+	const given = answerFor(build, step._id);
+	if (given) return warn(`Step ${step.stepNumber} is already answered ${given === 'yes' ? 'Yes' : 'No'}. Use Change Answer to change it.`);
+	const current = currentStep(section, build, wi);
+	if (current && current._id !== step._id) throw new BuildError(`Finish step ${current.stepNumber} first: ${whatStepNeeds(current, build, wi)}.`);
+	const proc = wi.sections.find((x: any) => x._id === step.branch.noSectionId) ?? null;
+	if (answer === 'no' && !proc) throw new BuildError('The procedure for No is no longer on the work instruction. Ask an editor to fix this step\'s question.');
+
+	const now = new Date();
+	const r = await SpuBuild.updateOne(
+		{ _id: build._id, status: 'in_progress', 'answers.stepId': { $ne: step._id } },
+		{
+			$push: { answers: { stepId: step._id, sectionNumber: section.number, stepNumber: step.stepNumber, question: step.branch.question, answer, noSectionId: step.branch.noSectionId, operator: operatorDoc(op), answeredAt: now } },
+			$set: { lastActivityAt: now, lastActivityBy: op.name }
+		}
+	);
+	if (!r.modifiedCount) return warn(`Step ${step.stepNumber} was just answered at another station.`);
+	await audit('UPDATE', build, op, { operation: 'spu_build_answer', step: `${tabLabel(section)} step ${step.stepNumber}`, question: step.branch.question, answer });
+
+	if (answer === 'no') {
+		return { kind: 'ok', message: `No: do ${tabLabel(proc)} now, then come back to ${tabLabel(section)} step ${step.stepNumber}.`, openSection: proc.number };
+	}
+	const fresh = await SpuBuild.findById(build._id).select('scans answers completedSteps').lean() as any;
+	const next = fresh ? currentStep(section, fresh, wi) : null;
+	const label = tabLabel(section);
+	return { kind: 'ok', message: `Yes: step ${step.stepNumber} is done.${next ? ` Next: step ${next.stepNumber}.` : ` Confirm ${label} complete at the end of its steps.`}` };
+}
+
+/** Clear a Yes/No answer so the question is asked again (answered wrong). Its section reopens if it was confirmed. */
+export async function changeAnswer(input: { buildId: string; stepId: string; reason: string }, op: BuildOperator): Promise<BuildOutcome> {
+	const reason = cleanReason(input.reason);
+	const build = await SpuBuild.findById(input.buildId).lean() as any;
+	if (!build) throw new BuildError('That build no longer exists. Reload the page.');
+	if (build.status === 'cancelled') throw new BuildError(`SPU ${build.buildNumber} was cancelled. Nothing to change.`);
+	const rec = (build.answers ?? []).find((a: any) => a.stepId === input.stepId);
+	if (!rec) return warn(`That question isn't answered on SPU ${build.buildNumber}. Nothing changed.`);
+	await assertBucketFree(build);
+
+	const wi = await getDeviceAssemblyWI();
+	const home = wi?.sections.find((x: any) => x.steps.some((st: any) => st._id === input.stepId)) ?? null;
+	const sectionStepIds: string[] = home ? home.steps.map((st: any) => st._id) : [input.stepId];
+	const sectionWasDone = (build.completedSteps ?? []).some((c: any) => sectionStepIds.includes(c.stepId));
+	const where = await stepLabel(rec.sectionNumber, rec.stepNumber);
+	const now = new Date();
+	const r = await SpuBuild.updateOne(
+		{ _id: build._id, status: { $ne: 'cancelled' }, 'answers.stepId': input.stepId },
+		{
+			$pull: { answers: { stepId: input.stepId }, completedSteps: { stepId: { $in: sectionStepIds } } },
+			$set: { lastActivityAt: now, lastActivityBy: op.name },
+			$push: { corrections: { _id: generateId(), kind: 'change_answer', stepId: input.stepId, sectionNumber: rec.sectionNumber, stepNumber: rec.stepNumber, summary: `Cleared the ${rec.answer === 'yes' ? 'Yes' : 'No'} answer on ${where}`, reason, operator: operatorDoc(op), at: now } }
+		}
+	);
+	if (!r.modifiedCount) return warn(`That question isn't answered on SPU ${build.buildNumber}. Nothing changed.`);
+	const reopened = sectionWasDone ? await reopenIfCompleted(build, op, reason) : false;
+	await audit('UPDATE', build, op, { operation: 'spu_build_change_answer', step: where, was: rec.answer, reason });
 	return {
 		kind: 'ok',
-		message: finished ? `${label} confirmed complete. SPU ${build.buildNumber} is complete.` : `${label} confirmed complete on SPU ${build.buildNumber}.`
+		message: `Answer cleared on ${where}. Answer the question again.${sectionWasDone && home ? ` ${tabLabel(home)} needs confirming again.` : ''}${reopened ? ` SPU ${build.buildNumber} is back in progress.` : ''}`
 	};
 }
 
 async function completeBuildIfDone(build: any, wi: any, op: BuildOperator, now: Date): Promise<boolean> {
-	const after = await SpuBuild.findById(build._id).select('completedSteps status').lean() as any;
+	const after = await SpuBuild.findById(build._id).select('completedSteps status answers').lean() as any;
 	const { done, total } = buildProgress(wi, after);
 	if (total === 0 || done < total) return false;
 	const closed = await SpuBuild.updateOne({ _id: build._id, status: 'in_progress' }, { $set: { status: 'completed', completedAt: now } });

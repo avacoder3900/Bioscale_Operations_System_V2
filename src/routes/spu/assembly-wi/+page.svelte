@@ -1,17 +1,30 @@
 <script lang="ts">
 	import { enhance } from '$app/forms';
+	import { replaceState } from '$app/navigation';
 	import { page } from '$app/stores';
 
 	let { data, form } = $props();
 
 	// ── view state ────────────────────────────────────────────────────────────
+	// The open tab lives in the address (?section=N) so a refresh reopens it.
+	// A missing param must not read as 0 (Number(null) === 0 is Setup's number).
 	const initialSection = (() => {
-		const q = Number($page.url.searchParams.get('section'));
+		const raw = $page.url.searchParams.get('section');
+		const q = raw == null || raw.trim() === '' ? NaN : Number(raw);
 		if (Number.isFinite(q) && data.wi?.sections.some((s: any) => s.number === q)) return q;
 		const first = data.wi?.sections.find((s: any) => s.steps.length) ?? data.wi?.sections[0];
 		return first?.number ?? 0;
 	})();
 	let activeSection = $state(initialSection);
+
+	/** Switch tab and write it to the address without reloading, so refreshing keeps this tab. */
+	function selectSection(n: number) {
+		activeSection = n;
+		const url = new URL(window.location.href);
+		if (url.searchParams.get('section') === String(n)) return;
+		url.searchParams.set('section', String(n));
+		replaceState(url, $page.state);
+	}
 	let editMode = $state(false);
 	let showUpload = $state(!data.wi);
 	let showFrontMatter = $state(false);
@@ -54,8 +67,19 @@
 
 	// ── helpers ───────────────────────────────────────────────────────────────
 	function sectionLabel(s: any) {
-		return s.type === 'setup' ? 'Setup' : `Sub-Assembly ${s.number}`;
+		if (s.type === 'setup') return 'Setup';
+		if (s.type === 'procedure') return (s.title ?? '').trim() || 'Procedure';
+		return `Sub-Assembly ${s.number}`;
 	}
+	const isSub = (s: any) => s.type === 'subassembly' || !s.type;
+	// Procedures (e.g. "Cricut: Heat Shield") a step's Yes/No question can send operators to.
+	const procedures = $derived<any[]>((data.wi?.sections ?? []).filter((s: any) => s.type === 'procedure'));
+	function procedureName(id: string | null | undefined) {
+		const p = procedures.find((s: any) => s._id === id);
+		return p ? tabLabel(p) : 'a deleted procedure';
+	}
+	let editingBranch = $state<string | null>(null);
+	let addingProcedure = $state(false);
 	function tabLabel(s: any) {
 		return (s.tabLabel ?? '').trim() || sectionLabel(s);
 	}
@@ -100,6 +124,21 @@
 				await update({ reset: false });
 				busy = false;
 				if (result.type === 'success') onSuccess?.();
+			};
+		};
+	}
+
+	// Replace an image's file in place (same position and caption): the upload
+	// starts as soon as a file is picked.
+	let replacingImage = $state<string | null>(null);
+	function replaceEnhance(imageId: string) {
+		return () => {
+			busy = true;
+			replacingImage = imageId;
+			return async ({ update }: any) => {
+				await update({ reset: true });
+				busy = false;
+				replacingImage = null;
 			};
 		};
 	}
@@ -248,7 +287,7 @@
 			{#each data.wi.sections as s (s._id)}
 				<button
 					class="rounded-t px-3 py-2 text-sm transition {activeSection === s.number ? 'bg-[var(--color-tron-cyan)]/15 font-semibold text-[var(--color-tron-cyan)] border-b-2 border-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]'}"
-					onclick={() => { activeSection = s.number; editingStep = null; }}
+					onclick={() => { selectSection(s.number); editingStep = null; }}
 					title="{sectionLabel(s)} — {s.title}"
 				>
 					{tabLabel(s)}
@@ -266,6 +305,16 @@
 						<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (showAddSection = false)}>cancel</button>
 					</form>
 				{/if}
+				{#if !addingProcedure}
+					<button class="rounded border border-dashed border-amber-500/50 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-900/20" onclick={() => (addingProcedure = true)}>+ Add Procedure</button>
+				{:else}
+					<form method="POST" action="?/addSection" use:enhance={afterSubmit(() => (addingProcedure = false))} class="flex items-center gap-1 text-xs">
+						<input type="hidden" name="type" value="procedure" />
+						<input name="title" required placeholder="Procedure Title" class="w-48 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-[var(--color-tron-text)]" />
+						<button class="rounded border border-amber-500/50 px-2 py-1 text-amber-300">Add</button>
+						<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (addingProcedure = false)}>Cancel</button>
+					</form>
+				{/if}
 			{/if}
 		</div>
 
@@ -274,7 +323,7 @@
 			<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
 				<div class="flex flex-wrap items-start justify-between gap-3">
 					<div>
-						<div class="text-xs uppercase tracking-wide text-[var(--color-tron-text-secondary)]">{sectionLabel(section)}</div>
+						<div class="text-xs uppercase tracking-wide text-[var(--color-tron-text-secondary)]">{section.type === 'procedure' ? 'Procedure' : sectionLabel(section)}</div>
 						<h2 class="text-lg font-semibold text-[var(--color-tron-text)]">{section.title}</h2>
 					</div>
 					{#if editMode}
@@ -289,20 +338,20 @@
 								</label>
 								<button class="rounded border border-[var(--color-tron-cyan)]/50 px-2 py-1 text-xs text-[var(--color-tron-cyan)]">Save</button>
 							</form>
-							{#if section.type !== 'setup'}
-								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => (activeSection = Math.max(1, section.number - 1)))} class="inline">
+							{#if isSub(section)}
+								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => selectSection(Math.max(1, section.number - 1)))} class="inline">
 									<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="toPosition" value={section.number - 1} />
 									<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] disabled:opacity-30" disabled={section.number <= 1} title="move earlier">◀</button>
 								</form>
-								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => (activeSection = section.number + 1))} class="inline">
+								<form method="POST" action="?/moveSection" use:enhance={afterSubmit(() => selectSection(section.number + 1))} class="inline">
 									<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="toPosition" value={section.number + 1} />
-									<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] disabled:opacity-30" disabled={section.number >= data.wi.sections.filter((x: any) => x.type !== 'setup').length} title="move later">▶</button>
+									<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] disabled:opacity-30" disabled={section.number >= data.wi.sections.filter(isSub).length} title="move later">▶</button>
 								</form>
 							{/if}
 							{#if !showDeleteSection}
 								<button class="rounded border border-red-500/40 px-2 py-1 text-xs text-red-300 hover:bg-red-900/20" onclick={() => (showDeleteSection = true)}>Delete section</button>
 							{:else}
-								<form method="POST" action="?/deleteSection" use:enhance={afterSubmit(() => { showDeleteSection = false; activeSection = 0; })} class="flex items-center gap-1 rounded border border-red-500/40 bg-red-900/10 px-2 py-1 text-xs" onsubmit={(e) => { if (!confirm(`Delete ${sectionLabel(section)} "${section.title}"?`)) e.preventDefault(); }}>
+								<form method="POST" action="?/deleteSection" use:enhance={afterSubmit(() => { showDeleteSection = false; selectSection(0); })} class="flex items-center gap-1 rounded border border-red-500/40 bg-red-900/10 px-2 py-1 text-xs" onsubmit={(e) => { if (!confirm(`Delete ${sectionLabel(section)} "${section.title}"?`)) e.preventDefault(); }}>
 									<input type="hidden" name="sectionNumber" value={section.number} />
 									{#if section.steps.length}
 										<span class="text-red-200">move its {section.steps.length} steps to</span>
@@ -380,6 +429,9 @@
 								<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]" onclick={() => (showAddImages = showAddImages === step._id ? null : step._id)}>Add images</button>
 								<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]" onclick={() => (showAddMaterial = showAddMaterial === step._id ? null : step._id)}>Add material</button>
 								<button class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]" onclick={() => (showMove = showMove === step._id ? null : step._id)}>Move</button>
+								{#if section.type !== 'procedure'}
+									<button class="rounded border border-amber-500/40 px-2 py-1 text-xs text-amber-300 hover:bg-amber-900/20" onclick={() => (editingBranch = editingBranch === step._id ? null : step._id)}>Yes/No Question</button>
+								{/if}
 								<form method="POST" action="?/deleteStep" use:enhance={afterSubmit()} onsubmit={(e) => { if (!confirm(`Delete step ${step.stepNumber} in ${sectionLabel(section)}?`)) e.preventDefault(); }}>
 									<input type="hidden" name="sectionNumber" value={section.number} />
 									<input type="hidden" name="stepId" value={step._id} />
@@ -458,6 +510,34 @@
 					{/if}
 
 					<div class="grid gap-4 px-4 py-4 lg:grid-cols-5">
+						<!-- Yes/No question: answered on Build SPUs -->
+						{#if editMode && editingBranch === step._id}
+							<form method="POST" action="?/setBranch" use:enhance={afterSubmit(() => (editingBranch = null))} class="space-y-2 border-b border-amber-500/30 bg-amber-900/5 px-4 py-3 text-xs lg:col-span-5">
+								<input type="hidden" name="sectionNumber" value={section.number} />
+								<input type="hidden" name="stepId" value={step._id} />
+								<label class="block text-[var(--color-tron-text-secondary)]">Question
+									<input name="question" value={step.branch?.question ?? ''} placeholder="Is The Heat Shield Already On The Heater Block?" class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]" />
+								</label>
+								<label class="block text-[var(--color-tron-text-secondary)]">If No, Go To
+									<select name="noSectionId" class="mt-1 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-2 py-1 text-sm text-[var(--color-tron-text)]">
+										{#each procedures as p (p._id)}<option value={p._id} selected={p._id === step.branch?.noSectionId}>{tabLabel(p)}</option>{/each}
+									</select>
+								</label>
+								{#if !procedures.length}<p class="text-amber-300">No procedures yet.</p>{/if}
+								<div class="flex gap-2">
+									<button disabled={busy || !procedures.length} class="rounded bg-amber-500 px-3 py-1 font-semibold text-black disabled:opacity-50">Save Question</button>
+									{#if step.branch}<button name="removeQuestion" value="1" disabled={busy} class="rounded border border-red-500/40 px-3 py-1 text-red-300 hover:bg-red-900/20">Remove Question</button>{/if}
+									<button type="button" class="text-[var(--color-tron-text-secondary)]" onclick={() => (editingBranch = null)}>Cancel</button>
+								</div>
+							</form>
+						{/if}
+						{#if step.branch}
+							<div class="flex flex-wrap items-center gap-2 rounded border border-amber-500/30 bg-amber-900/10 px-3 py-2 text-sm lg:col-span-5">
+								<span class="font-semibold text-[var(--color-tron-text)]">{step.branch.question}</span>
+								<span class="rounded border border-green-500/40 px-2 py-0.5 text-xs text-green-300">Yes: Step Done</span>
+								<button type="button" onclick={() => { const p = procedures.find((s) => s._id === step.branch.noSectionId); if (p) selectSection(p.number); }} class="rounded border border-amber-500/40 px-2 py-0.5 text-xs text-amber-300 hover:bg-amber-900/20">No: {procedureName(step.branch.noSectionId)}</button>
+							</div>
+						{/if}
 						<!-- instructions -->
 						<div class="lg:col-span-3">
 							<div class="wi-prose text-sm text-[var(--color-tron-text)]">{@html step.instructionsHtml || '<p class="opacity-60">No written instructions.</p>'}</div>
@@ -493,7 +573,7 @@
 																<input type="hidden" name="sectionNumber" value={section.number} />
 																<input type="hidden" name="stepId" value={step._id} />
 																<input type="hidden" name="materialId" value={m._id} />
-																<button class="ml-2 text-[10px] text-red-300 hover:underline">remove</button>
+																<button class="ml-2 text-[10px] text-red-300 hover:underline">Remove</button>
 															</form>
 														</td>
 													{/if}
@@ -603,7 +683,7 @@
 														<input type="hidden" name="stepId" value={step._id} />
 														<input type="hidden" name="imageId" value={im._id} />
 														<input name="caption" value={im.caption ?? ''} placeholder="caption" class="w-full min-w-0 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg)] px-1 py-0.5 text-[var(--color-tron-text)]" />
-														<button class="text-amber-300 hover:underline">save</button>
+														<button class="text-amber-300 hover:underline">Save</button>
 													</form>
 													<form method="POST" action="?/updateImage" use:enhance={afterSubmit()} class="inline">
 														<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="stepId" value={step._id} /><input type="hidden" name="imageId" value={im._id} /><input type="hidden" name="direction" value="up" />
@@ -613,9 +693,20 @@
 														<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="stepId" value={step._id} /><input type="hidden" name="imageId" value={im._id} /><input type="hidden" name="direction" value="down" />
 														<button class="text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-text)]" disabled={i === step.images.length - 1} title="move later">▶</button>
 													</form>
-													<form method="POST" action="?/removeImage" use:enhance={afterSubmit()} class="inline" onsubmit={(e) => { if (!confirm('Remove this image from the step?')) e.preventDefault(); }}>
+													<form method="POST" action="?/replaceImage" enctype="multipart/form-data" use:enhance={replaceEnhance(im._id)} class="inline">
+													<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="stepId" value={step._id} /><input type="hidden" name="imageId" value={im._id} />
+													{#if replacingImage === im._id}
+														<span class="text-[var(--color-tron-text-secondary)]">Replacing…</span>
+													{:else}
+														<label class="cursor-pointer text-[var(--color-tron-cyan)] hover:underline focus-within:underline {busy ? 'pointer-events-none opacity-50' : ''}">
+															Replace
+															<input type="file" name="image" accept="image/*" class="sr-only" disabled={busy} onchange={(e) => { if (e.currentTarget.files?.length) e.currentTarget.form?.requestSubmit(); }} />
+														</label>
+													{/if}
+												</form>
+												<form method="POST" action="?/removeImage" use:enhance={afterSubmit()} class="inline" onsubmit={(e) => { if (!confirm('Remove this image from the step?')) e.preventDefault(); }}>
 														<input type="hidden" name="sectionNumber" value={section.number} /><input type="hidden" name="stepId" value={step._id} /><input type="hidden" name="imageId" value={im._id} />
-														<button class="text-red-300 hover:underline">remove</button>
+														<button class="text-red-300 hover:underline">Remove</button>
 													</form>
 												</div>
 											{/if}
