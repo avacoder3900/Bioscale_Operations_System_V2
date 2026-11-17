@@ -28087,7 +28087,7 @@ Live WI content (after that deploy): scripts/add-cricut-heat-shield-2026-11-17.t
   BIMS MCP (device_wi_get_step section "cricut": 14 steps, section 7).
 
 ================================================================================
-2026-11-17 — feat/screen-soak — Motion soak: overnight assay-motion stress test chained from screens
+2026-11-17 — feat/screen-soak — Motion stress test: overnight assay-motion stress test chained from screens
 ================================================================================
 Asked for after 0218 seized its bushings again ~15 cartridges after a cleaning: a long, unattended
 motion-only test to catch that wear before units go out. BIMS-only — no firmware push. The firmware's
@@ -28098,7 +28098,7 @@ limit hits / home time / travel / stage check) but caps it at SCREEN_MAX_REPS = 
 
 New: models/screen-soak.ts (collection screen_soaks: blocks[], runsDone, awaiting, lease lock),
 screen/soak.ts (startSoak / requestBlock / tagSoakSession / onSoakBlockComplete / advanceSoaks /
-soakRunRows), /validation/screen/soak (start form with run count + stop-on-first-fail, live per-run
+soakRunRows), /validation/screen/motion-stress, "Motion stress test" (start form with run count + stop-on-first-fail, live per-run
 table and sparklines of |home error|, limit hits, home time; polls every 60 s while a soak runs).
 Hand-off: screen ingest tags the session it creates to the soak's pending block (rawData.soakId) and,
 when the summary closes it, records the block (idempotent on redelivery) and fires the next block —

@@ -76,7 +76,7 @@
 			</p>
 		</div>
 		<div class="flex gap-2">
-			<a href="/validation/screen/soak" class="text-sm text-[var(--color-tron-cyan)] hover:underline">Motion soak →</a>
+			<a href="/validation/screen/motion-stress" class="text-sm text-[var(--color-tron-cyan)] hover:underline">Motion stress test →</a>
 			<a href="/validation/screen/export.csv{data.filterUdi ? `?udi=${encodeURIComponent(data.filterUdi)}` : ''}" class="text-sm text-[var(--color-tron-cyan)] hover:underline">Export CSV ↓</a>
 			<button type="button" class="text-sm text-[var(--color-tron-cyan)] hover:underline" onclick={() => (showCriteria = !showCriteria)}>
 				{showCriteria ? 'Hide criteria' : 'Criteria'}

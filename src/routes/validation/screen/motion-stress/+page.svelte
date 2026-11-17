@@ -17,7 +17,7 @@
 	const sel = $derived(data.selected);
 	const anyRunning = $derived(data.soaks.some((s: any) => s.status === 'running'));
 
-	// While a soak runs this page is also the backstop that fires a block the
+	// While a test runs this page is also the backstop that fires a block the
 	// webhook missed — every refresh runs the server's advance step.
 	onMount(() => {
 		const id = setInterval(async () => {
@@ -44,22 +44,22 @@
 		<div class="flex items-center gap-3">
 			<a href="/validation/screen" class="text-sm text-[var(--color-tron-cyan)] hover:underline">← Screen</a>
 		</div>
-		<h1 class="tron-heading mt-1 text-2xl font-bold">Motion soak</h1>
+		<h1 class="tron-heading mt-1 text-2xl font-bold">Motion stress test</h1>
 		<p class="tron-text-muted mt-1 max-w-3xl text-sm">
 			Overnight stress test of the motion system. Runs the production assay motion over and over with nothing
 			inserted — the screen's level 2 only — and records each run's home error, limit hits, home time and travel so
 			wear like seizing bushings shows up as a trend. The unit allows {data.limits.perBlock} runs per screen, so BIMS
 			chains blocks of up to {data.limits.perBlock} and starts the next one as soon as the last one reports. Each run
-			is about {Math.round(data.limits.minutesPerRun)} minutes. Soak blocks do not change the unit's Screen validation.
+			is about {Math.round(data.limits.minutesPerRun)} minutes. Its blocks do not change the unit's Screen validation.
 		</p>
 	</div>
 
 	{#if form?.error}
 		<div class="rounded-lg bg-[var(--color-tron-red)]/10 p-4 text-sm text-[var(--color-tron-red)]">{form.error}</div>
 	{:else if form?.started}
-		<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-4 text-sm text-[var(--color-tron-cyan)]">Soak started — the first block is running on the unit.</div>
+		<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-4 text-sm text-[var(--color-tron-cyan)]">Motion stress test started — the first block is running on the unit.</div>
 	{:else if form?.stopped}
-		<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-4 text-sm text-[var(--color-tron-cyan)]">Soak stopped. A block already on the unit finishes its runs; no new block starts.</div>
+		<div class="rounded-lg bg-[var(--color-tron-cyan)]/10 p-4 text-sm text-[var(--color-tron-cyan)]">Motion stress test stopped. A block already on the unit finishes its runs; no new block starts.</div>
 	{/if}
 
 	<form
@@ -102,7 +102,7 @@
 			About {hours} h on the unit ({blocks} block{blocks === 1 ? '' : 's'}). The slot must be empty. Leaving this page
 			open overnight is a good backstop: it checks every minute and restarts the chain if a hand-off was missed.
 		</p>
-		<TronButton type="submit" variant="primary" disabled={!spuId || busy || runs < 1}>{busy ? 'Asking the unit…' : 'Start soak'}</TronButton>
+		<TronButton type="submit" variant="primary" disabled={!spuId || busy || runs < 1}>{busy ? 'Asking the unit…' : 'Start motion stress test'}</TronButton>
 	</form>
 
 	{#if sel}
@@ -126,7 +126,7 @@
 				{#if sel.status === 'running'}
 					<form method="POST" action="?/stop" use:enhance>
 						<input type="hidden" name="id" value={sel.id} />
-						<TronButton type="submit" variant="danger" size="sm">Stop soak</TronButton>
+						<TronButton type="submit" variant="danger" size="sm">Stop test</TronButton>
 					</form>
 				{/if}
 			</div>
@@ -191,7 +191,7 @@
 
 	{#if data.soaks.length}
 		<div class="tron-card p-6">
-			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">Recent soaks</h2>
+			<h2 class="tron-heading mb-2 text-sm font-semibold uppercase tracking-wide">Recent motion stress tests</h2>
 			<table class="w-full text-xs">
 				<tbody>
 					{#each data.soaks as s (s.id)}

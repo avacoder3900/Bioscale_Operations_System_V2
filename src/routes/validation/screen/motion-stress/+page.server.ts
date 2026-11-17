@@ -7,7 +7,7 @@ import { startSoak, stopSoak, advanceSoaks, soakRunRows, SOAK_RUNS_PER_BLOCK, SO
 import type { Actions, PageServerLoad } from './$types';
 
 /**
- * SCREEN SOAK — overnight motion stress test. Chains level-2-only screens
+ * MOTION STRESS TEST (internally "soak") — overnight. Chains level-2-only screens
  * (assay motion, ≤5 runs each — the firmware cap) until the target run count.
  * The webhook fires each next block as the previous one's summary lands; this
  * page is the backstop (every load advances any soak stuck between blocks),
@@ -89,7 +89,7 @@ export const actions: Actions = {
 		const form = await request.formData();
 		const id = form.get('id')?.toString() ?? '';
 		const ok = await stopSoak(id, { _id: locals.user!._id, username: locals.user!.username });
-		if (!ok) return fail(400, { error: 'That soak is not running' });
+		if (!ok) return fail(400, { error: 'That test is not running' });
 		return { stopped: true };
 	}
 };

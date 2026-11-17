@@ -121,7 +121,7 @@ export async function startSoak(opts: { spuId: string; targetRuns: number; stopO
 	const deviceId = spu?.particleLink?.particleDeviceId;
 	if (!deviceId) return { ok: false, error: 'That unit has no Particle device linked' };
 	const existing = await ScreenSoak.findOne({ particleDeviceId: deviceId, status: 'running' }).select('_id').lean();
-	if (existing) return { ok: false, error: `${spu.udi} already has a soak running — stop it first` };
+	if (existing) return { ok: false, error: `${spu.udi} already has a motion stress test running — stop it first` };
 
 	// Refuse up front rather than create a soak that immediately fails.
 	try {
@@ -156,9 +156,9 @@ export async function startSoak(opts: { spuId: string; targetRuns: number; stopO
 		newData: { spuId: spu._id, spuUdi: spu.udi, targetRuns, stopOnFail: opts.stopOnFail, deviceId },
 		changedAt: new Date(),
 		changedBy: opts.actor.username ?? opts.actor._id,
-		reason: `Screen soak started on ${spu.udi}: ${targetRuns} assay-motion runs (~${Math.round((targetRuns * SOAK_MINUTES_PER_RUN) / 60 * 10) / 10} h)`
+		reason: `Motion stress test started on ${spu.udi}: ${targetRuns} assay-motion runs (~${Math.round((targetRuns * SOAK_MINUTES_PER_RUN) / 60 * 10) / 10} h)`
 	});
-	await appendSpuJournal(spu._id, `Motion soak started — ${targetRuns} assay-motion runs, ~${Math.round((targetRuns * SOAK_MINUTES_PER_RUN) / 60 * 10) / 10} h${opts.stopOnFail ? ', stops on first fail' : ''}`, opts.actor, { source: 'validation', refKind: 'screen_soak', refId: soakId, refLabel: 'Screen soak' });
+	await appendSpuJournal(spu._id, `Motion stress test started — ${targetRuns} assay-motion runs, ~${Math.round((targetRuns * SOAK_MINUTES_PER_RUN) / 60 * 10) / 10} h${opts.stopOnFail ? ', stops on first fail' : ''}`, opts.actor, { source: 'validation', refKind: 'screen_soak', refId: soakId, refLabel: 'Motion stress test' });
 	return { ok: true, soakId };
 }
 
@@ -173,11 +173,11 @@ async function finishSoak(soakId: string, status: 'completed' | 'stopped' | 'fai
 		action: 'UPDATE',
 		newData: { status, reason, runsDone: soak?.runsDone },
 		changedAt: new Date(),
-		changedBy: actor?.username ?? 'system:screen-soak',
-		reason: `Screen soak ${status}: ${reason}`
+		changedBy: actor?.username ?? 'system:motion-stress',
+		reason: `Motion stress test ${status}: ${reason}`
 	});
 	if (soak?.spuId) {
-		await appendSpuJournal(soak.spuId, `Motion soak ${status} after ${soak.runsDone}/${soak.targetRuns} runs — ${reason}`, actor ?? { _id: 'system:screen-soak', username: 'screen-soak' }, { source: 'validation', refKind: 'screen_soak', refId: soakId, refLabel: 'Screen soak' });
+		await appendSpuJournal(soak.spuId, `Motion stress test ${status} after ${soak.runsDone}/${soak.targetRuns} runs — ${reason}`, actor ?? { _id: 'system:motion-stress', username: 'motion-stress' }, { source: 'validation', refKind: 'screen_soak', refId: soakId, refLabel: 'Motion stress test' });
 	}
 }
 
