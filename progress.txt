@@ -28077,7 +28077,7 @@ Retrieve this exact code: git checkout master at commit c66ccea0
 What this deployment is for: the above live in production. Deployed 2026-11-17 21:44 UTC. This docs-only
   log commit triggers one more production build of the same code.
 Live WI content (after that deploy): scripts/add-cricut-heat-shield-2026-11-17.ts (on branch
-  feat/wi-replace-image @ 57b0ad38 — not in master; a reviewed follow-up PR can bring it in), rehearsed on
+  feat/wi-replace-image @ 330f425c — not in master; a reviewed follow-up PR can bring it in), rehearsed on
   an in-memory copy of the live WI, then dry-run + APPLY=1 on bioscale: v322 -> v338, changedBy
   "claude-code". Added procedure "Cricut: Heat Shield" (tab #7, after the sub-assemblies), its 14 steps
   (text verbatim from the "Work Instruction SB" doc, typos kept: step 4 "screenshot in Step 2", step 13
