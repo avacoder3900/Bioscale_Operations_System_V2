@@ -1223,10 +1223,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'List spoken voice memos (end-of-day wrap-ups, experiment notes) recorded in the Voicenotes app. ' +
 				'Default: UNPROCESSED memos only (no digest yet), oldest first. Transcripts over 800 chars are truncated ' +
 				'(transcriptTruncated: true) — use voice_memos_get for the full text before summarizing. ' +
-				'Start of a "process my EODs" pass: call this, then voice_memos_get each memo, then voice_memo_digest_write.',
+				'Start of a "process my EODs" pass: call this, then voice_memos_get each memo, then voice_memo_digest_write. ' +
+				'Each memo belongs to one person: `speaker` is their BIMS username, taken from the initials in the note title ' +
+				'("EOD GV" → initials "GV") or, without initials, from the webhook key. Filter with speaker to read one person\'s notes.',
 			inputSchema: z.object({
 				processed: z.enum(['false', 'true', 'all']).optional().describe("Default 'false' = only memos with no digest yet."),
-				speaker: z.string().optional().describe('BIMS username.'),
+				speaker: z.string().optional().describe('BIMS username, e.g. "jacob" or "Giovanni Victorio".'),
 				kind: z.enum(['eod', 'experiment']).optional(),
 				tag: z.string().optional(),
 				experimentRef: z.string().optional().describe('e.g. "358" for memos tagged exp-358 or opening "Experiment 358…".'),

@@ -56,6 +56,11 @@ const voiceMemoSchema = new Schema(
 			_id: { type: String, required: true },
 			username: { type: String, required: true }
 		},
+		/** Initials from the title that named the speaker ("EOD GV" → "GV"); null when the key did. */
+		initials: { type: String, default: null },
+		speakerSource: { type: String, enum: ['key', 'initials'], default: 'key' },
+		/** Username of the webhook key that delivered the note. Only this key may update it. */
+		deliveredBy: { type: String, default: null },
 
 		tags: { type: [String], default: [] },
 		kind: { type: String, enum: ['eod', 'experiment'], required: true },

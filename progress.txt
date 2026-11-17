@@ -27941,3 +27941,27 @@ uploads on 11/16 (their device flags were set directly that afternoon, so monito
 Checked: vitest 8 pass; svelte-check shows no errors in these files.
 Verify live: particleLink.monitorFlagState goes offline -> synced on 0210 / 0212 / 0239 at their next test upload.
 Source: branch master (from fix/monitor-flag-retry)
+
+================================================================================
+2026-11-17 — feat/voice-memo-initials — Voice notes sorted by person: "EOD JQ" files the note under JQ
+================================================================================
+Jacob: the team should each record an end-of-day note, titled "End of Day" plus initials (EOD JQ, EOD GV,
+EOD AV), and the notes should land in per-person piles.
+- parse.ts titleInitials(): the 2-3 letter word right after the EOD phrase, then the one right before it
+  ("EOD JQ", "End of day - GV", "EOD for RD", "AV EOD"). Candidates only.
+- speakers.ts (new): initials = first letter of the BIMS user's first + last name; VOICENOTES_INITIALS
+  ("JQ:jacob,GIO:Giovanni Victorio") overrides; a candidate is accepted only when it names exactly one
+  active user, so "EOD on magnets" still goes to the key owner and shared initials are never guessed.
+- Webhook: the key still authenticates; initials choose the speaker. voice_memos gains initials,
+  speakerSource (key|initials) and deliveredBy (the key's username). Ownership is now checked against
+  deliveredBy (old memos fall back to speaker), so one shared webhook URL works for the whole team.
+  Retitling with other initials moves the note (audited); dropping them does not move it back.
+- /kanban/journal: a chip per person (initials, name, note count, "n new"); ?who=<username> shows that
+  person's notes (transcript to the speaker and admins only) and only their digests.
+- MCP voice_memos_list / voice_memos_get return initials; description explains the speaker rule.
+- docs/VOICE-MEMOS.md: "Notes by person" section + VOICENOTES_INITIALS.
+Current active users all have unique initials (JQ, GV, AV, AT, SW, PD, RD, JG, NC, ZQ, IA, YC), so no
+override is needed today. Existing 9 memos are unchanged (all jacob).
+Checked: vitest voice-memos 58 pass (16 new); npm run check 14 errors, none in these files (r2.ts,
+research-proxy.ts, AskBimsWidget, assembly/[sessionId], validation/magnetometer). Journal page not yet
+looked at in a browser.

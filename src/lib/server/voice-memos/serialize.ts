@@ -13,6 +13,7 @@ export function memoSummary(m: any) {
 	return {
 		id: m._id,
 		speaker: m.speaker?.username ?? null,
+		initials: m.initials ?? null,
 		kind: m.kind,
 		experimentRef: m.experimentRef ?? null,
 		tags: m.tags ?? [],
@@ -37,6 +38,9 @@ export function memoFull(m: any, includeRaw = false) {
 		source: m.source,
 		sourceNoteId: m.sourceNoteId,
 		speaker: m.speaker?.username ?? null,
+		initials: m.initials ?? null,
+		speakerSource: m.speakerSource ?? 'key',
+		deliveredBy: m.deliveredBy ?? m.speaker?.username ?? null,
 		kind: m.kind,
 		experimentRef: m.experimentRef ?? null,
 		tags: m.tags ?? [],

@@ -84,6 +84,52 @@ describe('ingestVoicenote', () => {
 		expect(state.memos[0].transcript).toBe('EOD.');
 	});
 
+	describe('initials in the title', () => {
+		const gio = { _id: 'u3', username: 'gio' };
+		const viaJacobsKey = (body: any, speaker: any, initials: string | null) =>
+			ingestVoicenote({
+				parsed: parseVoicenotesPayload(body),
+				speaker,
+				deliveredBy: jacob.username,
+				initials,
+				raw: body,
+				allowlist: DEFAULT_ALLOWLIST
+			});
+
+		it("files the note under the named person, and keeps whose key delivered it", async () => {
+			await viaJacobsKey(note('recording.created', { title: 'EOD GV', transcript: 'arm PID' }), gio, 'GV');
+			expect(state.memos[0]).toMatchObject({ speaker: gio, initials: 'GV', speakerSource: 'initials', deliveredBy: 'jacobq' });
+		});
+
+		it('no initials → the key owner, as before', async () => {
+			await send(note('recording.created', { title: 'EOD', transcript: 'x' }));
+			expect(state.memos[0]).toMatchObject({ speaker: jacob, initials: null, speakerSource: 'key', deliveredBy: 'jacobq' });
+		});
+
+		it('the same key can still update a note filed under someone else', async () => {
+			await viaJacobsKey(note('recording.created', { title: 'EOD GV', transcript: 'arm' }), gio, 'GV');
+			const r = await viaJacobsKey(note('recording.updated', { title: 'EOD GV', transcript: 'arm PID' }), gio, 'GV');
+			expect(r.outcome).toBe('updated');
+			expect(state.memos[0].transcript).toBe('arm PID');
+		});
+
+		it('retitling with initials moves the note; dropping them leaves it', async () => {
+			await send(note('recording.created', { title: 'EOD', transcript: 'arm' }));
+			expect((await viaJacobsKey(note('recording.updated', { title: 'EOD GV' }), gio, 'GV')).outcome).toBe('updated');
+			expect(state.memos[0]).toMatchObject({ speaker: gio, initials: 'GV', speakerSource: 'initials' });
+			expect(state.audits.at(-1).reason).toContain('moved to gio');
+
+			await viaJacobsKey(note('recording.updated', { title: 'EOD Tuesday' }), jacob, null);
+			expect(state.memos[0].speaker).toEqual(gio);
+		});
+
+		it('a memo stored before deliveredBy existed still belongs to its speaker’s key', async () => {
+			state.memos.push({ _id: 'old', sourceNoteId: 'n1', speaker: jacob, title: 'EOD', transcript: 'x', tags: [], revisions: [] });
+			expect((await send(note('recording.updated', { transcript: 'y' }))).outcome).toBe('updated');
+			expect((await send(note('recording.updated', { transcript: 'z' }), gio)).outcome).toBe('conflict');
+		});
+	});
+
 	it('ignores AI creations and payloads without a note id', async () => {
 		expect((await send({ event: 'creation.summary', data: { id: 's1', content: 'x' } })).outcome).toBe('ignored');
 		expect((await send({ event: 'recording.created', data: { title: 'EOD' } })).outcome).toBe('invalid');
