@@ -28064,3 +28064,10 @@ Verified on a throwaway in-memory MongoDB (headless Chrome): add procedure + ste
 No → Cricut tab → confirm → back to SA2 → confirm; SPU 2 Yes (no Cricut tab); Change Answer; no console
 errors. npm run check 13 errors / 451 warnings (= master baseline). Unit 1481 pass, 1 pre-existing fail
 (ot2-protocol.run.test.ts). Not committed.
+Deployment: preview — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CQcg6TGaHR2XxCDqo9EUULeBfr7k
+Source: branch feat/wi-replace-image @ commit 3dd98100
+Retrieve this exact code: git checkout feat/wi-replace-image at commit 3dd98100
+  (or: git log feat/wi-replace-image --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU WI image Replace, ?section= tab memory, Save/Remove caps, Yes/No questions
+  with procedure tabs (Build SPUs answering) — review before the PR into master is merged. The docs-only
+  commit adding this entry triggers one more preview of the same code.
