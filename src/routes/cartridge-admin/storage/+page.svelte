@@ -102,8 +102,10 @@
 	function handleFormResult(result: { type: string; data?: Record<string, unknown> }) {
 		if (result.type === 'success' && result.data?.success) {
 			successMessage = (result.data.message as string) ?? 'Cartridges stored successfully';
+			// Carts a customer has linked are skipped by the server; say which.
+			scanError = (result.data.warning as string) ?? '';
 			step = 'done';
-			playBeep(true);
+			playBeep(!result.data.warning);
 		} else if (result.type === 'failure' && result.data?.error) {
 			scanError = result.data.error as string;
 			playBeep(false);
