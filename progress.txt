@@ -28007,3 +28007,16 @@ What this deployment is for: EOD notes filed by title initials + Journal per-per
   check-in table. Verified live 09:22 CST: MCP voice_memos_list now returns `initials`; webhook still 401s
   a bad key. Full unit suite 1455 pass / 1 fail (ot2-protocol.run.test.ts, fails on master alone too).
   Next: pick the roster on /kanban/eod; existing 9 memos unchanged (all jacob, initials null).
+
+================================================================================
+2026-11-17 — feat/spu-wifi-manual-entry — SPU Wi-Fi panel: type in network credentials
+================================================================================
+SPU diagnostics Wi-Fi panel (PR #133) only let you pick a network from a scan, so a unit could not be
+given credentials for a network it cannot see yet (hidden SSID, or before moving it to a new site).
+Added an "Enter Network Manually" button: network name + security (WPA2 default / WPA3 / WPA / WEP /
+Open) + password, then the existing connect flow (cellular + at-rest guard, replace saved networks,
+switch-state polling). A typed name that matches a scanned network takes its security type; a
+leading/trailing space in the name is flagged. Server unchanged apart from two reworded validation
+messages. Password still never stored, journaled or logged.
+Files: src/lib/components/spu/SpuWifiPanel.svelte, src/lib/server/spu-wifi.ts.
+Checked: npm run check 14 errors (baseline 14), none in these files. Not yet looked at in a browser.

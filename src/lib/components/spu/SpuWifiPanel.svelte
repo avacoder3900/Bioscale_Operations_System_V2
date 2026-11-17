@@ -43,6 +43,19 @@
 	let switching = $state(false);
 	let message = $state<{ text: string; tone: 'ok' | 'warn' | 'err' | 'info' } | null>(null);
 
+	// Manual entry: for a network the scan did not list (hidden, out of range right now, or the
+	// unit is about to be moved). Values are Device OS WLanSecurityType, as in the scan.
+	const MANUAL_SECURITY = [
+		{ value: 3, label: 'WPA2' },
+		{ value: 6, label: 'WPA3' },
+		{ value: 2, label: 'WPA' },
+		{ value: 1, label: 'WEP' },
+		{ value: 0, label: 'Open' }
+	];
+	let manual = $state(false);
+	let manualSsid = $state('');
+	let manualSecurity = $state(3);
+
 	let destroyed = false;
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	onDestroy(() => {
@@ -84,6 +97,7 @@
 		scanning = true;
 		message = { text: 'Scanning…', tone: 'info' };
 		selected = null;
+		closeManual();
 		password = '';
 		try {
 			const { seq } = await post({ action: 'scan' });
@@ -109,19 +123,64 @@
 
 	function choose(n: Network) {
 		if (!n.supported || switching) return;
+		manual = false;
 		selected = n;
 		password = '';
 		showPassword = false;
 		message = null;
 	}
 
-	let canConfirm = $derived(
-		!!selected && !switching && (selected.security === 0 ? true : password.length >= (selected.security >= 2 ? 8 : 1))
+	function openManual() {
+		if (switching) return;
+		selected = null;
+		manual = true;
+		manualSsid = '';
+		manualSecurity = 3;
+		password = '';
+		showPassword = false;
+		message = null;
+	}
+
+	function closeManual() {
+		manual = false;
+		manualSsid = '';
+		password = '';
+	}
+
+	// A typed name that matches a scanned network takes that network's security type.
+	function onManualSsidInput() {
+		const hit = networks.find((n) => n.ssid === manualSsid);
+		if (hit && hit.supported) manualSecurity = hit.security;
+	}
+
+	const passwordOk = (security: number) =>
+		security === 0 ? true : password.length >= (security >= 2 ? 8 : 1);
+
+	let canConfirm = $derived(!!selected && !switching && passwordOk(selected.security));
+
+	let manualSsidBytes = $derived(new TextEncoder().encode(manualSsid).length);
+	let canConfirmManual = $derived(
+		manual &&
+			!switching &&
+			manualSsid.length > 0 &&
+			manualSsidBytes <= 32 &&
+			!manualSsid.includes(':::') &&
+			passwordOk(manualSecurity)
 	);
 
-	async function connect() {
-		if (!selected) return;
-		const target = selected;
+	function connectManual() {
+		const label = MANUAL_SECURITY.find((s) => s.value === manualSecurity)?.label ?? String(manualSecurity);
+		connect({
+			ssid: manualSsid,
+			rssi: 0,
+			security: manualSecurity,
+			securityLabel: label,
+			channel: 0,
+			supported: true
+		});
+	}
+
+	async function connect(target: Network) {
 		switching = true;
 		message = { text: `Switching To ${target.ssid}…`, tone: 'info' };
 		try {
@@ -149,6 +208,7 @@
 				if (s.switchState === 'joined') {
 					message = { text: `Connected To ${target.ssid}`, tone: 'ok' };
 					selected = null;
+					closeManual();
 					return;
 				}
 				if (s.switchState === 'joined_other') {
@@ -199,7 +259,15 @@
 				<span class="tron-text-muted text-xs">Saved: {status.saved.join(', ')}</span>
 			{/if}
 		{/if}
-		<div class="ml-auto">
+		<div class="ml-auto flex gap-2">
+			<TronButton
+				type="button"
+				onclick={openManual}
+				disabled={scanning || switching || online === false || supported === false}
+				style="min-height: 38px;"
+			>
+				Enter Network Manually
+			</TronButton>
 			<TronButton
 				type="button"
 				variant="primary"
@@ -246,7 +314,7 @@
 			class="mt-3 flex flex-wrap items-center gap-3"
 			onsubmit={(e) => {
 				e.preventDefault();
-				if (canConfirm) connect();
+				if (canConfirm && selected) connect(selected);
 			}}
 		>
 			<span class="tron-text-primary text-sm font-medium">{selected.ssid}</span>
@@ -272,6 +340,62 @@
 				Cancel
 			</TronButton>
 		</form>
+	{/if}
+
+	{#if manual}
+		<form
+			class="mt-3 flex flex-wrap items-center gap-3"
+			onsubmit={(e) => {
+				e.preventDefault();
+				if (canConfirmManual) connectManual();
+			}}
+		>
+			<input
+				type="text"
+				class="tron-input"
+				placeholder="Network Name (SSID)"
+				autocomplete="off"
+				spellcheck="false"
+				maxlength="32"
+				bind:value={manualSsid}
+				oninput={onManualSsidInput}
+				disabled={switching}
+				style="min-height: 38px;"
+			/>
+			<select class="tron-input" bind:value={manualSecurity} disabled={switching} style="min-height: 38px;">
+				{#each MANUAL_SECURITY as s (s.value)}
+					<option value={s.value}>{s.label}</option>
+				{/each}
+			</select>
+			{#if manualSecurity !== 0}
+				<input
+					type={showPassword ? 'text' : 'password'}
+					class="tron-input flex-1"
+					placeholder="Password"
+					autocomplete="off"
+					maxlength="64"
+					bind:value={password}
+					disabled={switching}
+					style="min-height: 38px;"
+				/>
+				<TronButton type="button" onclick={() => (showPassword = !showPassword)} disabled={switching} style="min-height: 38px;">
+					{showPassword ? 'Hide' : 'Show'}
+				</TronButton>
+			{/if}
+			<TronButton type="submit" variant="primary" disabled={!canConfirmManual} style="min-height: 38px;">
+				{switching ? 'Connecting…' : 'Are you sure you want to connect?'}
+			</TronButton>
+			<TronButton type="button" onclick={closeManual} disabled={switching} style="min-height: 38px;">
+				Cancel
+			</TronButton>
+		</form>
+		<p class="tron-text-muted mt-1 text-xs">
+			Name and password are case-sensitive. This replaces the SPU's saved Wi-Fi networks; if the name or password is
+			wrong the SPU stays on cellular and can be retried.
+		</p>
+		{#if manualSsid !== manualSsid.trim()}
+			<p class="mt-1 text-xs" style="color: {toneColor.warn};">⚠ Network name starts or ends with a space.</p>
+		{/if}
 	{/if}
 
 	{#if message}

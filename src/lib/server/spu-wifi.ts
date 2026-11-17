@@ -157,11 +157,11 @@ export function validateCredentials(
 	password: unknown,
 	security: unknown
 ): { ok: true; ssid: string; password: string; security: number } | { ok: false; error: string } {
-	if (typeof ssid !== 'string' || ssid.length === 0) return { ok: false, error: 'Select a network.' };
+	if (typeof ssid !== 'string' || ssid.length === 0) return { ok: false, error: 'Select or enter a network.' };
 	if (new TextEncoder().encode(ssid).length > 32) return { ok: false, error: 'Network name is too long.' };
 	if (ssid.includes(':::')) return { ok: false, error: 'Network name contains an unsupported sequence (":::").' };
 	const sec = Number(security);
-	if (!Number.isInteger(sec) || sec < 0 || sec > 99) return { ok: false, error: 'Unknown network security type. Re-scan.' };
+	if (!Number.isInteger(sec) || sec < 0 || sec > 99) return { ok: false, error: 'Unknown network security type.' };
 	if (UNSUPPORTED_SECURITY.has(sec)) return { ok: false, error: 'Enterprise Wi-Fi networks are not supported.' };
 	const pw = typeof password === 'string' ? password : '';
 	if (sec === 0 && pw.length > 0) return { ok: false, error: 'This is an open network; leave the password empty.' };
