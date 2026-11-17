@@ -1,6 +1,7 @@
 import { error, fail, redirect } from '@sveltejs/kit';
 import { connectDB, AssayDefinition, CartridgeRecord } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
+import { withNotCustomerHeld, findCustomerHeldIds, customerHeldNotice } from '$lib/server/manufacturing/locked-cartridges';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, params }) => {
@@ -13,9 +14,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	}).lean() as any;
 	if (!assay) throw error(404, 'Assay not found');
 
-	// Fetch cartridges that haven't had an assay loaded yet
+	// Fetch cartridges that haven't had an assay loaded yet — never one a
+	// customer has linked (customer-held.ts)
 	const cartridges = await CartridgeRecord.find(
-		{ 'assayLoaded.recordedAt': { $exists: false } },
+		withNotCustomerHeld({ 'assayLoaded.recordedAt': { $exists: false } }),
 		{ _id: 1, barcode: 1, lotNumber: 1, status: 1, cartridgeType: 1 }
 	).sort({ createdAt: -1 }).limit(200).lean();
 
@@ -53,9 +55,18 @@ export const actions: Actions = {
 		const errors: string[] = [];
 
 		if (cartridgeIds.length) {
-			const bulkOps = cartridgeIds.map((cid: string) => ({
+			// A cartridge a customer has linked is refused outright: it is never
+			// pulled back to linked under another assay. The guard is in each
+			// filter too, so a link made after this read still wins.
+			const held = await findCustomerHeldIds(cartridgeIds);
+			const heldSet = new Set(held);
+			const heldNotice = customerHeldNotice('assigned', held);
+			if (heldNotice) errors.push(heldNotice);
+			const toAssign = cartridgeIds.filter((cid) => !heldSet.has(cid));
+			if (!toAssign.length) return { success: true, assigned: 0, errors };
+			const bulkOps = toAssign.map((cid: string) => ({
 				updateOne: {
-					filter: { _id: cid, 'assayLoaded.recordedAt': { $exists: false } },
+					filter: withNotCustomerHeld({ _id: cid, 'assayLoaded.recordedAt': { $exists: false } }),
 					update: {
 						$set: {
 							'assayLoaded.assay': { _id: assay._id, name: assay.name, skuCode: assay.skuCode },
@@ -66,9 +77,9 @@ export const actions: Actions = {
 					}
 				}
 			}));
-			const result = await CartridgeRecord.bulkWrite(bulkOps);
+			const result = await CartridgeRecord.bulkWrite(bulkOps as any);
 			const assigned = result.modifiedCount;
-			const skipped = cartridgeIds.length - assigned;
+			const skipped = toAssign.length - assigned;
 			if (skipped > 0) errors.push(`${skipped} cartridge(s) were already assigned or not found`);
 			return { success: true, assigned, errors };
 		}
