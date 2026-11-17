@@ -1,7 +1,8 @@
 # BIMS API v1
 
-Four endpoints the customer apps (bioscale-app, bioscale-business, later the store) call instead
-of holding a database login. Built 2026-11-16 on branch `feat/bims-api-v1`.
+Endpoints the customer apps (bioscale-app, bioscale-business, later the store) call instead
+of holding a database login. The cartridge endpoints were built 2026-11-16 on branch
+`feat/bims-api-v1`; the reader endpoints 2026-11-17 on `feat/bims-api-readers` (see [Readers](#readers)).
 
 | Endpoint | Does |
 | --- | --- |
@@ -9,10 +10,16 @@ of holding a database login. Built 2026-11-16 on branch `feat/bims-api-v1`.
 | `POST /api/v1/cartridges/{id}/link` | Make the cartridge `linked` for one holder, so a reader will run it |
 | `POST /api/v1/cartridges/{id}/unlink` | Undo that link, by the same holder, before a run |
 | `GET /api/v1/cartridges/{id}/result` | Run state, start and end times, the result in ng/mL, quality flags, provenance |
+| `POST /api/v1/readers/pair` | Pair a reader with a holder, from the code scanned or typed off it |
+| `POST /api/v1/readers/{serial}/unpair` | Release a reader this holder holds |
+| `GET /api/v1/readers/{serial}` | The held reader: online, firmware, whether it can change Wi-Fi |
+| `GET /api/v1/readers/{serial}/wifi` | The held reader's Wi-Fi state and last scan, live |
+| `POST /api/v1/readers/{serial}/wifi` | Scan for networks, or switch the reader to one |
 
 Code: `src/lib/server/bims-api/` (auth, rules, reducers, rate limit, database operations) and
-`src/routes/api/v1/cartridges/[id]/`. The module imports nothing from the rest of `$lib/server`
-except the database connection and models.
+`src/routes/api/v1/`. The cartridge code imports nothing from the rest of `$lib/server` except the
+database connection and models; the reader code (`readers.ts`) also imports the Particle client and
+the operator Wi-Fi functions (`spu-wifi.ts`), so the device contract lives in one place.
 
 ## Conventions
 
@@ -58,6 +65,12 @@ Per minute, counted per calling app and, when the request names one, per `holder
 | link | 20 | 200 |
 | unlink | 20 | 200 |
 | result | 120 | 1200 |
+| reader pair | 10 | 100 |
+| reader unpair | 10 | 100 |
+| reader GET | 60 | 600 |
+| reader Wi-Fi GET | 60 | 600 |
+| reader Wi-Fi scan | 6 | 60 |
+| reader Wi-Fi connect | 6 | 60 |
 
 Over either limit: `429 { "message": "Too many requests" }` with `Retry-After: <seconds>` (the time
 to the next minute boundary).
@@ -337,6 +350,200 @@ Reads: named fields of one `cartridge_records` document (for wells A, B and C: `
 `spus` lookup. Writes: a rate-limit counter. Never returned: the Particle device id or name, run
 data, customer, shipping, sample or experiment fields.
 
+## Readers
+
+A reader is an SPU in BIMS (`spus`). An app pairs a reader with a holder (an account or a
+practice, named only by its `holderRef`), then reads its state and changes its Wi-Fi. Code:
+`src/lib/server/bims-api/reader-rules.ts` (pure rules), `src/lib/server/bims-api/readers.ts`
+(database and Particle), `src/routes/api/v1/readers/`. The Wi-Fi calls reuse the operator panel's
+functions (`src/lib/server/spu-wifi.ts`), so the device contract and its safety checks are the
+same: firmware v109+, and a switch only while cellular is connected and the reader is at rest.
+
+### The holder field
+
+```
+spus.holder = { kind: "app", ref: "h_…", via: "bioscale-app" | "bioscale-business" | "bioscale-store", since: Date }
+```
+
+Absent when no app holds the reader. Separate from the operator `assignment` (customer), which
+these endpoints never read or write. The writes use the sacred-document annotation opt-in
+(`allowFinalized`, `db/middleware/sacred.ts`) and each adds an `audit_log` row, so a finalized SPU
+can still be paired. The SPU page shows "Paired with a Bioscale app since …" while an app holds it.
+
+### What a reader's code is
+
+A reader carries a pre-printed QR label whose payload is a random UUID, bound to the unit on
+`/spu/mfg/barcodes` and stored as `spus.barcode`. Its UDI is the reader's serial in this API.
+`pair` accepts, after trimming, at most 200 characters, any case:
+
+| Form | Example |
+| --- | --- |
+| UDI | `BT-M01-0000-0230`, `bt-m01-0000-0230` |
+| QR label (`spus.barcode`) | `0c42168a-d868-401a-ac94-1b990f4ad10d` |
+| Particle serial number (`particleLink.particleSerial`) | `P2MABA1234ABCD` |
+| A URL or text with a UDI or UUID anywhere in it, or a URL whose query value, last path segment or hash is one of the above | `https://bioscale.app/pair?code=0c42168a-d868-401a-ac94-1b990f4ad10d` |
+
+A UDI match wins over a label match, which wins over a Particle serial match. If one kind matches
+two readers the code names none (404). The SPU's database id and the Particle device id are not
+accepted: neither is printed on the unit.
+
+`{serial}` in the paths is the UDI, any case (`^[A-Za-z0-9-]{3,40}$`, else
+`400 { "message": "Not a reader serial" }`).
+
+### Pair
+
+```
+POST /api/v1/readers/pair
+Authorization: Bearer <key>
+Content-Type: application/json
+
+{ "holderRef": "h_8Kq2mXw0aB3dE5fG7hJ9kL1n", "code": "0c42168a-d868-401a-ac94-1b990f4ad10d" }
+```
+
+```
+201 { "ok": true, "status": "paired",  "reader": ReaderView }
+200 { "ok": true, "status": "already", "reader": ReaderView }   // this holderRef already holds it; nothing written
+404 { "ok": false, "reason": "not_found" }                      // no reader has this code
+409 { "ok": false, "reason": "held_by_other" }                  // another holderRef holds it
+409 { "ok": false, "reason": "not_available" }                  // status is not released
+400 { "message": "code is required (at most 200 characters)" }
+400 { "message": "Only holderRef and code are accepted in the body" }
+```
+
+Rules, in order: unknown, `not_found`; held by this holderRef, `already` (whatever its status is
+now); held by another, `held_by_other`; status not `released` (draft, assembling, validating,
+servicing, retired; legacy values go through `normalizeSpuStatus`, so `deployed` counts as
+released), `not_available`; otherwise paired. An operator `assignment.customer` does not block
+pairing.
+
+The write matches on `_id`, no holder and the status that was read; a miss is read and judged again
+once, and a second miss is `409 held_by_other`, so two holders cannot both pair one reader. It sets
+`holder` and pushes one journal entry, `Paired with a Bioscale app (<app>, holder <holderRef>)`
+(source `app`). One `audit_log` row: `tableName: "spus"`, `action: "PAIR"`,
+`changedBy: "api:<app>"`, `newData: { holder: { kind, ref, via }, journalEntryAdded }`.
+
+To move a reader to a new holder, the old holder unpairs first (READER-01: "the previous holder is
+released first"). The API has no forced takeover.
+
+### ReaderView
+
+```
+{ "serial": "BT-M01-0000-0230", "online": true, "firmware": 109, "wifiSupported": true, "since": "2026-11-17T15:04:05.000Z" }
+```
+
+| Field | Source | Null when |
+| --- | --- | --- |
+| `serial` | `udi` | never |
+| `online` | Particle `GET /devices/{id}` (`online`, else `connected`) | no Particle device linked, or Particle did not answer within 4 s |
+| `firmware` | the product firmware version Particle reports, else `wifi_status.fw` | unknown |
+| `wifiSupported` | online: whether the `wifi_status` variable exists; offline: `firmware >= 109` | the variable read failed for another reason; offline with unknown firmware |
+| `since` | `holder.since` | not in these responses |
+
+At most one device read and one variable read, each bounded to 4 s. Particle being down never
+fails the call; the fields are null.
+
+### Unpair
+
+```
+POST /api/v1/readers/BT-M01-0000-0230/unpair
+{ "holderRef": "h_8Kq2mXw0aB3dE5fG7hJ9kL1n" }
+```
+
+```
+200 { "ok": true, "status": "unpaired" }
+200 { "ok": true, "status": "not_paired" }     // no one holds it; nothing written
+404 { "ok": false, "reason": "not_found" }
+409 { "ok": false, "reason": "held_by_other" }
+```
+
+Removes `holder` (matching `_id` and `holder.ref`), journals `Unpaired from a Bioscale app (<app>,
+holder <holderRef>)`, one `audit_log` row with `action: "UNPAIR"`.
+
+### Get a reader
+
+```
+GET /api/v1/readers/BT-M01-0000-0230?holderRef=h_8Kq2mXw0aB3dE5fG7hJ9kL1n
+```
+
+```
+200 ReaderView
+404 { "reason": "not_found" }
+```
+
+404 unless this holderRef holds the reader. An unknown serial, an unheld reader and a reader held
+by someone else look the same.
+
+### Wi-Fi
+
+```
+GET /api/v1/readers/BT-M01-0000-0230/wifi?holderRef=h_8Kq2mXw0aB3dE5fG7hJ9kL1n
+```
+
+```
+200 { "online": true,  "supported": true, "status": WifiStatus, "scan": WifiScan, "error": null }
+200 { "online": false, "supported": null, "status": null, "scan": null, "error": null }    // offline
+200 { "online": false, "supported": null, "status": null, "scan": null,
+      "error": "This reader is not connected to the Bioscale cloud yet." }                // no Particle device linked
+404 { "reason": "not_found" }
+```
+
+The operator panel's body (`GET /api/spu/{spuId}/wifi`, `readWifi`): `supported: false` is
+firmware older than v109. `WifiStatus` is `{ firmware, radioOn, ready, ssid, rssi, cloud, cellular,
+switchState, switchSeq, target, scanSeq, saved }`; `WifiScan` is `{ seq, networks: [{ ssid, rssi,
+security, securityLabel, channel, supported }], truncated, error }`. Both are read live from the
+device and never stored.
+
+```
+POST /api/v1/readers/BT-M01-0000-0230/wifi
+{ "holderRef": "h_8Kq2mXw0aB3dE5fG7hJ9kL1n", "action": "scan" }
+```
+
+```
+200 { "seq": 7 }       // poll GET until scan.seq is this
+409 { "error": "The reader is busy (running a test or other routine). Try again when it is idle." }
+409 { "error": "This reader runs firmware older than v109, which cannot scan for Wi-Fi." }
+409 { "error": "The reader has its Wi-Fi radio turned off." }
+502 { "error": "Could not reach the reader." }
+```
+
+```
+POST /api/v1/readers/BT-M01-0000-0230/wifi
+{ "holderRef": "h_8Kq2mXw0aB3dE5fG7hJ9kL1n", "action": "connect", "ssid": "Home Net", "password": "…", "security": 3 }
+```
+
+```
+200 { "seq": 12 }      // poll GET: status.switchSeq and switchState (queued, connecting, joined, joined_other, failed)
+200 { "seq": null }    // firmware that saves the network without reporting progress
+400 { "error": "WPA passwords are 8–63 characters." }       // validateCredentials, any of its sentences
+409 { "error": "Cellular is not connected on this reader, so switching Wi-Fi could leave it unreachable." }
+409 { "error": "The reader is busy (running a test or other routine). Try again when it is idle." }
+409 { "error": "This reader runs firmware older than v109." }
+409 { "error": "⚠ Saved networks were cleared, but Home Net was not saved: …" }
+502 { "error": "Could not reach the reader." }
+```
+
+`security` is the scanned network's `security` number (0 open, 1 WEP, 2 WPA, 3 WPA2, 6 WPA3;
+enterprise 4 and 5 are refused). A switch makes the chosen network the reader's only saved network
+(`replaceAndSwitch`). No Particle device linked: `409 { "error": "This reader is not connected to
+the Bioscale cloud yet." }`. Not held by this holderRef: `404 { "reason": "not_found" }`, and nothing
+is sent to the device. An unknown `action` is `400 { "message": "Unknown action" }`. The body may
+carry only `holderRef`, `action`, `ssid`, `password` and `security`.
+
+Messages are the operator panel's with "SPU" rewritten as "reader".
+
+### Privacy
+
+- BIMS receives a `holderRef`, never an email, name or account id.
+- The Wi-Fi password is forwarded to Particle and nothing else: it is never stored, logged, audited,
+  journaled or returned. A device or Particle message is returned only when it does not contain the
+  password (otherwise a generic sentence), and an exception from the device call is a 502 with a
+  fixed sentence. The unexpected-failure log line names the endpoint and the error class only.
+- A network name can place a home (READER-01), so a Wi-Fi change from an app is journaled and
+  audited as `Wi-Fi changed from a Bioscale app (<app>)`, without the network name. The operator
+  panel also leaves the network name out of its journal entry while an app holds the reader.
+- Scan results are returned live and never stored.
+- No location is read or returned.
+
 ## What was decided here
 
 - **Research cartridges are refused, with no "internal testers" exception.** The claim API allows
@@ -388,3 +595,8 @@ Until step 2 every `/api/v1/` request is a 401.
 - `src/lib/server/bims-api/result.test.ts`: the reported-wells reduction, units, run state.
 - `src/lib/server/bims-api/auth.test.ts`: keys and the rate limiter.
 - `src/routes/api/v1/cartridges/[id]/handlers.test.ts`: the four handlers against in-memory models.
+- `src/lib/server/bims-api/reader-rules.test.ts`: every accepted reader code form, pairing and
+  unpairing rules, operator-to-app wording.
+- `src/routes/api/v1/readers/handlers.test.ts`: the reader handlers against an in-memory `spus`, a
+  mocked Particle client and the real spu-wifi functions over it; the holder check on every
+  endpoint; that the password appears in no response, journal entry, audit row, update or log line.
