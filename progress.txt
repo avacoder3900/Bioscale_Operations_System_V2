@@ -28116,3 +28116,10 @@ block recorded once with 2 runs, redelivery a no-op, no rollup, next-block attem
 deleted). npm run check: 13 errors / 451 warnings, none in touched files (= master baseline).
 Known gap: no frequent cron (vercel.json crons are daily), so if the webhook hand-off fails and the
 soak page is closed, the chain waits until the device next reconnects. Leave the page open overnight.
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (Vercel GitHub integration
+  build from the push; deployment id not retrieved — no gh CLI and the Vercel MCP lacks brevitest scope)
+Source: branch master @ commit eec1fc2c (fast-forward of feat/screen-soak, fc7c2c8c + eec1fc2c)
+Retrieve this exact code: git checkout master at commit eec1fc2c
+  (or: git log feat/screen-soak --oneline to find it if master has since moved on)
+What this deployment is for: Motion stress test (/validation/screen/motion-stress) live for the first
+  overnight runs, 2026-11-17. Pushed to master with Jacob's explicit OK. This log commit rebuilds the same code.
