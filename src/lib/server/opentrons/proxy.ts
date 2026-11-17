@@ -74,7 +74,7 @@ export function withRequester<T>(username: string | null | undefined, fn: () => 
 export const currentRequester = (): string | null => requesterStore.getStore() ?? null;
 
 const BRIDGE_POLL_MS = 100;
-const BRIDGE_TIMEOUT_MS = 30_000; // parity with the direct robotFetch abort
+import { BRIDGE_TIMEOUT_MS, bridgeTtlMs } from './bridge-timing';
 
 /**
  * Relay one HTTP request through the command queue and wait for the daemon's
@@ -84,21 +84,26 @@ async function bridgeFetch(
 	robot: any,
 	method: string,
 	path: string,
-	body?: unknown
+	body?: unknown,
+	opts: { timeoutMs?: number } = {}
 ): Promise<Response> {
 	await connectDB();
 	const deviceId = bridgeDeviceIdForRobot(robot);
+	// The call's own timeout when it is longer than the 30 s default (run.create
+	// asks for 90 s: a Pi needs 15–30 s just to create a run). Same number on the
+	// command, so the daemon side expires it at the same moment.
+	const ttl = bridgeTtlMs(opts.timeoutMs);
 	const cmd = await Ot2BridgeCommand.create({
 		_id: generateId(),
 		robotId: String(robot._id ?? ''),
 		deviceId,
 		kind: 'http',
 		request: { method, path, body: body ?? null },
-		ttlMs: BRIDGE_TIMEOUT_MS,
+		ttlMs: ttl,
 		requestedBy: currentRequester()
 	});
 
-	const deadline = Date.now() + BRIDGE_TIMEOUT_MS;
+	const deadline = Date.now() + ttl;
 	while (Date.now() < deadline) {
 		const doc = await Ot2BridgeCommand.findById(cmd._id)
 			.select('status result error').lean() as any;
@@ -126,7 +131,20 @@ async function bridgeFetch(
 	const beatInfo = lastBeat?.receivedAt
 		? `last bridge heartbeat ${Math.round((Date.now() - new Date(lastBeat.receivedAt).getTime()) / 60000)} min ago`
 		: 'no bridge heartbeat ever received';
-	throw new Error(`${method} ${path} failed: robot bridge "${deviceId}" did not respond within ${BRIDGE_TIMEOUT_MS / 1000}s (${beatInfo})`);
+	throw new Error(`${method} ${path} failed: robot bridge "${deviceId}" did not respond within ${Math.round(ttl / 1000)}s (${beatInfo})`);
+}
+
+/** Is this server relaying robot calls through the bridge daemon (Vercel) rather than calling the robot directly? */
+export function isBridgeTransport(): boolean {
+	return resolveTransport() === 'bridge';
+}
+
+/** Milliseconds since the robot's bridge daemon last heartbeat; null when it never has. */
+export async function bridgeHeartbeatAgeMs(robot: { name?: string; bridgeDeviceId?: string }): Promise<number | null> {
+	await connectDB();
+	const lastBeat = await ScannerEvent.findOne({ deviceId: bridgeDeviceIdForRobot(robot), eventType: 'heartbeat' })
+		.sort({ receivedAt: -1 }).select('receivedAt').lean().catch(() => null) as any;
+	return lastBeat?.receivedAt ? Date.now() - new Date(lastBeat.receivedAt).getTime() : null;
 }
 
 /** Get a robot record by DB id and assert it's active */
@@ -204,7 +222,7 @@ const requesterUser = () => {
 async function robotPostRaw(robot: any, path: string, body: unknown, opts: { timeoutMs?: number }): Promise<Response> {
 	const viaArm = await viaArmLink(robot, 'POST', path, body, opts);
 	if (viaArm) return viaArm;
-	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'POST', path, body);
+	if (resolveTransport() === 'bridge') return bridgeFetch(robot, 'POST', path, body, opts);
 	const url = `${robotBaseUrl(robot)}${path}`;
 	return robotFetch(url, {
 		method: 'POST',

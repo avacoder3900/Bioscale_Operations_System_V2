@@ -56,7 +56,8 @@ import {
 	type LegacyLabwareOffset,
 	type StepError
 } from '$lib/opentrons/ot2-protocol';
-import { getRobot, bridgeDeviceIdForRobot, withRequester } from './proxy';
+import { getRobot, bridgeDeviceIdForRobot, withRequester, isBridgeTransport, bridgeHeartbeatAgeMs } from './proxy';
+import { bridgeOfflineBanner } from './bridge-timing';
 import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
@@ -1665,6 +1666,13 @@ export async function reconcileStartIntent(kind: FillKind, run: any, user: User)
 		const createArgs = intent.createArgs as { protocolId?: string } | undefined;
 		const robot = await getRobot(run.robot?._id);
 		if (!robot) return { changed: false, banner: banner() };
+		// 2026-11-17 (R04): with the bridge daemon not heartbeating, the run.list
+		// below only burns the 30 s bridge wait on every page load and learns
+		// nothing. Say what is wrong instead; the intent is left for the next look.
+		if (isBridgeTransport()) {
+			const offline = bridgeOfflineBanner(await bridgeHeartbeatAgeMs(robot));
+			if (offline) return { changed: false, banner: offline };
+		}
 		const list = await withRequester(`${user.username} (reconcile)`, () => runVerb(serverTransport(robot), 'run.list', {}));
 		if (list.status !== 200) return { changed: false, banner: banner() };
 		const body = list.body as { runs: Array<{ id: string; status: string | null; protocolId: string | null; createdAt: string | null }>; current: any };

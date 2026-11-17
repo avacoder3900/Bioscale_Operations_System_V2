@@ -27817,3 +27817,34 @@ What this deployment is for: cart-mfg dashboard after Alejandro's physical-count
   Flow, Seal tile dropped, Reagent Fill = in progress, Stored = reagent-filled not yet run.
   Data the same day: 3 'sealed' test rows hidden via checkout (pqIep3Nqd9WR6ATuz9ikX); stray cart
   4c3fbb44… pulled from the reconciliation checkout (now 30) and set Loose for a new bucket.
+
+2026-11-17 — fix/wax-start-recovery — a wax start that can't reach the robot fails fast and can be retried
+Why: Alejandro: "whenever a wax run fails to auto start I can't start it manually; I cancel and rescan."
+Traced R04 run v44e (21:43–21:50Z): the bridge daemon stopped claiming commands (heartbeat, due every
+10 s, absent ~21:46–21:57; WiFi loss 44–48% on Nov 11–12, a 12 h heartbeat gap on Nov 12). The start's
+first robot call (GET analyses) expired after 30 s; startRunSequence read "could not verify" as STALE
+and launched a 110 s protocol re-upload inside the 60 s ?/startRun action (browser aborts at 45 s) →
+function killed, no failed confirm, startIntent left with no run id → Start refused for 3 min ("a start
+is already in progress"), every reload burning another 30 s on run.list → operator cancels, loses scans.
+What:
+  1. ot2-protocol.ts startRunSequence: a freshness check the robot did not answer (no "analys…" in the
+     message) fails the start at once — "Couldn't reach the robot to check its protocol (…). Nothing was
+     started" — and the failed confirm clears the intent. A robot that answered about a missing/failed
+     analysis still re-uploads (robotAnsweredAboutAnalysis).
+  2. WaxWizard: Start runs step by step over the RobotSession on BOTH lines (auto-start step d, the
+     captured-params auto-start, the panel's Start). On the queue line each step is its own call through
+     /verb (maxDuration 300); a failed step reports and clears the intent, so Start is retryable at once
+     with the scans kept. Finish/Cancel/Abort unchanged.
+  3. proxy.ts bridgeFetch honours the call's timeoutMs (bridgeTtlMs: default 30 s, caller's longer wait up
+     to 180 s) on the wait AND the command's ttlMs — run.create asks for 90 s; a Pi needs 15–30 s.
+  4. reconcileStartIntent: on the bridge transport, when the robot's daemon heartbeat is older than 45 s
+     (bridgeHeartbeatAgeMs / bridgeOfflineBanner) it skips the run.list and returns "robot bridge offline
+     — last heartbeat N ago; start not checked" instead of waiting 30 s per page load.
+  New pure module src/lib/server/opentrons/bridge-timing.ts (+ test). Reagent/diluent wizards still use
+  the one-shot queue start; fixes 1, 3, 4 apply to them too — step-by-step start there is a follow-up.
+Not fixed here: R04's bridge link itself (robot-side daemon over WiFi) — needs a wired path or WiFi work.
+Tests: +4 (ot2-protocol.run.test.ts: line-down → fail fast; robot-answered → re-upload; bridge-timing
+.test.ts ×2; run-lifecycle-records.test.ts: stale-heartbeat banner skips run.list). The long-stale
+"completed with errors" expectation now carries the robot's detail (": x") like the code has since.
+116/116 pass across ot2-protocol / direct-client / protocol-freshness; lifecycle + timing green.
+npm run check: 16 errors (baseline).

@@ -84,10 +84,13 @@ vi.mock('$lib/server/db', () => ({
 		updateOne: async (...args: any[]) => db.writes.push({ model: 'runRecord', op: 'updateOne', args })
 	}
 }));
+const bridgeMock = vi.hoisted(() => ({ transport: false, heartbeatAgeMs: 0 as number | null }));
 vi.mock('./proxy', () => ({
 	getRobot: async (id: string) => ({ _id: id, name: 'Robot 1 B14', ip: 'x' }),
 	bridgeDeviceIdForRobot: () => 'ot2-b14-bridge',
-	withRequester: (_u: unknown, fn: () => Promise<unknown>) => fn()
+	withRequester: (_u: unknown, fn: () => Promise<unknown>) => fn(),
+	isBridgeTransport: () => bridgeMock.transport,
+	bridgeHeartbeatAgeMs: async () => bridgeMock.heartbeatAgeMs
 }));
 vi.mock('./transport', () => ({ serverTransport: () => ({}) }));
 const gateMock = vi.hoisted(() => ({ ok: true }));
@@ -387,6 +390,30 @@ describe('reconcileStartIntent (load)', () => {
 		expect(r.banner).toBeNull();
 		expect(db.audits).toHaveLength(0);
 		expect(db.writes.some((w) => w.args?.[1]?.$unset)).toBe(false);
+		runVerbMock.fn = null;
+	});
+
+	it('bridge transport with a stale daemon heartbeat → "bridge offline" banner, no run.list, nothing written (R04 2026-11-17)', async () => {
+		let calls = 0;
+		runVerbMock.fn = async () => {
+			calls++;
+			return { status: 502, body: { message: 'should not be called' } };
+		};
+		bridgeMock.transport = true;
+		bridgeMock.heartbeatAgeMs = 7 * 60_000;
+		const run = runWith({ requestedAt: new Date() });
+		db.wax.set('W4', run);
+		const r = await reconcileStartIntent('wax', run, USER);
+		expect(r).toEqual({ changed: false, banner: 'robot bridge offline — last heartbeat 7 min ago; start not checked' });
+		expect(calls).toBe(0);
+		expect(db.audits).toHaveLength(0);
+		expect(db.writes.some((w) => w.args?.[1]?.$unset)).toBe(false);
+		// A fresh heartbeat lets the reconcile proceed to the robot as before.
+		bridgeMock.heartbeatAgeMs = 5_000;
+		await reconcileStartIntent('wax', run, USER);
+		expect(calls).toBe(1);
+		bridgeMock.transport = false;
+		bridgeMock.heartbeatAgeMs = 0;
 		runVerbMock.fn = null;
 	});
 

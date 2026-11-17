@@ -1516,6 +1516,18 @@ export type SequenceResult =
 	| { ok: true; opentronsRunId: string; result: Record<string, unknown> }
 	| { ok: false; error: string; status: number };
 
+/**
+ * Did a failed freshness check come from the robot talking about its analysis
+ * (missing, failed, errored, or an HTTP status listing/fetching it — the
+ * messages bundledDefsMatch raises) — as opposed to the robot or its bridge not
+ * answering at all ("… failed via bridge", "did not respond", "fetch failed")?
+ * Only the former is worth a re-upload; the latter is a line problem and the
+ * start must fail fast. Matched on the robot's own phrases, not on the word
+ * "analyses" — a bridge failure quotes the /analyses path it was fetching.
+ */
+export const robotAnsweredAboutAnalysis = (message: string): boolean =>
+	/robot returned \d+ (listing|fetching) analys|protocol analysis|no completed analysis/i.test(message);
+
 const bodyMsg = (r: VerbResult, fallback: string) => {
 	const b = (r.body ?? {}) as any;
 	return typeof b.message === 'string' && b.message ? b.message : typeof b.detail === 'string' && b.detail ? b.detail : fallback;
@@ -1552,7 +1564,22 @@ export async function startRunSequence(s: StartRunSteps): Promise<SequenceResult
 		const r = await s.verb('run.ensureFresh', { protocolId, expectedWells });
 		const b = (r.body ?? {}) as any;
 		if (r.status === 200 && b.ok === true) fresh = true;
-		else staleDetail = r.status === 200 ? String(b.detail) : `could not verify bundle: ${bodyMsg(r, 'unknown')}`;
+		else if (r.status === 200) staleDetail = String(b.detail);
+		else {
+			const why = bodyMsg(r, 'unknown');
+			if (!robotAnsweredAboutAnalysis(why)) {
+				// R04 2026-11-17: the bridge daemon did not answer, "could not verify" was
+				// read as stale, and a 110 s protocol re-upload ran inside a 60 s action
+				// — killed, intent left behind, Start refused for 3 min. Not reaching the
+				// robot is not a stale bundle: fail now, with nothing started.
+				const message = `Couldn't reach the robot to check its protocol (${why}). Nothing was started — try again when the robot line is back.`;
+				step('checking', 'failed', message);
+				return failStart({ phase: 'failed', stage: 'freshness', message });
+			}
+			// The robot answered and its analysis is missing / failed / errored: a
+			// re-upload with the live definitions is the right repair, as before.
+			staleDetail = `could not verify bundle: ${why}`;
+		}
 	}
 	if (fresh) {
 		step('checking', 'done');

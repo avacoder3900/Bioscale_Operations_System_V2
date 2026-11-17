@@ -495,8 +495,9 @@
 			// (d) startRun — POST the panel's captured FormData (protocol +
 			// params) the same way submitAction posts actions.
 			setOrchStep('start', 'active', 'Starting protocol on the robot…');
-			if (lifecycleDirect) {
-				// Tailnet line: no 45 s abort — the upload + analysis wait run on the robot line.
+			if (lifecycleSession) {
+				// Step-by-step over the session (either line): no 45 s abort — each
+				// step is its own call and the upload + analysis wait run on the robot line.
 				formData.set('runId', runId);
 				const err = await startRunDirect(formData);
 				if (err) {
@@ -798,7 +799,7 @@
 		capturedParamsFd.set('runId', data.runState.runId);
 		submitting = true;
 		pendingStage = 'Running';
-		if (lifecycleDirect) {
+		if (lifecycleSession) {
 			try {
 				const err = await startRunDirect(capturedParamsFd);
 				if (err) {
@@ -1005,8 +1006,14 @@
 	// One RobotSession per page (shared with the embedded run controller). When
 	// it is on the direct line, Start / Finish / Cancel / Abort run as server
 	// prepare → the robot half over Tailscale → server confirm (the shared drivers
-	// in $lib/opentrons/ot2-protocol). Otherwise the page calls the same single
-	// ?/startRun, ?/recordRunFinished, ?/cancelRun, ?/abortRun actions as before.
+	// in $lib/opentrons/ot2-protocol). Otherwise Finish / Cancel / Abort call the
+	// same single ?/recordRunFinished, ?/cancelRun, ?/abortRun actions as before.
+	// START runs step by step over the session on BOTH lines (2026-11-17): on the
+	// queue line the one-shot ?/startRun could run a 110 s protocol re-upload
+	// inside a 60 s action — killed, startIntent left behind, Start refused for
+	// 3 min (R04 that day). Each step is now its own short call through the
+	// robot's /verb route, and a failed step clears the intent so Start can be
+	// pressed again at once with the scans kept.
 	const lifecycleRobotId = $derived(previewParam ? '' : (data.opentronsRobotId ?? ''));
 	let lifecycleSession = $state.raw<RobotSession | null>(null);
 	let lifecycleConn = $state<RobotSessionState | null>(null);
@@ -1064,7 +1071,7 @@
 		);
 	}
 
-	/** Start over the direct line. Resolves null on success, else the error to show. */
+	/** Start step by step over the session (direct or queue line). Resolves null on success, else the error to show. */
 	async function startRunDirect(fd: FormData): Promise<string | null> {
 		const session = lifecycleSession;
 		if (!session) return 'Robot session is not open';
@@ -1440,7 +1447,7 @@
 						extraHidden={{ runId: data.runState.runId ?? '', ...(testFillNoCarts ? { testFillNoCartridges: 'true' } : {}) }}
 						autoStart={autoStartPending}
 						onAutoStarted={() => (autoStartPending = false)}
-						onSubmitIntercept={lifecycleDirect ? startFromPanelDirect : undefined}
+						onSubmitIntercept={lifecycleSession ? startFromPanelDirect : undefined}
 					/>
 
 					<div class="flex justify-center">

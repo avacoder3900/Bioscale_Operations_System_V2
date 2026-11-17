@@ -20,6 +20,7 @@ import {
 	buildProtocolForm,
 	browserTransport,
 	startRunSequence,
+	robotAnsweredAboutAnalysis,
 	observeRunFinished,
 	observeRunStopped,
 	sessionVerb,
@@ -337,7 +338,7 @@ describe('run.ensureFresh — stale-bundle detection (was bundledDefsMatchMongo)
 		});
 		const withErr = { data: { ...analysisDetail.data, errors: [{ detail: 'x' }] } };
 		const r = await runVerb(robot(withErr), 'run.ensureFresh', { protocolId: 'pid', expectedWells: wells });
-		expect(r).toEqual({ status: 502, body: { message: 'protocol analysis completed with errors' } });
+		expect(r).toEqual({ status: 502, body: { message: 'protocol analysis completed with errors: x' } }); // the robot's detail rides along
 		const failed = mockTransport(() => jres(200, { data: [{ id: 'a', status: 'failed' }] }));
 		expect((await runVerb(failed, 'run.ensureFresh', { protocolId: 'pid', expectedWells: wells })).body).toEqual({
 			message: 'protocol analysis failed'
@@ -550,6 +551,29 @@ describe('startRunSequence', () => {
 		);
 		expect((await startRunSequence(stale.steps)).ok).toBe(true);
 		expect(seen[1]).toEqual({ protocolId: 'p-new', runTimeParameterValues: { a: 2 } });
+	});
+	it('robot line down during the check → fails at once, nothing uploaded or created (R04 2026-11-17)', async () => {
+		const { steps, log, confirms } = startSteps({}, {
+			'run.ensureFresh': { status: 502, body: { message: 'GET /protocols/p-cur/analyses failed via bridge (ot2-r04-bridge): BIMS gave up waiting for the bridge daemon' } }
+		});
+		const r = await startRunSequence(steps);
+		expect(r.ok).toBe(false);
+		expect(r.ok ? '' : r.error).toMatch(/^Couldn't reach the robot to check its protocol \(GET .*bridge daemon\)\. Nothing was started/);
+		expect(log).toEqual(['prepare', 'run.ensureFresh', 'confirm:failed']);
+		expect(confirms[0]).toMatchObject({ phase: 'failed', stage: 'freshness' });
+	});
+	it('robot answered that its analysis is missing / failed → still re-uploads with the live definitions', async () => {
+		for (const message of ['protocol analysis failed', 'robot returned 503 listing analyses', 'no completed analysis for protocol', 'protocol analysis completed with errors: x']) {
+			let n = 0;
+			const { steps, log } = startSteps({}, {
+				'run.ensureFresh': () => (n++ === 0 ? { status: 502, body: { message } } : { status: 200, body: { ok: true, detail: 'ok' } })
+			});
+			const r = await startRunSequence(steps);
+			expect(r.ok, message).toBe(true);
+			expect(log.slice(0, 5), message).toEqual(['prepare', 'run.ensureFresh', 'bundle', 'run.uploadProtocol', 'recordResync']);
+		}
+		expect(robotAnsweredAboutAnalysis('GET /protocols/p/analyses failed via bridge (ot2-r04-bridge): BIMS gave up waiting for the bridge daemon')).toBe(false);
+		expect(robotAnsweredAboutAnalysis('Couldn\'t reach robot: fetch failed')).toBe(false);
 	});
 	it('verify still stale → freshness failure with the old message, nothing created', async () => {
 		const { steps, log } = startSteps({}, { 'run.ensureFresh': { status: 200, body: { ok: false, detail: 'moved' } } });
