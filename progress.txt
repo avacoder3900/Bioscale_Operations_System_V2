@@ -27998,3 +27998,12 @@ end-of-day note, so he can see at a glance that everyone is sending them.
   already the next day in UTC), Monday-of-week, tally.
 Checked: vitest voice-memos 63 pass; npm run check 14 errors, none in these files. Not yet looked at in a
 browser.
+Deployment: production — https://bioscale-operations-system-mongodb.vercel.app (deployment URL not
+  captured: the Vercel connector has no access to the brevitest team from this session)
+Source: branch master @ commit 25ff52d9 (feat/voice-memo-initials merged with origin/master 07ee91b6)
+Retrieve this exact code: git checkout master at commit 25ff52d9
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: EOD notes filed by title initials + Journal per-person view + /kanban/eod
+  check-in table. Verified live 09:22 CST: MCP voice_memos_list now returns `initials`; webhook still 401s
+  a bad key. Full unit suite 1455 pass / 1 fail (ot2-protocol.run.test.ts, fails on master alone too).
+  Next: pick the roster on /kanban/eod; existing 9 memos unchanged (all jacob, initials null).
