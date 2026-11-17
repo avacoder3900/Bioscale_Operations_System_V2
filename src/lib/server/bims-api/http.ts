@@ -2,6 +2,7 @@
  * BIMS API v1 — request and response helpers. Every response is JSON,
  * including errors (`{ "message": "…" }`), whatever the caller's Accept header.
  */
+import { READER_SERIAL } from './reader-rules';
 import { HOLDER_REF } from './rules';
 
 export class ApiError extends Error {
@@ -64,8 +65,12 @@ export function optionalHolderRef(value: string | null): string | null {
 
 const MAX_BODY_BYTES = 2048;
 
-/** The body's `holderRef` and nothing else: any other field is refused, so no personal data can ride along. */
-export async function readHolderRefBody(request: Request): Promise<string> {
+/**
+ * A JSON object body of at most 2 kB whose fields are all in `allowed`; any
+ * other field is refused, so no personal data can ride along. The error
+ * messages never repeat what the body carried.
+ */
+export async function readJsonBody(request: Request, allowed: readonly string[], refusal: string): Promise<Record<string, unknown>> {
 	let body: unknown;
 	try {
 		const text = await request.text();
@@ -75,7 +80,19 @@ export async function readHolderRefBody(request: Request): Promise<string> {
 		throw new ApiError(400, 'Invalid JSON body');
 	}
 	if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ApiError(400, 'Invalid JSON body');
-	const keys = Object.keys(body);
-	if (keys.some((k) => k !== 'holderRef')) throw new ApiError(400, 'Only holderRef is accepted in the body');
-	return requireHolderRef((body as Record<string, unknown>).holderRef);
+	if (Object.keys(body).some((k) => !allowed.includes(k))) throw new ApiError(400, refusal);
+	return body as Record<string, unknown>;
+}
+
+/** The body's `holderRef` and nothing else: any other field is refused, so no personal data can ride along. */
+export async function readHolderRefBody(request: Request): Promise<string> {
+	const body = await readJsonBody(request, ['holderRef'], 'Only holderRef is accepted in the body');
+	return requireHolderRef(body.holderRef);
+}
+
+/** `{serial}`: a reader's UDI, e.g. BT-M01-0000-0230 (any case). */
+export function requireReaderSerial(value: string | undefined): string {
+	const serial = (value ?? '').trim();
+	if (!READER_SERIAL.test(serial)) throw new ApiError(400, 'Not a reader serial');
+	return serial;
 }

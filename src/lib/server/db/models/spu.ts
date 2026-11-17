@@ -115,6 +115,15 @@ const spuSchema = new Schema({
 		}
 	},
 
+	// Held by a customer app through BIMS API v1 (/api/v1/readers, docs/BIMS-API-V1.md).
+	// Separate from the operator `assignment`, which this never touches. `ref` is the
+	// opaque holderRef the app minted (an account or a practice); BIMS never learns who
+	// it is. `via` is the calling app. Absent when no app holds the reader.
+	holder: {
+		kind: { type: String, enum: ['app'] },
+		ref: String, via: String, since: Date
+	},
+
 	assignment: {
 		type: String,
 		customer: { _id: String, name: String },

@@ -21,7 +21,17 @@ import mongoose from 'mongoose';
 import { ApiError } from './http';
 import type { AppName } from './rules';
 
-export type Endpoint = 'check' | 'link' | 'unlink' | 'result';
+export type Endpoint =
+	| 'check'
+	| 'link'
+	| 'unlink'
+	| 'result'
+	| 'reader_pair'
+	| 'reader_unpair'
+	| 'reader_get'
+	| 'reader_wifi'
+	| 'reader_scan'
+	| 'reader_connect';
 
 export const WINDOW_MS = 60_000;
 
@@ -30,7 +40,13 @@ export const LIMITS: Record<Endpoint, { perHolder: number; perApp: number }> = {
 	check: { perHolder: 60, perApp: 600 },
 	link: { perHolder: 20, perApp: 200 },
 	unlink: { perHolder: 20, perApp: 200 },
-	result: { perHolder: 120, perApp: 1200 }
+	result: { perHolder: 120, perApp: 1200 },
+	reader_pair: { perHolder: 10, perApp: 100 },
+	reader_unpair: { perHolder: 10, perApp: 100 },
+	reader_get: { perHolder: 60, perApp: 600 },
+	reader_wifi: { perHolder: 60, perApp: 600 },
+	reader_scan: { perHolder: 6, perApp: 60 },
+	reader_connect: { perHolder: 6, perApp: 60 }
 };
 
 const schema = new mongoose.Schema(
