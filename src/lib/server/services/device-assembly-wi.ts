@@ -32,8 +32,11 @@ export type RevisionInput = {
 	after?: unknown;
 };
 
-export function sectionLabel(section: { type: string; number: number }): string {
-	return section.type === 'setup' ? 'Setup' : `Sub-Assembly ${section.number}`;
+export function sectionLabel(section: { type: string; number: number; title?: string | null }): string {
+	if (section.type === 'setup') return 'Setup';
+	// a procedure (e.g. "Cricut: Heat Shield") is known by its title, not a number
+	if (section.type === 'procedure') return section.title?.trim() || 'Procedure';
+	return `Sub-Assembly ${section.number}`;
 }
 
 /** Text shown on the section's tab: custom tabLabel if set, else the positional label. */
@@ -432,6 +435,38 @@ export function updateStep(
 	});
 }
 
+/**
+ * Put a Yes/No question on a step (or take it off with branch = null). On Build
+ * SPUs the operator answers it: Yes = the step is done; No = the procedure
+ * section noSectionId must be done for that SPU first.
+ */
+export function setStepBranch(actor: Actor, sectionNumber: number, stepId: string, branch: { question: string; noSectionId: string } | null) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const section = requireSection(doc, sectionNumber);
+		const step = requireStep(section, stepId);
+		const before = step.branch ? { question: step.branch.question, noSectionId: step.branch.noSectionId } : null;
+		if (!branch) {
+			if (!step.branch) throw new Error('This step has no Yes/No question');
+			step.branch = null;
+			return { changeType: 'step_edit', summary: `Removed the Yes/No question from ${stepRef(section, step)}`, location: where(section, step), before, after: null };
+		}
+		const question = branch.question.trim();
+		if (!question) throw new Error('Write the question the operator answers Yes or No to');
+		if (section.type === 'procedure') throw new Error('A procedure step cannot send operators to another procedure');
+		const target = doc.sections.find((s: any) => s._id === branch.noSectionId);
+		if (!target || target.type !== 'procedure') throw new Error('Pick the procedure to follow when the answer is No');
+		if (before && before.question === question && before.noSectionId === target._id) throw new Error('No changes to save');
+		step.branch = { question, noSectionId: target._id };
+		return {
+			changeType: 'step_edit',
+			summary: `${before ? 'Changed' : 'Added'} the Yes/No question on ${stepRef(section, step)} (No → ${sectionLabel(target)})`,
+			location: where(section, step),
+			before,
+			after: { question, noSectionId: target._id }
+		};
+	});
+}
+
 export function addStep(
 	actor: Actor,
 	sectionNumber: number,
@@ -458,7 +493,10 @@ export function addStep(
 		}
 		section.steps.splice(idx, 0, step);
 		renumber(section);
-		return { changeType: 'step_add', summary: `Added ${stepRef(section, step)}: "${step.title || stripTags(html).slice(0, 60)}"`, location: where(section, step), before: null, after: { title: step.title, instructionsHtml: html } };
+		// The array holds its own copy of the inserted step (Mongoose casts it), so read the
+		// number back from there — `step` itself still says 0, which made every summary "step 0".
+		const added = section.steps[idx] ?? step;
+		return { changeType: 'step_add', summary: `Added ${stepRef(section, added)}: "${added.title || stripTags(html).slice(0, 60)}"`, location: where(section, added), before: null, after: { title: added.title, instructionsHtml: html } };
 	});
 }
 
@@ -513,6 +551,34 @@ export function removeStepImage(actor: Actor, sectionNumber: number, stepId: str
 		const position = step.images.indexOf(img) + 1;
 		step.images = step.images.filter((i: any) => i._id !== imageId);
 		return { changeType: 'image_remove', summary: `Removed image ${position} from ${stepRef(section, step)}`, location: where(section, step), before: { _id: img._id, url: img.url, caption: img.caption }, after: null };
+	});
+}
+
+/**
+ * Swap the picture of an existing step image in place: it keeps its id, its
+ * position among the step's images and its caption; only the file changes.
+ * The old file stays in storage (revisions and reverts still point at it).
+ */
+export function replaceStepImage(
+	actor: Actor,
+	sectionNumber: number,
+	stepId: string,
+	imageId: string,
+	image: { url: string; alt?: string; storage: 'r2' | 'mongo' | 'inline' | 'external' }
+) {
+	return mutateDeviceAssemblyWI(actor, (doc) => {
+		const section = requireSection(doc, sectionNumber);
+		const step = requireStep(section, stepId);
+		const img = step.images.find((i: any) => i._id === imageId);
+		if (!img) throw new Error('Image not found');
+		const position = step.images.indexOf(img) + 1;
+		const before = { _id: img._id, url: img.url, storage: img.storage, alt: img.alt, caption: img.caption };
+		img.url = image.url;
+		img.storage = image.storage;
+		if (image.alt != null) img.alt = image.alt;
+		img.addedAt = new Date();
+		img.addedBy = actor.username;
+		return { changeType: 'image_edit', summary: `Replaced image ${position} in ${stepRef(section, step)}`, location: where(section, step), before, after: { _id: img._id, url: img.url, storage: img.storage, alt: img.alt, caption: img.caption } };
 	});
 }
 
@@ -632,24 +698,31 @@ export function relinkAllParts(actor: Actor) {
 
 // ───────────────────────────── sections / front matter / metadata ─────────────────────────────
 
-/** Setup stays number 0; sub-assemblies are renumbered 1..N in array order. */
+/**
+ * Setup stays number 0; sub-assemblies are renumbered 1..N in array order;
+ * procedures come after them (N+1, N+2 …) so they never shift a sub-assembly's number.
+ */
 export function renumberSections(doc: any) {
 	const setup = doc.sections.filter((s: any) => s.type === 'setup');
-	const subs = doc.sections.filter((s: any) => s.type !== 'setup');
+	const subs = doc.sections.filter((s: any) => s.type === 'subassembly' || !s.type);
+	const procedures = doc.sections.filter((s: any) => s.type === 'procedure');
 	setup.forEach((s: any) => { s.number = 0; });
 	subs.forEach((s: any, i: number) => { s.number = i + 1; });
-	doc.sections = [...setup, ...subs];
+	procedures.forEach((s: any, i: number) => { s.number = subs.length + i + 1; });
+	doc.sections = [...setup, ...subs, ...procedures];
 }
+
+const isSub = (s: any) => s.type === 'subassembly' || !s.type;
 
 /** Rewrite default "Sub-Assembly N" titles after renumbering so labels and numbers stay in step. */
 function refreshDefaultTitles(doc: any, before: Map<string, number>) {
 	for (const s of doc.sections) {
 		const prev = before.get(s._id);
-		if (prev != null && prev !== s.number && s.type !== 'setup' && s.title === `Sub-Assembly ${prev}`) s.title = `Sub-Assembly ${s.number}`;
+		if (prev != null && prev !== s.number && isSub(s) && s.title === `Sub-Assembly ${prev}`) s.title = `Sub-Assembly ${s.number}`;
 	}
 }
 
-export function addSection(actor: Actor, input: { title?: string; position?: number | null; type?: 'setup' | 'subassembly'; notesHtml?: string }) {
+export function addSection(actor: Actor, input: { title?: string; position?: number | null; type?: 'setup' | 'subassembly' | 'procedure'; notesHtml?: string }) {
 	return mutateDeviceAssemblyWI(actor, (doc) => {
 		const type = input.type ?? 'subassembly';
 		if (type === 'setup') {
@@ -659,7 +732,15 @@ export function addSection(actor: Actor, input: { title?: string; position?: num
 			renumberSections(doc);
 			return { changeType: 'section_add', summary: `Added Setup section "${section.title}"`, location: where(section), before: null, after: { title: section.title, number: 0 } };
 		}
-		const subs = doc.sections.filter((s: any) => s.type !== 'setup');
+		if (type === 'procedure') {
+			const title = input.title?.trim();
+			if (!title) throw new Error('Give the procedure a title, e.g. "Cricut: Heat Shield"');
+			const section = { _id: generateId(), type: 'procedure', number: 0, title, tabLabel: '', notesHtml: sanitizeHtml(input.notesHtml ?? ''), materialsHtml: '', steps: [] };
+			doc.sections.push(section);
+			renumberSections(doc);
+			return { changeType: 'section_add', summary: `Added procedure "${title}"`, location: where(section), before: null, after: { number: section.number, title } };
+		}
+		const subs = doc.sections.filter(isSub);
 		let idx = subs.length; // 0-based position among sub-assemblies
 		if (input.position != null && Number.isFinite(input.position)) idx = Math.max(0, Math.min(subs.length, Math.floor(input.position) - 1));
 		const before = new Map<string, number>(doc.sections.map((s: any) => [s._id, s.number]));
@@ -667,7 +748,7 @@ export function addSection(actor: Actor, input: { title?: string; position?: num
 		// insert among sub-assemblies, keep setup first
 		const setup = doc.sections.filter((s: any) => s.type === 'setup');
 		subs.splice(idx, 0, section);
-		doc.sections = [...setup, ...subs];
+		doc.sections = [...setup, ...subs, ...doc.sections.filter((s: any) => s.type === 'procedure')];
 		renumberSections(doc);
 		refreshDefaultTitles(doc, before);
 		const shifted = subs.length - 1 - idx;
@@ -685,6 +766,9 @@ export function deleteSection(actor: Actor, sectionNumber: number, opts: { moveS
 	return mutateDeviceAssemblyWI(actor, (doc) => {
 		const section = requireSection(doc, sectionNumber);
 		const label = sectionLabel(section);
+		// a procedure that a step's Yes/No question sends operators to can't just vanish
+		const askedFrom = doc.sections.flatMap((s: any) => s.steps.filter((st: any) => st.branch?.noSectionId === section._id).map((st: any) => stepRef(s, st)));
+		if (askedFrom.length) throw new Error(`${label} is where the Yes/No question on ${askedFrom.join(', ')} sends operators. Remove that question first.`);
 		const snapshot = JSON.parse(JSON.stringify(section));
 		let movedTo: any = null;
 		if (section.steps.length) {
@@ -694,8 +778,8 @@ export function deleteSection(actor: Actor, sectionNumber: number, opts: { moveS
 			movedTo.steps.push(...section.steps);
 			renumber(movedTo);
 		}
-		const subsLeft = doc.sections.filter((s: any) => s.type !== 'setup' && s._id !== section._id).length;
-		if (section.type !== 'setup' && subsLeft === 0) throw new Error('Cannot delete the last sub-assembly');
+		const subsLeft = doc.sections.filter((s: any) => isSub(s) && s._id !== section._id).length;
+		if (isSub(section) && subsLeft === 0) throw new Error('Cannot delete the last sub-assembly');
 		const before = new Map<string, number>(doc.sections.map((s: any) => [s._id, s.number]));
 		doc.sections = doc.sections.filter((s: any) => s._id !== section._id);
 		renumberSections(doc);
@@ -714,14 +798,15 @@ export function moveSection(actor: Actor, sectionNumber: number, toPosition: num
 	return mutateDeviceAssemblyWI(actor, (doc) => {
 		const section = requireSection(doc, sectionNumber);
 		if (section.type === 'setup') throw new Error('The Setup section always stays first');
-		const subs = doc.sections.filter((s: any) => s.type !== 'setup');
+		if (section.type === 'procedure') throw new Error('Procedures always stay after the sub-assemblies');
+		const subs = doc.sections.filter(isSub);
 		const from = subs.findIndex((s: any) => s._id === section._id);
 		const to = Math.max(0, Math.min(subs.length - 1, Math.floor(toPosition) - 1));
 		if (from === to) throw new Error(`${sectionLabel(section)} is already at position ${to + 1}`);
 		const before = new Map<string, number>(doc.sections.map((s: any) => [s._id, s.number]));
 		subs.splice(from, 1);
 		subs.splice(to, 0, section);
-		doc.sections = [...doc.sections.filter((s: any) => s.type === 'setup'), ...subs];
+		doc.sections = [...doc.sections.filter((s: any) => s.type === 'setup'), ...subs, ...doc.sections.filter((s: any) => s.type === 'procedure')];
 		renumberSections(doc);
 		refreshDefaultTitles(doc, before);
 		return { changeType: 'section_move', summary: `Moved "${section.title}" from Sub-Assembly ${from + 1} to Sub-Assembly ${to + 1} (others renumbered)`, location: where(section), before: { number: from + 1 }, after: { number: to + 1 } };

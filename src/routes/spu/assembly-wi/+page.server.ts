@@ -8,11 +8,13 @@ import {
 	renameSection,
 	updateSectionNotes,
 	updateStep,
+	setStepBranch,
 	addStep,
 	deleteStep,
 	moveStep,
 	addStepImages,
 	removeStepImage,
+	replaceStepImage,
 	updateStepImage,
 	moveStepImage,
 	addMaterial,
@@ -221,6 +223,31 @@ export const actions: Actions = {
 		}
 	},
 
+	// Upload a new file for an existing image: same position and caption, new picture.
+	replaceImage: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sectionNumber = num(form.get('sectionNumber'));
+		const stepId = str(form.get('stepId'));
+		const imageId = str(form.get('imageId'));
+		if (sectionNumber == null || !stepId || !imageId) return fail(400, { error: 'Image reference missing' });
+		const file = form.get('image');
+		if (!(file instanceof File) || !file.size) return fail(400, { error: 'Choose an image to replace it with' });
+		if (!file.type.startsWith('image/')) return fail(400, { error: `${file.name} is not an image` });
+		if (file.size > MAX_IMAGE_BYTES) return fail(400, { error: `${file.name} is larger than 15 MB` });
+		const wi = await getDeviceAssemblyWI();
+		if (!wi) return fail(400, { error: 'Import the work instruction first' });
+		const store = makeDeviceWiImageStore({ wiId: wi._id, uploadedBy: locals.user!.username, keyPrefix: `device-wi/${wi._id}/step-${stepId}/${Date.now()}` });
+		try {
+			const s = await store(Buffer.from(await file.arrayBuffer()), file.type, 1);
+			const r = await replaceStepImage(actor(locals), sectionNumber, stepId, imageId, { url: s.url, storage: s.storage, alt: file.name.replace(/\.[a-z0-9]+$/i, '') });
+			return { success: true, message: `${r.summary} — now ${r.label}`, version: r.version };
+		} catch (e: any) {
+			return fail(400, { error: e?.message ?? String(e) });
+		}
+	},
+
 	removeImage: async ({ request, locals }) => {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
@@ -302,7 +329,20 @@ export const actions: Actions = {
 		requirePermission(locals.user, 'spu:write');
 		await connectDB();
 		const form = await request.formData();
-		return run(() => addSection(actor(locals), { title: str(form.get('title')), position: num(form.get('position')) }), (r) => `${r.summary} — now ${r.label}`);
+		const type = str(form.get('type')) === 'procedure' ? 'procedure' : 'subassembly';
+		return run(() => addSection(actor(locals), { title: str(form.get('title')), position: num(form.get('position')), type }), (r) => `${r.summary} — now ${r.label}`);
+	},
+
+	// Yes/No question on a step: answered on Build SPUs; No sends the operator to a procedure section.
+	setBranch: async ({ request, locals }) => {
+		requirePermission(locals.user, 'spu:write');
+		await connectDB();
+		const form = await request.formData();
+		const sectionNumber = num(form.get('sectionNumber'));
+		const stepId = str(form.get('stepId'));
+		if (sectionNumber == null || !stepId) return fail(400, { error: 'Step reference missing' });
+		const branch = form.get('removeQuestion') === '1' ? null : { question: str(form.get('question')), noSectionId: str(form.get('noSectionId')) };
+		return run(() => setStepBranch(actor(locals), sectionNumber, stepId, branch), (r) => `${r.summary} — now ${r.label}`);
 	},
 
 	deleteSection: async ({ request, locals }) => {

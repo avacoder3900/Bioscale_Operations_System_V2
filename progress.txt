@@ -28007,3 +28007,60 @@ What this deployment is for: EOD notes filed by title initials + Journal per-per
   check-in table. Verified live 09:22 CST: MCP voice_memos_list now returns `initials`; webhook still 401s
   a bad key. Full unit suite 1455 pass / 1 fail (ot2-protocol.run.test.ts, fails on master alone too).
   Next: pick the roster on /kanban/eod; existing 9 memos unchanged (all jacob, initials null).
+
+================================================================================
+2026-11-17 — feat/wi-replace-image — SPU Assembly WI: replace a step image in place; refresh keeps the open tab
+================================================================================
+Branched from origin/master (b4db566d; no WI file changes since the Build SPUs merge).
+1. Replace image: each step image in Edit mode now has "Replace" (between the move arrows and remove).
+   Picking a file uploads it straight away into the same slot — same image id, position and caption;
+   only the file (url/storage/alt) changes. Before, the only way was remove + Add images, which put the
+   new picture at the end. New replaceStepImage() in services/device-assembly-wi.ts records an
+   'image_edit' revision ("Replaced image N in step …") with before/after; the old file stays in storage
+   so revision history and reverts still resolve. New replaceImage action in
+   routes/spu/assembly-wi/+page.server.ts (same image/size checks and R2 -> Mongo store as addImages).
+2. Refresh kept jumping to Setup. Root cause: tab clicks never wrote the section to the address, and with
+   no ?section= param Number(null) === 0 matched Setup's section number. Tabs now go through
+   selectSection(), which updates ?section=N with SvelteKit replaceState (no reload, no history entries);
+   moving/deleting a section does the same. A missing/blank param falls back to the first section with
+   steps, as before.
+Files: services/device-assembly-wi.ts, routes/spu/assembly-wi/+page.server.ts, +page.svelte.
+Verified on a throwaway in-memory MongoDB (headless Chrome): ?section=1 / 2 survive refresh; replacing
+image 2 of 3 keeps A, B, C order, captions and count, new picture loads, revision v112, persists after
+refresh. npm run check 13 errors / 451 warnings (= master baseline). Unit 1477 pass, 1 pre-existing fail
+(ot2-protocol.run.test.ts). Also ran scripts/ensure-indexes.ts (report only): spu_builds / spu_buckets
+indexes are present (184/185 models ok; the one missing is BimsApiRateLimit, unrelated). Not committed.
+
+================================================================================
+2026-11-17 — feat/wi-replace-image — Yes/No question on a step + "procedure" sections (Cricut: Heat Shield)
+================================================================================
+User ask: Sub-Assembly 2 step 4 ("Add Heat Shield to Heater Block", stepId sUC4710LPgZU2usgLb0xW in the
+live WI v294) gets a Yes/No button — "is the heat shield already on the heater block?". Yes = step done;
+No = open a new tab "Cricut: Heat Shield" with 14 Cricut steps (from "Work Instructuion SB" PDF).
+Built:
+- WI model: section type 'procedure' (title = its tab name; renumberSections puts procedures after the
+  sub-assemblies, numbered N+1…, so no sub-assembly renumbers; can't be moved; can't be deleted while a
+  question points at it) and step.branch { question, noSectionId }.
+- WI editor: "+ Add Procedure"; "Yes/No Question" on each step (question + "If No, Go To" procedure;
+  Save / Remove Question); the step shows the question with "Yes: Step Done" / "No: <procedure>" (opens
+  that tab). New setStepBranch() + setBranch action; addSection takes type 'procedure'.
+- Build SPUs: answering is part of step order (stepNeed: parts → answer → after No, the procedure
+  confirmed). Yes/No buttons on the current step; No opens the procedure tab (message on top),
+  confirming it returns to the question's section; a procedure tab only shows / counts toward the SPU
+  after a No (requiredSections). "Change Answer" correction (reason, clears the answer, reopens a
+  confirmed section). New answerQuestion() / changeAnswer(); SpuBuild.answers.
+- Chat/MCP: device_wi_add_section type "procedure"; new device_wi_set_step_question (mutate op set_branch).
+Fixed on the way: (1) addStep's summary/location always said "step 0" (Mongoose casts the spliced step,
+so the local object never got renumbered) — now read back from the array; (2) the "Remove Question"
+button named "remove" clobbered form.remove(), so Svelte threw "node.remove is not a function" when the
+form closed — renamed removeQuestion.
+NOT YET on the live WI: the Cricut: Heat Shield procedure, its 14 steps and the question on SA2 step 4 —
+the live (old) code would reject type 'procedure', so they go in after this deploys (via the chat tools
+or the editor). Photos need the PDF saved to disk.
+Files: models/device-assembly-wi.ts, models/spu-build.ts, services/device-assembly-wi.ts,
+services/spu-build.ts, $lib/spu-build/progress.ts (+4 tests), routes/spu/assembly-wi/+page(.server).ts/.svelte,
+routes/spu/assembly-wi/build/+page(.server).ts/.svelte, api/agent/device-assembly/mutate, mcp/bims-mcp.ts.
+Verified on a throwaway in-memory MongoDB (headless Chrome): add procedure + step, set question; SPU 1
+No → Cricut tab → confirm → back to SA2 → confirm; SPU 2 Yes (no Cricut tab); Change Answer; no console
+errors. npm run check 13 errors / 451 warnings (= master baseline). Unit 1481 pass, 1 pre-existing fail
+(ot2-protocol.run.test.ts). Not committed.

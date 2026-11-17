@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
 	allPartsScanned,
+	answerFor,
 	bucketLabel,
 	buildProgress,
 	buildStatus,
@@ -8,15 +9,19 @@ import {
 	deducts,
 	partsLeft,
 	partsProgress,
+	requiredSections,
 	sectionConfirmed,
 	findStepForPart,
 	firstOpenSection,
 	liveScan,
+	neededProcedureIds,
 	normalizeBucketCode,
 	scanKey,
 	scannedKeys,
 	sectionsUsingPart,
+	stepNeed,
 	stepTitle,
+	tabLabel,
 	type WiLike
 } from './progress';
 
@@ -184,5 +189,54 @@ describe('completion', () => {
 
 	it('ignores completed steps that were later deleted from the WI', () => {
 		expect(buildProgress(wi, { completedSteps: [{ stepId: 'gone' }, { stepId: 's0a' }] })).toEqual({ done: 1, total: 4 });
+	});
+});
+
+describe('Yes/No questions and procedures', () => {
+	const wiQ: WiLike = {
+		sections: [
+			{
+				_id: 'sec2', number: 2, type: 'subassembly', title: 'Heater Block', steps: [
+					{ _id: 'h1', stepNumber: 1, title: 'Create magnet chain', materials: [{ _id: 'mm', kind: 'part', partDefinitionId: 'pdm', partNumber: 'PT-M', name: 'Magnets' }] },
+					{ _id: 'h4', stepNumber: 4, title: 'Add Heat Shield', branch: { question: 'Is the heat shield already on the heater block?', noSectionId: 'proc' } },
+					{ _id: 'h5', stepNumber: 5, title: 'Next', materials: [{ _id: 'mz', kind: 'part', partDefinitionId: 'pdz', partNumber: 'PT-Z', name: 'Z' }] }
+				]
+			},
+			{ _id: 'proc', number: 3, type: 'procedure', title: 'Cricut: Heat Shield', steps: [{ _id: 'c1', stepNumber: 1, title: 'Take a cricut mat' }] }
+		]
+	};
+	const sec = wiQ.sections[0];
+	const chain = { stepId: 'h1', materialId: 'mm' };
+
+	it('names a procedure by its title and leaves it out until it is needed', () => {
+		expect(tabLabel(wiQ.sections[1])).toBe('Cricut: Heat Shield');
+		expect(requiredSections(wiQ, {}).map((s) => s._id)).toEqual(['sec2']);
+		expect(buildProgress(wiQ, {}).total).toBe(3);
+	});
+
+	it('asks the question in order: it blocks later parts until answered', () => {
+		const b = { scans: [chain] };
+		expect(currentStep(sec, b, wiQ)?._id).toBe('h4');
+		expect(stepNeed(sec.steps[1], b, wiQ)).toEqual({ kind: 'answer', question: 'Is the heat shield already on the heater block?' });
+		const hit = findStepForPart(sec, b, { partNumber: 'PT-Z' }, wiQ);
+		expect(hit.kind === 'out-of-order' && hit.current._id).toBe('h4');
+	});
+
+	it('Yes: the step is done and the procedure is not needed', () => {
+		const b = { scans: [chain], answers: [{ stepId: 'h4', answer: 'yes' }] };
+		expect(answerFor(b, 'h4')).toBe('yes');
+		expect(currentStep(sec, b, wiQ)?._id).toBe('h5');
+		expect(neededProcedureIds(wiQ, b).size).toBe(0);
+	});
+
+	it('No: the procedure is needed, and the step waits until it is confirmed', () => {
+		const b = { scans: [chain], answers: [{ stepId: 'h4', answer: 'no' }] };
+		expect(stepNeed(sec.steps[1], b, wiQ)).toEqual({ kind: 'procedure', sectionId: 'proc' });
+		expect(requiredSections(wiQ, b).map((s) => s._id)).toEqual(['sec2', 'proc']);
+		expect(buildProgress(wiQ, b).total).toBe(4);
+		expect(firstOpenSection(wiQ, b)?._id).toBe('sec2');
+		const done = { ...b, completedSteps: [{ stepId: 'c1' }] };
+		expect(currentStep(sec, done, wiQ)?._id).toBe('h5');
+		expect(firstOpenSection(wiQ, { ...done, completedSteps: [{ stepId: 'c1' }, { stepId: 'h1' }, { stepId: 'h4' }, { stepId: 'h5' }] })?._id).toBe('proc');
 	});
 });
