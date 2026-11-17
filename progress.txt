@@ -27943,6 +27943,26 @@ Verify live: particleLink.monitorFlagState goes offline -> synced on 0210 / 0212
 Source: branch master (from fix/monitor-flag-retry)
 
 ================================================================================
+2026-11-16 — feat/bims-api-v1 — BIMS API v1 for the customer apps (check, link, unlink, result)
+================================================================================
+Four endpoints under /api/v1/cartridges/{id} so the customer apps stop holding an Ops database login.
+Contract: docs/BIMS-API-V1.md.
+- src/lib/server/bims-api/: auth.ts (BIMS_API_KEY_CONSUMER / _BUSINESS / _STORE, Bearer only, the matched
+  key names the calling app), rules.ts (eligibility, link, unlink: pure), result.ts (reported-wells
+  reduction moved from the apps' storedResult(), units, run state: pure), rate-limit.ts (per app and per
+  holderRef, collection bims_api_rate_limits, TTL on expiresAt), http.ts, service.ts (database operations).
+  Imports only the db connection and models from the rest of $lib/server.
+- src/routes/api/v1/cartridges/[id]/: +server.ts (check), link, unlink, result.
+- Link writes status, statusUpdatedOn, priorStatus, checkpoints.linked (who "app:<holderRef>") and one
+  audit_log row (LINK, changedBy "api:<app>"); conditional on the status read and no run data, one retry.
+- .env.example: the three key names. scripts/ensure-indexes.ts: also registers the rate-limit model.
+- No existing route changed. Nothing deployed; the keys are not set anywhere, so every /api/v1 call is 401.
+Checked: vitest 199 pass in the 4 new files; whole unit suite 1436 pass, 2 fail (ot2-protocol.run.test.ts
+"protocol analysis completed with errors" message, sonic.test.ts leave-one-out timeout; neither touches
+these files). npm run check 14 errors (r2.ts, research-proxy.ts, AskBimsWidget, assembly/[sessionId],
+validation/magnetometer/[sessionId]); none in these files.
+After merge: set the keys in Vercel, redeploy, run scripts/ensure-indexes.ts --apply (TTL index).
+
 2026-11-17 — feat/voice-memo-initials — Voice notes sorted by person: "EOD JQ" files the note under JQ
 ================================================================================
 Jacob: the team should each record an end-of-day note, titled "End of Day" plus initials (EOD JQ, EOD GV,
