@@ -54,6 +54,7 @@ export { Batch } from './batch.js';
 export { ProductionRun } from './production-run.js';
 export { GeneratedBarcode } from './generated-barcode.js';
 export { ValidationSession } from './validation-session.js';
+export { ScreenSoak } from './screen-soak.js';
 export { SonicIgnoreRule } from './sonic-ignore-rule.js';
 export { ValidationRun, VALIDATION_RUN_STEPS, DEFAULT_RUN_STEPS, STEP_LABELS, ALL_STEP_LABELS } from './validation-run.js';
 export { SweepUpload } from './sweep-upload.js';

@@ -276,6 +276,14 @@ export const POST: RequestHandler = async ({ request }) => {
 			await syncServiceFlag(spu._id);
 			await syncMonitorFlag(spu._id); // v103 monitor mode; no-op below firmware 103
 		}
+		// A soaking unit that rebooted or dropped off is idle when it comes back:
+		// fire its next block. Never fails the webhook on a soak problem.
+		try {
+			const { advanceSoaks } = await import('$lib/server/screen/soak');
+			await advanceSoaks({ particleDeviceId: deviceId });
+		} catch (err) {
+			console.error('[webhook] soak advance failed', err);
+		}
 	}
 
 	return json({ success: true, event: eventType, deviceId, ...(blankRunId ? { blankRunId } : {}) });

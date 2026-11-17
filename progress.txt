@@ -28085,3 +28085,34 @@ Live WI content (after that deploy): scripts/add-cricut-heat-shield-2026-11-17.t
   Block": "Is the heat shield already present on the heater block?" — No -> Cricut: Heat Shield.
   No photos yet (the PDF was only available as page images in chat). Verified through the production
   BIMS MCP (device_wi_get_step section "cricut": 14 steps, section 7).
+
+================================================================================
+2026-11-17 — feat/screen-soak — Motion soak: overnight assay-motion stress test chained from screens
+================================================================================
+Asked for after 0218 seized its bushings again ~15 cartridges after a cleaning: a long, unattended
+motion-only test to catch that wear before units go out. BIMS-only — no firmware push. The firmware's
+run_screen already runs level 2 (the production assay BCODE, nothing inserted, per-run home error /
+limit hits / home time / travel / stage check) but caps it at SCREEN_MAX_REPS = 5 runs per screen
+(brevitest-firmware.h). One run is ~27.3 min (run{N}_dur_s 1623–1648 s on v108–v110), so 16 runs ≈
+7.5 h. A soak chains level-2-only screens ("2,<≤5>,") until the target run count.
+
+New: models/screen-soak.ts (collection screen_soaks: blocks[], runsDone, awaiting, lease lock),
+screen/soak.ts (startSoak / requestBlock / tagSoakSession / onSoakBlockComplete / advanceSoaks /
+soakRunRows), /validation/screen/soak (start form with run count + stop-on-first-fail, live per-run
+table and sparklines of |home error|, limit hits, home time; polls every 60 s while a soak runs).
+Hand-off: screen ingest tags the session it creates to the soak's pending block (rawData.soakId) and,
+when the summary closes it, records the block (idempotent on redelivery) and fires the next block —
+3 tries, 11 s budget so the webhook stays inside Particle's 20 s timeout. Backstops: every page load
+runs advanceSoaks() (fires a block a missed hand-off left idle; closes an overdue block when the
+device is idle again, e.g. a mid-block reboot), and spark/status 'online' does the same for that
+device. Soak blocks never write the unit's validation.screen rollup, autoEnterValidating or the
+"Screen passed/failed" journal line; start/stop/end are audited (screen_soaks) and journaled.
+Also: the Screen page said repeats 1–9 (form max 9); the firmware allows 1–5 — corrected; link to
+the soak page from the Screen header; summarize.ts passes records[].receivedAt (per-run finish time).
+
+Verified: soakRunRows against 0243's 17:21 and Nov 8 full screens (6 runs, values match the report);
+a simulated block through the real ingestScreenEvent on a fake device id against Atlas (tagging,
+block recorded once with 2 runs, redelivery a no-op, no rollup, next-block attempt; test docs
+deleted). npm run check: 13 errors / 451 warnings, none in touched files (= master baseline).
+Known gap: no frequent cron (vercel.json crons are daily), so if the webhook hand-off fails and the
+soak page is closed, the chain waits until the device next reconnects. Leave the page open overnight.

@@ -76,6 +76,7 @@
 			</p>
 		</div>
 		<div class="flex gap-2">
+			<a href="/validation/screen/soak" class="text-sm text-[var(--color-tron-cyan)] hover:underline">Motion soak →</a>
 			<a href="/validation/screen/export.csv{data.filterUdi ? `?udi=${encodeURIComponent(data.filterUdi)}` : ''}" class="text-sm text-[var(--color-tron-cyan)] hover:underline">Export CSV ↓</a>
 			<button type="button" class="text-sm text-[var(--color-tron-cyan)] hover:underline" onclick={() => (showCriteria = !showCriteria)}>
 				{showCriteria ? 'Hide criteria' : 'Criteria'}
@@ -155,7 +156,7 @@
 			</div>
 			<div>
 				<label for="screen-reps" class="tron-label">Repeats (assay motion runs)</label>
-				<input id="screen-reps" name="reps" type="number" min="1" max="9" bind:value={reps} class="tron-input w-full" style="min-height: 44px;" />
+				<input id="screen-reps" name="reps" type="number" min="1" max="5" bind:value={reps} class="tron-input w-full" style="min-height: 44px;" />
 			</div>
 		</div>
 		<p class="tron-text-muted text-xs">About {Math.round(estMinutes)} min on the unit. The slot must be empty; the unit refuses otherwise.</p>
