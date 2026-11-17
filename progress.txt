@@ -28064,3 +28064,24 @@ Verified on a throwaway in-memory MongoDB (headless Chrome): add procedure + ste
 No → Cricut tab → confirm → back to SA2 → confirm; SPU 2 Yes (no Cricut tab); Change Answer; no console
 errors. npm run check 13 errors / 451 warnings (= master baseline). Unit 1481 pass, 1 pre-existing fail
 (ot2-protocol.run.test.ts). Not committed.
+Deployment: preview — https://vercel.com/brevitest/bioscale-operations-system-mongodb/CQcg6TGaHR2XxCDqo9EUULeBfr7k
+Source: branch feat/wi-replace-image @ commit 3dd98100
+Retrieve this exact code: git checkout feat/wi-replace-image at commit 3dd98100
+  (or: git log feat/wi-replace-image --oneline to find it if the branch has since moved on)
+What this deployment is for: SPU WI image Replace, ?section= tab memory, Save/Remove caps, Yes/No questions
+  with procedure tabs — review before PR #134 was merged.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/EJRU7o1qVtcSQsWiKf4EmSAyJJGf
+Source: branch master @ commit c66ccea0 (merge of PR #134, feat/wi-replace-image @ 3dd98100)
+Retrieve this exact code: git checkout master at commit c66ccea0
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: the above live in production. Deployed 2026-11-17 21:44 UTC. This docs-only
+  log commit triggers one more production build of the same code.
+Live WI content (after that deploy): scripts/add-cricut-heat-shield-2026-11-17.ts (on branch
+  feat/wi-replace-image @ 57b0ad38 — not in master; a reviewed follow-up PR can bring it in), rehearsed on
+  an in-memory copy of the live WI, then dry-run + APPLY=1 on bioscale: v322 -> v338, changedBy
+  "claude-code". Added procedure "Cricut: Heat Shield" (tab #7, after the sub-assemblies), its 14 steps
+  (text verbatim from the "Work Instruction SB" doc, typos kept: step 4 "screenshot in Step 2", step 13
+  "has been tied … difference)") and the question on Sub-Assembly 2 step 4 "Add Heat Shield to Heater
+  Block": "Is the heat shield already present on the heater block?" — No -> Cricut: Heat Shield.
+  No photos yet (the PDF was only available as page images in chat). Verified through the production
+  BIMS MCP (device_wi_get_step section "cricut": 14 steps, section 7).
