@@ -60,6 +60,9 @@ const kanbanPolicySchema = new Schema(
 			measuredMinN: { type: Number, default: 15 },
 			trailingWindowWeeks: { type: Number, default: 6 }
 		},
+		// VOICE-01: usernames expected to send an end-of-day voice note — the rows
+		// of the /kanban/eod check-in table. Edited on that page.
+		eodRoster: { type: [String], default: [] },
 		recalibrateAfter: Date, // nag when past due — seeds must be replaced by measured demand
 		updatedBy: String,
 		updatedAt: Date

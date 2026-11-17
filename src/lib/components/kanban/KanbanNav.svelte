@@ -21,6 +21,8 @@
 		{ href: '/kanban/plans', label: 'Plans' },
 		// VOICE-01: Claude-written digests of spoken EOD / experiment memos.
 		{ href: '/kanban/journal', label: 'Journal' },
+		// VOICE-01: who sent an end-of-day note, Monday–Friday.
+		{ href: '/kanban/eod', label: 'EOD check-in' },
 		{ href: '/kanban/flow', label: 'Flow' },
 		{ href: '/kanban/policy', label: 'Policy' },
 		{ href: '/kanban/archived', label: 'Archive' }

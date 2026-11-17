@@ -27965,3 +27965,16 @@ override is needed today. Existing 9 memos are unchanged (all jacob).
 Checked: vitest voice-memos 58 pass (16 new); npm run check 14 errors, none in these files (r2.ts,
 research-proxy.ts, AskBimsWidget, assembly/[sessionId], validation/magnetometer). Journal page not yet
 looked at in a browser.
+
+2026-11-17 — feat/voice-memo-initials — EOD check-in table at /kanban/eod
+Jacob: a checkbox table under Kanban, Monday-Friday across, initials down, an X where someone sent their
+end-of-day note, so he can see at a glance that everyone is sending them.
+- src/routes/kanban/eod/ (new) + "EOD check-in" tab in KanbanNav. Rows = roster + anyone who sent a note
+  that week; X per weekday (count if more than one), red dash for a passed day with no note, n/5 total;
+  prev/next week; initials link to that person's notes on the Journal.
+- Roster = KanbanPolicy.eodRoster (new field, usernames), edited on the page by kanban:admin / admins,
+  audited. Empty until someone picks the team.
+- voice-memos/checkin.ts (new, tested): lab day = US Central with a 4 a.m. cutoff (a 6:35 pm note is
+  already the next day in UTC), Monday-of-week, tally.
+Checked: vitest voice-memos 63 pass; npm run check 14 errors, none in these files. Not yet looked at in a
+browser.

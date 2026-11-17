@@ -98,6 +98,12 @@ clicking one shows only that person's notes and digests.
   (audited). Removing the initials does not move it back.
 - **Transcripts** stay visible only to the person the note is filed under, and admins.
 
+## EOD check-in table (`/kanban/eod`, added 2026-11-17)
+
+Monday–Friday across, one row per person, an ✕ where they sent an end-of-day note that day. Rows are
+the roster (`KanbanPolicy.eodRoster`, picked on the page by kanban admins) plus anyone who sent a note
+that week. Days are US Central with a 4 a.m. cutoff (`src/lib/server/voice-memos/checkin.ts`).
+
 ## Rules worth knowing
 
 - **Allowlist:** a note is stored if it carries an allowed tag, **or its title contains "EOD" /
