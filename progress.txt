@@ -28190,3 +28190,9 @@ Alejandro: a tip left by an earlier run could not be dropped because BIMS grayed
 - Not driven on a real robot: no motion was sent from this session. First real use is the check.
 Tests: src/lib/opentrons 248 passed, 1 failed; the same ensureFresh test fails on master without this change.
 npm run check: 14 errors / 451 warnings, none in touched files.
+After rebasing on master e27ce014: src/lib/opentrons 251 passed, 0 failed; npm run check 14 errors / 451 warnings, none in touched files.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/J4LaBGTewShKPG4YWF2NNgSsaGTx
+Source: branch fix/drop-tip-always-available @ commit 214f4095 (fast-forward of master)
+Retrieve this exact code: git checkout fix/drop-tip-always-available at commit 214f4095
+  (or: git log fix/drop-tip-always-available --oneline to find it if the branch has since moved on)
+What this deployment is for: Drop Tip always available on Deck Calibration Studio and the arm Stage page.
