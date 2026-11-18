@@ -28154,3 +28154,19 @@ Retrieve this exact code: git checkout master at commit eec1fc2c
   (or: git log feat/screen-soak --oneline to find it if master has since moved on)
 What this deployment is for: Motion stress test (/validation/screen/motion-stress) live for the first
   overnight runs, 2026-11-17. Pushed to master with Jacob's explicit OK. This log commit rebuilds the same code.
+
+Deployment (production) — 2026-11-18
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/5U4bageNC3j45vCpqGfG2b13tTCB
+Source: master @ commit 52f3f0d6 (fix/wax-start-recovery 517460ce merged with master d189bb73; only progress.txt overlapped)
+Retrieve this exact code: git checkout 52f3f0d6
+Live: 22:20:01Z — /_app/version.json 1794959299357 → 1795040304505; GitHub status success.
+Pre-push: vitest ot2-protocol.run / bridge-timing / run-lifecycle-records / lpc-offsets 105/105 after the merge;
+  npm run check at the 16-error baseline on 517460ce (re-run on the merge commit logged below if it differs).
+What this deployment is for: Alejandro's "wax run fails to auto start and I can't press Start; I cancel and
+  rescan" (R04 run v44e, 2026-11-17). (1) an ensureFresh failure the robot did not answer fails the start
+  fast ("Couldn't reach the robot to check its protocol … Nothing was started") instead of re-uploading the
+  protocol for 110 s and orphaning the start intent; (2) WaxWizard starts step by step over the RobotSession
+  on the queue line too (was the one-shot ?/startRun); (3) bridgeFetch TTL = max(30 s, call timeout) ≤ 180 s;
+  (4) reconcileStartIntent returns "robot bridge offline — last heartbeat N ago" when the daemon heartbeat is
+  > 45 s old instead of waiting 30 s per reload. Reagent/diluent wizards still use the one-shot queue start.
+  Root cause not fixed here: R04's bridge daemon link over WiFi.
