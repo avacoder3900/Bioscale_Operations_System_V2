@@ -772,16 +772,16 @@
 		const text = await res.text();
 		let body: any = null;
 		try { body = text ? JSON.parse(text) : null; } catch { body = text; }
-		if (!res.ok) throw new Error((body && body.message) || (typeof body === 'string' ? body : `HTTP ${res.status}`));
+		if (!res.ok) throw Object.assign(new Error((body && body.message) || (typeof body === 'string' ? body : `HTTP ${res.status}`)), { code: body?.code });
 		return body;
 	}
 
-	async function startMaintenance() {
-		if (!selectedRobotId) { errMsg = 'Pick a robot'; return; }
+	async function startMaintenance(opts: { keepProtocolRun?: boolean } = {}): Promise<'open' | 'protocolRun' | 'failed'> {
+		if (!selectedRobotId) { errMsg = 'Pick a robot'; return 'failed'; }
 		clearMsg();
 		connecting = true;
 		try {
-			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance`, { method: 'POST', body: JSON.stringify({ mount: desiredMount }) });
+			const res = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance`, { method: 'POST', body: JSON.stringify({ mount: desiredMount, keepProtocolRun: opts.keepProtocolRun === true }) });
 			runId = res.runId ?? null;
 			pipetteId = res.pipetteId ?? null;
 			pipetteMount = res.mount ?? null;
@@ -814,7 +814,12 @@
 				await homeZAndPlungers();
 				msg = `Connected. pipette ${pipetteName} on ${pipetteMount}. If a tip is still on the pipette from an earlier session, remove it by hand before moving — a fresh session assumes a bare nozzle.`;
 			}
-		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { connecting = false; }
+			return 'open';
+		} catch (e) {
+			if (opts.keepProtocolRun && (e as { code?: string })?.code === 'PROTOCOL_RUN_OPEN') return 'protocolRun';
+			errMsg = e instanceof Error ? e.message : String(e);
+			return 'failed';
+		} finally { connecting = false; }
 	}
 
 	/** Home both Z axes and both plungers (not X/Y — that is the slow full home). Throws. */
@@ -1380,13 +1385,17 @@
 		return `A${col}`;
 	}
 
-	/** Drop the modelled tip into the trash. Resolves false when the engine modelled none. */
-	async function doDropTip(): Promise<boolean> {
+	/**
+	 * Eject over the trash. `unknownTip`: this page does not know of a tip, but one
+	 * may be on from an earlier run, so home everything first and stop higher.
+	 */
+	async function doDropTip(unknownTip = false): Promise<boolean> {
+		if (unknownTip) await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/home`, { method: 'POST', body: JSON.stringify({}) });
 		const res = await robotFetch(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/drop-tip`, {
 			method: 'POST',
 			credentials: 'same-origin',
 			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ pipetteId })
+			body: JSON.stringify({ pipetteId, unknownTip })
 		});
 		const body = await res.json().catch(() => ({}) as any);
 		if (!res.ok) throw new Error(body?.message || `HTTP ${res.status}`);
@@ -1494,6 +1503,31 @@
 			await doPickUpTip();
 			msg = `Fresh tip on (${tiprackForProfile} ${from}). Its bend is unknown — run "Calibrate tip" before capturing, or move to a hole to eyeball it.`;
 		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+
+	// Drop Tip is never grayed out: it is how a tip left by an earlier run comes off,
+	// so it opens a run when none is open and does not depend on hasTip.
+	async function dropTipAction() {
+		if (busy || connecting) { errMsg = 'Robot Is Busy. Press Drop Tip When This Move Finishes.'; return; }
+		busy = true;
+		try {
+			if (!runId) {
+				const opened = await startMaintenance({ keepProtocolRun: true });
+				if (opened === 'protocolRun') {
+					if (!confirm('Drop Tip Will Stop The Protocol Run Waiting On This Robot. Continue?')) { msg = 'Tip Not Dropped.'; return; }
+					await startMaintenance();
+				}
+				if (!runId) return;
+			}
+			if (!pipetteId) { errMsg = 'No Pipette Loaded In This Run. Close The Run And Press Drop Tip Again.'; return; }
+			clearMsg();
+			const knownTip = hasTip;
+			msg = knownTip ? 'Dropping The Tip In The Trash…' : 'Homing, Then Ejecting Over The Trash…';
+			await doDropTip(!knownTip);
+			hasTip = false; tipAdjust = null; nominal = null; refWell = null;
+			await refreshPosition();
+			msg = knownTip ? 'Tip Dropped In The Trash.' : 'Ejected Over The Trash.';
+		} catch (e) { msg = null; errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
 	}
 
 	// Park at the fixture without probing — the first step of the teach loop
@@ -1835,7 +1869,7 @@
 				<div class="flex items-center justify-between">
 					<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Jog</h2>
 					{#if !runId}
-						<button type="button" onclick={startMaintenance} disabled={connecting || !selectedRobotId} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">{connecting ? 'Opening…' : 'Open run'}</button>
+						<button type="button" onclick={() => startMaintenance()} disabled={connecting || !selectedRobotId} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-3 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">{connecting ? 'Opening…' : 'Open run'}</button>
 					{:else}
 						<div class="flex gap-2">
 							<button type="button" onclick={homeRobot} disabled={busy} class="rounded border border-[var(--color-tron-border)] px-2 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">Home</button>
@@ -1976,6 +2010,7 @@
 					<button type="button" onclick={pickUpTipAction} disabled={!pipetteId || busy || !tipProfile} class="mt-1 w-full rounded border border-[var(--color-tron-cyan)]/40 px-2 py-1.5 text-[11px] text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40" title="Just picks up a tip of the selected type from slot 11 — no travel to the calibrator, no probe.">
 						{hasTip ? 'Pick up tip (another one)' : 'Pick up tip (no probe)'}
 					</button>
+					<button type="button" onclick={dropTipAction} class="mt-1 w-full rounded border border-[var(--color-tron-border)] px-2 py-1.5 text-[11px] hover:border-amber-400/60" style="color: var(--color-tron-text-secondary)">Drop Tip</button>
 					{#if currentCalibrator?.inheritedFromGlobal}
 						<!-- Provenance of the point the button above will probe at. Conditional and
 						     rare, so it stays in the main view rather than hiding in the disclosure. -->

@@ -365,13 +365,27 @@ export async function moveToWell(
 	);
 }
 
-/** Drop whatever tip the run models into the fixed trash. */
-export async function dropTipInTrash(t: Ot2Transport, runId: string, pipetteId: string): Promise<void> {
+/**
+ * How far above the trash rim the pipette stops for a tip the run may not know
+ * about. The engine parks the bare nozzle at the rim, so a leftover tip would
+ * otherwise reach 40-77 mm down into the 82 mm bin and its pile of used tips.
+ * 40 mm stays reachable with a p1000 tip on, and a tip still falls into the bin.
+ */
+export const UNKNOWN_TIP_TRASH_CLEARANCE_MM = 40;
+
+/**
+ * Drop the pipette's tip into the fixed trash. The OT-2 has no tip sensor and
+ * ejects whether or not the run models a tip, so `unknownTip` also clears a tip
+ * left by an earlier run. The caller homes first in that case: the arc travels
+ * at the height it starts from, keeping the unmodelled tip above the deck.
+ */
+export async function dropTipInTrash(t: Ot2Transport, runId: string, pipetteId: string, opts: { unknownTip?: boolean } = {}): Promise<void> {
+	const z = opts.unknownTip ? UNKNOWN_TIP_TRASH_CLEARANCE_MM : 0;
 	await sendMaintenanceCommand(
 		t,
 		runId,
 		'moveToAddressableAreaForDropTip',
-		{ pipetteId, addressableAreaName: 'fixedTrash', offset: { x: 0, y: 0, z: 0 }, alternateDropLocation: false },
+		{ pipetteId, addressableAreaName: 'fixedTrash', offset: { x: 0, y: 0, z }, alternateDropLocation: false },
 		{ waitUntilComplete: true, timeoutMs: 30_000 }
 	);
 	// homeAfter: home the plunger after the eject, as the OT-2 Python API's
@@ -434,12 +448,22 @@ async function currentProtocolRun(t: Ot2Transport): Promise<{ id: string; status
 	return cur ? { id: cur.id, status: cur.status } : null;
 }
 
+/** A paused or idle protocol run blocks the maintenance run and the caller asked to keep it. */
+export class ProtocolRunOpenError extends Error {
+	readonly code = 'PROTOCOL_RUN_OPEN';
+	constructor(readonly runStatus: string) {
+		super(`Robot has a protocol run waiting (status=${runStatus}).`);
+		this.name = 'ProtocolRunOpenError';
+	}
+}
+
 /**
  * Free the run engine when a non-terminal protocol run is blocking a new
  * maintenance run. Throws if the blocking run is genuinely ACTIVE
- * (running/finishing) — we never silently kill a live run.
+ * (running/finishing) — we never silently kill a live run — and, with
+ * `keepProtocolRun`, instead of stopping a paused or idle one.
  */
-async function clearStaleProtocolRun(t: Ot2Transport): Promise<void> {
+async function clearStaleProtocolRun(t: Ot2Transport, opts: { keepProtocolRun?: boolean } = {}): Promise<void> {
 	const run = await currentProtocolRun(t);
 	if (!run) return;
 	const status = (run.status ?? '').toLowerCase();
@@ -447,6 +471,7 @@ async function clearStaleProtocolRun(t: Ot2Transport): Promise<void> {
 	if (ACTIVE_RUN_STATES.has(status)) {
 		throw new Error(`Robot has an ACTIVE protocol run (status=${status}) — stop that run before opening a maintenance run.`);
 	}
+	if (opts.keepProtocolRun) throw new ProtocolRunOpenError(status || 'unknown');
 	// Stale: paused / idle / blocked-by-open-door / stop-requested / awaiting-recovery
 	await t.post(`/runs/${run.id}/actions`, { data: { actionType: 'stop' } }).catch(() => {});
 	for (let i = 0; i < 6; i++) {
@@ -458,7 +483,7 @@ async function clearStaleProtocolRun(t: Ot2Transport): Promise<void> {
 }
 
 /** Open a new maintenance run. Returns the run id. */
-export async function openMaintenanceRun(t: Ot2Transport): Promise<{ runId: string }> {
+export async function openMaintenanceRun(t: Ot2Transport, opts: { keepProtocolRun?: boolean } = {}): Promise<{ runId: string }> {
 	// OT-2 maintenance_runs endpoint is JSON:API style — requires the `data`
 	// envelope even when there are no attributes. Empty body returns
 	// `Field required` at /data.
@@ -478,7 +503,7 @@ export async function openMaintenanceRun(t: Ot2Transport): Promise<{ runId: stri
 		const body = (await res.json().catch(() => ({}))) as any;
 		const detail = body?.errors?.[0]?.detail ?? `Robot returned ${res.status} on /maintenance_runs`;
 		if (String(detail).toLowerCase().includes(PROTOCOL_RUN_CONFLICT)) {
-			await clearStaleProtocolRun(t); // throws if genuinely active
+			await clearStaleProtocolRun(t, opts); // throws if genuinely active
 			res = await open();
 			if (!res.ok) {
 				const retryBody = (await res.json().catch(() => ({}))) as any;
@@ -746,7 +771,7 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 				pipetteName = discovered.pipetteName;
 				mount = discovered.mount;
 			}
-			const { runId } = await openMaintenanceRun(t);
+			const { runId } = await openMaintenanceRun(t, { keepProtocolRun: args.keepProtocolRun === true });
 			let pipetteId: string | undefined;
 			if (pipetteName && mount) {
 				try {
@@ -758,6 +783,7 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 			}
 			return ok({ runId, pipetteId, pipetteName, mount });
 		} catch (e) {
+			if (e instanceof ProtocolRunOpenError) return { status: 409, body: { code: e.code, message: e.message } };
 			return fail(502, msgOf(e, 'Failed to open maintenance run'));
 		}
 	}
@@ -904,7 +930,7 @@ export async function runVerb(t: Ot2Transport, verb: Ot2Verb, args: Record<strin
 		}
 		case 'mx.dropTip': {
 			try {
-				await dropTipInTrash(t, runId, pipetteId);
+				await dropTipInTrash(t, runId, pipetteId, { unknownTip: args.unknownTip === true });
 				return ok({ dropped: true });
 			} catch (e) {
 				const msg = e instanceof Error ? e.message : String(e);

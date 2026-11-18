@@ -28170,3 +28170,23 @@ What this deployment is for: Alejandro's "wax run fails to auto start and I can'
   (4) reconcileStartIntent returns "robot bridge offline — last heartbeat N ago" when the daemon heartbeat is
   > 45 s old instead of waiting 30 s per reload. Reagent/diluent wizards still use the one-shot queue start.
   Root cause not fixed here: R04's bridge daemon link over WiFi.
+================================================================================
+2026-11-18 — fix/drop-tip-always-available — Drop Tip is always available in both Deck Calibration Studios
+================================================================================
+Alejandro: a tip left by an earlier run could not be dropped because BIMS grayed the button out.
+- Root cause: the arm Stage page gated Drop Tip on an open run, not busy, and hasTip. hasTip is only this
+  page's belief, and a new run always starts false, so a leftover tip could never be dropped. The normal
+  Deck Calibration Studio had no Drop Tip button at all (Swap Tip only).
+- Both pages (deck-calibration/+page.svelte, robot-arm/calibrate/stage/+page.svelte): Drop Tip has no disabled
+  state. With no run open it opens one on the selected mount and leaves it open. While another action is
+  moving the robot it reports that instead of sending a second motion.
+- Opentrons 8.7.0 source (the version on B07/B14/R04): the OT-2 has no tip sensor and dropTipInPlace ejects
+  with or without a modelled tip, so this really clears a leftover tip. The engine then treats the nozzle as
+  bare, so a tip the page does not know about gets a full home first (the arc travels at its starting height,
+  above the deck) and stops 40 mm above the trash rim (ot2-protocol.ts UNKNOWN_TIP_TRASH_CLEARANCE_MM,
+  mx.dropTip unknownTip), keeping it out of the pile of used tips.
+- mx.open keepProtocolRun: opening a run normally stops a paused or idle protocol run. Drop Tip now gets
+  409 PROTOCOL_RUN_OPEN first and asks before stopping it. A running protocol still refuses. Open Run is unchanged.
+- Not driven on a real robot: no motion was sent from this session. First real use is the check.
+Tests: src/lib/opentrons 248 passed, 1 failed; the same ensureFresh test fails on master without this change.
+npm run check: 14 errors / 451 warnings, none in touched files.

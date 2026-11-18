@@ -137,6 +137,18 @@ describe('maintenance verbs', () => {
 		// next pick-up cannot seat the tip (Studio Swap tip).
 		expect(calls[1].body.data.params).toEqual({ pipetteId: 'p', homeAfter: true });
 	});
+	it('drop-tip for a tip the run may not know stops 40 mm above the trash rim', async () => {
+		const { t, calls } = robot(() => okCmd());
+		const r = await runVerb(t, 'mx.dropTip', { runId: 'm', pipetteId: 'p', unknownTip: true });
+		expect(r).toEqual({ status: 200, body: { dropped: true } });
+		expect(calls[0].body.data.params.offset).toEqual({ x: 0, y: 0, z: 40 });
+		expect(calls[1].body.data.commandType).toBe('dropTipInPlace');
+	});
+	it('drop-tip for a known tip stays at the trash rim', async () => {
+		const { t, calls } = robot(() => okCmd());
+		await runVerb(t, 'mx.dropTip', { runId: 'm', pipetteId: 'p', unknownTip: false });
+		expect(calls[0].body.data.params.offset).toEqual({ x: 0, y: 0, z: 0 });
+	});
 	it('drop-tip with no tip modelled → 200 {dropped:false}', async () => {
 		const { t } = robot(() => res(201, { data: { status: 'failed', error: { detail: 'Pipette does not have a tip' } } }));
 		const r = await runVerb(t, 'mx.dropTip', { runId: 'm', pipetteId: 'p' });

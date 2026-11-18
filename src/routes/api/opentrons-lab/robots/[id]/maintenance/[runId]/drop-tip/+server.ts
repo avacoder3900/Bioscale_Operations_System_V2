@@ -1,9 +1,10 @@
 /**
- * Drop the tip the maintenance run currently models into the fixed trash.
+ * Drop the pipette's tip into the fixed trash.
  * POST /api/opentrons-lab/robots/:id/maintenance/:runId/drop-tip
- * Body: { pipetteId }
- * Returns: { dropped: boolean } — false when the engine modelled no tip (a tip
- * pushed on by hand is invisible to it and must come off by hand).
+ * Body: { pipetteId, unknownTip?: boolean }
+ * unknownTip: the run may not model the tip (left by an earlier run); stop higher
+ * over the trash. The caller homes first so the travel stays at the top.
+ * Returns: { dropped: boolean }
  */
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';

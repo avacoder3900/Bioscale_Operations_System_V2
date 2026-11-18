@@ -1,7 +1,8 @@
 /**
  * Open a maintenance run on the OT-2.
  * POST /api/opentrons-lab/robots/:id/maintenance
- * Body (optional): { pipetteName?: string, mount?: 'left'|'right' }
+ * Body (optional): { pipetteName?: string, mount?: 'left'|'right', keepProtocolRun?: boolean }
+ * keepProtocolRun: answer 409 PROTOCOL_RUN_OPEN instead of stopping a paused or idle run.
  *
  * Response: { runId, pipetteId?, pipetteName?, mount? }
  *
@@ -31,5 +32,5 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	if (!robot) error(404, 'Robot not found');
 
 	const body = await request.json().catch(() => ({}) as any);
-	return verbResponse(robot, 'mx.open', { mount: body?.mount }, locals.user);
+	return verbResponse(robot, 'mx.open', { mount: body?.mount, keepProtocolRun: body?.keepProtocolRun === true }, locals.user);
 };

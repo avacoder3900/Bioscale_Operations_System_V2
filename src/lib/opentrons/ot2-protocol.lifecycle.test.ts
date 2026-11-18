@@ -64,6 +64,31 @@ describe('mx.open', () => {
 	});
 });
 
+describe('mx.open keepProtocolRun', () => {
+	const pausedRobot = () =>
+		robot((c) => {
+			if (c.path === '/pipettes') return res(200, {});
+			if (c.path === '/maintenance_runs') return res(409, { errors: [{ detail: 'A protocol run is active' }] });
+			if (c.path === '/runs') return res(200, { links: { current: { href: '/runs/r1' } }, data: [{ id: 'r1', status: 'paused' }] });
+			return res(200, {});
+		});
+
+	it('answers 409 PROTOCOL_RUN_OPEN and leaves a paused run alone', async () => {
+		const { t, calls } = pausedRobot();
+		const r = await runVerb(t, 'mx.open', { keepProtocolRun: true });
+		expect(r.status).toBe(409);
+		expect((r.body as any).code).toBe('PROTOCOL_RUN_OPEN');
+		expect(calls.some((c) => c.path.includes('/actions') || c.method === 'DELETE')).toBe(false);
+		expect(maintenanceRecordFor('mx.open', {}, r)).toBeNull();
+	});
+
+	it('without the flag a paused run is still stopped, as before', async () => {
+		const { t, calls } = pausedRobot();
+		await runVerb(t, 'mx.open', {});
+		expect(calls.some((c) => c.path === '/runs/r1/actions')).toBe(true);
+	});
+});
+
 describe('mx.close', () => {
 	it('DELETEs the run; an already-gone run (404) is fine', async () => {
 		const { t, calls } = robot(() => res(404, {}));
