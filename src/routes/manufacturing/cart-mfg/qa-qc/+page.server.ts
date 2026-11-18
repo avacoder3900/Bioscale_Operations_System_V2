@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import { connectDB, ReagentBatchRecord, CartridgeRecord, User, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
+import { updateEachUnlessCustomerHeld, customerHeldNotice, isCustomerHeld } from '$lib/server/manufacturing/locked-cartridges';
 import type { PageServerLoad, Actions } from './$types';
 
 const SCRAP_CATEGORIES = ['dimensional', 'contamination', 'seal_failure', 'wax_defect', 'reagent_defect', 'other'] as const;
@@ -104,22 +105,23 @@ export const actions: Actions = {
 			try { cartridgeIds = JSON.parse(cartridgeIdsRaw); } catch { /* ignore */ }
 		}
 
+		// Mark cartridges as being tested. Guarded per cart: a cartridge a customer
+		// has linked is never pulled back to released, and is left out of the QC
+		// sample list so recording the result cannot touch it either.
+		const { held } = cartridgeIds.length > 0
+			? await updateEachUnlessCustomerHeld(cartridgeIds, { $set: { status: 'released' } })
+			: { held: [] as string[] };
+		const heldSet = new Set(held);
+
 		await ReagentBatchRecord.findByIdAndUpdate(releaseId, {
 			$set: {
 				'qcRelease.testResult': 'testing',
-				'qcRelease.qaqcCartridgeIds': cartridgeIds
+				'qcRelease.qaqcCartridgeIds': cartridgeIds.filter((id) => !heldSet.has(id))
 			}
 		});
 
-		// Mark cartridges as being tested
-		if (cartridgeIds.length > 0) {
-			await CartridgeRecord.updateMany(
-				{ _id: { $in: cartridgeIds } },
-				{ $set: { status: 'released' } }
-			);
-		}
-
-		return { success: true };
+		const warning = customerHeldNotice('marked for testing', held);
+		return { success: true, ...(warning ? { warning } : {}) };
 	},
 
 	/** Record the QA/QC test result */
@@ -156,27 +158,29 @@ export const actions: Actions = {
 		const sampleIds = run?.qcRelease?.qaqcCartridgeIds ?? [];
 		const shippingLotId = run?.qcRelease?.shippingLotId;
 
+		let warning: string | null = null;
 		if (sampleIds.length > 0) {
-			const bulkOps = sampleIds.map((cid: string) => ({
-				updateOne: {
-					filter: { _id: cid, 'qaqcRelease.recordedAt': { $exists: false } },
-					update: {
-						$set: {
-							'qaqcRelease.shippingLotId': shippingLotId,
-							'qaqcRelease.testResult': normalizedResult,
-							'qaqcRelease.testedBy': { _id: locals.user!._id, username: locals.user!.username },
-							'qaqcRelease.testedAt': now,
-							'qaqcRelease.notes': notes,
-							'qaqcRelease.recordedAt': now,
-							status: normalizedResult === 'pass' ? 'released' : 'voided'
-						}
+			// One guarded update per sample: a cartridge a customer has linked keeps
+			// its status, and only carts actually written get a transaction row.
+			const { updated, held } = await updateEachUnlessCustomerHeld(
+				sampleIds,
+				{
+					$set: {
+						'qaqcRelease.shippingLotId': shippingLotId,
+						'qaqcRelease.testResult': normalizedResult,
+						'qaqcRelease.testedBy': { _id: locals.user!._id, username: locals.user!.username },
+						'qaqcRelease.testedAt': now,
+						'qaqcRelease.notes': notes,
+						'qaqcRelease.recordedAt': now,
+						status: normalizedResult === 'pass' ? 'released' : 'voided'
 					}
-				}
-			}));
-			await CartridgeRecord.bulkWrite(bulkOps);
+				},
+				{ 'qaqcRelease.recordedAt': { $exists: false } }
+			);
+			warning = customerHeldNotice(normalizedResult === 'pass' ? 'released' : 'voided', held);
 
 			// Record QA/QC transactions
-			for (const cid of sampleIds) {
+			for (const cid of updated) {
 				if (normalizedResult === 'fail') {
 					await recordTransaction({
 						transactionType: 'scrap',
@@ -203,7 +207,7 @@ export const actions: Actions = {
 			}
 		}
 
-		return { success: true };
+		return { success: true, ...(warning ? { warning } : {}) };
 	},
 
 	/** Scrap a cartridge that fails QC */
@@ -229,18 +233,25 @@ export const actions: Actions = {
 		if (cartridge.status === 'scrapped' || cartridge.status === 'voided') {
 			return fail(400, { error: 'Cartridge is already scrapped/voided' });
 		}
+		if (isCustomerHeld(cartridge)) {
+			return fail(409, { error: customerHeldNotice('scrapped', [cartridgeId]) });
+		}
 
 		const now = new Date();
 
 		// Mark cartridge as scrapped — distinct status from 'voided' (which is
-		// reserved for operator-initiated inventory removals).
-		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
+		// reserved for operator-initiated inventory removals). Guarded in the
+		// filter too, in case a customer linked it since the read above.
+		const { held } = await updateEachUnlessCustomerHeld([cartridgeId], {
 			$set: {
 				status: 'scrapped',
 				voidedAt: now,
 				voidReason: `Scrapped: ${scrapCategory}${notes ? ` — ${notes}` : ''}`
 			}
 		});
+		if (held.length) {
+			return fail(409, { error: customerHeldNotice('scrapped', held) });
+		}
 
 		// Record scrap transaction
 		await recordTransaction({

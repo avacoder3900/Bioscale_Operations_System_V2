@@ -22,7 +22,8 @@ import { json } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { connectDB, User, VoiceMemoCapture } from '$lib/server/db';
 import { parseKeyMap, usernameForKey } from '$lib/server/voice-memos/keys';
-import { parseVoicenotesPayload, allowlistFromEnv } from '$lib/server/voice-memos/parse';
+import { parseVoicenotesPayload, allowlistFromEnv, titleInitials } from '$lib/server/voice-memos/parse';
+import { parseInitialsMap, resolveInitials } from '$lib/server/voice-memos/speakers';
 import { ingestVoicenote } from '$lib/server/voice-memos/ingest';
 import type { RequestHandler } from './$types';
 
@@ -45,7 +46,7 @@ export const GET: RequestHandler = async ({ url }) => {
 };
 
 export const POST: RequestHandler = async ({ request, url }) => {
-	const speaker = await resolveSpeaker(url);
+	let speaker = await resolveSpeaker(url);
 	if (!speaker) return unauthorized();
 
 	const text = await request.text();
@@ -61,12 +62,32 @@ export const POST: RequestHandler = async ({ request, url }) => {
 	const parsed = parseVoicenotesPayload(body);
 	const capture = env.VOICENOTES_CAPTURE_RAW === 'true';
 
+	// "EOD GV" in the title files the note under GV, whoever's key delivered it.
+	// The key still authenticates the request and stays on the memo as deliveredBy.
+	const deliveredBy = speaker.username;
+	let initials: string | null = null;
+	const candidates = titleInitials(parsed.title);
+	if (candidates.length) {
+		const users: any[] = await User.find({ isActive: true }).select('_id username firstName lastName').lean();
+		const hit = resolveInitials(
+			candidates,
+			users.map((u) => ({ _id: String(u._id), username: u.username, firstName: u.firstName, lastName: u.lastName })),
+			parseInitialsMap(env.VOICENOTES_INITIALS)
+		);
+		if (hit) {
+			speaker = { _id: hit.user._id, username: hit.user.username };
+			initials = hit.initials;
+		}
+	}
+
 	let outcome: string;
 	let memoId: string | undefined;
 	try {
 		const result = await ingestVoicenote({
 			parsed,
 			speaker,
+			deliveredBy,
+			initials,
 			raw: body,
 			allowlist: allowlistFromEnv(env.VOICENOTES_TAGS, env.VOICENOTES_SPOKEN_TRIGGERS)
 		});

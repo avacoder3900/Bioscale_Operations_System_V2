@@ -21,7 +21,7 @@
 import { json } from '@sveltejs/kit';
 import { connectDB, DeviceEvent, ParticleDevice, Spu, OpticalBlankRun, generateId } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
-import { syncServiceFlag, syncMonitorFlag } from '$lib/server/service-flag';
+import { syncServiceFlag, syncMonitorFlag, retryMonitorFlagIfPending } from '$lib/server/service-flag';
 import { parseTestPayload, parseTestRecordBuffer } from '$lib/server/test-payload';
 import { ingestScreenEvent, attachScreenRecord } from '$lib/server/screen/ingest';
 import { ingestSweepText } from '$lib/server/sweep/ingest';
@@ -30,6 +30,7 @@ import { parseChunkEnvelope, storeChunk, assembleChunks, markJob, recordProgress
 // mag_sweep_chunk BINARY, which only the chunk store above decodes, so this is
 // reached only for the alias spellings it accepts.
 import { handleSweepChunk, isSweepChunkEvent } from '$lib/server/validation/mag-sweep-ingest';
+import { runAfterResponse } from '$lib/server/after-response';
 import type { RequestHandler } from './$types';
 
 /** Strip an optional "bioscale/" prefix so both spellings route the same. */
@@ -258,6 +259,11 @@ export const POST: RequestHandler = async ({ request }) => {
 		}
 	);
 
+	// A monitor-flag push that timed out mid-test is retried here, when the device's own
+	// event shows it is connected. Runs after the response so a slow device call can never
+	// hold up (and fail) Particle's webhook delivery.
+	runAfterResponse(retryMonitorFlagIfPending(deviceId, eventType));
+
 	// Device came (back) online → re-push the service-flag LED bit so a status
 	// change made while it was unplugged takes effect now (SPU-INV-08).
 	// Requires a Particle Console webhook on event `spark/status` with the
@@ -269,6 +275,14 @@ export const POST: RequestHandler = async ({ request }) => {
 		if (spu) {
 			await syncServiceFlag(spu._id);
 			await syncMonitorFlag(spu._id); // v103 monitor mode; no-op below firmware 103
+		}
+		// A soaking unit that rebooted or dropped off is idle when it comes back:
+		// fire its next block. Never fails the webhook on a soak problem.
+		try {
+			const { advanceSoaks } = await import('$lib/server/screen/soak');
+			await advanceSoaks({ particleDeviceId: deviceId });
+		} catch (err) {
+			console.error('[webhook] soak advance failed', err);
 		}
 	}
 

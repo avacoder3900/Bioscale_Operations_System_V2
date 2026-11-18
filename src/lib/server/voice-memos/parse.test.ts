@@ -5,8 +5,34 @@ import {
 	spokenTrigger,
 	normalizeTags,
 	allowlistFromEnv,
+	titleInitials,
 	DEFAULT_ALLOWLIST
 } from './parse';
+
+describe('titleInitials', () => {
+	it('reads the initials next to the EOD phrase', () => {
+		expect(titleInitials('EOD JQ')).toEqual(['JQ']);
+		expect(titleInitials('End of Day GV')).toEqual(['GV']);
+		expect(titleInitials('end of day - av')).toEqual(['AV']);
+		expect(titleInitials('EOD: for RD')).toEqual(['RD']);
+		expect(titleInitials('E.O.D. (SW)')).toEqual(['SW']);
+		expect(titleInitials('AV EOD')).toEqual(['AV']);
+		expect(titleInitials('Monday PD - end of the day')).toEqual(['PD']);
+	});
+
+	it('offers after-then-before candidates and leaves the choosing to the caller', () => {
+		expect(titleInitials('JQ EOD Nov 16')).toEqual(['NOV', 'JQ']);
+		expect(titleInitials('EOD on magnets')).toEqual(['ON']);
+	});
+
+	it('nothing without an EOD title, or without a short word beside it', () => {
+		expect(titleInitials(null)).toEqual([]);
+		expect(titleInitials('EOD')).toEqual([]);
+		expect(titleInitials('Groceries JQ')).toEqual([]);
+		expect(titleInitials('EOD Magnets JQ')).toEqual([]);
+		expect(titleInitials('EOD J2')).toEqual([]);
+	});
+});
 
 // The shape Voicenotes documents (help.voicenotes.com "Set up webhooks", 2026-10-19).
 const DOCUMENTED = {

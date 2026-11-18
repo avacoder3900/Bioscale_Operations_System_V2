@@ -15,13 +15,13 @@ import type { RequestHandler } from './$types';
  * journaled, audited or echoed back.
  */
 
-async function deviceIdFor(spuId: string): Promise<{ deviceId: string; udi: string }> {
+async function deviceIdFor(spuId: string): Promise<{ deviceId: string; udi: string; appHeld: boolean }> {
 	await connectDB();
-	const spu = (await Spu.findById(spuId, { udi: 1, 'particleLink.particleDeviceId': 1 }).lean()) as any;
+	const spu = (await Spu.findById(spuId, { udi: 1, 'particleLink.particleDeviceId': 1, 'holder.ref': 1 }).lean()) as any;
 	if (!spu) throw error(404, 'SPU not found');
 	const deviceId = spu.particleLink?.particleDeviceId;
 	if (!deviceId) throw error(400, 'No Particle device is linked to this SPU');
-	return { deviceId, udi: spu.udi };
+	return { deviceId, udi: spu.udi, appHeld: Boolean(spu.holder?.ref) };
 }
 
 const msg = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -48,7 +48,7 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 
 export const POST: RequestHandler = async ({ params, locals, request }) => {
 	requirePermission(locals.user, 'spu:write');
-	const { deviceId, udi } = await deviceIdFor(params.spuId);
+	const { deviceId, udi, appHeld } = await deviceIdFor(params.spuId);
 	const body = await request.json().catch(() => null);
 	if (!body || typeof body !== 'object') throw error(400, 'JSON body required');
 
@@ -73,10 +73,14 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 		if (!r.ok) return json({ error: r.error }, { status: 409 });
 
 		// Journal (writes the AuditLog too). Network name only — never the password.
+		// A reader a customer app holds is in someone's home: its network name can place
+		// that home, so it is left out (READER-01).
 		const actor = { _id: locals.user!._id, username: locals.user!.username };
 		await appendSpuJournal(
 			params.spuId,
-			`Wi-Fi: switched ${udi} to network "${v.ssid}" (other saved networks removed)`,
+			appHeld
+				? `Wi-Fi: switched ${udi} to a new network (other saved networks removed)`
+				: `Wi-Fi: switched ${udi} to network "${v.ssid}" (other saved networks removed)`,
 			actor,
 			{ source: 'service', refKind: 'wifi' }
 		);

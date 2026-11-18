@@ -47,6 +47,7 @@ the first ~week of collection. The digest tool's description tells Claude this.
 | `VOICENOTES_CAPTURE_RAW` | `true` for Step 0, then remove | Saves every raw webhook body (including dropped personal notes) to `voice_memo_captures`, TTL 14 days. |
 | `VOICENOTES_TAGS` | optional, default `eod,exp-*` | Allowlisted tags; `*` suffix = prefix match. |
 | `VOICENOTES_SPOKEN_TRIGGERS` | optional, default on | `false` = only tags qualify. |
+| `VOICENOTES_INITIALS` | optional | `INITIALS:username` pairs, comma-separated. Overrides the initials derived from user names. |
 
 ## Rollout runbook
 
@@ -76,6 +77,33 @@ the first ~week of collection. The digest tool's description tells Claude this.
 7. **Process:** in Claude (BIMS connector), say "process my EODs". Claude lists unprocessed memos,
    reads them, pulls BIMS context, and files a digest. Read it at Kanban → Journal.
 
+## Notes by person (initials in the title, added 2026-11-17)
+
+Title a note **EOD + your initials** and it is filed under you: `EOD JQ`, `End of Day GV`,
+`end of day - av`, `AV EOD`. Journal shows a chip per person (count, how many have no digest yet);
+clicking one shows only that person's notes and digests.
+
+- **Whose initials:** first letter of the BIMS user's first and last name (Jacob Quick → JQ,
+  Giovanni Victorio → GV). Active users only. If two people share initials, nothing is guessed —
+  add an override.
+- **Overrides:** `VOICENOTES_INITIALS="JQ:jacob,GIO:Giovanni Victorio"` (initials → BIMS username;
+  2–3 letters). Use it for nicknames or a tie.
+- **No initials, or initials that match nobody** ("EOD on magnets" → "ON"): the note goes to the
+  owner of the webhook key, exactly as before.
+- **One URL for the team works.** The key still authenticates the request, and is kept on the memo as
+  `deliveredBy`; the initials decide the speaker. Anyone holding a key can therefore file a note under
+  anyone's initials — acceptable inside the team, and `deliveredBy` + the audit log show who sent it.
+  Give people their own key (`VOICENOTES_WEBHOOK_KEYS`) if that ever matters.
+- **Fixing a note:** retitle it in Voicenotes with the right initials; the update event moves it
+  (audited). Removing the initials does not move it back.
+- **Transcripts** stay visible only to the person the note is filed under, and admins.
+
+## EOD check-in table (`/kanban/eod`, added 2026-11-17)
+
+Monday–Friday across, one row per person, an ✕ where they sent an end-of-day note that day. Rows are
+the roster (`KanbanPolicy.eodRoster`, picked on the page by kanban admins) plus anyone who sent a note
+that week. Days are US Central with a 4 a.m. cutoff (`src/lib/server/voice-memos/checkin.ts`).
+
 ## Rules worth knowing
 
 - **Allowlist:** a note is stored if it carries an allowed tag, **or its title contains "EOD" /
@@ -90,7 +118,7 @@ the first ~week of collection. The digest tool's description tells Claude this.
 - **Edits:** the previous title/transcript/tags move to `revisions[]`; a changed transcript reopens a
   processed memo so the digest gets rewritten (with `replacesDigestId`, which keeps the old version).
 - **Deletes:** flagged (`sourceDeletedAt`), never removed.
-- **Ownership:** a memo can only be changed through the key that first delivered it.
+- **Ownership:** a memo can only be changed through the key that first delivered it (`deliveredBy`).
 - **Journal privacy:** everyone with `kanban:read` sees digests. Source transcripts are visible only
   to their speaker and to admins.
 

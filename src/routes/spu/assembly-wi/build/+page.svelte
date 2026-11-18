@@ -5,7 +5,10 @@
 	import {
 		buildProgress,
 		buildStatus,
+		answerFor,
 		currentStep,
+		requiredSections,
+		stepNeed,
 		deducts,
 		firstOpenSection,
 		bucketLabel,
@@ -56,10 +59,11 @@
 	onMount(() => (ready = true));
 
 	// ── corrections (undo a scan, reopen a section, cancel a build) ───────────
-	type CorrectionKind = 'scan' | 'section' | 'cancel';
+	type CorrectionKind = 'scan' | 'section' | 'cancel' | 'answer';
 	const REASONS: Record<CorrectionKind, string[]> = {
 		scan: ['Wrong bag scanned', 'Scanned for the wrong SPU', 'Part not used', 'Other'],
 		section: ['Confirmed by mistake', 'Work has to be redone', 'Other'],
+		answer: ['Answered by mistake', 'Other'],
 		cancel: ['Started by mistake', 'Wrong bucket', 'Build abandoned', 'Other']
 	};
 	let correcting = $state<{ kind: CorrectionKind; id: string } | null>(null);
@@ -79,7 +83,8 @@
 	const wiLike = $derived({ sections });
 	const totalSteps = $derived(sections.reduce((n, s) => n + s.steps.length, 0));
 	const active = $derived<any | null>(view === 'build' ? (data.builds.find((b: any) => b._id === activeId) ?? null) : null);
-	const section = $derived<any | null>(sections.find((s) => s.number === activeSection) ?? sections[0] ?? null);
+	const visibleSections = $derived<any[]>(active ? requiredSections(wiLike, active) : sections);
+	const section = $derived<any | null>(visibleSections.find((s) => s.number === activeSection) ?? visibleSections[0] ?? null);
 	const canAct = $derived(Boolean(data.canBuild && operator && active?.status === 'in_progress'));
 	// Corrections also work on a completed build (it reopens); a cancelled one only allows returning parts.
 	const canCorrect = $derived(Boolean(data.canBuild && operator && active && active.status !== 'cancelled'));
@@ -94,7 +99,7 @@
 	});
 	const doneFor = $derived.by(() => new Map<string, any>((active?.completedSteps ?? []).map((c: any) => [c.stepId, c])));
 	// The step whose parts are scanned now (parts go in step by step), and whether this section is confirmed.
-	const current = $derived<any | null>(active && section ? currentStep(section, active) : null);
+	const current = $derived<any | null>(active && section ? currentStep(section, active, wiLike) : null);
 	const confirmed = $derived(Boolean(active && section && sectionConfirmed(section, active)));
 	const sectionRec = $derived<any | null>(section ? (section.steps.map((st: any) => doneFor.get(st._id)).find(Boolean) ?? null) : null);
 	const sectionPartsLeft = $derived(active && section ? partsProgress([section], active).total - partsProgress([section], active).scanned : 0);
@@ -182,7 +187,17 @@
 		newQrInput?.focus();
 	}
 
+	// After Yes/No or a confirm moves the page to another tab, its message shows at the top of that tab.
+	let msgTop = $state(false);
+	async function moveToSection(n: number) {
+		activeSection = n;
+		msgTop = true;
+		await tick();
+		window.scrollTo({ top: 0, behavior: 'smooth' });
+	}
+
 	function applyResult(result: any) {
+		msgTop = false;
 		if (result.type === 'success') msg = { kind: result.data?.kind === 'warn' ? 'warn' : 'ok', text: result.data?.message ?? 'Done.' };
 		else if (result.type === 'failure') msg = { kind: 'warn', text: result.data?.error ?? 'That did not work.' };
 		else if (result.type === 'error') msg = { kind: 'warn', text: 'Something went wrong. Reload the page and check Inventory deductions before scanning again.' };
@@ -297,15 +312,33 @@
 			busy = false;
 			applyResult(result);
 			if (result.type === 'success' && active && result.data?.kind === 'ok') {
-				const at = sections.findIndex((s) => s.number === activeSection);
-				const next = [...sections.slice(at + 1), ...sections.slice(0, at)].find((s) => !sectionConfirmed(s, active));
-				if (next) {
-					activeSection = next.number;
-					await tick();
-					window.scrollTo({ top: 0, behavior: 'smooth' });
+				// a procedure sends you back to its question; otherwise on to the next section still to do
+				let target = result.data?.openSection as number | undefined;
+				if (target == null) {
+					const req = requiredSections(wiLike, active);
+					const at = req.findIndex((s) => s.number === activeSection);
+					target = [...req.slice(at + 1), ...req.slice(0, at)].find((s) => !sectionConfirmed(s, active))?.number;
 				}
+				if (target != null && target !== activeSection) await moveToSection(target);
 			}
 			focusScan();
+		};
+	};
+
+	// Yes/No: Yes moves on to the next step; No opens the procedure the question sends you to.
+	const answerEnhance: SubmitFunction = () => {
+		busy = true;
+		return async ({ result, update }) => {
+			await update({ reset: false });
+			busy = false;
+			applyResult(result);
+			const open = result.type === 'success' ? (result.data?.openSection as number | undefined) : undefined;
+			if (open != null) {
+				await moveToSection(open);
+				focusScan();
+			} else {
+				focusScan('next');
+			}
 		};
 	};
 
@@ -533,7 +566,7 @@
 								{#each data.builds as b (b._id)}
 									{@const status = buildStatus(wiLike, b)}
 									{@const p = buildProgress(wiLike, b)}
-									{@const pp = partsProgress(sections, b)}
+									{@const pp = partsProgress(requiredSections(wiLike, b), b)}
 									<tr class="border-t border-[var(--color-tron-border)]">
 										<td class="whitespace-nowrap px-4 py-3.5 font-semibold text-[var(--color-tron-text)]">{bucketLabel(b)}</td>
 										<td class="whitespace-nowrap px-4 py-3.5 font-semibold text-[var(--color-tron-text)]">SPU {b.buildNumber}</td>
@@ -633,7 +666,7 @@
 				{/if}
 
 				<div role="tablist" aria-label="Work instruction sections" class="flex flex-wrap gap-1.5">
-					{#each sections as s (s._id)}
+					{#each visibleSections as s (s._id)}
 						{@const sel = s.number === section.number}
 						{@const ok = sectionConfirmed(s, active)}
 						{@const pp = partsProgress([s], active)}
@@ -651,7 +684,10 @@
 				<div class="flex flex-wrap items-start gap-5">
 					<!-- steps: everything shown at once; parts are scanned step by step -->
 					<div class="flex min-w-0 flex-[999_1_35rem] flex-col gap-3">
-						<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">{tabLabel(section)} — {section.title}</h3>
+						<h3 class="text-lg font-semibold text-[var(--color-tron-text)]">{section.type === 'procedure' ? tabLabel(section) : `${tabLabel(section)} — ${section.title}`}</h3>
+						{#if msg && msgTop}
+							<p role="status" class="rounded border px-4 py-2.5 text-sm font-medium {msgClass(msg)}">{msg.text}</p>
+						{/if}
 						{#if !section.steps.length}
 							<p class="text-sm text-[var(--color-tron-text-secondary)]">No steps in this section.</p>
 						{/if}
@@ -666,7 +702,7 @@
 									<div class="flex items-center gap-2">
 										{#if step.requiresEsd}<span class="rounded-full border border-red-500/40 bg-red-900/20 px-2.5 py-0.5 text-xs font-semibold text-red-300">ESD</span>{/if}
 										<span class="rounded-full border px-2.5 py-0.5 text-xs font-semibold {confirmed || (parts.length && !left) ? toneClass.done : isCurrent ? toneClass.active : toneClass.idle}">
-											{confirmed ? 'Done' : !parts.length ? 'No parts to scan' : !left ? 'Parts scanned' : isCurrent ? `Scan now · ${left} of ${parts.length} left` : `${left} part${left === 1 ? '' : 's'} to scan`}
+											{confirmed ? 'Done' : step.branch && !left ? (answerFor(active, step._id) ? `Answered ${answerFor(active, step._id) === 'yes' ? 'Yes' : 'No'}` : isCurrent ? 'Answer Now' : 'Question') : !parts.length ? 'No parts to scan' : !left ? 'Parts scanned' : isCurrent ? `Scan now · ${left} of ${parts.length} left` : `${left} part${left === 1 ? '' : 's'} to scan`}
 										</span>
 									</div>
 								</div>
@@ -752,7 +788,7 @@
 									</div>
 								{/if}
 
-								{#if isCurrent}
+								{#if isCurrent && left}
 									<!-- the one place to scan right now: this step's part bags -->
 									<form method="POST" action="?/scan" use:enhance={stepScanEnhance} class="mt-3 rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/5 px-4 py-3">
 										{@render who()}
@@ -775,10 +811,61 @@
 											<!-- Never disabled: a disabled submit button also blocks Enter in the field, which drops scans. -->
 											<button type="submit" class="min-h-12 rounded bg-[var(--color-tron-cyan)] px-5 font-semibold text-black hover:opacity-90">{busy ? 'Recording…' : 'Enter'}</button>
 										</div>
-										{#if msg}
+										{#if msg && !msgTop}
 											<p role="status" class="mt-3 rounded border px-4 py-2.5 text-sm font-medium {msgClass(msg)}">{msg.text}</p>
 										{/if}
 									</form>
+								{/if}
+
+								{#if step.branch}
+									<!-- Yes/No question: Yes = step done; No = do its procedure first -->
+									{@const ans = answerFor(active, step._id)}
+									{@const rec = (active.answers ?? []).find((a: any) => a.stepId === step._id)}
+									{@const proc = sections.find((x) => x._id === step.branch.noSectionId)}
+									<div class="mt-3 rounded border px-4 py-3 {isCurrent ? 'border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/5' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]'}">
+										<p class="font-semibold text-[var(--color-tron-text)]">{step.branch.question}</p>
+										{#if !ans}
+											{#if isCurrent && !left}
+												<form method="POST" action="?/answer" use:enhance={answerEnhance} class="mt-3 flex flex-wrap gap-3">
+													{@render who()}
+													<input type="hidden" name="buildId" value={active._id} />
+													<input type="hidden" name="sectionNumber" value={section.number} />
+													<input type="hidden" name="stepId" value={step._id} />
+													<button type="submit" name="answer" value="yes" disabled={busy} class="min-h-12 min-w-[7rem] rounded bg-green-500 px-6 text-lg font-semibold text-black hover:opacity-90 disabled:opacity-50">Yes</button>
+													<button type="submit" name="answer" value="no" disabled={busy} class="min-h-12 min-w-[7rem] rounded bg-amber-400 px-6 text-lg font-semibold text-black hover:opacity-90 disabled:opacity-50">No</button>
+												</form>
+											{/if}
+										{:else}
+											<div class="mt-2 flex flex-wrap items-center gap-3 text-sm">
+												<span class="font-semibold {ans === 'yes' ? 'text-green-300' : 'text-amber-300'}">Answered {ans === 'yes' ? 'Yes' : 'No'}</span>
+												{#if rec}<span class="text-[var(--color-tron-text-secondary)]">{rec.operator?.name} · {fmt(rec.answeredAt)}</span>{/if}
+												{#if ans === 'no' && proc}
+													<button type="button" onclick={() => { activeSection = proc.number; msg = null; window.scrollTo({ top: 0, behavior: 'smooth' }); focusScan(); }} class="min-h-11 rounded border border-amber-500/50 px-3.5 font-semibold text-amber-300 hover:bg-amber-900/20">
+														{sectionConfirmed(proc, active) ? `${tabLabel(proc)} · Done` : `Open ${tabLabel(proc)}`}
+													</button>
+												{/if}
+												{#if canCorrect && !isCorrecting('answer', step._id)}
+													<button type="button" onclick={() => startCorrection('answer', step._id)} class="min-h-11 rounded border border-[var(--color-tron-border)] px-3 text-[var(--color-tron-text-secondary)] hover:border-amber-500/60 hover:text-amber-300">Change Answer</button>
+												{/if}
+											</div>
+											{#if canCorrect && isCorrecting('answer', step._id)}
+												<form method="POST" action="?/changeAnswer" use:enhance={correctionEnhance} class="mt-3 space-y-3 rounded border border-amber-500/40 bg-amber-900/10 px-4 py-3">
+													{@render who()}
+													<input type="hidden" name="buildId" value={active._id} />
+													<input type="hidden" name="stepId" value={step._id} />
+													<p class="text-sm text-[var(--color-tron-text)]">Clear the {ans === 'yes' ? 'Yes' : 'No'} answer and ask again?{#if confirmed} {tabLabel(section)} will need confirming again.{/if}</p>
+													<div class="flex flex-wrap items-end gap-3">{@render reasonFields('answer')}</div>
+													<div class="flex flex-wrap gap-2">
+														<button type="submit" disabled={busy || !reasonOk} class="min-h-11 rounded bg-amber-400 px-4 font-semibold text-black hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50">Clear Answer</button>
+														{@render keepButton('Keep It')}
+													</div>
+												</form>
+											{/if}
+										{/if}
+										{#if isCurrent && !left && msg && !msgTop}
+											<p role="status" class="mt-3 rounded border px-4 py-2.5 text-sm font-medium {msgClass(msg)}">{msg.text}</p>
+										{/if}
+									</div>
 								{/if}
 							</article>
 						{/each}
@@ -823,7 +910,7 @@
 										</p>
 										<button type="submit" disabled={busy || Boolean(current)} class="min-h-12 rounded bg-green-500 px-5 font-semibold text-black hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40">Confirm {tabLabel(section)} complete</button>
 									</form>
-									{#if msg && !current}
+									{#if msg && !current && !msgTop}
 										<p role="status" class="mt-3 rounded border px-4 py-2.5 text-sm font-medium {msgClass(msg)}">{msg.text}</p>
 									{/if}
 								{:else}

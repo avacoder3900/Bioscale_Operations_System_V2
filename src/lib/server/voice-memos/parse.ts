@@ -203,4 +203,33 @@ export function classify(note: ParsedVoicenote, cfg: AllowlistConfig): Classific
 }
 
 // Word-bounded, so "geode" / "Theodore" / "period" never match.
-const EOD_ANYWHERE = /(?:^|[^a-z0-9])#?(?:e\.?\s?o\.?\s?d|end[\s-]+of[\s-]+(?:the[\s-]+)?day)(?![a-z0-9])/i;
+const EOD_ANYWHERE = /(^|[^a-z0-9])#?(?:e\.?\s?o\.?\s?d|end[\s-]+of[\s-]+(?:the[\s-]+)?day)(?![a-z0-9])/i;
+
+// ---------------------------------------------------------------------------
+// Speaker initials in the title ("EOD JQ", "End of Day - GV", "AV EOD")
+// ---------------------------------------------------------------------------
+
+const SEP = String.raw`[\s\-–—:;,.#/|()\[\]]*`;
+const INITIALS_AFTER = new RegExp(String.raw`^${SEP}(?:(?:for|by|from)\s+)?([a-z]{2,3})(?![a-z0-9])`, 'i');
+const INITIALS_BEFORE = new RegExp(String.raw`(?:^|[^a-z0-9])([a-z]{2,3})${SEP}$`, 'i');
+
+/**
+ * Candidate speaker initials from an EOD title: the 2–3 letter word right after
+ * the EOD phrase ("EOD JQ", "End of day: GV", "EOD for AV"), then the one right
+ * before it ("AV EOD"). Uppercased, in that order. These are only CANDIDATES:
+ * "EOD on magnets" yields "ON", so the caller must accept one only when it maps
+ * to a real person (speakers.ts).
+ */
+export function titleInitials(title: string | null): string[] {
+	if (!title) return [];
+	const m = EOD_ANYWHERE.exec(title);
+	if (!m) return [];
+	const before = title.slice(0, m.index + m[1].length);
+	const after = title.slice(m.index + m[0].length);
+	const out: string[] = [];
+	for (const hit of [INITIALS_AFTER.exec(after), INITIALS_BEFORE.exec(before)]) {
+		const c = hit?.[1]?.toUpperCase();
+		if (c && !out.includes(c)) out.push(c);
+	}
+	return out;
+}

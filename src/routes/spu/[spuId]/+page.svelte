@@ -472,6 +472,12 @@
 								<dd class="tron-text-primary">{data.spu.owner}</dd>
 							</div>
 						{/if}
+						{#if data.spu.appHolderSince !== null}
+							<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
+								<dt class="tron-text-muted">Holder</dt>
+								<dd class="tron-text-primary">Paired with a Bioscale app{data.spu.appHolderSince ? ` since ${formatDate(data.spu.appHolderSince)}` : ''}</dd>
+							</div>
+						{/if}
 						{#if data.spu.ownerNotes}
 							<div class="flex justify-between {editingIdentifiers ? 'opacity-40' : ''}">
 								<dt class="tron-text-muted">Owner Notes</dt>

@@ -55,6 +55,7 @@ export function summarizeSession(s: any, criteria: ScreenCriteria) {
 		records: Object.values(raw.records ?? {}).map((r: any) => ({
 			runIndex: r.runIndex,
 			assayId: r.assayId,
+			receivedAt: r.receivedAt ?? null,
 			durationS: r.durationS,
 			numberOfReadings: r.numberOfReadings,
 			stageCheck: r.stageCheck ?? null,

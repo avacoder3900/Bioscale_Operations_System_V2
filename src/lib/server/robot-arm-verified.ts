@@ -783,7 +783,7 @@ function chunkKeyframes(doc: any, chunk: Chunk): ResolvedKeyframe[] {
 		holdS: Number(s.holdS ?? 0),
 		durationS: Number(s.durationS ?? 1),
 		easing: s.easing ?? 'ease',
-		...(s.fire?.solenoid ? { fire: { solenoid: s.fire.solenoid, pulseMs: Number(s.fire.pulseMs) } } : {})
+		...(s.fire?.solenoid ? { fire: { solenoid: s.fire.solenoid, pulseMs: Number(s.fire.pulseMs), ...(s.fire.scan === true ? { scan: true, scanDelayMs: Number(s.fire.scanDelayMs ?? 0) } : {}) } } : {})
 	}));
 }
 

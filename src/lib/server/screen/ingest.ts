@@ -21,6 +21,7 @@ import {
 	type ScreenSummaryEvent
 } from './contract';
 import type { TestPayload } from '$lib/server/test-payload';
+import { tagSoakSession, onSoakBlockComplete } from './soak';
 
 export async function loadScreenCriteria(): Promise<ScreenCriteria> {
 	const doc = (await Integration.findOne({ type: 'screen_criteria' }).lean()) as any;
@@ -38,6 +39,8 @@ export interface ScreenSessionRaw {
 	summary: ScreenSummaryEvent | null;
 	/** Level-2 background records (one per assay run), keyed by run index. */
 	records?: Record<string, ScreenRecordSummary>;
+	/** Set when this screen is one block of a motion soak (screen/soak.ts). */
+	soakId?: string;
 	firstEventAt: string;
 	lastEventAt: string;
 }
@@ -139,9 +142,10 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 	// the screen read as passed). Evaluation re-reads the document afterwards.
 	let session = await findScreenSession(particleDeviceId, ev.run, at, '_id');
 	if (!session) {
+		let createdId: string | null = generateId();
 		try {
 			await ValidationSession.create({
-				_id: generateId(),
+				_id: createdId,
 				type: 'screen',
 				spuId: spu?._id ?? null,
 				spuUdi: spu?.udi ?? null,
@@ -154,9 +158,12 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 			});
 		} catch {
 			/* a concurrent first event created it — fall through to the lookup */
+			createdId = null;
 		}
 		session = await findScreenSession(particleDeviceId, ev.run, at, '_id');
 		if (!session) return { error: 'could not create the screen session' };
+		// Only the invocation that created the session claims it for a soak block.
+		if (createdId && session._id === createdId) await tagSoakSession(particleDeviceId, createdId);
 	}
 	const sessionId: string = session._id;
 
@@ -204,7 +211,11 @@ export async function ingestScreenEvent(particleDeviceId: string, data: unknown,
 		}
 	);
 
-	if (evaln.complete && spu && !spu.finalizedAt) {
+	// A soak block is a level-2-only screen: it is NOT a screen of the unit, so it
+	// never writes validation.screen. It hands off to the soak engine instead.
+	if (evaln.complete && raw.soakId) {
+		await onSoakBlockComplete(raw.soakId, sessionId, evaln, raw);
+	} else if (evaln.complete && spu && !spu.finalizedAt) {
 		const rollupStatus = evaln.overallPassed ? 'passed' : 'failed';
 		await Spu.updateOne(
 			{ _id: spu._id },
@@ -282,6 +293,7 @@ export async function attachScreenRecord(particleDeviceId: string, run: number, 
 			rawData: { fw: 0, run, parts: {}, partsExpected: {}, summary: null, records: { [String(runIndex)]: summary }, firstEventAt: receivedAt.toISOString(), lastEventAt: receivedAt.toISOString() },
 			results: []
 		});
+		await tagSoakSession(particleDeviceId, id);
 		return { sessionId: id };
 	}
 	await ValidationSession.updateOne({ _id: session._id }, { $set: { [`rawData.records.${runIndex}`]: summary } });

@@ -18,7 +18,7 @@
 				return m.flag === 1
 					? { text: 'Device uploading logs', color: 'var(--color-tron-green)' }
 					: { text: 'Device flag clear', color: 'var(--color-tron-text-secondary)' };
-			case 'offline': return { text: 'Pending — device offline', color: 'var(--color-tron-text-secondary)' };
+			case 'offline': return { text: 'Pending — device did not answer (unreachable during a test). Retries by itself after its next test upload.', color: 'var(--color-tron-text-secondary)' };
 			case 'unsupported': return { text: 'Firmware < 103 — flag not pushed', color: 'var(--color-tron-yellow, #fbbf24)' };
 			case 'unlinked': return { text: 'No device linked', color: 'var(--color-tron-text-secondary)' };
 			case 'error': return { text: m.flagError ?? 'Sync error', color: 'var(--color-tron-red, #ef4444)' };

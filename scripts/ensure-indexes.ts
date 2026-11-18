@@ -15,6 +15,8 @@
 import 'dotenv/config';
 import mongoose, { type Model } from 'mongoose';
 import '../src/lib/server/db/models/index.js';
+// BIMS API v1 keeps its rate-limit model beside its code (TTL index on expiresAt).
+import '../src/lib/server/bims-api/rate-limit.js';
 
 const uri = process.env.MONGODB_URI;
 if (!uri) {

@@ -11,6 +11,7 @@
  */
 import mongoose from 'mongoose';
 import * as dotenv from 'dotenv';
+import { notCustomerHeld } from '../src/lib/server/manufacturing/customer-held';
 dotenv.config();
 
 async function main() {
@@ -49,7 +50,9 @@ async function main() {
 			{ 'backing.lotId': { $in: ['test', 'testtt'] } },
 			{ _id: { $regex: /^CART-/ } }
 		],
-		status: { $nin: ['voided', 'completed', 'shipped', 'scrapped', 'cancelled'] }
+		status: { $nin: ['voided', 'completed', 'shipped', 'scrapped', 'cancelled'] },
+		// Never void a cart a customer has linked.
+		...notCustomerHeld()
 	};
 	const testCount = await db.collection('cartridge_records').countDocuments(testSeedFilter);
 	console.log(`  Test-seed active carts to void: ${testCount}`);

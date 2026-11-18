@@ -26,6 +26,7 @@ import {
 	generateId
 } from '$lib/server/db';
 import { nextGroupColor } from '$lib/server/optical-constants';
+import { isCustomerHeld, withNotCustomerHeld, HELD_PROBE_FIELDS } from '$lib/server/manufacturing/customer-held';
 
 export interface AssignOpticalOpts {
 	assayId: string;
@@ -163,8 +164,13 @@ export async function assignOpticalCartridges(
 		// An existing record is adopted if it has never run and isn't someone
 		// else's assay; a record that already ran is never clobbered.
 		const existingCR = (await CartridgeRecord.findById(barcode)
-			.select('assayCategory assayId status serialNumber name expirationDate rawData.readings')
+			.select(`assayCategory assayId serialNumber name expirationDate rawData.readings ${HELD_PROBE_FIELDS}`)
 			.lean()) as any;
+		// A cartridge a customer has linked is theirs: refused outright (customer-held.ts).
+		if (isCustomerHeld(existingCR)) {
+			skipped.push({ barcode, reason: 'a customer has linked this cartridge — cannot be assigned' });
+			continue;
+		}
 		const isOptical = existingCR?.assayCategory === 'optical_test';
 		if (existingCR && !isOptical) {
 			const ran =
@@ -234,8 +240,10 @@ export async function assignOpticalCartridges(
 
 		if (existingCR && !isOptical) {
 			// ADOPT: touch only the link fields; the manufacturing record stays whole.
-			await CartridgeRecord.updateOne(
-				{ _id: barcode },
+			// Guarded in the filter: a customer link made since the read above wins,
+			// and the optical record just created is taken back.
+			const res = await CartridgeRecord.updateOne(
+				withNotCustomerHeld({ _id: barcode }) as any,
 				{
 					$set: {
 						...link,
@@ -247,6 +255,11 @@ export async function assignOpticalCartridges(
 					}
 				}
 			);
+			if ((res as any)?.matchedCount === 0) {
+				await OpticalTestCartridge.deleteOne({ _id });
+				skipped.push({ barcode, reason: 'a customer has linked this cartridge — cannot be assigned' });
+				continue;
+			}
 			adopted.push({ barcode, priorStatus: existingCR.status ?? '' });
 		} else {
 			// Fresh (or re-tagging an optical record): the full run-cartridge shape.

@@ -287,6 +287,46 @@ describe('bulkPoseMessage', () => {
 	});
 });
 
+describe('chute barcode scan after a trapdoor fire', () => {
+	const scanFire = (solenoid: 'A' | 'B' | 'conveyor'): ResolvedKeyframe => ({
+		poseId: '',
+		name: `Fire ${solenoid}`,
+		positions: [],
+		holdS: 1,
+		durationS: 0,
+		easing: 'linear',
+		fire: { solenoid, pulseMs: 100, scan: true, scanDelayMs: 150 }
+	});
+
+	it('cleanKeyframes keeps Scan Barcode After on a trapdoor and drops it on the belt', () => {
+		const [a, belt, b] = cleanKeyframes([
+			{ fire: { solenoid: 'A', pulseMs: 100, scan: true }, holdS: 1 },
+			{ fire: { solenoid: 'conveyor', pulseMs: 600, scan: true }, holdS: 1 },
+			{ fire: { solenoid: 'B', pulseMs: 100, scan: 'yes' }, holdS: 1 }
+		]);
+		expect(a.fire).toEqual({ solenoid: 'A', pulseMs: 100, scan: true, scanDelayMs: 0 });
+		expect(belt.fire).toEqual({ solenoid: 'conveyor', pulseMs: 600 });
+		expect(b.fire).toEqual({ solenoid: 'B', pulseMs: 100 });
+	});
+
+	it('Scan Delay is kept per step and checked', () => {
+		const [k] = cleanKeyframes([{ fire: { solenoid: 'A', pulseMs: 100, scan: true, scanDelayMs: 250.4 }, holdS: 1 }]);
+		expect(k.fire).toEqual({ solenoid: 'A', pulseMs: 100, scan: true, scanDelayMs: 250 });
+		expect(() => cleanKeyframes([{ fire: { solenoid: 'A', pulseMs: 100, scan: true, scanDelayMs: 20000 }, holdS: 1 }])).toThrow(/scan delay/);
+		expect(() => cleanKeyframes([{ fire: { solenoid: 'A', pulseMs: 100, scan: true, scanDelayMs: -1 }, holdS: 1 }])).toThrow(/scan delay/);
+	});
+
+	it('the replay frame and the fires-only schedule carry scan', () => {
+		const p = buildPath([kf('a', A, { holdS: 0.5 }), scanFire('A'), kf('b', B)], { rateHz: 10 });
+		const line = composeAnimationJsonl(p, { jointNames: ['a', 'b', 'c', 'd', 'e', 'f'], title: 't' })
+			.jsonl.split('\n')
+			.map((l) => (l ? JSON.parse(l) : null))
+			.find((r) => r?.fire);
+		expect(line.fire).toEqual({ pin: 17, ms: 100, solenoid: 'A', scan: true, scan_delay_ms: 150 });
+		expect(fireOnlySchedule([scanFire('B')])!.fires[0]).toEqual({ t: 0, pin: 27, ms: 100, solenoid: 'B', scan: true, scan_delay_ms: 150 });
+	});
+});
+
 describe('fire steps (cartridge trapdoor solenoids)', () => {
 	function fire(solenoid: 'A' | 'B' | 'conveyor', o: Partial<ResolvedKeyframe> = {}): ResolvedKeyframe {
 		const k = newFireStep(solenoid);

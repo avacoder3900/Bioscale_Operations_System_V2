@@ -24,6 +24,63 @@
 		"process my EODs" to turn new memos into a digest.
 	</p>
 
+	{#if data.people.length}
+		<nav class="flex flex-wrap items-center gap-2" aria-label="Notes by person">
+			<a
+				href="/kanban/journal"
+				class="rounded-full border px-3 py-1 text-xs {data.who
+					? 'border-[var(--color-tron-border)] tron-text-muted'
+					: 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'}"
+			>
+				Everyone
+			</a>
+			{#each data.people as p (p.username)}
+				<a
+					href="/kanban/journal?who={encodeURIComponent(p.username)}"
+					title="Last note {p.lastAt ? fmtTime(p.lastAt) : '—'}"
+					class="flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs {data.who === p.username
+						? 'border-[var(--color-tron-cyan)] text-[var(--color-tron-cyan)]'
+						: 'border-[var(--color-tron-border)] tron-text-primary'}"
+				>
+					<span class="font-mono font-bold">{p.initials}</span>
+					<span>{p.name}</span>
+					<span class="tron-text-muted">{p.total}</span>
+					{#if p.pending}<span class="text-yellow-300">· {p.pending} new</span>{/if}
+				</a>
+			{/each}
+		</nav>
+		<p class="text-xs tron-text-muted">
+			Title a note <span class="font-mono tron-text-primary">EOD</span> plus your initials (<span class="font-mono tron-text-primary">EOD JQ</span>,
+			<span class="font-mono tron-text-primary">End of Day GV</span>) and it is filed under you.
+		</p>
+	{/if}
+
+	{#if data.who}
+		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
+			<h2 class="border-b border-[var(--color-tron-border)] px-4 py-2 text-sm font-bold tron-text-primary">
+				{data.people.find((p: { username: string }) => p.username === data.who)?.name ?? data.who} —{data.notes.length} note{data.notes.length === 1 ? '' : 's'}
+			</h2>
+			<div class="divide-y divide-[var(--color-tron-border)]">
+				{#each data.notes as n (n.id)}
+					<details class="px-4 py-2 text-xs">
+						<summary class="flex cursor-pointer flex-wrap items-center gap-2">
+							<span class="font-mono tron-text-muted">{fmtTime(n.recordedAt)}</span>
+							<span class="rounded bg-[var(--color-tron-bg-tertiary)] px-1.5 py-0.5 text-[10px] uppercase tron-text-muted">{kindLabel(n)}</span>
+							<span class="tron-text-primary">{n.title ?? '(untitled)'}</span>
+							{#if !n.processed}<span class="text-yellow-300">· no digest yet</span>{/if}
+							{#if n.deletedInVoicenotes}<span class="text-yellow-300">· deleted in Voicenotes</span>{/if}
+						</summary>
+						{#if n.transcript !== null}
+							<p class="mt-2 whitespace-pre-wrap leading-relaxed tron-text-muted">{n.transcript}</p>
+						{:else}
+							<p class="mt-2 italic tron-text-muted">Transcript visible to the speaker only.</p>
+						{/if}
+					</details>
+				{/each}
+			</div>
+		</section>
+	{/if}
+
 	{#if data.pending.length}
 		<details class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)]">
 			<summary class="cursor-pointer px-4 py-2 text-sm tron-text-primary">
@@ -45,7 +102,7 @@
 
 	{#if data.days.length === 0}
 		<div class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-secondary)] p-6 text-sm tron-text-muted">
-			No digests yet.
+			No digests yet{data.who ? ' for this person' : ''}.
 		</div>
 	{:else}
 		{#each data.days as day (day.date)}

@@ -8,6 +8,7 @@
  */
 import { callFunction, getVariable } from '$lib/server/particle';
 import { connectDB, Spu } from '$lib/server/db';
+import { FLAG_RETRY_EVENTS, monitorFlagNeedsPush } from '$lib/server/monitor-flag-retry';
 
 // Post-SPU-INV-07 vocabulary: only 'released' means cleared for use.
 // A retired unit that gets powered on SHOULD blink — deliberate.
@@ -98,6 +99,26 @@ export async function syncMonitorFlag(spuId: string): Promise<ServiceFlagResult>
 		}
 	} catch (err) {
 		return { state: 'error', message: err instanceof Error ? err.message : String(err) };
+	}
+}
+
+/**
+ * Called when one of the device's own events arrives (the device is connected right now):
+ * re-push the monitor flag if the last push did not land. A push made mid-test times out
+ * because the firmware drops its cloud session for the whole test, and nothing else retries
+ * it. Never throws; a no-op for units that were never set up for monitoring.
+ */
+export async function retryMonitorFlagIfPending(deviceId: string, eventType: string): Promise<ServiceFlagResult | null> {
+	try {
+		if (!FLAG_RETRY_EVENTS.includes(eventType)) return null;
+		await connectDB();
+		const spu = (await Spu.findOne({ 'particleLink.particleDeviceId': deviceId })
+			.select('monitoring particleLink')
+			.lean()) as any;
+		if (!monitorFlagNeedsPush(spu, eventType)) return null;
+		return await syncMonitorFlag(spu._id);
+	} catch {
+		return null;
 	}
 }
 

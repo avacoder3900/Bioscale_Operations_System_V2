@@ -1223,10 +1223,12 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				'List spoken voice memos (end-of-day wrap-ups, experiment notes) recorded in the Voicenotes app. ' +
 				'Default: UNPROCESSED memos only (no digest yet), oldest first. Transcripts over 800 chars are truncated ' +
 				'(transcriptTruncated: true) — use voice_memos_get for the full text before summarizing. ' +
-				'Start of a "process my EODs" pass: call this, then voice_memos_get each memo, then voice_memo_digest_write.',
+				'Start of a "process my EODs" pass: call this, then voice_memos_get each memo, then voice_memo_digest_write. ' +
+				'Each memo belongs to one person: `speaker` is their BIMS username, taken from the initials in the note title ' +
+				'("EOD GV" → initials "GV") or, without initials, from the webhook key. Filter with speaker to read one person\'s notes.',
 			inputSchema: z.object({
 				processed: z.enum(['false', 'true', 'all']).optional().describe("Default 'false' = only memos with no digest yet."),
-				speaker: z.string().optional().describe('BIMS username.'),
+				speaker: z.string().optional().describe('BIMS username, e.g. "jacob" or "Giovanni Victorio".'),
 				kind: z.enum(['eod', 'experiment']).optional(),
 				tag: z.string().optional(),
 				experimentRef: z.string().optional().describe('e.g. "358" for memos tagged exp-358 or opening "Experiment 358…".'),
@@ -2426,7 +2428,7 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 				actor: ACTOR_FIELD,
 				title: z.string().optional().describe('Title shown on the tab (default "Sub-Assembly N").'),
 				position: z.number().int().min(1).optional().describe('Sub-assembly number the new section should take (omit = after the last one).'),
-				type: z.enum(['subassembly', 'setup']).optional().describe('"setup" recreates the Setup block if it was deleted; default subassembly.'),
+				type: z.enum(['subassembly', 'setup', 'procedure']).optional().describe('"setup" recreates the Setup block if it was deleted; "procedure" adds a side procedure (e.g. "Cricut: Heat Shield", title required) that keeps its own tab after the sub-assemblies and is only done when a step\'s Yes/No question is answered No (see device_wi_set_step_question); default subassembly.'),
 				notes: z.string().optional().describe('Section-level notes shown above its steps (plain text).')
 			})
 		},
@@ -2595,6 +2597,26 @@ export function buildBimsMcpServer(fetcher: Fetcher): McpServer {
 			inputSchema: z.object({ actor: ACTOR_FIELD, section: WI_SECTION_FIELD, notes: z.string() })
 		},
 		async (args) => wiMutate('set_section_notes', args)
+	);
+
+	server.registerTool(
+		'device_wi_set_step_question',
+		{ annotations: WRITE_TOOL,
+			description:
+				'Put a Yes/No question on a step (or remove it). On Build SPUs the operator answers it: Yes = the step is done; ' +
+				'No = the procedure section noSection (created with device_wi_add_section type "procedure") must be done for that ' +
+				'SPU first, e.g. step 4 in Sub-Assembly 2 "Is the heat shield already on the heater block?" → No → "Cricut: Heat Shield". ' +
+				'Creates a new revision.',
+			inputSchema: z.object({
+				actor: ACTOR_FIELD,
+				section: WI_SECTION_FIELD,
+				step: WI_STEP_FIELD,
+				question: z.string().optional().describe('The question, answered Yes or No.'),
+				noSection: z.string().optional().describe('The procedure to follow on No: its title or a unique word from it (e.g. "cricut").'),
+				remove: z.boolean().optional().describe('true = take the question off the step.')
+			})
+		},
+		async (args) => wiMutate('set_branch', args)
 	);
 
 	server.registerTool(

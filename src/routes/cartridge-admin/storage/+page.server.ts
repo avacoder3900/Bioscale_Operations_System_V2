@@ -3,6 +3,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { connectDB, CartridgeRecord, Equipment, EquipmentLocation, AuditLog, generateId } from '$lib/server/db';
 import { recordTransaction } from '$lib/server/services/inventory-transaction';
 import { resolveFridgeId } from '$lib/server/services/equipment-resolve';
+import { updateEachUnlessCustomerHeld, customerHeldNotice } from '$lib/server/manufacturing/locked-cartridges';
 import type { PageServerLoad, Actions } from './$types';
 
 type StoredCartridge = {
@@ -43,9 +44,10 @@ export const load: PageServerLoad = async ({ locals }) => {
 		}
 	}
 
-	// Get cartridges awaiting storage (completed QC but not yet stored)
+	// Get cartridges awaiting storage (completed QC but not yet stored). A cart a
+	// customer has linked is theirs, not stock: never listed here (customer-held.ts).
 	const awaitingStorage = await CartridgeRecord.find(
-		{ status: { $in: ['released', 'linked'] }, 'storage.fridgeName': { $exists: false } },
+		{ status: 'released', 'storage.fridgeName': { $exists: false } },
 		{ _id: 1, barcode: 1, lotNumber: 1 }
 	).sort({ createdAt: -1 }).limit(500).lean();
 
@@ -101,7 +103,10 @@ export const actions: Actions = {
 		await connectDB();
 
 		const form = await request.formData();
-		const cartridgeIds = form.getAll('cartridgeIds').map(String).filter(Boolean);
+		// The page posts one comma-joined field; repeated fields also work.
+		const cartridgeIds = Array.from(new Set(
+			form.getAll('cartridgeIds').flatMap((v) => String(v).split(',')).map((s) => s.trim()).filter(Boolean)
+		));
 		const fridgeKey = form.get('fridgeId')?.toString();
 		const containerBarcode = form.get('containerBarcode')?.toString() || null;
 
@@ -113,23 +118,26 @@ export const actions: Actions = {
 		}
 
 		const now = new Date();
-		await CartridgeRecord.updateMany(
-			{ _id: { $in: cartridgeIds } },
-			{
-				$set: {
-					'storage.fridgeName': fridgeKey,       // barcode string — for fridgeName-based queries
-					'storage.locationId': fridgeKey,       // same value — for locationId-based queries
-					'storage.containerBarcode': containerBarcode,
-					'storage.storedAt': now,
-					'storage.recordedAt': now,
-					'storage.storedBy': locals.user?._id,
-					status: 'stored'
-				}
+		// Guarded per cart: a cartridge a customer has linked is never moved to
+		// stored, and gets no inventory or audit row (customer-held.ts).
+		const { updated, held } = await updateEachUnlessCustomerHeld(cartridgeIds, {
+			$set: {
+				'storage.fridgeName': fridgeKey,       // barcode string — for fridgeName-based queries
+				'storage.locationId': fridgeKey,       // same value — for locationId-based queries
+				'storage.containerBarcode': containerBarcode,
+				'storage.storedAt': now,
+				'storage.recordedAt': now,
+				'storage.storedBy': locals.user?._id,
+				status: 'stored'
 			}
-		);
+		});
+		const heldNotice = customerHeldNotice('stored', held);
+		if (!updated.length) {
+			return fail(heldNotice ? 409 : 404, { error: heldNotice ?? 'None of the selected cartridges were found' });
+		}
 
-		// Record storage transactions
-		for (const cid of cartridgeIds) {
+		// Record storage transactions — only for the carts actually stored
+		for (const cid of updated) {
 			await recordTransaction({
 				transactionType: 'creation',
 				cartridgeRecordId: cid,
@@ -149,7 +157,11 @@ export const actions: Actions = {
 			});
 		}
 
-		return { message: `${cartridgeIds.length} cartridges stored in ${fridgeKey}` };
+		return {
+			success: true,
+			message: `${updated.length} cartridges stored in ${fridgeKey}`,
+			...(heldNotice ? { warning: heldNotice } : {})
+		};
 	}
 };
 

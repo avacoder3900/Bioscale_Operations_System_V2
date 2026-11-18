@@ -3,7 +3,7 @@ import { connectDB } from '$lib/server/db';
 import { requireAgentApiKey } from '$lib/server/api-auth';
 import { resolveActor, ActorError } from '$lib/server/machine-actor';
 import {
-	renameSection, updateSectionNotes, updateStep, addStep, deleteStep, moveStep,
+	renameSection, updateSectionNotes, updateStep, setStepBranch, addStep, deleteStep, moveStep,
 	addStepImages, removeStepImage, updateStepImage, moveStepImage,
 	addMaterial, addMaterialFromText, updateMaterial, removeMaterial, relinkAllParts,
 	addSection, deleteSection, moveSection, updateFrontMatter, updateMetadata,
@@ -62,7 +62,7 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 			return json({ success: true, data: await relinkAllParts(actor) });
 		}
 		if (op === 'add_section') {
-			const r = await addSection(actor, { title: text(body.title), position: num(body.position), type: body.type === 'setup' ? 'setup' : 'subassembly', notesHtml: body.notes ? toHtml(text(body.notes)) : '' });
+			const r = await addSection(actor, { title: text(body.title), position: num(body.position), type: body.type === 'setup' ? 'setup' : body.type === 'procedure' ? 'procedure' : 'subassembly', notesHtml: body.notes ? toHtml(text(body.notes)) : '' });
 			return json({ success: true, data: r }, { status: 201 });
 		}
 		if (op === 'delete_section') {
@@ -152,6 +152,12 @@ export const POST: RequestHandler = async ({ request, fetch }) => {
 				if (body.requiresEsd != null) patch.requiresEsd = Boolean(body.requiresEsd);
 				if (Array.isArray(body.dhrFields)) patch.dhrFields = body.dhrFields.map(String);
 				return json({ success: true, data: { ...where, ...(await updateStep(actor, section.number, step._id, patch)) } });
+			}
+			case 'set_branch': {
+				// Yes/No question on a step: No sends the operator to a procedure section.
+				if (body.remove === true) return json({ success: true, data: { ...where, ...(await setStepBranch(actor, section.number, step._id, null)) } });
+				const target = resolveSection(wi, body.noSection);
+				return json({ success: true, data: { ...where, ...(await setStepBranch(actor, section.number, step._id, { question: text(body.question), noSectionId: target._id })) } });
 			}
 			case 'delete_step': {
 				if (body.confirmed !== true) throw error(400, `confirmed must be true — ask the user to confirm deleting step ${step.stepNumber} ("${step.title}") in ${sectionLabel(section)}`);

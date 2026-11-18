@@ -129,6 +129,9 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 			deviceState: s.deviceState ?? '',
 			owner: s.owner ?? null,
 			ownerNotes: s.ownerNotes ?? null,
+			// Held by a customer app (BIMS API v1). Kind and date only: the app's opaque
+			// holder reference stays in the journal and audit rows.
+			appHolderSince: s.holder?.ref ? (s.holder.since ? new Date(s.holder.since).toISOString() : '') : null,
 			batchId: s.batch?._id ?? null,
 			createdBy: s.createdBy ?? null,
 			createdAt: s.createdAt,

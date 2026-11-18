@@ -13,6 +13,7 @@
 	 */
 	import { invalidateAll } from '$app/navigation';
 	import type { ArmThermal } from '$lib/server/robot-arm-client';
+	import ChuteScanWarning from './robot-arm/ChuteScanWarning.svelte';
 	import PiThermalChip from './robot-arm/PiThermalChip.svelte';
 	import ReturnHomeControl from './robot-arm/ReturnHomeControl.svelte';
 	import StopArmControl from './robot-arm/StopArmControl.svelte';
@@ -222,6 +223,9 @@
 			</button>
 		</div>
 	{/if}
+
+	<!-- A failed chute barcode scan after a trapdoor fire (2026-11-16): Hide or Close, never blocks. -->
+	<ChuteScanWarning />
 
 	<!-- Always visible: Pi heat + Wi-Fi, servo temperatures, Torque, Return to home, Stop arm. -->
 	<div class="mt-2 space-y-1.5">

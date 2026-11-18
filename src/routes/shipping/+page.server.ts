@@ -1,7 +1,8 @@
-import { redirect } from '@sveltejs/kit';
+import { fail, redirect } from '@sveltejs/kit';
 import { connectDB, ShippingLot, ShippingPackage, CartridgeRecord, Customer, AuditLog, generateId } from '$lib/server/db';
 import { requirePermission } from '$lib/server/permissions';
 import { ownershipForShipment } from '$lib/server/consumer/ownership';
+import { updateEachUnlessCustomerHeld, customerHeldNotice } from '$lib/server/manufacturing/locked-cartridges';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ locals, url }) => {
@@ -215,14 +216,12 @@ export const actions: Actions = {
 			barcode: 1, customer: 1, trackingNumber: 1, carrier: 1
 		}).lean() as any;
 
-		await ShippingPackage.findByIdAndUpdate(packageId, {
-			$push: { cartridges: { cartridgeId, addedAt: new Date() } }
-		});
-
 		const now = new Date();
 
-		// Write shipping subdoc to CartridgeRecord DMR (correct field, not phantom phases[])
-		await CartridgeRecord.findByIdAndUpdate(cartridgeId, {
+		// Write shipping subdoc to CartridgeRecord DMR (correct field, not phantom phases[]).
+		// Guarded: a cartridge a customer has linked is never moved to shipped, and
+		// nothing else (package row, audit, ownership) is written for it.
+		const guarded = await updateEachUnlessCustomerHeld([cartridgeId], {
 			$set: {
 				'shipping.packageId': packageId,
 				'shipping.packageBarcode': pkg?.barcode ?? undefined,
@@ -233,6 +232,13 @@ export const actions: Actions = {
 				'shipping.recordedAt': now,
 				status: 'shipped'
 			}
+		});
+		if (guarded.held.length) {
+			return fail(409, { error: customerHeldNotice('shipped', guarded.held) });
+		}
+
+		await ShippingPackage.findByIdAndUpdate(packageId, {
+			$push: { cartridges: { cartridgeId, addedAt: new Date() } }
 		});
 
 		// Audit log

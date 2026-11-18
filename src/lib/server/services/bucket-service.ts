@@ -53,6 +53,7 @@ import { consumeThermoseal, creditThermoseal, ThermosealError, THERMOSEAL_PART, 
 import { lotRemaining, fifoLot } from './lot-remaining';
 import { LOOSE_STATUS, LOOSE_LABEL, partitionMissingActions, type MissingAction, type LooseDecision } from './bucket-loose';
 import { getCheckedOutCartridgeIds } from '$lib/server/checkout-utils';
+import { isCustomerHeld, withNotCustomerHeld, HELD_PROBE_FIELDS } from '$lib/server/manufacturing/customer-held';
 export { LOOSE_STATUS, LOOSE_LABEL, type MissingAction, type LooseDecision } from './bucket-loose';
 
 export const BUCKET_STAGES = ['barcoded', 'unpressed', 'backing'] as const;
@@ -1404,18 +1405,22 @@ export async function inOvenCarts(limit = 200, excludeIds?: string[]): Promise<{
 // sendToOven, adoptLooseCarts — so the audit, the board scan-in and the Loose
 // panel cannot drift apart.
 
-/** Carts go loose: status 'loose' plus the stamp saying where they fell out of. Pass membership is the caller's job. */
-async function setLoose(ids: string[], from: { bucketId: string | null; cycleId: string | null; stage: string | null }, by: Operator, reason: string, now: Date): Promise<void> {
+/**
+ * Carts go loose: status 'loose' plus the stamp saying where they fell out of. Pass membership is the caller's job.
+ * Never writes a cart a customer has linked (customer-held.ts); returns how many it matched.
+ */
+async function setLoose(ids: string[], from: { bucketId: string | null; cycleId: string | null; stage: string | null }, by: Operator, reason: string, now: Date): Promise<number> {
 	const stamp: Record<string, unknown> = { at: now, by, reason };
 	if (from.bucketId) stamp.fromBucketId = from.bucketId;
 	if (from.cycleId) stamp.fromCycleId = from.cycleId;
 	if (from.stage) stamp.priorStatus = from.stage;
 	const set: Record<string, unknown> = { status: LOOSE_STATUS, statusUpdatedOn: now.toISOString(), loose: stamp };
 	if (from.stage) set.priorStatus = from.stage;
-	await CartridgeRecord.updateMany(
-		{ _id: { $in: ids } },
+	const res = await CartridgeRecord.updateMany(
+		withNotCustomerHeld({ _id: { $in: ids } }) as any,
 		{ $set: set, $push: { notes: { _id: generateId(), body: `Loose: ${reason}`, phase: 'bucket', author: by, createdAt: now } } }
 	);
+	return (res as any)?.matchedCount ?? 0;
 }
 
 /**
@@ -1431,8 +1436,9 @@ async function sendToOven(ids: string[], priorStatus: string | null, by: Operato
 		'backing.recordedAt': now, 'backing.operator': by, 'backing.manualBackedAt': now
 	};
 	if (priorStatus) set.priorStatus = priorStatus;
+	// Callers pass loose or bucket-stage carts only; the guard is defence in depth.
 	await CartridgeRecord.updateMany(
-		{ _id: { $in: ids } },
+		withNotCustomerHeld({ _id: { $in: ids } }) as any,
 		{ $set: set, $unset: { loose: 1 }, $push: { notes: { _id: generateId(), body: `Moved to oven: ${reason}`, phase: 'bucket', author: by, createdAt: now } } }
 	);
 }
@@ -1524,10 +1530,13 @@ export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanRes
 	if (isBadgeCode(barcode)) throw new BucketError('That is a badge, not a cartridge sticker.', 400, 'BADGE');
 	assertNotMergedBarcode(barcode);
 	const [cart, bucketLabelId] = await Promise.all([
-		CartridgeRecord.findById(barcode).select('_id status bucket').lean() as Promise<any>,
+		CartridgeRecord.findById(barcode).select(`_id bucket ${HELD_PROBE_FIELDS}`).lean() as Promise<any>,
 		resolveBucketId(barcode)
 	]);
 	if (bucketLabelId) throw new BucketError(`${barcode} is the QR sticker on production bucket ${bucketLabelId}, not a cartridge.`, 409, 'BUCKET_LABEL');
+	// A cart a customer has linked is theirs: never pulled into Loose (customer-held.ts).
+	const heldError = () => new BucketError(`${barcode} was not moved to Loose because a customer has linked it.`, 409, 'CUSTOMER_LINKED');
+	if (isCustomerHeld(cart)) throw heldError();
 	const now = new Date();
 	const by = input.user;
 	const why = (input.reason ?? '').trim();
@@ -1568,7 +1577,8 @@ export async function scanIntoLoose(input: LooseScanInput): Promise<LooseScanRes
 		await audit('cartridge_records', barcode, 'LOOSE', by, { status: LOOSE_STATUS, fromCycleId: home._id, reason }, { status, cycleId: home._id });
 		return { barcode, outcome: 'pulled', from: label, priorStatus: status };
 	}
-	await setLoose([barcode], { bucketId: cart.bucket?.bucketId ?? null, cycleId: cart.bucket?.cycleId ?? null, stage: status }, by, reason, now);
+	const moved = await setLoose([barcode], { bucketId: cart.bucket?.bucketId ?? null, cycleId: cart.bucket?.cycleId ?? null, stage: status }, by, reason, now);
+	if (moved === 0) throw heldError();
 	await audit('cartridge_records', barcode, 'LOOSE', by, { status: LOOSE_STATUS, reason }, { status });
 	return { barcode, outcome: 'freed', from: cart.bucket?.bucketId ?? null, priorStatus: status };
 }

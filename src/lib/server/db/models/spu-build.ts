@@ -69,10 +69,23 @@ const scanSchema = new Schema({
 	returnedQuantity: { type: Number, default: null } // stock count after the return
 }, { _id: false });
 
+// The operator's answer to a step's Yes/No question (WI step.branch), one per step.
+// No = the procedure section noSectionId becomes part of this build.
+const answerSchema = new Schema({
+	stepId: { type: String, required: true },
+	sectionNumber: { type: Number, default: null },
+	stepNumber: { type: Number, default: null },
+	question: { type: String, default: '' },
+	answer: { type: String, enum: ['yes', 'no'], required: true },
+	noSectionId: { type: String, default: null },
+	operator: { type: operatorSchema, required: true },
+	answeredAt: { type: Date, default: Date.now }
+}, { _id: false });
+
 // Every correction made to a build, oldest first: what, why, who.
 const correctionSchema = new Schema({
 	_id: { type: String, default: () => generateId() },
-	kind: { type: String, enum: ['undo_scan', 'reopen_step', 'reopen_section', 'reopen_build', 'cancel_build'], required: true },
+	kind: { type: String, enum: ['undo_scan', 'reopen_step', 'reopen_section', 'reopen_build', 'cancel_build', 'change_answer'], required: true },
 	scanId: { type: String, default: null },
 	stepId: { type: String, default: null },
 	sectionNumber: { type: Number, default: null },
@@ -105,6 +118,7 @@ const spuBuildSchema = new Schema({
 	partsReturnedOnCancel: { type: Boolean, default: null },
 	completedSteps: { type: [completedStepSchema], default: [] },
 	scans: { type: [scanSchema], default: [] },
+	answers: { type: [answerSchema], default: [] },
 	corrections: { type: [correctionSchema], default: [] },
 	spuId: { type: String, default: null }          // link to the Spu record once one exists
 }, { timestamps: true });

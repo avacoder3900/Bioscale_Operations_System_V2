@@ -25,12 +25,14 @@ export type WiStep = {
 	instructionsText?: string | null;
 	materials?: WiMaterial[];
 	requiresEsd?: boolean;
+	// Yes/No question answered on Build SPUs; No = do procedure noSectionId first.
+	branch?: { question: string; noSectionId: string } | null;
 };
 
 export type WiSection = {
 	_id?: string;
 	number: number;
-	type: string; // 'setup' | 'subassembly'
+	type: string; // 'setup' | 'subassembly' | 'procedure'
 	title?: string | null;
 	tabLabel?: string | null;
 	steps: WiStep[];
@@ -43,6 +45,7 @@ export type BuildLike = {
 	status?: string | null;
 	completedSteps?: { stepId: string }[];
 	scans?: BuildScanLike[];
+	answers?: { stepId: string; answer: string }[];
 };
 
 export type PartRef = { partDefinitionId?: string | null; partNumber?: string | null };
@@ -70,8 +73,10 @@ export function bucketLabel(b: { bucketNumber?: number | null; bucketCode?: stri
 	return n != null ? `Bucket ${n}` : `Bucket ${b.bucketCode ?? '?'}`;
 }
 
-export function sectionLabel(section: { type: string; number: number }): string {
-	return section.type === 'setup' ? 'Setup' : `Sub-Assembly ${section.number}`;
+export function sectionLabel(section: { type: string; number: number; title?: string | null }): string {
+	if (section.type === 'setup') return 'Setup';
+	if (section.type === 'procedure') return section.title?.trim() || 'Procedure';
+	return `Sub-Assembly ${section.number}`;
 }
 
 /** Same rule as the WI page's tabs: custom tabLabel if set, else the positional label. */
@@ -146,12 +151,31 @@ export function sectionProgress(section: WiSection, done: Set<string>): { done: 
 	return { done: section.steps.filter((st) => done.has(st._id)).length, total: section.steps.length };
 }
 
-/** Steps done out of every step on the current WI (steps since deleted from the WI don't count). */
+/** The operator's answer to a step's Yes/No question on this build, if any. */
+export function answerFor(build: BuildLike, stepId: string): 'yes' | 'no' | null {
+	const a = (build.answers ?? []).find((x) => x.stepId === stepId);
+	return a ? (a.answer === 'no' ? 'no' : 'yes') : null;
+}
+
+/** Procedure sections this build needs: the ones a step's question was answered No to. */
+export function neededProcedureIds(wi: WiLike, build: BuildLike): Set<string> {
+	const ids = new Set<string>();
+	for (const s of wi.sections) for (const st of s.steps) if (st.branch && answerFor(build, st._id) === 'no') ids.add(st.branch.noSectionId);
+	return ids;
+}
+
+/** Sections a build has to get through: Setup and every sub-assembly, plus any procedure it answered No to. */
+export function requiredSections(wi: WiLike, build: BuildLike): WiSection[] {
+	const needed = neededProcedureIds(wi, build);
+	return wi.sections.filter((s) => s.type !== 'procedure' || (s._id != null && needed.has(s._id)));
+}
+
+/** Steps done out of every step the build needs (steps since deleted from the WI don't count). */
 export function buildProgress(wi: WiLike, build: BuildLike): { done: number; total: number } {
 	const done = doneStepIds(build);
 	let n = 0;
 	let total = 0;
-	for (const s of wi.sections) {
+	for (const s of requiredSections(wi, build)) {
 		const p = sectionProgress(s, done);
 		n += p.done;
 		total += p.total;
@@ -162,11 +186,12 @@ export function buildProgress(wi: WiLike, build: BuildLike): { done: number; tot
 /** The first section with a step left to do; the last section when everything is done. */
 export function firstOpenSection(wi: WiLike, build: BuildLike): WiSection | null {
 	const done = doneStepIds(build);
-	for (const s of wi.sections) {
+	const needed = requiredSections(wi, build);
+	for (const s of needed) {
 		const p = sectionProgress(s, done);
 		if (p.done < p.total) return s;
 	}
-	return wi.sections[wi.sections.length - 1] ?? null;
+	return needed[needed.length - 1] ?? null;
 }
 
 export type BuildTone = 'done' | 'idle' | 'active' | 'cancelled';
@@ -200,8 +225,32 @@ export function partsLeft(step: WiStep, build: BuildLike): WiMaterial[] {
  * step's parts are refused until this step's are all in. Null when every part
  * in the section is in, or the section has none.
  */
-export function currentStep(section: WiSection, build: BuildLike): WiStep | null {
-	return section.steps.find((st) => partsLeft(st, build).length > 0) ?? null;
+export function currentStep(section: WiSection, build: BuildLike, wi?: WiLike): WiStep | null {
+	return section.steps.find((st) => stepNeed(st, build, wi) != null) ?? null;
+}
+
+export type StepNeed =
+	| { kind: 'parts'; parts: WiMaterial[] } // parts still to scan
+	| { kind: 'answer'; question: string } // its Yes/No question isn't answered
+	| { kind: 'procedure'; sectionId: string } // answered No: that procedure isn't confirmed yet
+	| null;
+
+/**
+ * What a step still needs on this build, in order: its parts, then its Yes/No
+ * question, then — after a No — the procedure the question sends the operator to
+ * (pass wi so that procedure can be found; without it a No counts as settled).
+ */
+export function stepNeed(step: WiStep, build: BuildLike, wi?: WiLike): StepNeed {
+	const left = partsLeft(step, build);
+	if (left.length) return { kind: 'parts', parts: left };
+	if (!step.branch) return null;
+	const answer = answerFor(build, step._id);
+	if (!answer) return { kind: 'answer', question: step.branch.question };
+	if (answer === 'no' && wi) {
+		const proc = wi.sections.find((s) => s._id === step.branch!.noSectionId);
+		if (proc && !sectionConfirmed(proc, build)) return { kind: 'procedure', sectionId: proc._id! };
+	}
+	return null;
 }
 
 export type PartHit =
@@ -215,9 +264,9 @@ export type PartHit =
  * Where a scanned part goes: the current step (see currentStep), if it still
  * needs that part. A part a later step needs is refused as out of order.
  */
-export function findStepForPart(section: WiSection, build: BuildLike, part: PartRef): PartHit {
+export function findStepForPart(section: WiSection, build: BuildLike, part: PartRef, wi?: WiLike): PartHit {
 	if (!section.steps.some((st) => partsOf(st).some((m) => matchesPart(m, part)))) return { kind: 'not-in-section' };
-	const current = currentStep(section, build);
+	const current = currentStep(section, build, wi);
 	if (!current) return { kind: 'section-scanned' };
 	const material = partsLeft(current, build).find((m) => matchesPart(m, part));
 	if (material) return { kind: 'found', step: current, material };

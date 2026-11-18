@@ -18,7 +18,7 @@
 			releases: Release[];
 			filter: string;
 		};
-		form: { success?: boolean; error?: string } | null;
+		form: { success?: boolean; error?: string; warning?: string } | null;
 	}
 
 	let { data, form }: Props = $props();
@@ -72,6 +72,12 @@
 	{#if form?.success}
 		<div class="rounded border border-green-500/30 bg-green-900/20 px-4 py-3 text-sm text-green-300">
 			Action completed successfully.
+		</div>
+	{/if}
+
+	{#if form?.warning}
+		<div class="rounded border border-amber-500/30 bg-amber-900/20 px-4 py-3 text-sm text-amber-300">
+			{form.warning}
 		</div>
 	{/if}
 

@@ -11,8 +11,11 @@
  * - Fields the payload omits keep their stored value (the documented payload has
  *   no tags at all, so absence cannot mean "tag removed").
  * - Deleted in Voicenotes → flagged, never removed. The memo is a record.
- * - A memo belongs to the speaker whose key first delivered it; another key
+ * - A memo belongs to the KEY that first delivered it (deliveredBy); another key
  *   cannot rewrite it.
+ * - The speaker is the person named by the initials in the title ("EOD GV"),
+ *   else the key's owner. Retitling a note with different initials moves it to
+ *   that person; removing the initials leaves it where it is.
  */
 import { VoiceMemo, AuditLog, generateId } from '$lib/server/db';
 import { classify, type AllowlistConfig, type ParsedVoicenote } from './parse';
@@ -39,18 +42,25 @@ export async function ingestVoicenote(opts: {
 	speaker: Speaker;
 	raw: unknown;
 	allowlist: AllowlistConfig;
+	/** Username of the webhook key that delivered this. Defaults to the speaker. */
+	deliveredBy?: string;
+	/** Set when the speaker was resolved from initials in the title ("EOD GV" → "GV"). */
+	initials?: string | null;
 	now?: Date;
 }): Promise<{ outcome: IngestOutcome; memoId?: string }> {
 	const { parsed, speaker, raw, allowlist } = opts;
 	const now = opts.now ?? new Date();
-	const changedBy = `voicenotes-webhook:${speaker.username}`;
+	const deliveredBy = opts.deliveredBy ?? speaker.username;
+	const initials = opts.initials ?? null;
+	const changedBy = `voicenotes-webhook:${deliveredBy}`;
 
 	if (parsed.action === 'other') return { outcome: 'ignored' };
 	if (!parsed.noteId) return { outcome: 'invalid' };
 
 	const existing: any = await VoiceMemo.findOne({ sourceNoteId: parsed.noteId }).lean();
 
-	if (existing && existing.speaker?.username !== speaker.username) {
+	// Memos stored before deliveredBy existed were always delivered by their speaker's key.
+	if (existing && (existing.deliveredBy ?? existing.speaker?.username) !== deliveredBy) {
 		return { outcome: 'conflict', memoId: existing._id };
 	}
 
@@ -83,8 +93,13 @@ export async function ingestVoicenote(opts: {
 			tags: parsed.tags.length ? parsed.tags : (existing.tags ?? [])
 		};
 		const transcriptChanged = next.transcript !== (existing.transcript ?? '');
+		// Only initials move a memo: an edit that drops them leaves the speaker alone.
+		const speakerChanged = !!initials && existing.speaker?.username !== speaker.username;
 		const changed =
-			transcriptChanged || next.title !== (existing.title ?? null) || !sameTags(next.tags, existing.tags ?? []);
+			transcriptChanged ||
+			speakerChanged ||
+			next.title !== (existing.title ?? null) ||
+			!sameTags(next.tags, existing.tags ?? []);
 
 		if (!changed) {
 			await VoiceMemo.updateOne({ _id: existing._id }, { $set: { lastEventAt: now, lastEvent: parsed.event } });
@@ -102,6 +117,7 @@ export async function ingestVoicenote(opts: {
 			lastEvent: parsed.event
 		};
 		if (cls) Object.assign(set, { kind: cls.kind, experimentRef: cls.experimentRef, matchedBy: cls.matchedBy });
+		if (speakerChanged) Object.assign(set, { speaker, initials, speakerSource: 'initials' });
 		if (transcriptChanged && existing.processed) Object.assign(set, { processed: false, processedAt: null, processedBy: null });
 
 		await VoiceMemo.updateOne(
@@ -124,9 +140,21 @@ export async function ingestVoicenote(opts: {
 			tableName: 'voice_memos',
 			recordId: existing._id,
 			action: 'UPDATE',
-			oldData: { title: existing.title, tags: existing.tags, transcriptLength: (existing.transcript ?? '').length },
-			newData: { title: next.title, tags: next.tags, transcriptLength: next.transcript.length },
-			reason: transcriptChanged && existing.processed ? 'Edited in Voicenotes — reopened for digest' : 'Edited in Voicenotes',
+			oldData: {
+				title: existing.title,
+				tags: existing.tags,
+				transcriptLength: (existing.transcript ?? '').length,
+				...(speakerChanged ? { speaker: existing.speaker?.username } : {})
+			},
+			newData: {
+				title: next.title,
+				tags: next.tags,
+				transcriptLength: next.transcript.length,
+				...(speakerChanged ? { speaker: speaker.username, initials } : {})
+			},
+			reason:
+				(transcriptChanged && existing.processed ? 'Edited in Voicenotes — reopened for digest' : 'Edited in Voicenotes') +
+				(speakerChanged ? ` — moved to ${speaker.username} by title initials` : ''),
 			changedAt: now,
 			changedBy
 		});
@@ -144,6 +172,9 @@ export async function ingestVoicenote(opts: {
 			source: 'voicenotes',
 			sourceNoteId: parsed.noteId,
 			speaker,
+			initials,
+			speakerSource: initials ? 'initials' : 'key',
+			deliveredBy,
 			tags: parsed.tags,
 			kind: cls.kind,
 			experimentRef: cls.experimentRef,
@@ -171,6 +202,8 @@ export async function ingestVoicenote(opts: {
 		newData: {
 			sourceNoteId: parsed.noteId,
 			speaker: speaker.username,
+			initials,
+			deliveredBy,
 			kind: cls.kind,
 			experimentRef: cls.experimentRef,
 			matchedBy: cls.matchedBy,

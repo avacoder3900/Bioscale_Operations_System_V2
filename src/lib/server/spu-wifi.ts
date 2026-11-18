@@ -116,7 +116,7 @@ export function parseStatus(raw: unknown): WifiStatus | null {
 	};
 }
 
-const isMissingVariable = (msg: string) => /variable not found|not found/i.test(msg);
+export const isMissingVariable = (msg: string) => /variable not found|not found/i.test(msg);
 
 /** Read both Wi-Fi variables. `supported: false` means the device runs firmware older than v109. */
 export async function readWifi(deviceId: string): Promise<{

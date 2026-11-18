@@ -20,6 +20,7 @@ async function openDayFillLot(reagentLotId: string, assayId: string, name: strin
 import { findBucketLabels } from '$lib/server/services/bucket-service';
 import { checkRobotConflict, checkDeckConflict, checkTrayConflict } from '$lib/server/manufacturing/resource-locks';
 import { WAX_PAGE_OWNED } from '$lib/server/manufacturing/run-statuses';
+import { withNotCustomerHeld, customerHeldMatch, customerHeldNotice } from '$lib/server/manufacturing/locked-cartridges';
 import { getRobot, robotGet, robotPost, bridgeDeviceIdForRobot } from '$lib/server/opentrons/proxy';
 import { bridgeJobGate } from '$lib/server/opentrons/bridge-token';
 import { requirePermission } from '$lib/server/permissions';
@@ -573,12 +574,18 @@ export const actions: Actions = {
 		const run = await ReagentBatchRecord.findById(runId).lean() as any;
 		if (!run) return fail(404, { error: 'Run not found' });
 
-		// Void all CartridgeRecord entries for this run
+		// Void all CartridgeRecord entries for this run — except any a customer
+		// has linked (customer-held.ts): those keep their status and are reported.
+		let warning: string | null = null;
 		if (run.cartridgesFilled?.length) {
+			const runFilter = { 'reagentFilling.runId': runId, status: { $nin: ['completed', 'voided'] } };
+			const held = (await CartridgeRecord.find({ ...runFilter, $and: [customerHeldMatch()] })
+				.select('_id').lean()) as unknown as Array<{ _id: string }>;
 			await CartridgeRecord.updateMany(
-				{ 'reagentFilling.runId': runId, status: { $nin: ['completed', 'voided'] } },
+				withNotCustomerHeld(runFilter) as any,
 				{ $set: { status: 'voided', voidedAt: new Date(), voidReason: 'Reset to deck loading' } }
 			);
+			warning = customerHeldNotice('voided', held.map((h) => String(h._id)));
 		}
 
 		await ReagentBatchRecord.findByIdAndUpdate(runId, {
@@ -591,7 +598,7 @@ export const actions: Actions = {
 			$unset: { runStartTime: '', runEndTime: '' }
 		});
 
-		return { success: true };
+		return { success: true, ...(warning ? { warning } : {}) };
 	},
 
 	/** Force advance to a specific stage (admin skip) */

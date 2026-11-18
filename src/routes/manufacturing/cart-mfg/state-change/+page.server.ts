@@ -129,7 +129,7 @@ export const actions: Actions = {
 			return { needsConfirm: true, target, protected: protectedCarts, changed: [], unchanged: [], rejected: [] };
 		}
 		if (protectedCarts.length && !reason) {
-			return fail(400, { error: `Give a reason — ${protectedCarts.length} of these cart${protectedCarts.length === 1 ? ' is' : 's are'} linked to an experiment or an app account.` });
+			return fail(400, { error: `Give a reason — ${protectedCarts.length} of these cart${protectedCarts.length === 1 ? ' is' : 's are'} linked to an experiment, a customer or an app account.` });
 		}
 		const protectedByBarcode = new Map(protectedCarts.map((p) => [p.barcode, p]));
 
