@@ -42,7 +42,12 @@ const keyframeSchema = new Schema(
 		 * Present: the step fires a cartridge trapdoor solenoid instead of
 		 * moving (2026-10-28). holdS is then the wait after the pulse.
 		 */
-		fire: { type: fireSchema, default: undefined }
+		fire: { type: fireSchema, default: undefined },
+		/**
+		 * Step PID (2026-11-19): this step's own P / D / I for some servos, set by
+		 * the Pi's replay from the move into the step to the end of its hold.
+		 */
+		gains: { type: [new Schema({ servo: { type: Number, required: true }, p: Number, d: Number, i: Number }, { _id: false })], default: undefined }
 	},
 	{ _id: false }
 );

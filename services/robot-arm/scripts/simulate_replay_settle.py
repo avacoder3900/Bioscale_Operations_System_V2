@@ -138,7 +138,7 @@ def main() -> None:
 
     # 1. no flags: the original writes, plus position reads (in-play measurement), no settle event
     rs.MEASURE_DIR = tmp / "measured"
-    frames_plain = 2
+    frames_plain = 4  # two poses x 0.04 s at 50 Hz (was 2, which failed on master before 2026-11-19)
     p = tmp / "plain.jsonl"
     recording(p, [(A, 0.04, False, None), (B, 0.04, False, None)])
     bus = FakeBus(droop)
@@ -255,6 +255,104 @@ def main() -> None:
     rs.replay_session_settling(arms, p, loops=1, stop_event=stop)
     torque = [(s, v) for s, n, v in bus.writes if n == "Torque_Enable"]
     check(torque[-6:] == [(s, 1) for s in range(1, 7)], "hold: stopped mid-replay, torque still on")
+
+    # 7. step PID (2026-11-19): set at the step's frame, normal gains back at its restore frame
+    #    and at the end, Lock 1 before every gain write, a died play's gains recovered first.
+    class FakePacket:
+        def __init__(self, regs: dict[tuple[int, int], int], fail_read: set[int] | None = None) -> None:
+            self.regs = regs
+            self.fail_read = fail_read or set()
+            self.log: list[tuple[int, int, int]] = []
+
+        def read1ByteTxRx(self, _port, sid: int, addr: int):
+            if sid in self.fail_read:
+                return 0, -1, 0
+            return self.regs.get((sid, addr), 0), 0, 0
+
+        def write1ByteTxRx(self, _port, sid: int, addr: int, value: int):
+            self.regs[(sid, addr)] = value
+            self.log.append((sid, addr, value))
+            return 0, 0
+
+    rs.GAINS_STATE_FILE = tmp / "step-gains.json"
+    rs.StepGains.__init__.__defaults__ = (rs.GAINS_STATE_FILE,)
+    normal = {(s, a): v for s in range(1, 7) for a, v in ((21, 32), (22, 45), (23, 4))}
+
+    def gain_recording(path: Path, stop_long: bool = False) -> None:
+        lines = [{"event": "header", "version": "1", "rate_hz": 50, "follower_neutral": A, "hold_at_end": True}]
+        for k in range(6):
+            rec: dict = {"event": "frame", "t": round(k * 0.02, 4), "goal": A if k < 3 else B}
+            if k == 1:
+                rec["gains"] = {"set": [{"id": 3, "i": 0, "d": 30}, {"id": 2, "p": 99}]}  # p 99 is out of range: dropped
+            if k == 4 and not stop_long:
+                rec["gains"] = {"restore": True}
+            lines.append(rec)
+        if stop_long:
+            lines += [{"event": "frame", "t": round(0.12 + k * 0.02, 4), "goal": B} for k in range(150)]
+        path.write_text("\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
+
+    def gain_bus(fail_read: set[int] | None = None) -> FakeBus:
+        b = FakeBus(droop)
+        b._packet_handler = FakePacket(dict(normal), fail_read)  # type: ignore[attr-defined]
+        b._port_handler = None  # type: ignore[attr-defined]
+        return b
+
+    p = tmp / "gains.jsonl"
+    gain_recording(p)
+    bus = gain_bus()
+    arms = FakeArms(bus)
+    rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
+    ph = bus._packet_handler  # type: ignore[attr-defined]
+    ev = dict(arms.logger.events)
+    check(ev["replay.start"]["gain_servos"] == [3], f"gains: only servo 3 has a usable override {ev['replay.start']['gain_servos']}")
+    sets = [e for e in ev["replay.gains"]["gains"] if "set" in e]
+    check(len(sets) == 1 and sets[0]["servo"] == 3 and sets[0]["set"] == {"i": 0, "d": 30} and sets[0]["frame"] == 1, f"gains: servo 3 set at frame 1 {sets}")
+    restores = [e for e in ev["replay.gains"]["gains"] if "restore" in e]
+    check(restores and restores[0]["frame"] == 4 and restores[0]["restore"] == {"p": 32, "d": 45, "i": 4}, f"gains: normal gains back at frame 4 {restores}")
+    check(ph.regs[(3, 22)] == 45 and ph.regs[(3, 23)] == 4 and ph.regs[(2, 21)] == 32, "gains: registers end at the normal values")
+    lock_first = all(ph.log[i - 1] == (sid, 55, 1) for i, (sid, addr, _v) in enumerate(ph.log) if addr in (21, 22, 23) and ph.log[i - 1][1] != addr - 1 and ph.log[i - 1][1] not in (21, 22))
+    check(lock_first and all(v == 1 for _s, a, v in ph.log if a == 55), f"gains: Lock 1 before each servo's gain writes, never 0 {ph.log}")
+    check(not rs.GAINS_STATE_FILE.exists(), "gains: state file removed after a clean end")
+    check([k for k, _ in arms.logger.events][-1] == "replay.stop", "gains: replay completed")
+
+    # 7b. stopped mid-step: gains still come back
+    p = tmp / "gains-stop.jsonl"
+    gain_recording(p, stop_long=True)
+    bus = gain_bus()
+    arms = FakeArms(bus)
+    stop = threading.Event()
+    threading.Timer(0.3, stop.set).start()
+    rs.replay_session_settling(arms, p, loops=1, stop_event=stop)
+    ph = bus._packet_handler  # type: ignore[attr-defined]
+    check(ph.regs[(3, 22)] == 45 and ph.regs[(3, 23)] == 4, "gains stop: normal gains back after Stop")
+    check(not rs.GAINS_STATE_FILE.exists(), "gains stop: state file removed")
+
+    # 7c. a died play left gains set: the next play puts them back before reading the normal ones
+    rs.GAINS_STATE_FILE.write_text(json.dumps({"3": {"p": 32, "d": 45, "i": 4}}), encoding="utf-8")
+    bus = gain_bus()
+    bus._packet_handler.regs[(3, 23)] = 0  # type: ignore[attr-defined]  # left at the override
+    arms = FakeArms(bus)
+    p = tmp / "gains.jsonl"
+    gain_recording(p)
+    rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
+    ev = dict(arms.logger.events)["replay.gains"]["gains"]
+    check(ev[0].get("recover") == {"3": {"p": 32, "d": 45, "i": 4}} and ev[0]["ok"], f"gains recover: died play's gains restored first {ev[0]}")
+    restores = [e for e in ev if "restore" in e]
+    check(restores[0]["restore"] == {"p": 32, "d": 45, "i": 4}, "gains recover: normal gains read after the recovery, not the override")
+
+    # 7d. gains cannot be read: that servo is left alone
+    bus = gain_bus(fail_read={3})
+    arms = FakeArms(bus)
+    rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
+    ph = bus._packet_handler  # type: ignore[attr-defined]
+    check(not any(a in (21, 22, 23) for _s, a, _v in ph.log), "gains unreadable: no gain write at all")
+
+    # 7e. a plain play never touches gains (FakeBus without a packet handler, as in checks 1-6)
+    p = tmp / "plain.jsonl"
+    bus = gain_bus()
+    arms = FakeArms(bus)
+    rs.replay_session_settling(arms, p, loops=1, stop_event=threading.Event())
+    check(not bus._packet_handler.log and "replay.gains" not in dict(arms.logger.events), "plain: no gain writes, no replay.gains event")  # type: ignore[attr-defined]
 
     # 5. install() rebinds the name in a stand-in sessions module
     import types

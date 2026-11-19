@@ -83,6 +83,21 @@ read opened the port 1.7 ms into replay.start, the replay died between its
 torque-off and torque-on writes and left servos 1-2 (shoulder) limp. Now the
 replay waits for an in-flight one-shot to finish before its first write, and
 a one-shot that slipped past the check waits for the replay to end.
+
+Step PID (2026-11-19, Alejandro: the elbow and shoulder wobble at 5.7 Hz while
+holding "r.6 withdraw", and only there): a BIMS move set step may carry its
+own P / D / I for some servos. BIMS marks the frame where the move into that
+step starts with `"gains": {"set": [{"id", "p"?, "d"?, "i"?}]}` and the frame
+where its hold ends with `"gains": {"restore": true}` (both on one frame when
+the next step has its own). Before the first frame this replay reads every
+named servo's P / D / I, keeps them in GAINS_STATE_FILE, and puts exactly
+those back on restore and in `finally` (Stop, error, end of play), so the
+normal gains always come back. A replay that died with gains still set left
+the file behind; the next replay puts those gains back before anything else.
+Writes are RAM only: Lock is written 1 before each servo's gains, the same
+"temporary" write POST /servos/gains makes, so nothing is saved to EEPROM and
+the Change Log is not touched (the play's `replay.gains` run event lists
+every write). A servo whose gains cannot be read is left alone for the play.
 """
 
 from __future__ import annotations
@@ -162,9 +177,150 @@ def parse_frames(lines: list[dict]) -> list[dict]:
                 "pose": rec.get("pose"),
                 "target": rec.get("target"),
                 "fire": rec.get("fire") if isinstance(rec.get("fire"), dict) else None,
+                "gains": rec.get("gains") if isinstance(rec.get("gains"), dict) else None,
             }
         )
     return out
+
+
+# ── step PID (2026-11-19) ───────────────────────────────────────────────
+
+#: Register addresses (STS3215) and the ranges POST /servos/gains allows.
+GAIN_REGISTERS = {"p": 21, "d": 22, "i": 23}
+GAIN_RANGE = {"p": (1, 64), "d": (0, 254), "i": (0, 254)}
+LOCK_ADDRESS = 55
+GAINS_STATE_FILE = Path.home() / ".bims-arm" / "step-gains.json"
+
+
+def clean_gain_set(entries: Any) -> dict[int, dict[str, int]]:
+    """A frame's `gains.set` as {sid: {"p"|"d"|"i": value}}; bad entries and out-of-range values are dropped."""
+    out: dict[int, dict[str, int]] = {}
+    if not isinstance(entries, list):
+        return out
+    for e in entries:
+        if not isinstance(e, dict):
+            continue
+        try:
+            sid = int(e.get("id"))
+        except (TypeError, ValueError):
+            continue
+        if not 1 <= sid <= SERVO_COUNT:
+            continue
+        vals: dict[str, int] = {}
+        for k, (lo, hi) in GAIN_RANGE.items():
+            v = e.get(k)
+            if v is None:
+                continue
+            try:
+                n = int(v)
+            except (TypeError, ValueError):
+                continue
+            if lo <= n <= hi:
+                vals[k] = n
+        if vals:
+            out[sid] = vals
+    return out
+
+
+def gain_servos(frames: list[dict]) -> list[int]:
+    """Every servo some frame sets gains on, in id order."""
+    ids: set[int] = set()
+    for f in frames:
+        g = f.get("gains")
+        if g:
+            ids.update(clean_gain_set(g.get("set")))
+    return sorted(ids)
+
+
+class StepGains:
+    """Sets a step's gains during a play and always puts the normal ones back.
+
+    `raw_read(sid, addr)` / `raw_write(sid, addr, value)` are one-byte register
+    access (read returns None, write returns False on failure). Nothing here
+    raises: a failed write is logged in `events` and the play goes on.
+    """
+
+    def __init__(self, raw_read: Callable[[int, int], Optional[int]], raw_write: Callable[[int, int, int], bool], state_file: Optional[Path] = GAINS_STATE_FILE) -> None:
+        self.raw_read = raw_read
+        self.raw_write = raw_write
+        self.state_file = state_file
+        self.normal: dict[int, dict[str, int]] = {}
+        self.changed: set[int] = set()
+        self.events: list[dict] = []
+
+    def _write(self, sid: int, vals: dict[str, int]) -> bool:
+        ok = self.raw_write(sid, LOCK_ADDRESS, 1)
+        if ok:
+            for k, v in vals.items():
+                ok = self.raw_write(sid, GAIN_REGISTERS[k], int(v)) and ok
+        return ok
+
+    def recover(self) -> bool:
+        """Put back gains a replay that died left set (GAINS_STATE_FILE). False: they are still set."""
+        if self.state_file is None or not self.state_file.exists():
+            return True
+        try:
+            left = {int(k): {n: int(x) for n, x in v.items()} for k, v in json.loads(self.state_file.read_text(encoding="utf-8")).items()}
+        except Exception as exc:  # noqa: BLE001 - a bad file must never stop the play
+            self.events.append({"recover": "unreadable", "error": str(exc)})
+            self._drop_state()
+            return True
+        ok = all([self._write(sid, vals) for sid, vals in left.items()])
+        self.events.append({"recover": {str(s): v for s, v in left.items()}, "ok": ok})
+        if ok:
+            self._drop_state()
+        return ok
+
+    def prepare(self, servos: list[int]) -> None:
+        """Read the normal P / D / I of every servo the play will change."""
+        for sid in servos:
+            vals = {k: self.raw_read(sid, a) for k, a in GAIN_REGISTERS.items()}
+            if any(v is None for v in vals.values()):
+                self.events.append({"servo": sid, "skipped": "gains could not be read"})
+                continue
+            self.normal[sid] = {k: int(v) for k, v in vals.items() if v is not None}
+        if self.normal and self.state_file is not None:
+            try:
+                self.state_file.parent.mkdir(parents=True, exist_ok=True)
+                self.state_file.write_text(json.dumps({str(s): v for s, v in self.normal.items()}), encoding="utf-8")
+            except Exception as exc:  # noqa: BLE001
+                self.events.append({"state_file": "not written", "error": str(exc)})
+
+    def apply(self, frame_gains: Optional[dict], frame: int, t: float) -> None:
+        """A frame's `gains`: restore first (when asked), then set."""
+        if not frame_gains:
+            return
+        if frame_gains.get("restore"):
+            self.restore(frame, t)
+        for sid, vals in clean_gain_set(frame_gains.get("set")).items():
+            if sid not in self.normal:
+                continue
+            ok = self._write(sid, vals)
+            self.changed.add(sid)
+            self.events.append({"frame": frame, "t": t, "servo": sid, "set": vals, "ok": ok})
+
+    def restore(self, frame: Optional[int] = None, t: Optional[float] = None) -> bool:
+        """Normal gains back on every changed servo; a servo that failed stays listed for the next try."""
+        failed: set[int] = set()
+        for sid in sorted(self.changed):
+            ok = self._write(sid, self.normal[sid])
+            if not ok:
+                failed.add(sid)
+            self.events.append({"frame": frame, "t": t, "servo": sid, "restore": self.normal[sid], "ok": ok})
+        self.changed = failed
+        return not failed
+
+    def finish(self) -> None:
+        """End of play: normal gains back on every servo; the state file goes only when that worked."""
+        if self.restore() and self.state_file is not None:
+            self._drop_state()
+
+    def _drop_state(self) -> None:
+        try:
+            if self.state_file is not None:
+                self.state_file.unlink(missing_ok=True)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ── fire steps (cartridge trapdoor solenoids) ───────────────────────────
@@ -371,6 +527,36 @@ def _bus_io(bus: Any) -> tuple[Callable[[], dict[int, int]], Callable[[dict[int,
     return read, write
 
 
+def _raw_byte_io(bus: Any) -> tuple[Callable[[int, int], Optional[int]], Callable[[int, int, int], bool]]:
+    """One-byte register read / write by address (the gain registers are not in the bus's table)."""
+    try:
+        from scservo_sdk import COMM_SUCCESS  # type: ignore[import-untyped]
+    except Exception:  # noqa: BLE001 - tests / simulator
+        COMM_SUCCESS = 0
+
+    def raw_read(sid: int, addr: int) -> Optional[int]:
+        for _ in range(3):
+            try:
+                value, comm, _err = bus._packet_handler.read1ByteTxRx(bus._port_handler, sid, addr)
+            except Exception:  # noqa: BLE001
+                continue
+            if comm == COMM_SUCCESS:
+                return int(value)
+        return None
+
+    def raw_write(sid: int, addr: int, value: int) -> bool:
+        for _ in range(3):
+            try:
+                comm, _err = bus._packet_handler.write1ByteTxRx(bus._port_handler, sid, addr, int(value))
+            except Exception:  # noqa: BLE001
+                continue
+            if comm == COMM_SUCCESS:
+                return True
+        return False
+
+    return raw_read, raw_write
+
+
 # ── in-play measurement (2026-11-11) ────────────────────────────────────
 # Why: the user saw the arm wobble during "place and remove" (shoulder,
 # elbow and wrist flex at I = 4) but BIMS could not read the arm during a
@@ -487,9 +673,10 @@ def _replay_session_settling_unlocked(
 
         pulse = solenoid_gpio.pulse_blocking
 
+    gain_ids = gain_servos(frames)
     arms.logger.log_event(
         "replay.start",
-        {"source_path": str(source_path), "loops": loops, "frames": len(frames), "settle_frames": flagged, "fires": len(fires)},
+        {"source_path": str(source_path), "loops": loops, "frames": len(frames), "settle_frames": flagged, "fires": len(fires), "gain_servos": gain_ids},
     )
     if arms.dry_run:
         arms.logger.log_event(
@@ -512,6 +699,10 @@ def _replay_session_settling_unlocked(
 
     arms._write_all_torque(follower, 0)
     arms._write_all_torque(follower, 1)
+    # Step PID: a died replay's gains go back first; only then are the normal ones read.
+    step_gains = StepGains(*_raw_byte_io(follower))
+    if step_gains.recover() and gain_ids:
+        step_gains.prepare(gain_ids)
     first_goal = [frames[0]["goal"].get(s) for s in range(1, SERVO_COUNT + 1)]
     follower_neutral = header.get("follower_neutral") or first_goal
 
@@ -572,6 +763,8 @@ def _replay_session_settling_unlocked(
                     break
                 goal = frame["goal"]
                 write({sid: _clamp(p + offset.get(sid, 0), POS_MIN, POS_MAX) for sid, p in goal.items()})
+                if frame.get("gains"):
+                    step_gains.apply(frame["gains"], i, frame["t"])
                 # Where the arm is (not only where it was sent), when there is time before the next frame.
                 elapsed = time.perf_counter() - t_loop_start
                 if i + 1 >= n or frames[i + 1]["t"] - elapsed > MEASURE_MIN_SLACK_S:
@@ -601,6 +794,16 @@ def _replay_session_settling_unlocked(
         pass
     finally:
         finish_fires(cancel=True)
+        # The normal gains always come back, whatever ended the play.
+        try:
+            step_gains.finish()
+        except Exception as exc:  # noqa: BLE001
+            print(f"[replay_settle] step gains not restored: {exc}", flush=True)
+        if step_gains.events:
+            try:
+                arms.logger.log_event("replay.gains", {"gains": step_gains.events})
+            except Exception as exc:  # the webhook must never fail the replay
+                print(f"[replay_settle] gains event not logged: {exc}")
         if fires:
             try:
                 arms.logger.log_event("replay.fire", {"fires": fired, "planned": len(fires) * loops})
@@ -657,6 +860,8 @@ def _mark_fire_supported() -> None:
         from src.server import gpio as solenoid_gpio
 
         solenoid_gpio.REPLAY_FIRE_SUPPORTED = True
+        # Step PID (2026-11-19): BIMS plays a step with its own gains only when this is set.
+        solenoid_gpio.REPLAY_GAINS_SUPPORTED = True
     except Exception as exc:  # no GPIO module: BIMS will refuse fire steps, which is right
         print(f"[replay_settle] fire steps unavailable: {exc}", flush=True)
     try:

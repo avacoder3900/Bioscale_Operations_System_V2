@@ -107,7 +107,8 @@ const ROWS: Row[] = [
 	['2026-11-11T16:56:00Z', 'pi', 'servo', 'pi.torque_on_goal_sync', null, 'enable only', 'goal 0 or > 200 off set to position first', 'steps', 'pi', 'After a power loss every goal read 0; torque-on would drive the arm toward 0 (manual_control.py; backup .bak-pre-torque-sync-20261111)'],
 	['2026-11-11T21:20:00Z', 'pi', 'servo', 'pi.replay_inplay_samples', null, null, 'Added', null, 'pi', 'Every play reads the six positions after each frame (when time allows) and keeps them per run; GET /replay/measured/{run_id} (replay_settle.py, servo_config.py; backups .bak-pre-inplay-20261111)'],
 	['2026-11-11T21:25:00Z', 'maintenance.moves', 'servo', 'log.arrival_inplay', null, null, 'Added', null, 'code', 'Arrival rows keep where the arm was during the play: per servo max error from its goals and extra turns (wobble); Show In Play'],
-	['2026-11-12T15:28:00Z', 'pi', 'servo', 'pi.servo_gains_dead_zone', null, 'P D I only', 'P D I + CW/CCW dead zone 0..3', null, 'pi', 'POST /servos/gains can write the dead zone (temporary unless persist) for the shoulder hunting test; Change Log keys servo.cw_dead_zone / servo.ccw_dead_zone (servo_config.py, bims_changes.py; backups .bak-pre-deadzone-20261112)']
+	['2026-11-12T15:28:00Z', 'pi', 'servo', 'pi.servo_gains_dead_zone', null, 'P D I only', 'P D I + CW/CCW dead zone 0..3', null, 'pi', 'POST /servos/gains can write the dead zone (temporary unless persist) for the shoulder hunting test; Change Log keys servo.cw_dead_zone / servo.ccw_dead_zone (servo_config.py, bims_changes.py; backups .bak-pre-deadzone-20261112)'],
+	['2026-11-19T01:00:00Z', 'teach', 'servo', 'animate.step_pid', null, null, 'Added', null, 'code', "Step PID: a move set step can carry its own P / D / I per servo, set by the Pi's replay from the move into the step to the end of its hold, normal gains back after (RAM only, never EEPROM); needs replay_settle.py + gpio.py on the Pi (replay_gains)"]
 ];
 
 async function main() {

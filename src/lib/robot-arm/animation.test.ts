@@ -8,6 +8,9 @@ import {
 	cleanPoseIds,
 	cleanOffsets,
 	composeAnimationJsonl,
+	cleanStepGains,
+	gainFrames,
+	stepGainsLabel,
 	fireFrames,
 	fireOnlySchedule,
 	newFireStep,
@@ -428,5 +431,66 @@ describe('fire steps (cartridge trapdoor solenoids)', () => {
 	it('labels step counts', () => {
 		expect(stepCountLabel([kf('a', A)])).toBe('1 pose');
 		expect(stepCountLabel([kf('a', A), fire('A'), kf('b', B)])).toBe('2 poses · 1 fire');
+	});
+});
+
+describe('step PID (2026-11-19)', () => {
+	const frames = (jsonl: string) => jsonl.trim().split('\n').map((l) => JSON.parse(l)).filter((x) => x.event === 'frame');
+
+	it('cleans a step: whole numbers in range, one entry per servo, blanks dropped', () => {
+		expect(cleanStepGains([{ servo: 3, i: 0, d: '' }, { servo: 2, p: null }])).toEqual([{ servo: 3, i: 0 }]);
+		expect(cleanStepGains([{ servo: 3, i: 2 }, { servo: 3, d: 30 }])).toEqual([{ servo: 3, i: 2, d: 30 }]);
+		expect(cleanStepGains([])).toBeNull();
+		expect(cleanStepGains(undefined)).toBeNull();
+		expect(() => cleanStepGains([{ servo: 3, p: 0 }], 4)).toThrow(/step 4: Elbow P must be a whole number 1–64/);
+		expect(() => cleanStepGains([{ servo: 3, i: 255 }])).toThrow(/0–254/);
+		expect(() => cleanStepGains([{ servo: 3, i: 1.5 }])).toThrow(/whole number/);
+		expect(() => cleanStepGains([{ servo: 7, i: 1 }])).toThrow(/servo 7/);
+	});
+
+	it('keeps gains through cleanKeyframes and labels them', () => {
+		const [k] = cleanKeyframes([{ poseId: 'r6', holdS: 0.5, durationS: 1, easing: 'ease', gains: [{ servo: 3, i: 0 }, { servo: 2, d: 30, i: 1 }] }]);
+		expect(k.gains).toEqual([{ servo: 2, d: 30, i: 1 }, { servo: 3, i: 0 }]);
+		expect(stepGainsLabel(k.gains)).toBe('Shoulder D 30 I 1 · Elbow I 0');
+		const [plain] = cleanKeyframes([{ poseId: 'r6', holdS: 0, durationS: 1, easing: 'ease' }]);
+		expect('gains' in plain).toBe(false);
+	});
+
+	it('sets on the frame the move into the step starts and restores where its hold ends', () => {
+		// a (start, hold 0.5) -> b (1 s in, hold 0.5, gains) -> c (1 s in)
+		const p = buildPath([kf('a', A, { holdS: 0.5 }), kf('b', B, { holdS: 0.5, gains: [{ servo: 3, i: 0 }] }), kf('c', C)], { rateHz: 10 });
+		const g = gainFrames(p);
+		expect([...g.keys()]).toEqual([5, 20]);
+		expect(g.get(5)).toEqual({ set: [{ id: 3, i: 0 }] });
+		expect(g.get(20)).toEqual({ restore: true });
+		const out = composeAnimationJsonl(p, { jointNames: [], title: 't' });
+		expect(out.gainSteps).toBe(1);
+		expect(JSON.parse(out.jsonl.split('\n')[0]).gain_steps).toBe(1);
+		const f = frames(out.jsonl);
+		expect(f[5].gains).toEqual({ set: [{ id: 3, i: 0 }] });
+		expect(f[20].gains).toEqual({ restore: true });
+		expect(f.filter((x) => x.gains).length).toBe(2);
+	});
+
+	it('one frame restores then sets when the next step has its own gains', () => {
+		const p = buildPath([kf('a', A), kf('b', B, { gains: [{ servo: 3, i: 0 }] }), kf('c', C, { gains: [{ servo: 2, d: 30 }] })], { rateHz: 10 });
+		const g = gainFrames(p);
+		expect(g.get(0)).toEqual({ set: [{ id: 3, i: 0 }] });
+		expect(g.get(10)).toEqual({ restore: true, set: [{ id: 2, d: 30 }] });
+		expect(g.get(20)).toEqual({ restore: true });
+	});
+
+	it('a play without gains has no gains frames and no header field', () => {
+		const out = composeAnimationJsonl(buildPath([kf('a', A), kf('b', B)]), { jointNames: [], title: 't' });
+		expect(out.gainSteps).toBe(0);
+		expect(out.jsonl).not.toContain('gain');
+	});
+
+	it('a sequence keeps each step its gains', () => {
+		const flat = flattenSequence([
+			{ name: 'one', keyframes: [kf('a', A), kf('b', B, { gains: [{ servo: 3, i: 0 }] })], join: { durationS: null, easing: 'ease' } },
+			{ name: 'two', keyframes: [kf('c', C)], join: { durationS: null, easing: 'ease' } }
+		]);
+		expect(flat.filter((k) => k.gains).map((k) => k.name)).toEqual(['one · b']);
 	});
 });

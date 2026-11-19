@@ -620,6 +620,8 @@ export interface GpioStatus {
 	max_pulse_ms?: number;
 	/** The Pi's replay fires `fire` frames (replay_settle.py, 2026-10-28); absent on an older Pi. */
 	replay_fire?: boolean;
+	/** The Pi's replay sets a step's own P / D / I (`gains` frames, 2026-11-19); absent on an older Pi. */
+	replay_gains?: boolean;
 }
 
 // Conveyor belt on BCM 22 (pin 15). A pulse is fire-and-forget on the Pi, so

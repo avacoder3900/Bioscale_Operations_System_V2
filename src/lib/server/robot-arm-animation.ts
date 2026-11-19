@@ -60,6 +60,8 @@ import {
 	pathStats,
 	isFireTarget,
 	canScanAfter,
+	cleanStepGains,
+	stepGainsLabel,
 	solenoidLabel,
 	solenoidPin,
 	DEFAULT_RATE_HZ,
@@ -917,6 +919,13 @@ function moveSetSummary(d: any): MoveSetSummary {
 				const t = { positionMm: k.tolerances.positionMm ?? null, angleDeg: k.tolerances.angleDeg ?? null, steps: k.tolerances.steps ?? null };
 				if (t.positionMm != null || t.angleDeg != null || t.steps != null) out.tolerances = t;
 			}
+			// Step PID (2026-11-19); a stored value that no longer cleans is dropped, never played.
+			try {
+				const gains = cleanStepGains(k.gains, i + 1);
+				if (gains) out.gains = gains;
+			} catch (err) {
+				console.warn(`robot-arm move set "${d.name}" (${d._id}): ${(err as Error).message} — gains dropped`);
+			}
 			return [out];
 		}),
 		rateHz: Number(d.rateHz) || DEFAULT_RATE_HZ,
@@ -982,11 +991,16 @@ export async function updateMoveSet(user: User, id: string, input: { name: unkno
 	if (found.length !== poseIds.length) throw new AnimateError('A keyframe refers to a pose that no longer exists — reload the page.');
 	await RobotArmMoveSet.updateOne({ _id: id }, { $set: { name, notes: cleanNotes(input.notes), keyframes, updatedBy: opRef(user) } });
 	const fires = keyframes.filter((k) => k.fire).map((k) => ({ solenoid: k.fire!.solenoid, pulseMs: k.fire!.pulseMs, waitS: k.holdS }));
+	// Step PID (2026-11-19): which steps carry their own gains, before and after.
+	const gainsOf = (kfs: any[]) => (kfs ?? []).flatMap((k: any, i: number) => (k?.gains?.length ? [{ step: i + 1, poseId: String(k.poseId ?? ''), gains: k.gains.map((g: any) => ({ servo: g.servo, ...(g.p != null ? { p: g.p } : {}), ...(g.d != null ? { d: g.d } : {}), ...(g.i != null ? { i: g.i } : {}) })) }] : []));
+	const stepGains = gainsOf(keyframes);
+	const stepGainsBefore = gainsOf(before.keyframes);
 	await audit(user, 'robot_arm.animate.move_set_update', 'robot_arm_move_sets', id, {
 		name,
 		keyframes: keyframes.length,
 		...(fires.length ? { fires } : {}),
-		before: { name: before.name, keyframes: before.keyframes?.length ?? 0 }
+		...(stepGains.length || stepGainsBefore.length ? { stepGains } : {}),
+		before: { name: before.name, keyframes: before.keyframes?.length ?? 0, ...(stepGainsBefore.length ? { stepGains: stepGainsBefore } : {}) }
 	});
 	return moveSetSummary(await RobotArmMoveSet.findById(id).lean());
 }
@@ -1281,6 +1295,8 @@ export async function writeAndPlay(
 		const coilSteps = fireSteps.filter((k) => k.fire!.solenoid !== 'conveyor');
 		const gpio = coilSteps.length ? await requireReplayFire() : null;
 		if (fireSteps.length > coilSteps.length) await requireConveyorFire();
+		const gainSteps = o.keyframes.filter((k) => !k.fire && k.gains?.length);
+		if (gainSteps.length) await requireReplayGains();
 		const now = await readArm();
 		if (now.torqueOn === false) throw new AnimateError('Torque is off — press Torque on first.', 409);
 		const warnings: string[] = requireCool(now);
@@ -1350,6 +1366,7 @@ export async function writeAndPlay(
 			from: now.positions,
 			temps: now.temps,
 			maxStepsPerS: stats.maxStepsPerS,
+			...(gainSteps.length ? { stepGains: gainSteps.map((k) => ({ step: k.name, gains: k.gains, label: stepGainsLabel(k.gains) })) } : {}),
 			...(out.fires ? { fires: fireFrames(path).map((f) => ({ t: f.t, solenoid: f.solenoid, pin: f.pin, ms: f.ms })), gpioSimulated: !!gpio?.simulated } : {})
 		});
 		return { runId, durationS: path.durationS, leadInS, frames: out.frames, warnings };
@@ -1425,6 +1442,23 @@ async function requireConveyorFire(): Promise<void> {
 		throw new AnimateError(`Could not check the conveyor belt before playing: ${msg}`, 502);
 	}
 	if (!s.replay_fire) throw new AnimateError("This move set runs the conveyor belt, but the arm Pi's replay cannot drive it yet. Update conveyor.py and replay_settle.py on the Pi and restart robot-arm.", 409);
+}
+
+/**
+ * A path with step gains plays only on a Pi whose replay sets them (gpio.py's
+ * replay_gains, set by replay_settle.install, 2026-11-19): an older replay
+ * ignores the `gains` frames and the step would play on the normal gains.
+ */
+async function requireReplayGains(): Promise<void> {
+	let s: { replay_gains?: boolean };
+	try {
+		s = await robotArm.gpioStatus();
+	} catch (err) {
+		const msg = (err as Error).message ?? String(err);
+		if (/robot-arm 404/.test(msg)) throw new AnimateError('This move set has step PID, but the arm Pi has no GPIO routes to report it. Update gpio.py and replay_settle.py on the Pi.', 409);
+		throw new AnimateError(`Could not check the Pi's replay before playing: ${msg}`, 502);
+	}
+	if (!s.replay_gains) throw new AnimateError("This move set has step PID, but the arm Pi's replay cannot set it yet. Update replay_settle.py and gpio.py on the Pi and restart robot-arm.", 409);
 }
 
 /** Solenoid status for the Animate pages (null when the Pi or its GPIO routes are not there). */

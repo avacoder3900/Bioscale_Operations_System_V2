@@ -165,6 +165,8 @@ _lock = asyncio.Lock()
 _coil_lock = threading.Lock()
 #: Set by replay_settle.install(): the replay fires `fire` frames.
 REPLAY_FIRE_SUPPORTED = False
+#: Set by replay_settle.install(): the replay sets a move set step's own P / D / I (2026-11-19).
+REPLAY_GAINS_SUPPORTED = False
 
 
 def all_off() -> None:
@@ -257,6 +259,7 @@ async def gpio_status() -> dict:
         "simulated": _backend.simulated,
         "busy": _lock.locked() or _coil_lock.locked(),
         "replay_fire": REPLAY_FIRE_SUPPORTED,
+        "replay_gains": REPLAY_GAINS_SUPPORTED,
     }
 
 

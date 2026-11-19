@@ -28196,3 +28196,35 @@ Source: branch fix/drop-tip-always-available @ commit 214f4095 (fast-forward of 
 Retrieve this exact code: git checkout fix/drop-tip-always-available at commit 214f4095
   (or: git log fix/drop-tip-always-available --oneline to find it if the branch has since moved on)
 What this deployment is for: Drop Tip always available on Deck Calibration Studio and the arm Stage page.
+
+================================================================================
+2026-11-19 — feat/arm-step-pid — Step PID: a move set step can carry its own P / D / I per servo
+================================================================================
+Alejandro: "We do not like the wobble when r.6 withdraw is played after r.5 withdraw 3" — wants PID per move.
+- Movement Log (2026-11-12 and -18): the wobble belongs to the r.6 withdraw POSE, not to r.5 before it. The
+  elbow swings ~15 steps around its goal 1986 at ~5.7 Hz with its load flipping sign, the shoulder ~5 steps
+  with it; 3 of 4 solo plays shook (from three different starts), all 16 "remove 2nd" plays reverse 7-13
+  times there, and it was still moving 45 s after one play. All at P32 D45 I4 (elbow). Of 48 poses in 8 days
+  only r.6 withdraw shakes repeatedly. Separately: r.5 withdraw 3's elbow stops at ~3026 of goal 3163 in every
+  play (load 1000 then 200, Overload flag): something blocks it; no gain fixes that.
+- BIMS: Keyframe.gains [{servo, p?, d?, i?}] (animation.ts cleanStepGains, ranges = POST /servos/gains:
+  P 1-64, D/I 0-254; model robot-arm-move-set.ts; moveSetSummary keeps them). buildPath carries them on the
+  marker; gainFrames() marks the frame where the move into the step starts (`gains.set`) and the frame where
+  its hold ends (`gains.restore`), one frame doing both when the next step has its own. Header gain_steps.
+  writeAndPlay refuses unless GET /gpio/status says replay_gains (an older Pi would play the normal gains
+  silently). Play audit stepGains; move_set_update audit stepGains before/after.
+- Editor (teach/moveset/[id]): Step PID grid (Base..Gripper x P D I) under the selected step; blank = normal,
+  placeholder = the servo's gain now (GET /servos/state at load, not during a play). Summary line "PID Elbow I 0".
+- Pi (services/robot-arm): replay_settle.py StepGains — reads the named servos' P/D/I before the first frame,
+  keeps them in ~/.bims-arm/step-gains.json, writes Lock 1 then the gains (RAM only, the same temporary write
+  as POST /servos/gains; no Change Log rows, the play's replay.gains run event lists every write), restores
+  at the restore frame and in `finally` (Stop, error, end). A replay that died with gains set leaves the file;
+  the next replay restores those first. A servo whose gains cannot be read is left alone. gpio.py reports
+  replay_gains (set by install()). simulate_replay_settle.py: 13 new checks pass; its old frames_plain = 2
+  check already failed on master (the recording has 4 frames) — fixed to 4.
+- NOT yet on the Pi: copying replay_settle.py + gpio.py and restarting robot-arm was refused by the
+  auto-mode classifier; commands handed to the user. Until then BIMS refuses steps with PID (409 message).
+- Not driven on the arm. Whether a lower elbow I stops the r.6 wobble is untested; Alejandro tests it.
+- Change Log: seed row animate.step_pid (scripts/seed-robot-arm-change-log.ts).
+Tests: src/lib/robot-arm/animation.test.ts 50 passed (6 new). npm run check: 13 errors / 451 warnings
+(baseline 14), none new.

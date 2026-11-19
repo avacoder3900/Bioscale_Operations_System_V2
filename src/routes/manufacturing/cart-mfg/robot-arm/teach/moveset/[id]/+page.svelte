@@ -49,6 +49,11 @@
 		MIN_PULSE_MS,
 		MIN_TRANSITION_S,
 		FIRE_TARGETS,
+		GAIN_KEYS,
+		GAIN_LIMITS,
+		JOINT_LABELS,
+		stepGainsLabel,
+		type GainKey,
 		type FireTarget,
 		type Keyframe,
 		type ResolvedKeyframe,
@@ -122,6 +127,23 @@
 		else next[key] = key === 'steps' ? Math.round(v) : Math.round(v * 10) / 10;
 		if (Object.keys(next).length) k.tolerances = next;
 		else delete k.tolerances;
+	}
+	// Step PID (2026-11-19): this step's own P / D / I per servo; a blank box keeps the normal gain.
+	const normalGains = $derived((data.normalGains ?? null) as ({ p: number | null; d: number | null; i: number | null } | null)[] | null);
+	const gainOf = (k: Keyframe, servo: number, key: GainKey) => k.gains?.find((g) => g.servo === servo)?.[key] ?? '';
+	function setGain(k: Keyframe, servo: number, key: GainKey, raw: string) {
+		const list = (k.gains ?? []).map((g) => ({ ...g }));
+		let g = list.find((x) => x.servo === servo);
+		if (!g) {
+			g = { servo };
+			list.push(g);
+		}
+		const v = raw.trim() === '' ? null : Math.round(Number(raw));
+		if (v == null || !Number.isFinite(v)) delete g[key];
+		else g[key] = clamp(v, GAIN_LIMITS[key].min, GAIN_LIMITS[key].max);
+		const kept = list.filter((x) => GAIN_KEYS.some((q) => x[q] != null)).sort((a, b) => a.servo - b.servo);
+		if (kept.length) k.gains = kept;
+		else delete k.gains;
 	}
 	function playVerified() {
 		if (!camera) return;
@@ -445,6 +467,20 @@
 								<label>Spin °<input type="number" step="0.1" min="0" max={MAX_ANGLE_DEG} value={k.tolerances?.angleDeg ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.angleDeg ?? '')} oninput={(e) => setTol(k, 'angleDeg', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
 								<label>Steps<input type="number" step="1" min="1" max={MAX_TOLERANCE_STEPS} value={k.tolerances?.steps ?? ''} placeholder={String(calFor(k.poseId)?.tolerances.steps ?? '')} oninput={(e) => setTol(k, 'steps', e.currentTarget.value)} class="{input} mt-1 w-full font-mono" style={inputStyle} /></label>
 							</div>
+							<!-- Step PID (2026-11-19): this step's own gains, from the move into it to the end of its hold. Blank = the servo's normal gain (shown greyed). -->
+							<div class="mt-2 text-[11px]" style={muted}>
+								<div class="mb-1">Step PID</div>
+								<div class="grid grid-cols-4 gap-x-2 gap-y-1">
+									<span></span>
+									{#each GAIN_KEYS as g (g)}<span class="text-center">{g.toUpperCase()}</span>{/each}
+									{#each JOINT_LABELS as joint, s (joint)}
+										<span class="self-center truncate">{joint}</span>
+										{#each GAIN_KEYS as g (g)}
+											<input type="number" step="1" min={GAIN_LIMITS[g].min} max={GAIN_LIMITS[g].max} value={gainOf(k, s + 1, g)} placeholder={String(normalGains?.[s]?.[g] ?? '')} onchange={(e) => setGain(k, s + 1, g, e.currentTarget.value)} class="{input} w-full text-center font-mono" style={inputStyle} aria-label="{joint} {g.toUpperCase()}" />
+										{/each}
+									{/each}
+								</div>
+							</div>
 							{#if k.offsets}
 								<p class="mt-1 text-[11px]" style="color: #fbbf24">
 									Adjusted On Old Timeline
@@ -452,7 +488,7 @@
 								</p>
 							{/if}
 						{:else}
-							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === firstPoseIndex ? 'Start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}</div>
+							<div class="mt-0.5 pl-7 text-[11px]" style={muted}>{i === firstPoseIndex ? 'Start' : `${k.durationS} s ${EASINGS.find((e) => e.id === k.easing)?.label.toLowerCase()}`}{k.holdS ? ` · hold ${k.holdS} s` : ''}{k.gains?.length ? ` · PID ${stepGainsLabel(k.gains)}` : ''}</div>
 						{/if}
 					</li>
 					{/if}

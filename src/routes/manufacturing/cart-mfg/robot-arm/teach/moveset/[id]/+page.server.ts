@@ -7,7 +7,19 @@ import { friendlyName, stepCountLabel, type Keyframe } from '$lib/robot-arm/anim
 import { failFrom, field, sharedAnimateActions, who } from '$lib/server/robot-arm-animate-actions';
 import { activeVerifiedRun, listPoseCalibrations } from '$lib/server/robot-arm-verified';
 import { homeStepsByCamera } from '$lib/server/robot-arm-vision';
+import { readServoRegisters } from '$lib/server/robot-arm-client';
+import { servoRegisterStates } from '$lib/robot-arm/arrival';
 import type { Actions, PageServerLoad } from './$types';
+
+/** GET /servos/state → {p, d, i} for servos 1..6 (null where a servo is missing); null when unread. */
+function servoGains(raw: unknown): ({ p: number | null; d: number | null; i: number | null } | null)[] | null {
+	const list = servoRegisterStates(raw);
+	if (!list) return null;
+	return [1, 2, 3, 4, 5, 6].map((id) => {
+		const s = list.find((x) => x.id === id);
+		return s ? { p: s.p, d: s.d, i: s.i } : null;
+	});
+}
 
 export const load: PageServerLoad = async ({ locals, params }) => {
 	if (!locals.user) redirect(302, '/login');
@@ -26,7 +38,10 @@ export const load: PageServerLoad = async ({ locals, params }) => {
 	const homeSteps = await homeStepsByCamera().catch(() => ({}));
 	// Never read the servo bus while a session owns it.
 	const arm = active ? null : await readArm().catch(() => null);
+	// Step PID (2026-11-19): each servo's gains now, shown as the placeholder of a blank box.
+	const normalGains = active || !arm ? null : servoGains((await readServoRegisters()).raw);
 	return {
+		normalGains,
 		moveSet: JSON.parse(JSON.stringify(moveSet)),
 		poses: JSON.parse(JSON.stringify(poses)),
 		armNow: arm ? JSON.parse(JSON.stringify({ positions: arm.positions, temps: arm.temps, torqueOn: arm.torqueOn })) : null,

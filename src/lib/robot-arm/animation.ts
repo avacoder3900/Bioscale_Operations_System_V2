@@ -293,6 +293,58 @@ export interface Keyframe {
 	 * holdS is the wait after the pulse; durationS and easing are unused.
 	 */
 	fire?: FireSpec;
+	/**
+	 * Step PID (2026-11-19): this step's own P / D / I for some servos, used
+	 * from the start of the move into it to the end of its hold; the Pi puts
+	 * the normal gains back after. Absent = the normal gains throughout.
+	 */
+	gains?: StepGain[];
+}
+
+/** One servo's override on a step; a missing p / d / i keeps that gain normal. */
+export interface StepGain {
+	servo: number;
+	p?: number;
+	d?: number;
+	i?: number;
+}
+
+export type GainKey = 'p' | 'd' | 'i';
+export const GAIN_KEYS: GainKey[] = ['p', 'd', 'i'];
+/** The STS3215 ranges POST /servos/gains and the Pi's replay accept. */
+export const GAIN_LIMITS: Record<GainKey, { min: number; max: number }> = { p: { min: 1, max: 64 }, d: { min: 0, max: 254 }, i: { min: 0, max: 254 } };
+export const JOINT_LABELS = ['Base', 'Shoulder', 'Elbow', 'Wrist Flex', 'Wrist Roll', 'Gripper'];
+
+/**
+ * A step's gains from a form or the DB: whole numbers in range, one entry per
+ * servo (in servo order), entries with nothing set dropped. Null when nothing
+ * is left. `step` (1-based) names the step in the error.
+ */
+export function cleanStepGains(input: unknown, step = 0): StepGain[] | null {
+	if (input == null) return null;
+	if (!Array.isArray(input)) throw new Error(`step ${step}: gains must be a list`);
+	const by = new Map<number, StepGain>();
+	for (const g of input as any[]) {
+		const servo = Math.round(Number(g?.servo));
+		if (!Number.isFinite(servo) || servo < 1 || servo > SERVO_COUNT) throw new Error(`step ${step}: gains name servo ${String(g?.servo)}, not 1–${SERVO_COUNT}`);
+		const out: StepGain = { servo };
+		for (const k of GAIN_KEYS) {
+			const raw = g?.[k];
+			if (raw == null || raw === '') continue;
+			const v = Number(raw);
+			const { min, max } = GAIN_LIMITS[k];
+			if (!Number.isInteger(v) || v < min || v > max) throw new Error(`step ${step}: ${JOINT_LABELS[servo - 1]} ${k.toUpperCase()} must be a whole number ${min}–${max}`);
+			out[k] = v;
+		}
+		if (GAIN_KEYS.some((k) => out[k] != null)) by.set(servo, { ...(by.get(servo) ?? {}), ...out });
+	}
+	const list = [...by.values()].sort((a, b) => a.servo - b.servo);
+	return list.length ? list : null;
+}
+
+/** "Elbow I 0 · Shoulder D 30" for a step's summary line. */
+export function stepGainsLabel(gains: StepGain[] | undefined | null): string {
+	return (gains ?? []).map((g) => `${JOINT_LABELS[g.servo - 1]} ${GAIN_KEYS.filter((k) => g[k] != null).map((k) => `${k.toUpperCase()} ${g[k]}`).join(' ')}`).join(' · ');
 }
 
 export interface ResolvedKeyframe extends Keyframe {
@@ -317,6 +369,8 @@ export interface PathMarker {
 	poseId?: string;
 	/** kind 'fire': the solenoid fired at `t` (holdS is pulse + wait). */
 	fire?: FireSpec & { pin: number };
+	/** The step's own gains, from the move into it to the end of its hold. */
+	gains?: StepGain[];
 }
 
 export interface RenderedPath {
@@ -398,6 +452,8 @@ export function cleanKeyframes(input: unknown): Keyframe[] {
 		if (k?.verify === true || k?.verify === false) out.verify = k.verify;
 		const tol = cleanToleranceOverride(k?.tolerances);
 		if (tol) out.tolerances = tol;
+		const gains = cleanStepGains(k?.gains, i + 1);
+		if (gains) out.gains = gains;
 		return out;
 	});
 }
@@ -457,6 +513,7 @@ interface Node {
 	index: number;
 	poseId?: string;
 	fire?: FireSpec & { pin: number };
+	gains?: StepGain[];
 }
 
 export interface BuildOptions {
@@ -490,7 +547,8 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		label: k.name,
 		kind: (k as any).kind === 'join' ? 'join' : 'pose',
 		index,
-		poseId: k.poseId
+		poseId: k.poseId,
+		...(k.gains?.length ? { gains: k.gains } : {})
 	});
 	const first = kfs.find((k) => !k.fire) ?? null;
 	const from = o.leadIn && o.leadIn.from.length === SERVO_COUNT ? o.leadIn.from : null;
@@ -585,7 +643,8 @@ export function buildPath(kfs: ResolvedKeyframe[], o: BuildOptions = {}): Render
 		holdS: nd.holdS,
 		positions: nd.positions.map(clampStep),
 		...(nd.poseId ? { poseId: nd.poseId } : {}),
-		...(nd.fire ? { fire: nd.fire } : {})
+		...(nd.fire ? { fire: nd.fire } : {}),
+		...(nd.gains ? { gains: nd.gains } : {})
 	}));
 	return { rateHz: rate, t: tOut, goal, markers, durationS: round4(total) };
 }
@@ -715,11 +774,45 @@ export function fireFrames(p: RenderedPath): FireFlag[] {
 		});
 }
 
+/** What a frame's `gains` carries to the Pi: put the normal gains back first, then set these. */
+export interface GainFlag {
+	restore?: true;
+	set?: { id: number; p?: number; d?: number; i?: number }[];
+}
+
+/**
+ * The frames where step gains switch (2026-11-19): a step with gains sets
+ * them on the frame where the move into it starts (the previous node's
+ * departure; frame 0 for the first) and asks for the normal ones back on the
+ * frame where its hold ends. When the next step starts on that same frame
+ * with its own gains, one frame carries both (restore, then set). The Pi also
+ * restores at the end of every play.
+ */
+export function gainFrames(p: RenderedPath): Map<number, GainFlag> {
+	const last = p.goal.length - 1;
+	const frameOf = (t: number) => Math.max(0, Math.min(last, Math.round(t * p.rateHz)));
+	const out = new Map<number, GainFlag>();
+	const at = (f: number) => out.get(f) ?? (out.set(f, {}), out.get(f)!);
+	p.markers.forEach((m, i) => {
+		if (!m.gains?.length) return;
+		const prev = p.markers[i - 1];
+		const start = frameOf(prev ? prev.t + prev.holdS : 0);
+		const end = frameOf(m.t + m.holdS);
+		const s = at(start);
+		s.set = [...(s.set ?? []), ...m.gains.map((g) => ({ id: g.servo, ...(g.p != null ? { p: g.p } : {}), ...(g.d != null ? { d: g.d } : {}), ...(g.i != null ? { i: g.i } : {}) }))];
+		if (end > start) at(end).restore = true;
+	});
+	// A restore that lands on a frame that also sets (the next step starts there) runs first on the Pi.
+	return out;
+}
+
 /** The dense path as a recording the Pi replays (header / frame / footer JSONL). */
-export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jsonl: string; frames: number; durationS: number; fires: number } {
+export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jsonl: string; frames: number; durationS: number; fires: number; gainSteps: number } {
 	const lines: string[] = [];
 	const fires = fireFrames(p);
 	const fireAt = new Map(fires.map((f) => [f.frame, f]));
+	const gainAt = gainFrames(p);
+	const gainSteps = p.markers.filter((m) => m.gains?.length).length;
 	lines.push(
 		JSON.stringify({
 			...(o.extras ?? {}),
@@ -735,18 +828,23 @@ export function composeAnimationJsonl(p: RenderedPath, o: ComposeOptions): { jso
 			hold_at_end: true,
 			// How many frames fire a solenoid. BIMS plays a path with fires only on
 			// a Pi whose replay can fire them (GET /gpio/status → replay_fire).
-			...(fires.length ? { fires: fires.length } : {})
+			...(fires.length ? { fires: fires.length } : {}),
+			// How many steps carry their own gains. BIMS plays them only on a Pi whose
+			// replay sets them (GET /gpio/status → replay_gains).
+			...(gainSteps ? { gain_steps: gainSteps } : {})
 		})
 	);
 	for (let i = 0; i < p.goal.length; i++) {
 		const fire = fireAt.get(i);
+		const gains = gainAt.get(i);
 		// Plain frames only: no "settle" flags, so the Pi replays the goals exactly (2026-11-06).
 		const frame: Record<string, unknown> = { event: 'frame', t: p.t[i], goal: p.goal[i] };
 		if (fire) frame.fire = { pin: fire.pin, ms: fire.ms, solenoid: fire.solenoid, ...scanFields(fire) };
+		if (gains) frame.gains = gains;
 		lines.push(JSON.stringify(frame));
 	}
 	lines.push(JSON.stringify({ event: 'footer', duration_s: p.durationS, frames: p.goal.length }));
-	return { jsonl: lines.join('\n') + '\n', frames: p.goal.length, durationS: p.durationS, fires: fires.length };
+	return { jsonl: lines.join('\n') + '\n', frames: p.goal.length, durationS: p.durationS, fires: fires.length, gainSteps };
 }
 
 export function cleanAnimationName(name: string): string | null {
