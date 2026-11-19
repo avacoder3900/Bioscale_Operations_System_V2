@@ -253,7 +253,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 	const selected = kind === 'calibrator' ? '' : (url.searchParams.get('deck')?.trim() || (optionsForKind[0]?.loadName ?? ''));
 	const slot = SLOT_FOR_KIND[kind] ?? '1';
 
-	let wells: { name: string; x: number; y: number; z: number }[] = [];
+	let wells: { name: string; x: number; y: number; z: number; depth: number }[] = [];
 	let dimensions = { x: 0, y: 0, z: 0 };
 	let history: any[] = [];
 	let editedWells: string[] = [];
@@ -267,7 +267,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 			name,
 			x: Number(wmap[name]?.x ?? 0),
 			y: Number(wmap[name]?.y ?? 0),
-			z: Number(wmap[name]?.z ?? 0)
+			z: Number(wmap[name]?.z ?? 0),
+			// Rack tabs park Move To Hole above the hole by a height that clears the rim.
+			depth: Number(wmap[name]?.depth ?? 0)
 		}));
 		const hist = await deckEditHistory(selected, 200);
 		editedWells = Array.from(new Set(hist.map((h: any) => h.wellName)));

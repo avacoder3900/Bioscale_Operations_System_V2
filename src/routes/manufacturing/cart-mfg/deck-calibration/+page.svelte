@@ -15,7 +15,7 @@
 
 	let { data } = $props();
 
-	type Well = { name: string; x: number; y: number; z: number };
+	type Well = { name: string; x: number; y: number; z: number; depth?: number };
 
 	type LwOpt = { loadName: string; namespace: string; version: number };
 	const decks = $derived(data.decks as LwOpt[]);
@@ -77,10 +77,37 @@
 	 * (2026-11-19: the grid showed the bare definition and the panel deck mm, and
 	 * they never agreed).
 	 */
-	function shownPos(w: { x: number; y: number; z: number }): Vec3 {
+	function framePos(w: { x: number; y: number; z: number }): Vec3 {
 		if (!isRack) return { x: w.x, y: w.y, z: w.z };
 		const v = rackVector;
 		return { x: +(w.x + v.x).toFixed(3), y: +(w.y + v.y).toFixed(3), z: +(w.z + v.z).toFixed(3) };
+	}
+	/**
+	 * The numbers shown to the operator. On a rack tab these are DECK mm, the same
+	 * frame the JOG panel reads (2026-11-19: A3 read y 73 against the jog's 344.5):
+	 * the OT-2 slot origin (slot 10 = y 271.5) + the shared definition + this robot's
+	 * offset, exactly how the robot places the rack. framePos (the rack's own frame)
+	 * is only for drawing on the canvas. Decks sit in slot 1, whose origin is zero.
+	 */
+	function shownPos(w: { x: number; y: number; z: number }): Vec3 {
+		const p = framePos(w);
+		if (!isRack) return p;
+		const o = rackStdOrigin();
+		return { x: +(o.x + p.x).toFixed(3), y: +(o.y + p.y).toFixed(3), z: +(o.z + p.z).toFixed(3) };
+	}
+	function rackStdOrigin(): Vec3 {
+		return OT2_SLOT_ORIGIN[String(data.rackSlot ?? data.slot ?? '')] ?? ZERO3;
+	}
+	/**
+	 * How far above a rack hole's Z (its bottom) Move To Hole parks the tip: 40 mm
+	 * on the tube racks (the tube is 38.6 / 39.3 mm deep, so the tip is just over
+	 * the rim), and the first whole mm 2 mm over the rim on a rack deeper than that
+	 * (tip racks: 45.7 / 52.6 mm), so a tip is never driven into the rack.
+	 */
+	const RACK_PARK_MM = 40;
+	function rackParkMm(w: Well): number {
+		const depth = Number(w.depth ?? 0);
+		return depth + 2 <= RACK_PARK_MM || !Number.isFinite(depth) ? RACK_PARK_MM : Math.ceil(depth + 2);
 	}
 	/**
 	 * Where a rack's slot sits on the OT-2 deck (ot2_standard: columns 0 / 132.5 /
@@ -97,21 +124,6 @@
 		'7': { x: 0, y: 181, z: 0 }, '8': { x: 132.5, y: 181, z: 0 }, '9': { x: 265, y: 181, z: 0 },
 		'10': { x: 0, y: 271.5, z: 0 }, '11': { x: 132.5, y: 271.5, z: 0 }, '12': { x: 265, y: 271.5, z: 0 }
 	};
-	/**
-	 * The selected rack's slot origin in deck mm: the run-learned one when there is
-	 * one, else the standard slot. The run-learned slotOrigin is measured against
-	 * the rack AS LOADED, which already carries this robot's offset (the maintenance
-	 * verb registers it before loadLabware), so that offset is taken back out here.
-	 * Before 2026-11-19 it was not, and Set Position counted the offset twice after
-	 * any Move To Hole.
-	 */
-	function rackOriginNow(): Vec3 {
-		if (slotOrigin) {
-			const v = loadedRackVector;
-			return { x: +(slotOrigin.x - v.x).toFixed(3), y: +(slotOrigin.y - v.y).toFixed(3), z: +(slotOrigin.z - v.z).toFixed(3) };
-		}
-		return OT2_SLOT_ORIGIN[String(data.rackSlot ?? data.slot ?? '')] ?? ZERO3;
-	}
 
 	/**
 	 * The tip-probe adjust applies to CARTRIDGE HOLES only. Every fill protocol
@@ -370,7 +382,7 @@
 		if (!hover || !wells.length) return null;
 		let best: Well | null = null, bestD = Infinity;
 		for (const w of wells) {
-			const p = shownPos(w);
+			const p = framePos(w);
 			const ddx = p.x - hover.x, ddy = p.y - hover.y, d = ddx * ddx + ddy * ddy;
 			if (d < bestD) { bestD = d; best = w; }
 		}
@@ -387,7 +399,7 @@
 		const y0 = Math.min(boxStart.y, boxNow.y), y1 = Math.max(boxStart.y, boxNow.y);
 		const moved = Math.abs(x1 - x0) > 1 || Math.abs(y1 - y0) > 1;
 		if (moved) {
-			const hits = wells.filter((w) => { const p = shownPos(w); return isActiveRole(w.name) && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1; }).map((w) => w.name);
+			const hits = wells.filter((w) => { const p = framePos(w); return isActiveRole(w.name) && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1; }).map((w) => w.name);
 			if (deselectMode) {
 				// Deselect mode: a box REMOVES the boxed holes from the selection.
 				const next = new Set(selection);
@@ -583,24 +595,25 @@
 
 	// The jog readback is the critical point parked APPROACH_Z_MM over the hole top
 	// (moveToWellSafe), so Z comes back down by that much to read in the same frame.
-	// The jog readback is in deck mm; the rack frame is deck mm minus this robot's slot
-	// origin, which is only known exactly after a Move To Hole in this run.
+	// The jog readback and Hole Position are both deck mm. Z: Move To Hole parks
+	// rackParkMm above the hole, so the hole is the tip's Z minus that.
 	async function useCurrentPosition() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
-		if (!slotOrigin) { errMsg = 'Move To Hole first'; return; }
+		const w = wellByName.get(hpHole);
+		if (!w) { errMsg = 'Pick a hole'; return; }
 		await refreshPosition();
 		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Position read failed'; return; }
-		const o = rackOriginNow();
-		hpX = +(liveX - o.x).toFixed(3);
-		hpY = +(liveY - o.y).toFixed(3);
-		hpZ = +(liveZ - APPROACH_Z_MM - o.z).toFixed(3);
+		hpX = +liveX.toFixed(2);
+		hpY = +liveY.toFixed(2);
+		hpZ = +(liveZ - rackParkMm(w)).toFixed(2);
 	}
 
 	async function saveHolePosition() {
 		const w = wellByName.get(hpHole);
 		if (!w) { errMsg = 'Pick a hole'; return; }
 		if (![hpX, hpY, hpZ].every((n) => Number.isFinite(Number(n)))) { errMsg = 'X, Y and Z must be numbers'; return; }
-		const v = { x: +(Number(hpX) - w.x).toFixed(3), y: +(Number(hpY) - w.y).toFixed(3), z: +(Number(hpZ) - w.z).toFixed(3) };
+		const o = rackStdOrigin();
+		const v = { x: +(Number(hpX) - o.x - w.x).toFixed(3), y: +(Number(hpY) - o.y - w.y).toFixed(3), z: +(Number(hpZ) - o.z - w.z).toFixed(3) };
 		if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position unchanged'; return; }
 		await saveRackOffsetFor(v, 'absolute', `hole ${hpHole} → (${hpX}, ${hpY}, ${hpZ})`);
 	}
@@ -694,7 +707,8 @@
 			// absolute set, not a delta. The origin is the run-learned one when a
 			// Move to hole has happened in this run (exact for this robot), else the
 			// standard OT-2 slot.
-			const v = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
+			const o = rackStdOrigin();
+			const v = { x: +(setX - o.x - a.x).toFixed(3), y: +(setY - o.y - a.y).toFixed(3), z: +(setZ - o.z - a.z).toFixed(3) };
 			if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position equals current — nothing to change'; return; }
 			await saveRackOffsetFor(v, 'absolute', `set ${aName} → (${setX}, ${setY}, ${setZ})`);
 			return;
@@ -1052,6 +1066,28 @@
 	async function moveToWellSafe(name: string): Promise<void> {
 		const lid = await ensureDeckLoaded();
 		const { x: ax, y: ay } = moveAdjust();
+
+		if (isRack) {
+			// A rack hole goes exactly where Hole Position says (deck mm, this robot's
+			// current offset), with the tip rackParkMm above its Z: one absolute move,
+			// so a just-saved offset needs no reload and the JOG panel then reads the
+			// same X / Y and Z + 40 (2026-11-19). The run-learned origin follows the
+			// same numbers so Tour / Fill motion stay in step.
+			const w = wellByName.get(name);
+			if (!w) throw new Error(`Unknown well ${name}`);
+			const p = shownPos(w);
+			const park = rackParkMm(w);
+			await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
+				method: 'POST',
+				body: JSON.stringify({ pipetteId, x: p.x, y: p.y, z: +(p.z + park).toFixed(3), minimumZHeight: Math.max(safeArcZ, +(p.z + park).toFixed(3)), forceDirect: false })
+			});
+			const o = rackStdOrigin();
+			loadedRackVector = { ...rackVector };
+			// z as the deck path learns it: origin + offset + the hole depth (fill motion adds aboveTop to that).
+			slotOrigin = { x: o.x + rackVector.x, y: o.y + rackVector.y, z: o.z + rackVector.z + Number(w.depth ?? 0) };
+			void lid;
+			return;
+		}
 
 		if (slotOrigin) {
 			// Absolute move from LIVE coords → reflects edits instantly, tip-independent.
@@ -1880,7 +1916,7 @@
 				<label>Y (mm) <input type="number" step="0.1" bind:value={hpY} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<label>Z (mm) <input type="number" step="0.1" bind:value={hpZ} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<button type="button" onclick={moveToHolePosition} disabled={busy || !pipetteId || !hpHole} class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Move To Hole</button>
-				<button type="button" onclick={useCurrentPosition} disabled={busy || !pipetteId || !slotOrigin} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-40" style="color: var(--color-tron-text)">Use Current Position</button>
+				<button type="button" onclick={useCurrentPosition} disabled={busy || !pipetteId} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-40" style="color: var(--color-tron-text)">Use Current Position</button>
 				<button type="button" onclick={saveHolePosition} disabled={busy || !hpHole || !hpChanged} class="rounded border border-green-500/50 bg-green-900/20 px-3 py-1.5 font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save Hole Position</button>
 			</div>
 		</section>
@@ -1908,7 +1944,7 @@
 						<span class="text-[11px]" style="color: var(--color-tron-text-secondary)" title="The canvas draws the shared definition, which every robot loads. The selected robot's offset is added on top when its rack is loaded.">shared definition (every robot) · {robot?.name ?? 'robot'} adds <span class="font-mono">{fmtVec(rackVector)}</span> at load</span>
 					{/if}
 					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's calibrated height">
-						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.pos.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover deck for coords</span>{/if}
+						{#if hover}x {(hover.x + (isRack ? rackStdOrigin().x : 0)).toFixed(2)}  y {(hover.y + (isRack ? rackStdOrigin().y : 0)).toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.pos.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover deck for coords</span>{/if}
 					</span>
 				</div>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
@@ -1961,9 +1997,10 @@
 							{@const sel = selection.has(w.name)}
 							{@const active = isActiveRole(w.name)}
 							{@const role = kind === 'tube' ? null : roleOf(w.name)}
+							{@const fp = framePos(w)}
 							{@const sp = shownPos(w)}
 							<circle
-								cx={sp.x} cy={cy(sp.y)} r={wellR}
+								cx={fp.x} cy={cy(fp.y)} r={wellR}
 								fill={!active
 									? 'rgba(120,140,160,0.10)'
 									: sel
@@ -1987,7 +2024,7 @@
 						{#each wells as w (`issue-${w.name}`)}
 							{@const n = issueByWell.get(w.name)?.length ?? 0}
 							{#if n > 0}
-								{@const ip = shownPos(w)}
+								{@const ip = framePos(w)}
 								<circle cx={ip.x} cy={cy(ip.y)} r={wellR + 0.9} fill="none" stroke={n > 1 ? '#ef4444' : '#f87171'} stroke-width={n > 1 ? 0.6 : 0.4} style="pointer-events:none;" />
 							{/if}
 						{/each}
