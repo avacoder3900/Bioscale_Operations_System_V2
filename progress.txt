@@ -28228,3 +28228,8 @@ Alejandro: "We do not like the wobble when r.6 withdraw is played after r.5 with
 - Change Log: seed row animate.step_pid (scripts/seed-robot-arm-change-log.ts).
 Tests: src/lib/robot-arm/animation.test.ts 50 passed (6 new). npm run check: 13 errors / 451 warnings
 (baseline 14), none new.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/EwWFpthDCiSwumtJijGqy6R8ZeED
+Source: branch feat/arm-step-pid @ commit 53912163 (fast-forward of master)
+Retrieve this exact code: git checkout feat/arm-step-pid at commit 53912163
+  (or: git log feat/arm-step-pid --oneline to find it if the branch has since moved on)
+What this deployment is for: Step PID on Move Set steps (Pi files still to install by hand).
