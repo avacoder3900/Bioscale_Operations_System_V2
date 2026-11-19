@@ -28332,3 +28332,11 @@ Tests: run-lifecycle-records + rack-offsets 51 passed (1 new). npm run check: 15
   tip-cursor.ts: setManualNextTip / clearManualTip; nextStudioTipWell returns source 'manual' first. Run start sends
   bims_tip_exact = true for a manual cursor (both stage .py declare it) and clears the flag after the run starts.
 Tests: declared-params + run-lifecycle-records 45 passed. npm run check: 15 errors, same as master.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/Hw1KBsvMBHaDzBvNSGx7aruGaoz6
+Source: branch fix/tube-rack-hole-position @ commit 36744401 (fast-forward of master)
+What this deployment is for: BIMS tip cursor sent at run start (bims_next_tip_index).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/5Jd7fduKz8z33nooek5inMWYtkSc
+Source: branch fix/tube-rack-hole-position @ commit b1c19724 (fast-forward of master)
+Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit b1c19724
+  (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
+What this deployment is for: Run tab Next Tip, bims_tip_exact, stage Deploy RTP guard.
