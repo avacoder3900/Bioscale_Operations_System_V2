@@ -28222,7 +28222,7 @@ Alejandro: "We do not like the wobble when r.6 withdraw is played after r.5 with
   the next replay restores those first. A servo whose gains cannot be read is left alone. gpio.py reports
   replay_gains (set by install()). simulate_replay_settle.py: 13 new checks pass; its old frames_plain = 2
   check already failed on master (the recording has 4 frames) — fixed to 4.
-- NOT yet on the Pi: copying replay_settle.py + gpio.py and restarting robot-arm was refused by the
+- Pi install: first refused by the auto-mode classifier, then done on the user's go (below).
   auto-mode classifier; commands handed to the user. Until then BIMS refuses steps with PID (409 message).
 - Not driven on the arm. Whether a lower elbow I stops the r.6 wobble is untested; Alejandro tests it.
 - Change Log: seed row animate.step_pid (scripts/seed-robot-arm-change-log.ts).
@@ -28233,3 +28233,6 @@ Source: branch feat/arm-step-pid @ commit 53912163 (fast-forward of master)
 Retrieve this exact code: git checkout feat/arm-step-pid at commit 53912163
   (or: git log feat/arm-step-pid --oneline to find it if the branch has since moved on)
 What this deployment is for: Step PID on Move Set steps (Pi files still to install by hand).
+Pi install (2026-11-19T15:56:00Z, user's go): replay_settle.py + gpio.py copied to arm-pi (md5 match the repo), backups
+*.bak-pre-step-pid-20261119, robot-arm restarted with /sessions/active null. GET /gpio/status now
+replay_fire true, replay_gains true. Change Log seed row pi.replay_step_gains.
