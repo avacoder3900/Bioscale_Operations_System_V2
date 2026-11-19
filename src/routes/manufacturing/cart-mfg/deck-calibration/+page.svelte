@@ -70,6 +70,19 @@
 	const rackLabel = $derived(kind === 'tip' ? 'tip rack' : 'tube rack');
 	const fmtVec = (v: Vec3) => `(${v.x}, ${v.y}, ${v.z})`;
 	/**
+	 * Where a hole IS for this robot and line, in the rack's own frame: the shared
+	 * definition + this robot's offset (racks), or the hole as stored (decks). The
+	 * grid, its tooltips and hover readout, the Hole Position panel and Set Position
+	 * all show this one number, so a saved offset moves all of them at once
+	 * (2026-11-19: the grid showed the bare definition and the panel deck mm, and
+	 * they never agreed).
+	 */
+	function shownPos(w: { x: number; y: number; z: number }): Vec3 {
+		if (!isRack) return { x: w.x, y: w.y, z: w.z };
+		const v = rackVector;
+		return { x: +(w.x + v.x).toFixed(3), y: +(w.y + v.y).toFixed(3), z: +(w.z + v.z).toFixed(3) };
+	}
+	/**
 	 * Where a rack's slot sits on the OT-2 deck (ot2_standard: columns 0 / 132.5 /
 	 * 265 mm, rows 0 / 90.5 / 181 / 271.5 mm). A rack's wells are defined in the
 	 * LABWARE frame, so a deck-mm position (what the operator reads off the jog
@@ -357,10 +370,11 @@
 		if (!hover || !wells.length) return null;
 		let best: Well | null = null, bestD = Infinity;
 		for (const w of wells) {
-			const ddx = w.x - hover.x, ddy = w.y - hover.y, d = ddx * ddx + ddy * ddy;
+			const p = shownPos(w);
+			const ddx = p.x - hover.x, ddy = p.y - hover.y, d = ddx * ddx + ddy * ddy;
 			if (d < bestD) { bestD = d; best = w; }
 		}
-		return best ? { well: best, dist: Math.sqrt(bestD) } : null;
+		return best ? { well: best, pos: shownPos(best), dist: Math.sqrt(bestD) } : null;
 	});
 
 	function onCanvasPointerMove(e: PointerEvent) {
@@ -373,7 +387,7 @@
 		const y0 = Math.min(boxStart.y, boxNow.y), y1 = Math.max(boxStart.y, boxNow.y);
 		const moved = Math.abs(x1 - x0) > 1 || Math.abs(y1 - y0) > 1;
 		if (moved) {
-			const hits = wells.filter((w) => isActiveRole(w.name) && w.x >= x0 && w.x <= x1 && w.y >= y0 && w.y <= y1).map((w) => w.name);
+			const hits = wells.filter((w) => { const p = shownPos(w); return isActiveRole(w.name) && p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1; }).map((w) => w.name);
 			if (deselectMode) {
 				// Deselect mode: a box REMOVES the boxed holes from the selection.
 				const next = new Set(selection);
@@ -414,9 +428,7 @@
 			// origin was left out: the field prefilled with the labware-frame well
 			// (x 14 for H1), the operator typed the deck x (146), and the "offset"
 			// came out one slot width (132 mm) — rejected by the ±10 mm bound.
-			const v = isRack ? rackVector : ZERO3;
-			const o = isRack ? rackOriginNow() : ZERO3;
-			if (w) { setX = +(o.x + w.x + v.x).toFixed(3); setY = +(o.y + w.y + v.y).toFixed(3); setZ = +(o.z + w.z + v.z).toFixed(3); }
+			if (w) { const p = shownPos(w); setX = p.x; setY = p.y; setZ = p.z; }
 		}
 	});
 
@@ -545,10 +557,7 @@
 	});
 	function holeRunPosition(name: string): Vec3 | null {
 		const w = wellByName.get(name);
-		if (!w) return null;
-		const o = rackOriginNow();
-		const v = rackVector;
-		return { x: +(o.x + w.x + v.x).toFixed(2), y: +(o.y + w.y + v.y).toFixed(2), z: +(o.z + w.z + v.z).toFixed(2) };
+		return w ? shownPos(w) : null;
 	}
 	const hpRun = $derived(isRack && hpHole ? holeRunPosition(hpHole) : null);
 	// Refill the boxes whenever the hole or where it lands changes (a save, a revert, a Move To Hole).
@@ -574,21 +583,24 @@
 
 	// The jog readback is the critical point parked APPROACH_Z_MM over the hole top
 	// (moveToWellSafe), so Z comes back down by that much to read in the same frame.
+	// The jog readback is in deck mm; the rack frame is deck mm minus this robot's slot
+	// origin, which is only known exactly after a Move To Hole in this run.
 	async function useCurrentPosition() {
 		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!slotOrigin) { errMsg = 'Move To Hole first'; return; }
 		await refreshPosition();
 		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Position read failed'; return; }
-		hpX = +liveX.toFixed(2);
-		hpY = +liveY.toFixed(2);
-		hpZ = +(liveZ - APPROACH_Z_MM).toFixed(2);
+		const o = rackOriginNow();
+		hpX = +(liveX - o.x).toFixed(3);
+		hpY = +(liveY - o.y).toFixed(3);
+		hpZ = +(liveZ - APPROACH_Z_MM - o.z).toFixed(3);
 	}
 
 	async function saveHolePosition() {
 		const w = wellByName.get(hpHole);
 		if (!w) { errMsg = 'Pick a hole'; return; }
 		if (![hpX, hpY, hpZ].every((n) => Number.isFinite(Number(n)))) { errMsg = 'X, Y and Z must be numbers'; return; }
-		const o = rackOriginNow();
-		const v = { x: +(Number(hpX) - o.x - w.x).toFixed(3), y: +(Number(hpY) - o.y - w.y).toFixed(3), z: +(Number(hpZ) - o.z - w.z).toFixed(3) };
+		const v = { x: +(Number(hpX) - w.x).toFixed(3), y: +(Number(hpY) - w.y).toFixed(3), z: +(Number(hpZ) - w.z).toFixed(3) };
 		if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position unchanged'; return; }
 		await saveRackOffsetFor(v, 'absolute', `hole ${hpHole} → (${hpX}, ${hpY}, ${hpZ})`);
 	}
@@ -652,7 +664,9 @@
 		if (isRack) {
 			// Whole rack, this robot only — the selection is irrelevant (CALIB-5).
 			if (dx === 0 && dy === 0 && dz === 0) { errMsg = 'Capture or enter a non-zero offset'; return; }
-			await saveRackOffsetFor({ x: dx, y: dy, z: dz }, 'delta', `offset (${dx}, ${dy}, ${dz})`);
+			// Clear on success: the vector is cumulative, so a second Apply of the same
+			// capture doubled it (B07 arm tube, 2026-11-19 18:05).
+			if (await saveRackOffsetFor({ x: dx, y: dy, z: dz }, 'delta', `offset (${dx}, ${dy}, ${dz})`)) { dx = 0; dy = 0; dz = 0; }
 			return;
 		}
 		if (selection.size === 0) { errMsg = 'Select at least one hole'; return; }
@@ -680,10 +694,9 @@
 			// absolute set, not a delta. The origin is the run-learned one when a
 			// Move to hole has happened in this run (exact for this robot), else the
 			// standard OT-2 slot.
-			const o = rackOriginNow();
-			const v = { x: +(setX - o.x - a.x).toFixed(3), y: +(setY - o.y - a.y).toFixed(3), z: +(setZ - o.z - a.z).toFixed(3) };
+			const v = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
 			if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position equals current — nothing to change'; return; }
-			await saveRackOffsetFor(v, 'absolute', `set ${aName} → (${setX}, ${setY}, ${setZ})${slotOrigin ? '' : ' (standard slot origin)'}`);
+			await saveRackOffsetFor(v, 'absolute', `set ${aName} → (${setX}, ${setY}, ${setZ})`);
 			return;
 		}
 		const d = { x: +(setX - a.x).toFixed(3), y: +(setY - a.y).toFixed(3), z: +(setZ - a.z).toFixed(3) };
@@ -1867,12 +1880,9 @@
 				<label>Y (mm) <input type="number" step="0.1" bind:value={hpY} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<label>Z (mm) <input type="number" step="0.1" bind:value={hpZ} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
 				<button type="button" onclick={moveToHolePosition} disabled={busy || !pipetteId || !hpHole} class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Move To Hole</button>
-				<button type="button" onclick={useCurrentPosition} disabled={busy || !pipetteId} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-40" style="color: var(--color-tron-text)">Use Current Position</button>
+				<button type="button" onclick={useCurrentPosition} disabled={busy || !pipetteId || !slotOrigin} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-40" style="color: var(--color-tron-text)">Use Current Position</button>
 				<button type="button" onclick={saveHolePosition} disabled={busy || !hpHole || !hpChanged} class="rounded border border-green-500/50 bg-green-900/20 px-3 py-1.5 font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save Hole Position</button>
 			</div>
-			{#if hpRun}
-				<div class="mt-1.5 font-mono text-[11px]" style="color: var(--color-tron-text-secondary)">Run Goes To {hpHole}: X {hpRun.x} · Y {hpRun.y} · Z {hpRun.z}{slotOrigin ? '' : ' · Standard Slot Origin'}</div>
-			{/if}
 		</section>
 	{/if}
 
@@ -1898,7 +1908,7 @@
 						<span class="text-[11px]" style="color: var(--color-tron-text-secondary)" title="The canvas draws the shared definition, which every robot loads. The selected robot's offset is added on top when its rack is loaded.">shared definition (every robot) · {robot?.name ?? 'robot'} adds <span class="font-mono">{fmtVec(rackVector)}</span> at load</span>
 					{/if}
 					<span class="font-mono text-[11px]" style="color: var(--color-tron-cyan)" title="Cursor position in deck mm; z is the nearest hole's calibrated height">
-						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.well.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover deck for coords</span>{/if}
+						{#if hover}x {hover.x.toFixed(2)}  y {hover.y.toFixed(2)}{#if hoverNearest}  ·  {hoverNearest.well.name} z {hoverNearest.pos.z.toFixed(2)} ({hoverNearest.dist.toFixed(1)}mm){/if}{:else}<span style="color: var(--color-tron-text-secondary)">hover deck for coords</span>{/if}
 					</span>
 				</div>
 				<div class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
@@ -1951,8 +1961,9 @@
 							{@const sel = selection.has(w.name)}
 							{@const active = isActiveRole(w.name)}
 							{@const role = kind === 'tube' ? null : roleOf(w.name)}
+							{@const sp = shownPos(w)}
 							<circle
-								cx={w.x} cy={cy(w.y)} r={wellR}
+								cx={sp.x} cy={cy(sp.y)} r={wellR}
 								fill={!active
 									? 'rgba(120,140,160,0.10)'
 									: sel
@@ -1970,13 +1981,14 @@
 								onpointerdown={(e) => { e.stopPropagation(); }}
 								onclick={(e) => { e.stopPropagation(); toggleWell(w.name, e.shiftKey || e.ctrlKey || e.metaKey); }}
 								role="button" tabindex="-1"
-							><title>{w.name}{role ? ` (${role})` : ''} — x {w.x.toFixed(2)} y {w.y.toFixed(2)} z {w.z.toFixed(2)}{issueTitle(w.name)}</title></circle>
+							><title>{w.name}{role ? ` (${role})` : ''} — x {sp.x.toFixed(2)} y {sp.y.toFixed(2)} z {sp.z.toFixed(2)}{issueTitle(w.name)}</title></circle>
 						{/each}
 						<!-- Fill-mistake rings (reagent run-page well tracker), drawn over the dots. -->
 						{#each wells as w (`issue-${w.name}`)}
 							{@const n = issueByWell.get(w.name)?.length ?? 0}
 							{#if n > 0}
-								<circle cx={w.x} cy={cy(w.y)} r={wellR + 0.9} fill="none" stroke={n > 1 ? '#ef4444' : '#f87171'} stroke-width={n > 1 ? 0.6 : 0.4} style="pointer-events:none;" />
+								{@const ip = shownPos(w)}
+								<circle cx={ip.x} cy={cy(ip.y)} r={wellR + 0.9} fill="none" stroke={n > 1 ? '#ef4444' : '#f87171'} stroke-width={n > 1 ? 0.6 : 0.4} style="pointer-events:none;" />
 							{/if}
 						{/each}
 						{#if boxRect}
@@ -2322,9 +2334,7 @@
 	<!-- Set absolute position (selection, anchor-translate) -->
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Set position → selection</h2>
-		{#if isRack}
-			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm, as the jog panel reads them) where the <strong>anchor</strong> hole should land on <strong>{robot?.name ?? 'this robot'}</strong>. Prefilled with where it lands now (slot {data.rackSlot ?? data.slot} origin + shared definition + {robot?.name ?? 'the robot'}'s offset {fmtVec(rackVector)}); the whole {rackLabel} moves with it, and the saved offset becomes typed − slot origin − shared definition.{#if !slotOrigin} Before a Move to hole in this run the slot origin is the standard OT-2 one; after one it is this robot's own.{/if}</p>
-		{:else}
+		{#if !isRack}
 			<p class="mt-1 text-[10px]" style="color: var(--color-tron-text-secondary)">Type an EXACT x/y/z (deck mm) for the <strong>anchor</strong> hole — not a change. With several holes selected, the whole group translates by the same delta (relative spacing preserved). Prefilled with the anchor's current coords; edit and apply.</p>
 		{/if}
 		<div class="mt-1 text-[10px] font-mono" style="color: var(--color-tron-text-secondary)">
