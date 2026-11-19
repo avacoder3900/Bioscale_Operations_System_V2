@@ -28270,3 +28270,15 @@ Source: branch fix/tube-rack-hole-position @ commit 3e3dc910 (fast-forward of ma
 Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit 3e3dc910
   (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
 What this deployment is for: arm line's own Tube Rack 10 / Tip Rack 11 pages, Hole Position panel, Studio rack moves without the tip adjust.
+
+================================================================================
+2026-11-19 — fix/tube-rack-hole-position — Hole Position and the rack grid show the same position
+================================================================================
+User report: after applying an offset on the arm Tube Rack 10 page (B07), Hole Position did not reflect it and
+disagreed with the grid. Cause: the grid drew/labelled holes at the bare shared definition (never moves with a
+per-robot offset); Hole Position showed deck mm (slot origin + definition + offset). Fix (deck-calibration/
++page.svelte, commit 28cd11ed): shownPos() = definition + this robot's offset (racks) drives the grid circles,
+tooltips, hover readout, box select, Hole Position and Set Position, all in the rack frame; saves move them all.
+Use Current Position = live - run-learned slot origin, enabled after a Move To Hole. Rack Apply clears dx/dy/dz
+after a save (the 18:05 save repeated the 18:00 capture and doubled the arm tube vector to (-5, 0, 5.5); left as
+is for the operator to Revert or re-teach). npm run check: 15 errors, same as master.
