@@ -28236,3 +28236,32 @@ What this deployment is for: Step PID on Move Set steps (Pi files still to insta
 Pi install (2026-11-19T15:56:00Z, user's go): replay_settle.py + gpio.py copied to arm-pi (md5 match the repo), backups
 *.bak-pre-step-pid-20261119, robot-arm restarted with /sessions/active null. GET /gpio/status now
 replay_fire true, replay_gains true. Change Log seed row pi.replay_step_gains.
+
+================================================================================
+2026-11-19 — fix/tube-rack-hole-position — Robot arm line gets its own Tube Rack 10 / Tip Rack 11; Studio rack moves match the run
+================================================================================
+Why: a B07 arm loop missed the wax tube badly right after the Tube Rack was taught in the Deck Calibration Studio
+(Giovanni Victorio, 17:06-17:13Z, offset 0,0,0 -> 0,0,1 -> 4,0,1 -> 4,0,6). The runs at 17:17 / 17:20 / 17:22 did
+carry (4,0,6). Root cause: every Studio session that day ran Calibrate Tip first (adjust about x -6.5, y -1.2), and
+the Studio added that adjust to Move To Hole on racks too. No fill applies the adjust at a rack (tube aspirate
+source_well.top(...) and tip pick-up use the plain well; only cartridge / stage holes get + adjust). So the tube
+taught in the Studio was ~6.5 mm off in the run.
+- Studio (deck-calibration/+page.svelte): moveAdjust() = 0 on racks (Move To Hole, Fill motion). rackOriginNow()
+  takes the loaded rack offset back out of the run-learned slot origin (Set Position double-counted it after a
+  Move To Hole). New Hole Position panel on rack tabs: Hole (default A3), X / Y / Z (mm), Move To Hole, Use Current
+  Position, Save Hole Position; saving sets the robot's rack offset so that hole lands at the typed point.
+- Arm line separated (user's ask): new collection arm_line_labware_offsets (ArmLineLabwareOffset, same schema/key);
+  rack-offsets.ts takes a line ('standard' | 'arm'); computeRunParameters uses 'arm' when the protocol declares
+  arm_cart_x (rackLineForSchema). New pages robot-arm/calibrate/tube-rack and tip-rack re-export the Studio's
+  load/actions; the server forces kind + line from the path. load-labware / pick-up-tip / labware/resolve (and
+  the browser direct client) accept rackLine. The Stage page's Tube Rack 10 / Tip Rack 11 now open those pages,
+  and its own tube load and tip pick-up send rackLine 'arm'.
+- Data (prod): B07 normal-line tube rack reverted to (0,0,0), the vector before the 11-19 saves (history kept,
+  audit revert_rack_offset). Giovanni Victorio's other audited changes were not rack calibration and were left alone
+  (no labware_definitions edits). Arm line seeded as a copy of the normal rows after the revert (B07 tube 0,0,0;
+  B07 tip 20 uL 0,5,0; B07 tip 200 uL 1,6,0; R04 tip 20 uL 1.5,-2.5,-4), source 'migration'. Indexes for
+  arm_line_labware_offsets created with ArmLineLabwareOffset.createIndexes() only (ensure-indexes --apply would
+  also have created the unrelated, already-missing bims_api_rate_limits TTL index).
+- Not changed: the daemon's Calibrate Tip pick-up applies no rack offset on either line (as before).
+Tests: rack-offsets / run-lifecycle-records / lpc-offsets / direct-client 107 passed (3 new). npm run check:
+15 errors, identical to master's 15, none in touched files.
