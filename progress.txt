@@ -28316,3 +28316,19 @@ run start (-1 if Tiprack Refilled); the run takes max(file, BIMS) and saves it. 
 library and deployed to B07 from the Run tab. Not covered: the carriage wax / reagent .py (same tracker model);
 arm runs that end without a recorded tip after-state still leave the Studio cursor behind the file.
 Tests: run-lifecycle-records + rack-offsets 51 passed (1 new). npm run check: 15 errors, same as master.
+
+================================================================================
+2026-11-19 — fix/tube-rack-hole-position — Stage .py deployed to B07; Next Tip on the Run tab; Deploy RTP guard
+================================================================================
+- Deployed (user's ask) both stage .py to the library and Wax_Filling_GEN7_ArmStage.py to B07, from this PC with
+  the arm-wax-fill server functions over the bridge queue (tsx + a $env/dynamic/private shim; OT2_TRANSPORT=bridge),
+  as Giovanni Victorio. Final B07 protocol 4ce03386-7319-48dd-95c2-9fddb8250057 (18:58Z): 74 RTPs, every declared
+  variable_name present. Older library rows archived by addStageProtocolToLibrary.
+- Incident: the 18:51Z deploy had bims_next_tip_index with a 115-char description. Analysis said completed but the
+  RTP list stopped at tiprack_refilled (no gate volumes, rack offsets, tip cursor). Live 18:51-18:58Z, no runs or
+  loops started in that window. Fixed by shortening; deployStageProtocol now refuses when missingDeclaredParams()
+  is non-empty (src/lib/server/opentrons/declared-params.ts + test incl. a 30/100-char lint of both stage .py).
+- Run tab Next Tip (commit 0cc37191): select A1..H12 + Set Next Tip (setNextTip in arm-wax-fill.ts, action setNextTip).
+  tip-cursor.ts: setManualNextTip / clearManualTip; nextStudioTipWell returns source 'manual' first. Run start sends
+  bims_tip_exact = true for a manual cursor (both stage .py declare it) and clears the flag after the run starts.
+Tests: declared-params + run-lifecycle-records 45 passed. npm run check: 15 errors, same as master.
