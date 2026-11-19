@@ -17,10 +17,26 @@
  * Writes go through saveRackOffset / revertRackOffset only: upsert, capped
  * history, one AuditLog row. The shared definition is never touched here.
  */
-import { connectDB, RobotLabwareOffset, AuditLog, generateId } from '$lib/server/db';
+import { connectDB, RobotLabwareOffset, ArmLineLabwareOffset, AuditLog, generateId } from '$lib/server/db';
 import { resolveLabwareDefinition } from './resolve';
 
 export type RackSlot = '10' | '11';
+
+/**
+ * Which line's rack offsets (2026-11-19). 'standard' = the normal carriage fills
+ * (robot_labware_offsets); 'arm' = the robot-arm stage line (arm_line_labware_offsets),
+ * taught on the arm's own Tube Rack 10 / Tip Rack 11 pages. One robot, two
+ * independent vectors per rack: teaching one line never moves the other.
+ */
+export type RackLine = 'standard' | 'arm';
+export const isRackLine = (v: unknown): v is RackLine => v === 'standard' || v === 'arm';
+export const rackLineOf = (v: unknown): RackLine => (v === 'arm' ? 'arm' : 'standard');
+function modelFor(line: RackLine): any {
+	return line === 'arm' ? ArmLineLabwareOffset : RobotLabwareOffset;
+}
+function tableFor(line: RackLine): string {
+	return line === 'arm' ? 'arm_line_labware_offsets' : 'robot_labware_offsets';
+}
 export interface Vec3 {
 	x: number;
 	y: number;
@@ -31,6 +47,8 @@ export interface AppliedRackOffset {
 	definitionUri: string;
 	slotName: RackSlot;
 	vector: Vec3;
+	/** Which line's offset this was (absent on records written before 2026-11-19 = standard). */
+	line?: RackLine;
 }
 
 /** RTP names the .py declares per slot (CALIB-5 S2). */
@@ -106,23 +124,23 @@ function rowOf(doc: any): RackOffsetRow {
 }
 
 /** This robot's offset for one rack (by definition URI), or null when it was never taught (= zero). */
-export async function getRackOffset(robotId: string, definitionUri: string, slotName: RackSlot): Promise<RackOffsetRow | null> {
+export async function getRackOffset(robotId: string, definitionUri: string, slotName: RackSlot, line: RackLine = 'standard'): Promise<RackOffsetRow | null> {
 	await connectDB();
-	const doc = await RobotLabwareOffset.findOne({ robotId: String(robotId), definitionUri: String(definitionUri), slotName }).lean();
+	const doc = await modelFor(line).findOne({ robotId: String(robotId), definitionUri: String(definitionUri), slotName }).lean();
 	return doc ? rowOf(doc) : null;
 }
 
 /** Resolve the load name to its current definition URI, then read the offset. */
-export async function getRackOffsetByLoadName(robotId: string, loadName: string): Promise<{ uri: string; slotName: RackSlot; row: RackOffsetRow | null } | null> {
+export async function getRackOffsetByLoadName(robotId: string, loadName: string, line: RackLine = 'standard'): Promise<{ uri: string; slotName: RackSlot; row: RackOffsetRow | null } | null> {
 	const slotName = rackSlotFor(loadName);
 	if (!slotName) return null;
 	const { uri } = await resolveLabwareDefinition(loadName, { strict: true });
-	return { uri, slotName, row: await getRackOffset(robotId, uri, slotName) };
+	return { uri, slotName, row: await getRackOffset(robotId, uri, slotName, line) };
 }
 
-export async function listRackOffsets(robotId: string): Promise<RackOffsetRow[]> {
+export async function listRackOffsets(robotId: string, line: RackLine = 'standard'): Promise<RackOffsetRow[]> {
 	await connectDB();
-	const docs = await RobotLabwareOffset.find({ robotId: String(robotId) }).sort({ slotName: 1, loadName: 1 }).lean();
+	const docs = await modelFor(line).find({ robotId: String(robotId) }).sort({ slotName: 1, loadName: 1 }).lean();
 	return docs.map(rowOf);
 }
 
@@ -135,6 +153,8 @@ export interface SaveRackOffsetInput {
 	user: { _id?: string; username?: string };
 	source?: 'studio' | 'migration' | 'manual';
 	note?: string | null;
+	/** Which line's offset to write (default 'standard'). */
+	line?: RackLine;
 }
 
 export interface SaveRackOffsetResult {
@@ -156,8 +176,10 @@ export async function saveRackOffset(input: SaveRackOffsetInput): Promise<SaveRa
 	const slotName = rackSlotFor(input.loadName);
 	if (!slotName) throw new Error(`"${input.loadName}" is not a rack the Studio can offset per robot (slot 10/11 racks only).`);
 	const { uri } = await resolveLabwareDefinition(input.loadName, { strict: true });
+	const line = rackLineOf(input.line);
+	const Model = modelFor(line);
 	const selector = { robotId: String(input.robotId), definitionUri: uri, slotName };
-	const prev = (await RobotLabwareOffset.findOne(selector).lean()) as any;
+	const prev = (await Model.findOne(selector).lean()) as any;
 	const before = prev ? toVec(prev.vector) : { ...ZERO };
 	const after = input.vector ? toVec(input.vector) : add(before, toVec(input.delta ?? ZERO));
 	const bad = checkRackOffset(after);
@@ -184,13 +206,13 @@ export async function saveRackOffset(input: SaveRackOffsetInput): Promise<SaveRa
 			}
 		};
 	}
-	await RobotLabwareOffset.updateOne(selector, update, { upsert: true });
+	await Model.updateOne(selector, update, { upsert: true });
 	await AuditLog.create({
 		_id: generateId(),
-		tableName: 'robot_labware_offsets',
+		tableName: tableFor(line),
 		recordId: `${input.robotId}:${slotName}:${input.loadName}`,
 		action: 'save_rack_offset',
-		newData: { robotId: input.robotId, loadName: input.loadName, definitionUri: uri, slotName, before, after, delta: input.delta ?? null, source: input.source ?? 'studio', note: input.note ?? null },
+		newData: { robotId: input.robotId, line, loadName: input.loadName, definitionUri: uri, slotName, before, after, delta: input.delta ?? null, source: input.source ?? 'studio', note: input.note ?? null },
 		changedAt: now,
 		changedBy: input.user?.username
 	});
@@ -198,28 +220,30 @@ export async function saveRackOffset(input: SaveRackOffsetInput): Promise<SaveRa
 }
 
 /** Put back the vector this robot's rack had before the last save. */
-export async function revertRackOffset(input: { robotId: string; loadName: string; user: { _id?: string; username?: string } }): Promise<SaveRackOffsetResult> {
+export async function revertRackOffset(input: { robotId: string; loadName: string; user: { _id?: string; username?: string }; line?: RackLine }): Promise<SaveRackOffsetResult> {
 	await connectDB();
 	const slotName = rackSlotFor(input.loadName);
 	if (!slotName) throw new Error(`"${input.loadName}" is not a per-robot rack.`);
 	const { uri } = await resolveLabwareDefinition(input.loadName, { strict: true });
+	const line = rackLineOf(input.line);
+	const Model = modelFor(line);
 	const selector = { robotId: String(input.robotId), definitionUri: uri, slotName };
-	const prev = (await RobotLabwareOffset.findOne(selector).lean()) as any;
+	const prev = (await Model.findOne(selector).lean()) as any;
 	if (!prev) throw new Error('No offset saved for this rack on this robot — nothing to revert.');
 	const hist = Array.isArray(prev.history) ? prev.history : [];
 	const before = toVec(prev.vector);
 	const after = hist.length ? toVec(hist[0].vector) : { ...ZERO };
 	const now = new Date();
-	await RobotLabwareOffset.updateOne(selector, {
+	await Model.updateOne(selector, {
 		$set: { vector: after, taughtBy: { _id: input.user?._id, username: input.user?.username }, taughtAt: now, source: 'revert', note: hist.length ? hist[0].note ?? null : 'reverted to zero' },
 		...(hist.length ? { $pop: { history: -1 } } : {})
 	});
 	await AuditLog.create({
 		_id: generateId(),
-		tableName: 'robot_labware_offsets',
+		tableName: tableFor(line),
 		recordId: `${input.robotId}:${slotName}:${input.loadName}`,
 		action: 'revert_rack_offset',
-		newData: { robotId: input.robotId, loadName: input.loadName, definitionUri: uri, slotName, before, after },
+		newData: { robotId: input.robotId, line, loadName: input.loadName, definitionUri: uri, slotName, before, after },
 		changedAt: now,
 		changedBy: input.user?.username
 	});
@@ -241,7 +265,8 @@ type ParamDef = { variableName: string; min?: number; max?: number };
 export async function rackOffsetRtpValues(
 	robotId: string,
 	paramSchema: ParamDef[],
-	loadNames: Partial<Record<RackSlot, string>>
+	loadNames: Partial<Record<RackSlot, string>>,
+	line: RackLine = 'standard'
 ): Promise<{ rtp: Record<string, number>; applied: AppliedRackOffset[] }> {
 	const declared = new Map((paramSchema ?? []).map((p) => [p.variableName, p]));
 	const rtp: Record<string, number> = {};
@@ -257,7 +282,7 @@ export async function rackOffsetRtpValues(
 			console.warn(`[rack-offsets] ${loadName}: ${e instanceof Error ? e.message : e} — sending 0 offset`);
 			uri = loadName;
 		}
-		const row = uri === loadName ? null : await getRackOffset(robotId, uri, slotName);
+		const row = uri === loadName ? null : await getRackOffset(robotId, uri, slotName, line);
 		const v = row ? row.vector : { ...ZERO };
 		for (const k of ['x', 'y', 'z'] as const) {
 			const spec = declared.get(names[k])!;
@@ -266,7 +291,7 @@ export async function rackOffsetRtpValues(
 			if (Number.isFinite(Number(spec.min))) val = Math.max(val, Number(spec.min));
 			rtp[names[k]] = val;
 		}
-		applied.push({ loadName, definitionUri: uri, slotName, vector: { x: rtp[names.x], y: rtp[names.y], z: rtp[names.z] } });
+		applied.push({ loadName, definitionUri: uri, slotName, line, vector: { x: rtp[names.x], y: rtp[names.y], z: rtp[names.z] } });
 	}
 	return { rtp, applied };
 }

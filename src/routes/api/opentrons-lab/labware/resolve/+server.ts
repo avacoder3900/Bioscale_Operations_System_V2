@@ -27,7 +27,8 @@ export const GET: RequestHandler = async ({ locals, url }) => {
 			namespace: url.searchParams.get('namespace') || null,
 			version: version != null && version !== '' ? Number(version) : null,
 			robotId: url.searchParams.get('robotId') || null,
-			slot: slot != null && slot !== '' ? slot : null
+			slot: slot != null && slot !== '' ? slot : null,
+			rackLine: url.searchParams.get('rackLine') || null
 		});
 		return json(JSON.parse(JSON.stringify(resolved)));
 	} catch (e) {

@@ -37,7 +37,7 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 	try {
 		// CALIB-5: `resolved` also carries THIS robot's slot-11 tip-rack offset, so the
 		// pick-up presses where the fill's pick-up will.
-		resolved = await resolveLabwareForRobot(tiprackLoadName, { robotId: params.id, slot });
+		resolved = await resolveLabwareForRobot(tiprackLoadName, { robotId: params.id, slot, rackLine: body?.rackLine ?? null });
 	} catch (e) {
 		throw error(404, e instanceof Error ? e.message : `Tiprack "${tiprackLoadName}" not found`);
 	}

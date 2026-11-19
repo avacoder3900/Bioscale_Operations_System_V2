@@ -39,7 +39,9 @@ export const POST: RequestHandler = async ({ params, locals, request }) => {
 			namespace: body?.namespace ?? null,
 			version: body?.version != null ? Number(body.version) : null,
 			robotId: params.id,
-			slot
+			slot,
+			// 'arm' from the robot-arm Tube Rack 10 / Tip Rack 11 / Stage pages; else the normal line.
+			rackLine: body?.rackLine ?? null
 		});
 	} catch (e) {
 		throw error(404, e instanceof Error ? e.message : `Labware definition "${loadName}" not found`);

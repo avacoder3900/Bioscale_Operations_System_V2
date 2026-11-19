@@ -107,11 +107,11 @@ vi.mock('./calibration-rtps', () => ({ calibrationRtpValues: async () => ({}) })
 // applied); a test can swap `impl` to assert what reaches the RTPs.
 const rackMock = vi.hoisted(() => ({
 	impl: null as null | ((robotId: string, schema: any[], loadNames: Record<string, string>) => Promise<{ rtp: Record<string, number>; applied: any[] }>),
-	calls: [] as Array<{ robotId: string; loadNames: Record<string, string> }>
+	calls: [] as Array<{ robotId: string; loadNames: Record<string, string>; line?: string }>
 }));
 vi.mock('$lib/server/services/deck-calibration/rack-offsets', () => ({
-	rackOffsetRtpValues: async (robotId: string, schema: any[], loadNames: Record<string, string>) => {
-		rackMock.calls.push({ robotId, loadNames });
+	rackOffsetRtpValues: async (robotId: string, schema: any[], loadNames: Record<string, string>, line?: string) => {
+		rackMock.calls.push({ robotId, loadNames, line });
 		return rackMock.impl ? rackMock.impl(robotId, schema, loadNames) : { rtp: {}, applied: [] };
 	}
 }));
@@ -125,7 +125,7 @@ vi.mock('$lib/server/services/bucket-service', () => ({ returnCarts: vi.fn(async
 vi.mock('$lib/server/notifications', () => ({ notifyRunLifecycle: vi.fn(async () => {}) }));
 vi.mock('$lib/manufacturing/reagent-run-estimate', () => ({ estimateReagentRunSeconds: () => ({ seconds: 600 }) }));
 
-import { computeRunParameters, rackLoadNamesFor } from './run-lifecycle-records';
+import { computeRunParameters, rackLoadNamesFor, rackLineForSchema } from './run-lifecycle-records';
 import {
 	autoResumeFallback,
 	finishConfirm,
@@ -515,6 +515,11 @@ describe('computeRunParameters — rack offsets (CALIB-5)', () => {
 	const schemaWith = (names: string[]) =>
 		names.map((variableName) => ({ variableName, type: 'float', default: 0, min: -10, max: 10 }));
 
+	it('rackLineForSchema: only the robot-arm stage protocol (arm_cart_x) reads the arm line', () => {
+		expect(rackLineForSchema(new Set(['arm_cart_x', 'tuberack_offset_x']))).toBe('arm');
+		expect(rackLineForSchema(new Set(['tuberack_offset_x', 'bims_native']))).toBe('standard');
+	});
+
 	it('rackLoadNamesFor mirrors the .py load_labware calls, including the reagent tube-rack choice', () => {
 		expect(rackLoadNamesFor('wax', {})).toEqual({ '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' });
 		// The robot-arm rehearsal (declares z_cal_p300) loads the p300's 200 uL rack in slot 11 (2026-11-06).
@@ -532,7 +537,7 @@ describe('computeRunParameters — rack offsets (CALIB-5)', () => {
 		try {
 			const form = new FormData();
 			const r = await computeRunParameters('wax', form, schemaWith(['tiprack_offset_x', 'tiprack_offset_y', 'tiprack_offset_z']), 'CCyX8FjTRGvYOd9vISGvi', null);
-			expect(rackMock.calls).toEqual([{ robotId: 'CCyX8FjTRGvYOd9vISGvi', loadNames: { '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' } }]);
+			expect(rackMock.calls).toEqual([{ robotId: 'CCyX8FjTRGvYOd9vISGvi', loadNames: { '10': 'cosmas_and_damian_drybath_tuberack', '11': 'cosmasanddamian_96_tiprack_20ul' }, line: 'standard' }]);
 			expect(r.runTimeParameterValues).toMatchObject({ tiprack_offset_x: 2, tiprack_offset_y: 4, tiprack_offset_z: 0 });
 			expect(r.protocolParameters).toMatchObject({ tiprack_offset_x: 2, tiprack_offset_y: 4, tiprack_offset_z: 0 });
 			expect(r.labwareOffsets).toHaveLength(1);

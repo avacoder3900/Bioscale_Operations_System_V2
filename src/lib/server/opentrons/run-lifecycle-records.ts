@@ -61,7 +61,7 @@ import { bridgeOfflineBanner } from './bridge-timing';
 import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
-import { rackOffsetRtpValues, type AppliedRackOffset, type RackSlot } from '$lib/server/services/deck-calibration/rack-offsets';
+import { rackOffsetRtpValues, type AppliedRackOffset, type RackSlot, type RackLine } from '$lib/server/services/deck-calibration/rack-offsets';
 import {
 	currentProtocolEntry,
 	loadExpectedWells,
@@ -614,11 +614,20 @@ export async function computeRunParameters(
 	// set_offset). Keyed by the robot, not the deck. The reagent .py chooses its
 	// tube rack by the `tube_rack` RTP, so the load names follow the request.
 	// No-op for a protocol that does not declare these RTPs.
-	const rackLoadNames = rackLoadNamesFor(kind, runTimeParameterValues, new Set((paramSchema as any[]).map((d) => d.variableName)));
-	const rack = await rackOffsetRtpValues(String(robotId), paramSchema as any, rackLoadNames);
+	const declaredRtps = new Set((paramSchema as any[]).map((d) => d.variableName));
+	const rackLoadNames = rackLoadNamesFor(kind, runTimeParameterValues, declaredRtps);
+	// The robot-arm stage protocol (it alone declares arm_cart_x) reads the ARM line's
+	// rack offsets, taught on the arm's own Tube Rack 10 / Tip Rack 11 pages; every
+	// other fill reads the normal line's (2026-11-19).
+	const rack = await rackOffsetRtpValues(String(robotId), paramSchema as any, rackLoadNames, rackLineForSchema(declaredRtps));
 	Object.assign(runTimeParameterValues, rack.rtp);
 	Object.assign(protocolParameters, rack.rtp);
 	return { runTimeParameterValues, protocolParameters, labwareOffsets: rack.applied };
+}
+
+/** Which line's rack offsets a protocol reads: 'arm' for the robot-arm stage protocol (declares arm_cart_x), else 'standard'. */
+export function rackLineForSchema(declared: ReadonlySet<string>): RackLine {
+	return declared.has('arm_cart_x') ? 'arm' : 'standard';
 }
 
 /** Which rack each fill loads in slots 10 and 11 (mirrors the load_labware calls in the .py files). */

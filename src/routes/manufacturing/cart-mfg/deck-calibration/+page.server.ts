@@ -62,7 +62,8 @@ import {
 	listRackOffsets,
 	saveRackOffset,
 	revertRackOffset,
-	type RackOffsetRow
+	type RackOffsetRow,
+	type RackLine
 } from '$lib/server/services/deck-calibration/rack-offsets';
 import { isHardenedRobot } from '$lib/server/services/deck-calibration/rollout';
 import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
@@ -75,6 +76,24 @@ const TUBE_RACKS = ['cosmas_and_damian_drybath_tuberack', 'custom_2ml_24_tube_ra
 const TIP_RACKS = ['cosmasanddamian_96_tiprack_20ul', 'cosmas_and_damian_biotix_96_200ul_tiprack'];
 // Default OT-2 slot per labware kind (deck/carriage spans 1-9 from slot 1).
 const SLOT_FOR_KIND: Record<string, string> = { deck: '1', tube: '10', tip: '11' };
+
+/**
+ * The robot-arm line's own rack pages (2026-11-19) render this Studio from
+ * /manufacturing/cart-mfg/robot-arm/calibrate/{tube-rack,tip-rack} and re-export
+ * this load + these actions. The PATH decides the line (never a form field), so
+ * an arm page can only read and write the arm line's offsets, and this page only
+ * the normal line's.
+ */
+const ARM_RACK_PAGES: Record<string, 'tube' | 'tip'> = {
+	'/manufacturing/cart-mfg/robot-arm/calibrate/tube-rack': 'tube',
+	'/manufacturing/cart-mfg/robot-arm/calibrate/tip-rack': 'tip'
+};
+function armRackKind(url: URL): 'tube' | 'tip' | null {
+	return ARM_RACK_PAGES[url.pathname.replace(/\/+$/, '')] ?? null;
+}
+function rackLineFor(url: URL): RackLine {
+	return armRackKind(url) ? 'arm' : 'standard';
+}
 
 /**
  * CALIB-5: the message the shared-write actions answer with when the labware is
@@ -227,7 +246,9 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	// What kind of labware are we calibrating: deck | tube | tip | calibrator.
 	// The calibrator is a fixed fixture (not labware) — no options, no wells.
-	const kind = (url.searchParams.get('kind')?.trim() || 'deck') as 'deck' | 'tube' | 'tip' | 'calibrator';
+	const armKind = armRackKind(url);
+	const rackLine = rackLineFor(url);
+	const kind = (armKind ?? (url.searchParams.get('kind')?.trim() || 'deck')) as 'deck' | 'tube' | 'tip' | 'calibrator';
 	const optionsForKind = kind === 'tube' ? tubeRacks : kind === 'tip' ? tipRacks : kind === 'calibrator' ? [] : decks;
 	const selected = kind === 'calibrator' ? '' : (url.searchParams.get('deck')?.trim() || (optionsForKind[0]?.loadName ?? ''));
 	const slot = SLOT_FOR_KIND[kind] ?? '1';
@@ -364,7 +385,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 		await Promise.all(
 			robots.map(async (r) => {
 				try {
-					rackOffsets[r._id] = await listRackOffsets(r._id);
+					rackOffsets[r._id] = await listRackOffsets(r._id, rackLine);
 				} catch (e) {
 					console.warn(`[deck-calibration] rack offsets for ${r._id} unavailable:`, e instanceof Error ? e.message : e);
 					rackOffsets[r._id] = [];
@@ -375,6 +396,7 @@ export const load: PageServerLoad = async ({ locals, url }) => {
 
 	return {
 		kind,
+		rackLine,
 		rackSlot,
 		selectedDefinitionUri,
 		rackOffsets: JSON.parse(JSON.stringify(rackOffsets)),
@@ -563,7 +585,7 @@ export const actions: Actions = {
 	 * never clamp), snapshots the replaced vector onto history, and writes the
 	 * AuditLog row. The shared labware definition is never touched.
 	 */
-	saveRackOffset: async ({ request, locals }) => {
+	saveRackOffset: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
 		const data = await request.formData();
@@ -591,7 +613,8 @@ export const actions: Actions = {
 				...(mode === 'absolute' ? { vector: v } : { delta: v }),
 				user: { _id: locals.user._id, username: locals.user.username },
 				source: 'studio',
-				note
+				note,
+				line: rackLineFor(url)
 			});
 			return { success: true, action: 'saveRackOffset', mode, rackOffset: JSON.parse(JSON.stringify(res)) };
 		} catch (e) {
@@ -604,7 +627,7 @@ export const actions: Actions = {
 	 * (the service pops the newest history entry; with no history it goes to zero).
 	 * Fields: robotId, deckLoadName.
 	 */
-	revertRackOffset: async ({ request, locals }) => {
+	revertRackOffset: async ({ request, locals, url }) => {
 		if (!locals.user) redirect(302, '/login');
 		requirePermission(locals.user, 'manufacturing:write');
 		const data = await request.formData();
@@ -613,7 +636,7 @@ export const actions: Actions = {
 		if (!robotId) return fail(400, { error: 'Pick a robot' });
 		if (!deckLoadName || rackSlotFor(deckLoadName) === null) return fail(400, { error: 'Pick a rack (slot 10 tube rack or slot 11 tip rack)' });
 		try {
-			const res = await revertRackOffset({ robotId, loadName: deckLoadName, user: { _id: locals.user._id, username: locals.user.username } });
+			const res = await revertRackOffset({ robotId, loadName: deckLoadName, user: { _id: locals.user._id, username: locals.user.username }, line: rackLineFor(url) });
 			return { success: true, action: 'revertRackOffset', rackOffset: JSON.parse(JSON.stringify(res)) };
 		} catch (e) {
 			return fail(400, { error: e instanceof Error ? e.message : 'Reverting the rack offset failed' });

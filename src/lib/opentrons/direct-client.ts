@@ -624,6 +624,8 @@ export class RobotSession {
 		// as the routes (load-labware slot 1, pick-up-tip slot 11).
 		q.set('robotId', this.robotId);
 		q.set('slot', String(args.slot ?? (verb === 'mx.pickUpTip' ? '11' : '1')));
+		// Which line's rack offset (robot-arm pages send 'arm'), as the routes read body.rackLine.
+		if (typeof args.rackLine === 'string' && args.rackLine) q.set('rackLine', args.rackLine);
 		const res = await this.fetchImpl(`/api/opentrons-lab/labware/resolve?${q}`, { signal });
 		if (!res.ok) return res;
 		return (await res.json()) as Record<string, unknown>;

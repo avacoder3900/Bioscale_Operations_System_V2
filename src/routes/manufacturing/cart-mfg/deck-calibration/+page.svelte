@@ -49,6 +49,14 @@
 	// that for racks since 2026-10-26, when R04's +2/+5 reached B07 and broke its
 	// pick-ups), the whole rack moves together, and the run needs a reload.
 	const isRack = $derived(kind === 'tip' || kind === 'tube');
+	// Which line's rack offsets this page teaches (2026-11-19): 'arm' when rendered from
+	// the robot-arm Tube Rack 10 / Tip Rack 11 pages, else the normal fills'. The server
+	// decides it from the page path; the maintenance verbs pass it on so Move To Hole and
+	// Pick Up land where that line's runs will.
+	const rackLine = $derived<'standard' | 'arm'>(data.rackLine === 'arm' ? 'arm' : 'standard');
+	const armLine = $derived(rackLine === 'arm');
+	const ARM_CAL = '/manufacturing/cart-mfg/robot-arm/calibrate';
+	const armHref = (path: string) => `${ARM_CAL}/${path}${selectedRobotId ? `?robot=${encodeURIComponent(selectedRobotId)}` : ''}`;
 	type RackOffsetRow = { _id: string; robotId: string; loadName: string; definitionUri: string; slotName: string; vector: Vec3; taughtBy: { _id?: string; username?: string } | null; taughtAt: string | null; source: string; note: string | null; historyCount: number };
 	const rackOffsetRows = $derived((data.rackOffsets ?? {}) as Record<string, RackOffsetRow[]>);
 	/** A robot's row for the SELECTED rack (keyed on definition URI + slot), or null = never taught = zero. */
@@ -76,9 +84,35 @@
 		'7': { x: 0, y: 181, z: 0 }, '8': { x: 132.5, y: 181, z: 0 }, '9': { x: 265, y: 181, z: 0 },
 		'10': { x: 0, y: 271.5, z: 0 }, '11': { x: 132.5, y: 271.5, z: 0 }, '12': { x: 265, y: 271.5, z: 0 }
 	};
-	/** The selected rack's slot origin in deck mm: the run-learned one when there is one, else the standard slot. */
+	/**
+	 * The selected rack's slot origin in deck mm: the run-learned one when there is
+	 * one, else the standard slot. The run-learned slotOrigin is measured against
+	 * the rack AS LOADED, which already carries this robot's offset (the maintenance
+	 * verb registers it before loadLabware), so that offset is taken back out here.
+	 * Before 2026-11-19 it was not, and Set Position counted the offset twice after
+	 * any Move To Hole.
+	 */
 	function rackOriginNow(): Vec3 {
-		return slotOrigin ?? OT2_SLOT_ORIGIN[String(data.rackSlot ?? data.slot ?? '')] ?? ZERO3;
+		if (slotOrigin) {
+			const v = loadedRackVector;
+			return { x: +(slotOrigin.x - v.x).toFixed(3), y: +(slotOrigin.y - v.y).toFixed(3), z: +(slotOrigin.z - v.z).toFixed(3) };
+		}
+		return OT2_SLOT_ORIGIN[String(data.rackSlot ?? data.slot ?? '')] ?? ZERO3;
+	}
+
+	/**
+	 * The tip-probe adjust applies to CARTRIDGE HOLES only. Every fill protocol
+	 * (wax carriage, wax arm stage, its p300 rehearsal, reagent) aspirates from the
+	 * tube rack at `source_well.top(...)` and picks up from the tip rack with NO
+	 * adjust; only the deck / stage holes get `+ adjust`. Before 2026-11-19 the
+	 * Studio folded the adjust into every Move To Hole, racks included, so a tube
+	 * rack taught with a calibrated tip (B07: adjust about x -6.5, y -1.2) landed
+	 * there in the Studio and ~6.5 mm away in the run. Racks now move exactly as
+	 * the run moves them.
+	 */
+	function moveAdjust(): { x: number; y: number } {
+		if (isRack) return { x: 0, y: 0 };
+		return { x: tipAdjust?.x ?? 0, y: tipAdjust?.y ?? 0 };
 	}
 
 	// ── Fill-mistake marks from the reagent run-page well tracker (2026-10-08) ──
@@ -495,6 +529,70 @@
 		}
 	}
 
+	// ── Hole Position (rack tabs, 2026-11-19) ────────────────────────────────────
+	// One hole, its X / Y / Z in deck mm exactly where this line's run sends the tip
+	// (slot origin + shared definition + this robot's offset; no tip adjust, which
+	// the fills never apply at a rack). Typing a position and saving moves the whole
+	// rack so that hole lands there: the robot's offset becomes typed − origin −
+	// shared definition. Racks move as one piece (Labware.set_offset), so this is
+	// the per-robot way to put one hole, e.g. the wax tube A3, where it really is.
+	const HOLE_DEFAULT = 'A3'; // the wax tube every wax fill aspirates from
+	let hpHole = $state('');
+	let hpX = $state(0), hpY = $state(0), hpZ = $state(0);
+	$effect(() => {
+		if (!isRack) return;
+		if (!hpHole || !wellByName.has(hpHole)) hpHole = wellByName.has(HOLE_DEFAULT) ? HOLE_DEFAULT : (wells[0]?.name ?? '');
+	});
+	function holeRunPosition(name: string): Vec3 | null {
+		const w = wellByName.get(name);
+		if (!w) return null;
+		const o = rackOriginNow();
+		const v = rackVector;
+		return { x: +(o.x + w.x + v.x).toFixed(2), y: +(o.y + w.y + v.y).toFixed(2), z: +(o.z + w.z + v.z).toFixed(2) };
+	}
+	const hpRun = $derived(isRack && hpHole ? holeRunPosition(hpHole) : null);
+	// Refill the boxes whenever the hole or where it lands changes (a save, a revert, a Move To Hole).
+	$effect(() => {
+		const p = hpRun;
+		if (p) { hpX = p.x; hpY = p.y; hpZ = p.z; }
+	});
+	const hpChanged = $derived(!!hpRun && (hpX !== hpRun.x || hpY !== hpRun.y || hpZ !== hpRun.z));
+
+	async function moveToHolePosition() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		if (!hpHole) { errMsg = 'Pick a hole'; return; }
+		clearMsg();
+		busy = true;
+		try {
+			await moveToWellSafe(hpHole);
+			await refreshPosition();
+			nominal = liveX !== null ? { x: liveX!, y: liveY!, z: liveZ!, hasTip } : null;
+			refWell = hpHole;
+			msg = `At ${hpHole}${hasTip ? ' (tip on)' : ' (no tip)'}.`;
+		} catch (e) { errMsg = e instanceof Error ? e.message : String(e); } finally { busy = false; }
+	}
+
+	// The jog readback is the critical point parked APPROACH_Z_MM over the hole top
+	// (moveToWellSafe), so Z comes back down by that much to read in the same frame.
+	async function useCurrentPosition() {
+		if (!runId || !pipetteId) { errMsg = 'Open a maintenance run first'; return; }
+		await refreshPosition();
+		if (liveX === null || liveY === null || liveZ === null) { errMsg = 'Position read failed'; return; }
+		hpX = +liveX.toFixed(2);
+		hpY = +liveY.toFixed(2);
+		hpZ = +(liveZ - APPROACH_Z_MM).toFixed(2);
+	}
+
+	async function saveHolePosition() {
+		const w = wellByName.get(hpHole);
+		if (!w) { errMsg = 'Pick a hole'; return; }
+		if (![hpX, hpY, hpZ].every((n) => Number.isFinite(Number(n)))) { errMsg = 'X, Y and Z must be numbers'; return; }
+		const o = rackOriginNow();
+		const v = { x: +(Number(hpX) - o.x - w.x).toFixed(3), y: +(Number(hpY) - o.y - w.y).toFixed(3), z: +(Number(hpZ) - o.z - w.z).toFixed(3) };
+		if (v.x === rackVector.x && v.y === rackVector.y && v.z === rackVector.z) { errMsg = 'Position unchanged'; return; }
+		await saveRackOffsetFor(v, 'absolute', `hole ${hpHole} → (${hpX}, ${hpY}, ${hpZ})`);
+	}
+
 	// ── Align selection to the anchor hole (straighten every line) ───────────────
 	// The anchor is the jog-verified, trusted hole. Every OTHER selected hole of the
 	// SAME role snaps onto a clean grid ruled by the anchor's row + column:
@@ -733,6 +831,7 @@
 	// reflects edits instantly — no run close needed.
 	let slotOrigin = $state<{ x: number; y: number; z: number } | null>(null);
 	let loadedWells = $state<Map<string, { x: number; y: number; z: number }> | null>(null);
+	let loadedRackVector = $state<Vec3>({ x: 0, y: 0, z: 0 });
 	const APPROACH_Z_MM = 2; // critical point parks this far above the well top
 
 	// Deck floor for the tip, derived from the deck's OWN dimensions (data.dimensions
@@ -909,13 +1008,15 @@
 		const d = labwareOptions.find((x) => x.loadName === data.selected);
 		const lw = await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/load-labware`, {
 			method: 'POST',
-			body: JSON.stringify({ namespace: d?.namespace, loadName: data.selected, version: d?.version ?? 1, slot: deckSlot })
+			body: JSON.stringify({ namespace: d?.namespace, loadName: data.selected, version: d?.version ?? 1, slot: deckSlot, rackLine })
 		});
 		loadedLabwareId = lw?.labwareId ?? null;
 		if (!loadedLabwareId) throw new Error('load-labware did not return a labwareId');
 		// Snapshot the coords the run was loaded with (so we can derive the slot origin
 		// even after subsequent edits change the live Mongo coords). Re-derive origin.
 		loadedWells = new Map(wells.map((w) => [w.name, { x: w.x, y: w.y, z: w.z }]));
+		// The rack offset the server registered for this load (rackOriginNow takes it back out).
+		loadedRackVector = isRack ? { ...rackVector } : ZERO3;
 		slotOrigin = null;
 		return loadedLabwareId;
 	}
@@ -937,7 +1038,7 @@
 	// the origin from the load-time snapshot.
 	async function moveToWellSafe(name: string): Promise<void> {
 		const lid = await ensureDeckLoaded();
-		const ax = tipAdjust?.x ?? 0, ay = tipAdjust?.y ?? 0;
+		const { x: ax, y: ay } = moveAdjust();
 
 		if (slotOrigin) {
 			// Absolute move from LIVE coords → reflects edits instantly, tip-independent.
@@ -1100,8 +1201,7 @@
 	async function fillMoveAbs(name: string, aboveTopMm: number, o: { forceDirect: boolean; arc?: boolean }) {
 		const w = wellByName.get(name);
 		if (!w || !slotOrigin) throw new Error('Deck origin not established yet');
-		const ax = tipAdjust?.x ?? 0,
-			ay = tipAdjust?.y ?? 0;
+		const { x: ax, y: ay } = moveAdjust();
 		const zAbs = slotOrigin.z + w.z + aboveTopMm;
 		await api(`/api/opentrons-lab/robots/${selectedRobotId}/maintenance/${runId}/move-to`, {
 			method: 'POST',
@@ -1409,7 +1509,7 @@
 				method: 'POST',
 				credentials: 'same-origin',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell })
+				body: JSON.stringify({ pipetteId, tiprackLoadName: tiprackForProfile, slot: '11', tipWell, rackLine })
 			}
 		);
 		if (res.ok) {
@@ -1642,9 +1742,11 @@
 <div class="mx-auto max-w-[1400px] space-y-4 overflow-x-clip p-4">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<div>
-			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">Deck Calibration Studio</h1>
+			<h1 class="text-2xl font-bold" style="color: var(--color-tron-cyan)">{armLine ? (kind === 'tip' ? 'Robot Arm Tip Rack 11' : 'Robot Arm Tube Rack 10') : 'Deck Calibration Studio'}</h1>
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">
-				{#if isRack}
+				{#if armLine}
+					Robot Arm Line
+				{:else if isRack}
 					Jog to a hole, capture the real offset, apply it. On a rack it is saved as <strong>{robot?.name ?? 'the selected robot'}'s</strong> offset for the whole {rackLabel} (slot {data.slot}) — the shared definition and the other robots stay put, and {robot?.name ?? 'the robot'}'s next run picks it up by itself.
 				{:else}
 					Jog to a hole, capture the real offset, select a group of holes, apply it. Corrections persist in BIMS and reach the robot on Sync.
@@ -1653,16 +1755,24 @@
 		</div>
 		<!-- Text tuner (deck-tuner, CALIB-1) deleted 2026-08-28: superseded by this
 		     Studio since June; no recorded usage. -->
+		{#if !armLine}
 		<a href="/manufacturing/cart-mfg/deck-calibration/barcode-positions"
 			class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-3 py-1.5 text-xs font-medium text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20 transition-colors">
 			Teach barcode positions →
 		</a>
+		{/if}
 	</div>
 
 	<!-- Pickers -->
 	<div class="flex flex-wrap items-end gap-4 rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 		<div class="text-xs" style="color: var(--color-tron-text-secondary)">Labware
 			<div class="mt-1 flex overflow-hidden rounded border border-[var(--color-tron-border)] text-[11px]">
+				{#if armLine}
+					<!-- The arm line's three labware pages: the stage, then its own two racks. -->
+					<a href={armHref('stage')} class="px-2.5 py-1.5 transition-colors text-[var(--color-tron-text-secondary)] hover:bg-white/5 hover:text-[var(--color-tron-cyan)]">Cartridge On Stage</a>
+					<a href={armHref('tube-rack')} class="px-2.5 py-1.5 transition-colors {kind === 'tube' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}">Tube Rack 10</a>
+					<a href={armHref('tip-rack')} class="px-2.5 py-1.5 transition-colors {kind === 'tip' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : 'text-[var(--color-tron-text-secondary)] hover:bg-white/5'}">Tip Rack 11</a>
+				{:else}
 				{#each [['deck', 'Deck', '1'], ['tube', 'Tube rack', '10'], ['tip', 'Tip rack', '11'], ['calibrator', 'Calibrator', '—']] as [k, lbl, sl] (k)}
 					<button
 						type="button"
@@ -1671,6 +1781,7 @@
 						title={sl === '—' ? 'Tip-calibrator fixture' : `Slot ${sl}`}
 					>{lbl}</button>
 				{/each}
+				{/if}
 			</div>
 		</div>
 		{#if kind !== 'calibrator'}
@@ -1741,6 +1852,29 @@
 
 	{#if errMsg}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{errMsg}</div>{/if}
 	{#if msg}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{msg}</div>{/if}
+
+	{#if isRack}
+		<!-- Hole Position: one hole's deck X / Y / Z exactly as this line's run goes to it. -->
+		<section class="rounded-lg border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-surface)] p-3">
+			<h2 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-cyan)">Hole Position{armLine ? ' · Robot Arm Line' : ''} · {robot?.name ?? ''}</h2>
+			<div class="mt-2 flex flex-wrap items-end gap-3 text-xs" style="color: var(--color-tron-text-secondary)">
+				<label>Hole
+					<select bind:value={hpHole} class="mt-0.5 block rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1 font-mono" style="color: var(--color-tron-text)">
+						{#each wells as w (w.name)}<option value={w.name}>{w.name}</option>{/each}
+					</select>
+				</label>
+				<label>X (mm) <input type="number" step="0.1" bind:value={hpX} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<label>Y (mm) <input type="number" step="0.1" bind:value={hpY} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<label>Z (mm) <input type="number" step="0.1" bind:value={hpZ} class="mt-0.5 block w-24 rounded border border-[var(--color-tron-border)] bg-black/30 px-1 py-1 font-mono" style="color: var(--color-tron-text)" /></label>
+				<button type="button" onclick={moveToHolePosition} disabled={busy || !pipetteId || !hpHole} class="rounded border border-[var(--color-tron-cyan)]/40 px-3 py-1.5 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-40">Move To Hole</button>
+				<button type="button" onclick={useCurrentPosition} disabled={busy || !pipetteId} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 hover:border-[var(--color-tron-cyan)]/60 disabled:opacity-40" style="color: var(--color-tron-text)">Use Current Position</button>
+				<button type="button" onclick={saveHolePosition} disabled={busy || !hpHole || !hpChanged} class="rounded border border-green-500/50 bg-green-900/20 px-3 py-1.5 font-bold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Save Hole Position</button>
+			</div>
+			{#if hpRun}
+				<div class="mt-1.5 font-mono text-[11px]" style="color: var(--color-tron-text-secondary)">Run Goes To {hpHole}: X {hpRun.x} · Y {hpRun.y} · Z {hpRun.z}{slotOrigin ? '' : ' · Standard Slot Origin'}</div>
+			{/if}
+		</section>
+	{/if}
 
 	<div class="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_340px]">
 		<!-- Canvas -->

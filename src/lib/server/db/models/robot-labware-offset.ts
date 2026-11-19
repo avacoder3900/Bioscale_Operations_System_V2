@@ -60,3 +60,19 @@ robotLabwareOffsetSchema.index({ robotId: 1, definitionUri: 1, slotName: 1 }, { 
 export const RobotLabwareOffset =
 	mongoose.models.RobotLabwareOffset ||
 	mongoose.model('RobotLabwareOffset', robotLabwareOffsetSchema, 'robot_labware_offsets');
+
+/**
+ * The ROBOT-ARM line's copy of the same per-robot rack offsets (2026-11-19).
+ *
+ * The arm line runs the stage protocol (Wax_Filling_GEN7_ArmStage*.py) on the same
+ * OT-2 that also runs the normal carriage fill, but its tube rack (slot 10) and
+ * tip rack (slot 11) are taught separately: teaching B07's tube rack for the arm
+ * moved B07's normal wax fill too, and the reverse. Same shape, same key
+ * (robot × definition URI × slot), its own collection, so neither line's unique
+ * index or rows are touched by the other. Read by rack-offsets.ts with line 'arm'.
+ */
+const armLineLabwareOffsetSchema = robotLabwareOffsetSchema.clone();
+
+export const ArmLineLabwareOffset =
+	mongoose.models.ArmLineLabwareOffset ||
+	mongoose.model('ArmLineLabwareOffset', armLineLabwareOffsetSchema, 'arm_line_labware_offsets');

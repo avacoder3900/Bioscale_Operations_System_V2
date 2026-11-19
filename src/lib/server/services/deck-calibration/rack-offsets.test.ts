@@ -12,29 +12,34 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 type Doc = Record<string, any>;
-const store = vi.hoisted(() => ({ rows: new Map<string, Doc>(), audits: [] as Doc[] }));
+const store = vi.hoisted(() => ({ rows: new Map<string, Doc>(), armRows: new Map<string, Doc>(), audits: [] as Doc[] }));
 const keyOf = (q: Doc) => `${q.robotId}|${q.definitionUri}|${q.slotName}`;
 
-vi.mock('$lib/server/db', () => ({
-	connectDB: async () => {},
-	generateId: () => 'gen',
-	AuditLog: { create: async (d: Doc) => store.audits.push(d) },
-	RobotLabwareOffset: {
-		findOne: (q: Doc) => ({ lean: async () => store.rows.get(keyOf(q)) ?? null }),
-		find: (q: Doc) => ({ sort: () => ({ lean: async () => [...store.rows.values()].filter((r) => r.robotId === q.robotId) }) }),
+vi.mock('$lib/server/db', () => {
+	// One in-memory fake per collection: the normal line and the robot-arm line.
+	const fakeModel = (rows: Map<string, Doc>) => ({
+		findOne: (q: Doc) => ({ lean: async () => rows.get(keyOf(q)) ?? null }),
+		find: (q: Doc) => ({ sort: () => ({ lean: async () => [...rows.values()].filter((r) => r.robotId === q.robotId) }) }),
 		updateOne: async (q: Doc, update: Doc) => {
 			const k = keyOf(q);
-			const cur = store.rows.get(k) ?? { ...q, _id: update.$setOnInsert?._id, history: [] };
+			const cur = rows.get(k) ?? { ...q, _id: update.$setOnInsert?._id, history: [] };
 			Object.assign(cur, update.$set ?? {});
 			if (update.$push?.history) {
 				const { $each, $slice } = update.$push.history;
 				cur.history = [...$each, ...(cur.history ?? [])].slice(0, $slice);
 			}
 			if (update.$pop?.history === -1) cur.history = (cur.history ?? []).slice(1);
-			store.rows.set(k, cur);
+			rows.set(k, cur);
 		}
-	}
-}));
+	});
+	return {
+		connectDB: async () => {},
+		generateId: () => 'gen',
+		AuditLog: { create: async (d: Doc) => store.audits.push(d) },
+		RobotLabwareOffset: fakeModel(store.rows),
+		ArmLineLabwareOffset: fakeModel(store.armRows)
+	};
+});
 vi.mock('./resolve', () => ({
 	resolveLabwareDefinition: async (loadName: string) => {
 		if (loadName === 'missing_rack') throw new Error(`Labware definition "${loadName}" not found`);
@@ -50,7 +55,8 @@ import {
 	rackOffsetRtpValues,
 	saveRackOffset,
 	revertRackOffset,
-	getRackOffset
+	getRackOffset,
+	listRackOffsets
 } from './rack-offsets';
 
 const R04 = 'CCyX8FjTRGvYOd9vISGvi';
@@ -63,6 +69,7 @@ const bothSchema = [...tipSchema, ...['tuberack_offset_x', 'tuberack_offset_y', 
 
 beforeEach(() => {
 	store.rows.clear();
+	store.armRows.clear();
 	store.audits.length = 0;
 });
 
@@ -141,5 +148,35 @@ describe('rackOffsetRtpValues — what a fill start injects', () => {
 		} finally {
 			warn.mockRestore();
 		}
+	});
+});
+
+describe('robot-arm line vs normal line (2026-11-19)', () => {
+	const TUBE = 'cosmas_and_damian_drybath_tuberack';
+	const schema = ['tuberack_offset_x', 'tuberack_offset_y', 'tuberack_offset_z'].map((variableName) => ({ variableName, min: -10, max: 10 }));
+
+	it('teaching the arm tube rack never moves the normal fill, and the reverse', async () => {
+		await saveRackOffset({ robotId: B07, loadName: TUBE, vector: { x: 4, y: 0, z: 6 }, user, line: 'arm' });
+		const normal = await rackOffsetRtpValues(B07, schema, { '10': TUBE });
+		const arm = await rackOffsetRtpValues(B07, schema, { '10': TUBE }, 'arm');
+		expect(normal.rtp).toEqual({ tuberack_offset_x: 0, tuberack_offset_y: 0, tuberack_offset_z: 0 });
+		expect(arm.rtp).toEqual({ tuberack_offset_x: 4, tuberack_offset_y: 0, tuberack_offset_z: 6 });
+		expect(arm.applied[0].line).toBe('arm');
+
+		await saveRackOffset({ robotId: B07, loadName: TUBE, vector: { x: 1, y: 1, z: 1 }, user });
+		expect((await rackOffsetRtpValues(B07, schema, { '10': TUBE }, 'arm')).rtp.tuberack_offset_x).toBe(4);
+		expect((await rackOffsetRtpValues(B07, schema, { '10': TUBE })).rtp.tuberack_offset_x).toBe(1);
+	});
+
+	it('reads, lists, reverts and audits each line in its own collection', async () => {
+		await saveRackOffset({ robotId: B07, loadName: TUBE, vector: { x: 2, y: 0, z: 0 }, user, line: 'arm' });
+		await saveRackOffset({ robotId: B07, loadName: TUBE, vector: { x: 3, y: 0, z: 0 }, user, line: 'arm' });
+		expect(await getRackOffset(B07, `cosmas_damian/${TUBE}/1`, '10')).toBeNull();
+		expect((await listRackOffsets(B07, 'arm')).map((r) => r.vector.x)).toEqual([3]);
+		expect(await listRackOffsets(B07)).toEqual([]);
+		const r = await revertRackOffset({ robotId: B07, loadName: TUBE, user, line: 'arm' });
+		expect(r.after).toEqual({ x: 2, y: 0, z: 0 });
+		expect(store.audits.map((a) => a.tableName)).toEqual(['arm_line_labware_offsets', 'arm_line_labware_offsets', 'arm_line_labware_offsets']);
+		await expect(revertRackOffset({ robotId: B07, loadName: TUBE, user })).rejects.toThrow(/nothing to revert/);
 	});
 });

@@ -14,7 +14,7 @@
  */
 import { connectDB, AuditLog, generateId } from '$lib/server/db';
 import { resolveLabwareDefinition } from '$lib/server/services/deck-calibration/resolve';
-import { getRackOffset, rackSlotFor, isZero } from '$lib/server/services/deck-calibration/rack-offsets';
+import { getRackOffset, rackSlotFor, isZero, rackLineOf, type RackLine } from '$lib/server/services/deck-calibration/rack-offsets';
 import { profileForTiprack, recordStudioTipPickup } from './tip-cursor';
 import type { MaintenanceRecord, LabwareOffsetArg } from '$lib/opentrons/ot2-protocol';
 
@@ -34,7 +34,7 @@ export type Line = 'queue' | 'tailnet';
  */
 export async function resolveLabwareForRobot(
 	loadName: string,
-	opts: { namespace?: string | null; version?: number | null; robotId?: string | null; slot?: string | null } = {}
+	opts: { namespace?: string | null; version?: number | null; robotId?: string | null; slot?: string | null; rackLine?: RackLine | string | null } = {}
 ): Promise<{ definition: unknown; labwareNamespace: string; labwareVersion: number; labwareOffset?: LabwareOffsetArg }> {
 	const { doc: def, uri } = (await resolveLabwareDefinition(loadName, {
 		namespace: opts.namespace ?? null,
@@ -50,7 +50,8 @@ export async function resolveLabwareForRobot(
 	// Keyed in BIMS on the resolver's URI (DB columns); registered on the robot
 	// under the identity the robot indexes (the blob's namespace/version — the same
 	// identity loadLabwareInRun compares against), so the engine binds it at load.
-	const row = await getRackOffset(String(opts.robotId), uri, rackSlot);
+	// Which line's vector: the robot-arm pages ask for 'arm'; everything else is the normal line.
+	const row = await getRackOffset(String(opts.robotId), uri, rackSlot, rackLineOf(opts.rackLine));
 	if (!row || isZero(row.vector)) return out;
 	return {
 		...out,
