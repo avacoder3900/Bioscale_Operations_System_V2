@@ -28287,3 +28287,14 @@ Source: branch fix/tube-rack-hole-position @ commit 0e24a037 (fast-forward of ma
 Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit 0e24a037
   (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
 What this deployment is for: Hole Position, the rack grid and Set Position show one position; Apply clears after save.
+
+================================================================================
+2026-11-19 — fix/tube-rack-hole-position — Rack holes read in deck mm like JOG; Move To Hole parks 40 mm above
+================================================================================
+User report: after Move To Hole on A3 the JOG panel read y 344.50 while Hole Position said 73; Z was 40.2 up.
+Cause: Hole Position / grid labels were in the rack frame; JOG reads deck mm (slot 10 origin y 271.5 + 73 = 344.5).
+The Z gap was the old park: 2 mm over the tube TOP, and the shown Z is the hole BOTTOM (A3 depth 38.6).
+Fix (commit fff9a03d): shownPos = OT-2 slot origin + definition + offset (deck mm) for every rack readout; framePos
+(rack frame) only draws the canvas. Rack Move To Hole = absolute move-to at shownPos, Z + 40 (rackParkMm: 40 when
+depth + 2 <= 40, else ceil(depth + 2) for the tip racks 48 / 55). Use Current Position = jog X/Y, Z - park.
+Wells now carry depth from the server. npm run check: 15 errors, same as master.
