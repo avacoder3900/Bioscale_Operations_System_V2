@@ -28282,3 +28282,8 @@ tooltips, hover readout, box select, Hole Position and Set Position, all in the 
 Use Current Position = live - run-learned slot origin, enabled after a Move To Hole. Rack Apply clears dx/dy/dz
 after a save (the 18:05 save repeated the 18:00 capture and doubled the arm tube vector to (-5, 0, 5.5); left as
 is for the operator to Revert or re-teach). npm run check: 15 errors, same as master.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/9FUFzP7TZLhPGQotvEkreZHiA2he
+Source: branch fix/tube-rack-hole-position @ commit 0e24a037 (fast-forward of master; code in 28cd11ed)
+Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit 0e24a037
+  (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
+What this deployment is for: Hole Position, the rack grid and Set Position show one position; Apply clears after save.
