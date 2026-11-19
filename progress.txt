@@ -28298,3 +28298,8 @@ Fix (commit fff9a03d): shownPos = OT-2 slot origin + definition + offset (deck m
 (rack frame) only draws the canvas. Rack Move To Hole = absolute move-to at shownPos, Z + 40 (rackParkMm: 40 when
 depth + 2 <= 40, else ceil(depth + 2) for the tip racks 48 / 55). Use Current Position = jog X/Y, Z - park.
 Wells now carry depth from the server. npm run check: 15 errors, same as master.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/H1jGZJhQ469uqUKbQbqaxzYbtoF2
+Source: branch fix/tube-rack-hole-position @ commit 191937a8 (fast-forward of master)
+Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit 191937a8
+  (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
+What this deployment is for: rack holes in deck mm (same as JOG); Move To Hole parks 40 mm above the hole.
