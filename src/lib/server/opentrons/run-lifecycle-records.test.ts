@@ -115,6 +115,15 @@ vi.mock('$lib/server/services/deck-calibration/rack-offsets', () => ({
 		return rackMock.impl ? rackMock.impl(robotId, schema, loadNames) : { rtp: {}, applied: [] };
 	}
 }));
+// BIMS tip cursor: what nextStudioTipWell answers for this robot + profile.
+const tipMock = vi.hoisted(() => ({ index: 16, calls: [] as Array<{ robotId: string; profile: string }> }));
+vi.mock('./tip-cursor', () => ({
+	profileForTiprack: (n: string) => (/20ul/i.test(n) ? 'wax' : 'reagent'),
+	nextStudioTipWell: async (robotId: string, profile: string) => {
+		tipMock.calls.push({ robotId, profile });
+		return { well: 'A3', index: tipMock.index, source: 'studio', at: new Date() };
+	}
+}));
 vi.mock('./protocol-freshness', () => ({}));
 vi.mock('$lib/server/services/deck-calibration/run-guard', () => ({ resolveDeckBinding: async () => ({}), DeckBindingError: class {} }));
 vi.mock('$lib/server/services/deck-calibration/rollout', () => ({ isHardenedRobot: () => false }));
@@ -514,6 +523,22 @@ describe('autoResumeFallback', () => {
 describe('computeRunParameters — rack offsets (CALIB-5)', () => {
 	const schemaWith = (names: string[]) =>
 		names.map((variableName) => ({ variableName, type: 'float', default: 0, min: -10, max: 10 }));
+
+	it('bims_next_tip_index: sends the BIMS tip cursor for the slot-11 rack, -1 on a refilled rack, nothing when undeclared', async () => {
+		const schema = [...schemaWith(['arm_cart_x']), { variableName: 'bims_next_tip_index', type: 'int', default: -1, min: -1, max: 95 }, { variableName: 'tiprack_refilled', type: 'bool', default: false }];
+		tipMock.calls.length = 0;
+		const r = await computeRunParameters('wax', new FormData(), schema as any, '2vIu0fzsbqzkZ7_Zjj3h2', null);
+		expect(r.runTimeParameterValues.bims_next_tip_index).toBe(16);
+		expect(tipMock.calls).toEqual([{ robotId: '2vIu0fzsbqzkZ7_Zjj3h2', profile: 'wax' }]);
+
+		const f = new FormData();
+		f.set('param_tiprack_refilled', 'true');
+		const refilled = await computeRunParameters('wax', f, schema as any, '2vIu0fzsbqzkZ7_Zjj3h2', null);
+		expect(refilled.runTimeParameterValues.bims_next_tip_index).toBe(-1);
+
+		const none = await computeRunParameters('wax', new FormData(), schemaWith(['arm_cart_x']) as any, '2vIu0fzsbqzkZ7_Zjj3h2', null);
+		expect(none.runTimeParameterValues).not.toHaveProperty('bims_next_tip_index');
+	});
 
 	it('rackLineForSchema: only the robot-arm stage protocol (arm_cart_x) reads the arm line', () => {
 		expect(rackLineForSchema(new Set(['arm_cart_x', 'tuberack_offset_x']))).toBe('arm');

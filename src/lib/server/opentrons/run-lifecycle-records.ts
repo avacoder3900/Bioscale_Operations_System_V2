@@ -62,6 +62,7 @@ import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
 import { rackOffsetRtpValues, type AppliedRackOffset, type RackSlot, type RackLine } from '$lib/server/services/deck-calibration/rack-offsets';
+import { nextStudioTipWell, profileForTiprack } from './tip-cursor';
 import {
 	currentProtocolEntry,
 	loadExpectedWells,
@@ -622,7 +623,29 @@ export async function computeRunParameters(
 	const rack = await rackOffsetRtpValues(String(robotId), paramSchema as any, rackLoadNames, rackLineForSchema(declaredRtps));
 	Object.assign(runTimeParameterValues, rack.rtp);
 	Object.assign(protocolParameters, rack.rtp);
+
+	// BIMS tip cursor (2026-11-19): the protocol's tracker file only counts its own
+	// pick-ups; Studio / Stage / Calibrate Tip pick-ups are counted here. A .py that
+	// declares bims_next_tip_index starts at whichever is further along, so it never
+	// presses into a slot BIMS knows is empty. -1 on a refilled rack (start at A1).
+	if (declaredRtps.has('bims_next_tip_index')) {
+		const tipNext = await bimsNextTipIndex(String(robotId), rackLoadNames['11'], runTimeParameterValues['tiprack_refilled'] === true);
+		runTimeParameterValues['bims_next_tip_index'] = tipNext;
+		protocolParameters['bims_next_tip_index'] = tipNext;
+	}
 	return { runTimeParameterValues, protocolParameters, labwareOffsets: rack.applied };
+}
+
+/** The next fresh tip BIMS knows of on the slot-11 rack (0..95), or -1 when the rack was just refilled or there is no rack. */
+export async function bimsNextTipIndex(robotId: string, tiprackLoadName: string | undefined, refilled: boolean): Promise<number> {
+	if (refilled || !tiprackLoadName) return -1;
+	try {
+		const next = await nextStudioTipWell(robotId, profileForTiprack(tiprackLoadName));
+		return Number.isInteger(next.index) && next.index >= 0 && next.index <= 95 ? next.index : -1;
+	} catch (e) {
+		console.warn('[run-start] BIMS tip cursor unavailable:', e instanceof Error ? e.message : e);
+		return -1;
+	}
 }
 
 /** Which line's rack offsets a protocol reads: 'arm' for the robot-arm stage protocol (declares arm_cart_x), else 'standard'. */

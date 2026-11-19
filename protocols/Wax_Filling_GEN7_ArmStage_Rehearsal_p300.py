@@ -572,6 +572,21 @@ def add_parameters(parameters: protocol_api.Parameters):
         default=False
     )
 
+    # BIMS tip cursor (2026-11-19). The tracker file below only counts THIS
+    # protocol's pick-ups; the Deck Calibration Studio, the Stage page and every
+    # Calibrate Tip also take tips off this rack, and the run then pressed into
+    # empty positions (B07: file at B2, BIMS at A3). BIMS sends the next fresh tip
+    # it knows of; the run starts at whichever of the two is further along.
+    # -1 = not sent (older BIMS): the tracker file alone, as before.
+    parameters.add_int(
+        variable_name="bims_next_tip_index",
+        display_name="BIMS next tip",
+        description="Next fresh tip on the 200 uL rack as BIMS counts it (0 = A1, column by column). -1 = use the robot's tracker only.",
+        default=-1,
+        minimum=-1,
+        maximum=95
+    )
+
     # ── Rehearsal volumes (AIR) ──────────────────────────────────────────────
     # The real fill dispenses ~1.6 uL of wax per gate from a 20 uL trip. The
     # p300 cannot move that little, so each gate "dispenses" 20 uL of air (its
@@ -810,6 +825,12 @@ def run(protocol: protocol_api.ProtocolContext):
             protocol.comment('TIP TRACKER: tiprack marked as refilled - reset to A1')
         else:
             _tip_index = load_tip_state()
+            _bims_tip = int(protocol.params.bims_next_tip_index)
+            if 0 <= _bims_tip < len(_all_tips) and _bims_tip > _tip_index:
+                protocol.comment(f'TIP TRACKER: BIMS counts tips through {_all_tips[_bims_tip - 1].well_name} as used '
+                                 f'(Studio / Calibrate Tip pick-ups) - skipping from index {_tip_index} to {_bims_tip}')
+                _tip_index = _bims_tip
+                save_tip_state(_tip_index)
         _tip_well = _all_tips[_tip_index]
         pipette.starting_tip = _tip_well
         protocol.comment(f'TIP TRACKER: starting from tip {_tip_well.well_name} (index {_tip_index})')
