@@ -28303,3 +28303,16 @@ Source: branch fix/tube-rack-hole-position @ commit 191937a8 (fast-forward of ma
 Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit 191937a8
   (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
 What this deployment is for: rack holes in deck mm (same as JOG); Move To Hole parks 40 mm above the hole.
+
+================================================================================
+2026-11-19 — fix/tube-rack-hole-position — Arm runs skip tips the Studio / Calibrate Tip already took
+================================================================================
+User report: on B07, after many tips were used, runs pressed into empty tip slots. Cause: two counters. The stage
+.py's /data/tip_tracker_<host>.json counts only the run's own pick-ups (B07: index 10 = B2); every Studio, Stage page
+and Calibrate Tip pick-up is counted only in BIMS (opentrons_robots.studioTip.wax: 16 = A3; 7 Calibrate Tips on B07
+since 17:00). The 18:41 run started at B2 and hit NO TIP DETECTED. Fix (commit 38766b88): both stage .py declare
+bims_next_tip_index (int, -1..95, default -1); BIMS sends nextStudioTipWell(robot, profile of the slot-11 rack) at
+run start (-1 if Tiprack Refilled); the run takes max(file, BIMS) and saves it. Needs the new .py added to the
+library and deployed to B07 from the Run tab. Not covered: the carriage wax / reagent .py (same tracker model);
+arm runs that end without a recorded tip after-state still leave the Studio cursor behind the file.
+Tests: run-lifecycle-records + rack-offsets 51 passed (1 new). npm run check: 15 errors, same as master.
