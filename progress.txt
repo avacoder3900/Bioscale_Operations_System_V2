@@ -28265,3 +28265,8 @@ taught in the Studio was ~6.5 mm off in the run.
 - Not changed: the daemon's Calibrate Tip pick-up applies no rack offset on either line (as before).
 Tests: rack-offsets / run-lifecycle-records / lpc-offsets / direct-client 107 passed (3 new). npm run check:
 15 errors, identical to master's 15, none in touched files.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/EN7fePRmuBFjE5bon57TBvNYimiY
+Source: branch fix/tube-rack-hole-position @ commit 3e3dc910 (fast-forward of master)
+Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit 3e3dc910
+  (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
+What this deployment is for: arm line's own Tube Rack 10 / Tip Rack 11 pages, Hole Position panel, Studio rack moves without the tip adjust.
