@@ -91,7 +91,8 @@ import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, uploadAssembl
 // usable (one HTTPS hop, ~2 ms on the cable) and through the Mongo queue otherwise.
 import { armLinkFor, armPiUrls, armScanAvailable, armScanWait, armSetInstruction, armWriteFile, ot2Delete, ot2Get, ot2Post, ot2WaitChange } from '$lib/server/ot2-arm-link';
 import { ARM_LOOP_INSTRUCTION_PATH, isParkedFor, parseArmPause, type ArmLoopAction, type ArmLoopInstruction, type ArmPause, armMayMove, atScanFor, parseArmComment, type ArmMarker, type ArmMoveWant, tornPauseRead } from '$lib/robot-arm/arm-loop-protocol';
-import { nextStudioTipWell } from '$lib/server/opentrons/tip-cursor';
+import { nextStudioTipWell, setManualNextTip } from '$lib/server/opentrons/tip-cursor';
+import { missingDeclaredParams } from '$lib/server/opentrons/declared-params';
 import { TIP_PROFILE, asTipProfile, plausibleZ, resolveCalibratorPoint, type TipProfile } from '$lib/server/services/deck-calibration/tip-calibrator';
 import {
 	DISPENSE_DEPTH_LIMITS,
@@ -1272,6 +1273,20 @@ export async function deployStageProtocol(user: User, rawLibraryId: unknown): Pr
 	}
 	const analysisStatus = uploaded.analysisStatus === 'completed' || uploaded.analysisStatus === 'failed' ? uploaded.analysisStatus : 'pending';
 	const analysisErrors: string[] = uploaded.analysisErrors ?? [];
+	// A run-time parameter the robot rejects (description over 100 characters, display
+	// name over 30) can still leave the analysis 'completed' while silently dropping
+	// every parameter declared after it (2026-11-19: the list stopped at
+	// tiprack_refilled, losing the gate volumes and rack offsets). Refuse to point the
+	// robot at it; it stays on the protocol it had.
+	if (analysisStatus === 'completed') {
+		const missing = missingDeclaredParams(content, uploaded.parametersSchema);
+		if (missing.length) {
+			throw new ArmWaxFillError(
+				`${robot.name} did not take ${missing.length} run-time parameter${missing.length === 1 ? '' : 's'} of ${fileName} (${missing.slice(0, 6).join(', ')}${missing.length > 6 ? ', …' : ''}). Check each one's display name (30 characters) and description (100). The robot keeps its current protocol.`,
+				422
+			);
+		}
+	}
 
 	// The library row: deployment history + (on a completed analysis) the requirements, as the Opentrons page's Deploy records them.
 	const set: Record<string, unknown> = {};
@@ -1725,6 +1740,30 @@ export async function loadArmWaxFill() {
 }
 
 // ── the loop ─────────────────────────────────────────────────────────────
+
+/**
+ * Run tab: point the arm's OT-2 at its next fresh tip by hand (2026-11-19). The
+ * rack follows the protocol on the robot (p20 fill or p300 rehearsal). The next
+ * loop's run starts exactly there (bims_tip_exact), then tracking carries on.
+ */
+export async function setNextTip(user: User, rawWell: unknown): Promise<{ well: string; robotName: string | null }> {
+	await connectDB();
+	const well = String(rawWell ?? '').trim().toUpperCase();
+	const settings = await getSettings();
+	if (!settings.robotId) throw new ArmWaxFillError('Setup: pick the OT-2 the arm feeds first.');
+	if (await activeLoop()) throw new ArmWaxFillError('A loop is running. Set the next tip before the next loop.', 409);
+	const protocol = await protocolFor(settings.robotId);
+	const profile = stageTipProfile(protocol);
+	let r: { well: string; index: number };
+	try {
+		r = await setManualNextTip(settings.robotId, profile, well, user.username ?? null);
+	} catch (e) {
+		throw new ArmWaxFillError(e instanceof Error ? e.message : String(e));
+	}
+	await audit(user, 'arm_wax_fill.next_tip', 'opentrons_robots', settings.robotId, { well: r.well, index: r.index, profile });
+	const robot = await getRobot(settings.robotId);
+	return { well: r.well, robotName: (robot as any)?.name ?? null };
+}
 
 /**
  * opts.tiprackRefilled (the Run card's New Tip Rack box, 2026-11-06): the

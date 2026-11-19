@@ -62,7 +62,7 @@ import { serverTransport } from './transport';
 import { bridgeJobGate } from './bridge-token';
 import { calibrationRtpValues } from './calibration-rtps';
 import { rackOffsetRtpValues, type AppliedRackOffset, type RackSlot, type RackLine } from '$lib/server/services/deck-calibration/rack-offsets';
-import { nextStudioTipWell, profileForTiprack } from './tip-cursor';
+import { nextStudioTipWell, profileForTiprack, clearManualTip } from './tip-cursor';
 import {
 	currentProtocolEntry,
 	loadExpectedWells,
@@ -628,23 +628,33 @@ export async function computeRunParameters(
 	// pick-ups; Studio / Stage / Calibrate Tip pick-ups are counted here. A .py that
 	// declares bims_next_tip_index starts at whichever is further along, so it never
 	// presses into a slot BIMS knows is empty. -1 on a refilled rack (start at A1).
+	// A next tip set by hand on the Run tab is sent with bims_tip_exact: the run
+	// starts exactly there, even behind its own tracker.
 	if (declaredRtps.has('bims_next_tip_index')) {
-		const tipNext = await bimsNextTipIndex(String(robotId), rackLoadNames['11'], runTimeParameterValues['tiprack_refilled'] === true);
-		runTimeParameterValues['bims_next_tip_index'] = tipNext;
-		protocolParameters['bims_next_tip_index'] = tipNext;
+		const tip = await bimsNextTipIndex(String(robotId), rackLoadNames['11'], runTimeParameterValues['tiprack_refilled'] === true);
+		runTimeParameterValues['bims_next_tip_index'] = tip.index;
+		protocolParameters['bims_next_tip_index'] = tip.index;
+		if (declaredRtps.has('bims_tip_exact')) {
+			runTimeParameterValues['bims_tip_exact'] = tip.exact;
+			protocolParameters['bims_tip_exact'] = tip.exact;
+		}
 	}
 	return { runTimeParameterValues, protocolParameters, labwareOffsets: rack.applied };
 }
 
-/** The next fresh tip BIMS knows of on the slot-11 rack (0..95), or -1 when the rack was just refilled or there is no rack. */
-export async function bimsNextTipIndex(robotId: string, tiprackLoadName: string | undefined, refilled: boolean): Promise<number> {
-	if (refilled || !tiprackLoadName) return -1;
+/**
+ * The next fresh tip BIMS knows of on the slot-11 rack (0..95), or -1 when the rack
+ * was just refilled or there is no rack. `exact` = the operator set it by hand.
+ */
+export async function bimsNextTipIndex(robotId: string, tiprackLoadName: string | undefined, refilled: boolean): Promise<{ index: number; exact: boolean }> {
+	if (refilled || !tiprackLoadName) return { index: -1, exact: false };
 	try {
 		const next = await nextStudioTipWell(robotId, profileForTiprack(tiprackLoadName));
-		return Number.isInteger(next.index) && next.index >= 0 && next.index <= 95 ? next.index : -1;
+		const ok = Number.isInteger(next.index) && next.index >= 0 && next.index <= 95;
+		return { index: ok ? next.index : -1, exact: ok && next.source === 'manual' };
 	} catch (e) {
 		console.warn('[run-start] BIMS tip cursor unavailable:', e instanceof Error ? e.message : e);
-		return -1;
+		return { index: -1, exact: false };
 	}
 }
 
@@ -1145,6 +1155,13 @@ export async function startConfirm(
 					capturedAt: new Date()
 				}
 			: { nextTipIndex: 0, hostname: null, capturedAt: new Date() };
+
+	// The run took the hand-set next tip: drop the flag so the next run follows the tracker again.
+	if (protocolParameters.bims_tip_exact === true) {
+		await clearManualTip(robotId, 'z_cal_p300' in protocolParameters ? 'reagent' : 'wax').catch((e) =>
+			console.warn('[run-start] could not clear the hand-set tip:', e instanceof Error ? e.message : e)
+		);
+	}
 
 	if (kind === 'wax') {
 		const now = new Date();

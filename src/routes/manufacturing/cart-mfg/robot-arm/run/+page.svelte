@@ -89,6 +89,24 @@
 	let startBarcode = $state('');
 	// New Tip Rack: the protocol's tiprack_refilled — take the tip from A1 and reset the tracker on the robot.
 	let newTipRack = $state(false);
+	// Next Tip (2026-11-19): point the rack at its next fresh tip by hand; the next
+	// loop's run starts exactly there. Saved on Set Next Tip, never on change.
+	const TIP_WELLS = Array.from({ length: 96 }, (_, i) => `${'ABCDEFGH'[i % 8]}${Math.floor(i / 8) + 1}`);
+	let nextTipPick = $state('');
+	$effect(() => {
+		nextTipPick = data.teach?.nextTipWell ?? 'A1';
+	});
+	async function saveNextTip() {
+		busy = true;
+		try {
+			const r = await post('setNextTip', { well: nextTipPick });
+			if (!r.ok) { note(`Next tip not set: ${r.error}`, 'error'); return; }
+			note(String(r.data.success ?? `Next tip: ${nextTipPick}.`));
+			await invalidateAll();
+		} finally {
+			busy = false;
+		}
+	}
 	const START_AT_LABEL: Record<string, string> = {
 		grab: 'Grab',
 		scan: 'Scan (Cart On The Stage)',
@@ -1195,7 +1213,18 @@
 						title="Tick after putting a fresh rack on the robot: the protocol takes its tip from A1 and resets the tip tracker on the robot (the protocol's Tiprack Refilled parameter). Leave off to keep taking the next fresh tip.">
 						<input type="checkbox" bind:checked={newTipRack} class="rounded border-[var(--color-tron-border)] bg-black/40" />
 						New Tip Rack
-						{#if data.teach?.nextTipWell}<span class="font-mono" style="color: var(--color-tron-text)">{newTipRack ? 'A1' : data.teach.nextTipWell}</span>{/if}
+					</label>
+					<label class="flex items-center gap-1.5 text-xs" style="color: var(--color-tron-text-secondary)">
+						Next Tip
+						{#if newTipRack}
+							<span class="font-mono" style="color: var(--color-tron-text)">A1</span>
+						{:else}
+							<select bind:value={nextTipPick} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)">
+								{#each TIP_WELLS as w (w)}<option value={w}>{w}</option>{/each}
+							</select>
+							<button type="button" onclick={saveNextTip} disabled={busy || (!!loop && loop.status === 'running') || nextTipPick === (data.teach?.nextTipWell ?? '')}
+								class="rounded border border-green-500/50 bg-green-900/20 px-2 py-1.5 text-xs font-semibold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Set Next Tip</button>
+						{/if}
 					</label>
 					{#if startAt === 'decide'}
 						<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">

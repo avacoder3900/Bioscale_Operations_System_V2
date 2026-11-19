@@ -501,10 +501,18 @@ def add_parameters(parameters: protocol_api.Parameters):
     parameters.add_int(
         variable_name="bims_next_tip_index",
         display_name="BIMS next tip",
-        description="Next fresh tip on the 20 uL rack as BIMS counts it (0 = A1, column by column). -1 = use the robot's tracker only.",
+        description="Next fresh tip BIMS counts (0 = A1, column by column). -1 = the tracker only.",
         default=-1,
         minimum=-1,
         maximum=95
+    )
+    # Set by hand on the BIMS Run tab: start EXACTLY at bims_next_tip_index, even
+    # behind the tracker (a part-used rack put back, a slot found empty).
+    parameters.add_bool(
+        variable_name="bims_tip_exact",
+        display_name="BIMS next tip is exact",
+        description="True = set by hand in BIMS: start there even behind the tracker.",
+        default=False
     )
 
     parameters.add_float(variable_name="vol_gate4", display_name="Wax Gate 4 Volume",
@@ -720,7 +728,12 @@ def run(protocol: protocol_api.ProtocolContext):
         else:
             _tip_index = load_tip_state()
             _bims_tip = int(protocol.params.bims_next_tip_index)
-            if 0 <= _bims_tip < len(_all_tips) and _bims_tip > _tip_index:
+            if 0 <= _bims_tip < len(_all_tips) and bool(protocol.params.bims_tip_exact):
+                protocol.comment(f'TIP TRACKER: next tip set by hand in BIMS - {_all_tips[_bims_tip].well_name} '
+                                 f'(index {_bims_tip}; the tracker said {_tip_index})')
+                _tip_index = _bims_tip
+                save_tip_state(_tip_index)
+            elif 0 <= _bims_tip < len(_all_tips) and _bims_tip > _tip_index:
                 protocol.comment(f'TIP TRACKER: BIMS counts tips through {_all_tips[_bims_tip - 1].well_name} as used '
                                  f'(Studio / Calibrate Tip pick-ups) - skipping from index {_tip_index} to {_bims_tip}')
                 _tip_index = _bims_tip

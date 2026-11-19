@@ -39,7 +39,7 @@ export function profileForTiprack(loadName: string): TipProfile {
 export async function nextStudioTipWell(
 	robotId: string,
 	profile: TipProfile
-): Promise<{ well: string; index: number; source: 'run' | 'studio' | 'default'; at: Date | null }> {
+): Promise<{ well: string; index: number; source: 'run' | 'studio' | 'manual' | 'default'; at: Date | null }> {
 	await connectDB();
 	const Model: any = profile === 'reagent' ? ReagentBatchRecord : WaxFillingRun;
 	const lastRun = (await Model.findOne({ 'robot._id': robotId, 'pipetteTipState.after.nextTipIndex': { $exists: true } })
@@ -56,6 +56,9 @@ export async function nextStudioTipWell(
 
 	const haveRun = Number.isFinite(runIdx) && runAt;
 	const haveCur = Number.isFinite(curIdx) && curAt;
+	// Set by hand on the Run tab (2026-11-19): it IS the next tip until a run has
+	// started from it (clearManualTip), whatever the last run recorded.
+	if (haveCur && cur?.manual === true) return { well: wellFromIndex(curIdx), index: curIdx, source: 'manual', at: curAt };
 	if (haveRun && haveCur) {
 		return curAt! > runAt! ? { well: wellFromIndex(curIdx), index: curIdx, source: 'studio', at: curAt } : { well: wellFromIndex(runIdx), index: runIdx, source: 'run', at: runAt };
 	}
@@ -69,6 +72,31 @@ export async function recordStudioTipPickup(robotId: string, profile: TipProfile
 	await connectDB();
 	const i = indexFromWell(well);
 	const next = i == null ? 0 : (i + 1) % 96;
-	await OpentronsRobot.updateOne({ _id: robotId }, { $set: { [`studioTip.${profile}`]: { index: next, at: new Date(), lastWell: well } } });
+	// A hand-set next tip stays hand-set through Studio pick-ups: they walk on from it.
+	const prev = (await OpentronsRobot.findById(robotId).select('studioTip').lean()) as any;
+	const manual = prev?.studioTip?.[profile]?.manual === true;
+	await OpentronsRobot.updateOne({ _id: robotId }, { $set: { [`studioTip.${profile}`]: { index: next, at: new Date(), lastWell: well, ...(manual ? { manual: true } : {}) } } });
 	return wellFromIndex(next);
+}
+
+/**
+ * The operator points the rack at its next fresh tip by hand (Run tab, 2026-11-19).
+ * The next run that declares bims_tip_exact starts EXACTLY there (even behind the
+ * robot's own tracker, e.g. after swapping in a part-used rack); then clearManualTip.
+ */
+export async function setManualNextTip(robotId: string, profile: TipProfile, well: string, username: string | null): Promise<{ well: string; index: number }> {
+	await connectDB();
+	const i = indexFromWell(well);
+	if (i == null) throw new Error(`"${well}" is not a tip position (A1 to H12).`);
+	await OpentronsRobot.updateOne(
+		{ _id: robotId },
+		{ $set: { [`studioTip.${profile}`]: { index: i, at: new Date(), lastWell: null, manual: true, setBy: username ?? null } } }
+	);
+	return { well: wellFromIndex(i), index: i };
+}
+
+/** A run started from the hand-set tip: from here on the usual newest-wins rule applies again. */
+export async function clearManualTip(robotId: string, profile: TipProfile): Promise<void> {
+	await connectDB();
+	await OpentronsRobot.updateOne({ _id: robotId }, { $unset: { [`studioTip.${profile}.manual`]: '' } });
 }

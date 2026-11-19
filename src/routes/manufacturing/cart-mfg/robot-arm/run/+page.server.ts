@@ -23,6 +23,7 @@ import { requirePermission } from '$lib/server/permissions';
 import { sharedAnimateActions } from '$lib/server/robot-arm-animate-actions';
 import {
 	ArmWaxFillError,
+	setNextTip,
 	cancelBlockingRun,
 	cycleAwaitParked,
 	cycleDecide,
@@ -171,6 +172,17 @@ export const actions: Actions = {
 				success: `${r.protocol.protocolName} is now the wax-filling protocol on the robot${r.protocol.rehearsal ? ' — REHEARSAL: p300, air, no wax' : ''}.`,
 				protocol: json(r.protocol)
 			};
+		} catch (err) {
+			return failFrom(err);
+		}
+	},
+
+	// The next fresh tip, set by hand (the next loop's run starts exactly there).
+	setNextTip: async (ev) => {
+		const { d, user } = await writer(ev);
+		try {
+			const r = await setNextTip(user, field(d, 'well'));
+			return { success: `Next tip on ${r.robotName ?? 'the robot'}: ${r.well}.` };
 		} catch (err) {
 			return failFrom(err);
 		}

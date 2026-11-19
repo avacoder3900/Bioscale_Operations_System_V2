@@ -116,13 +116,14 @@ vi.mock('$lib/server/services/deck-calibration/rack-offsets', () => ({
 	}
 }));
 // BIMS tip cursor: what nextStudioTipWell answers for this robot + profile.
-const tipMock = vi.hoisted(() => ({ index: 16, calls: [] as Array<{ robotId: string; profile: string }> }));
+const tipMock = vi.hoisted(() => ({ index: 16, source: 'studio', calls: [] as Array<{ robotId: string; profile: string }> }));
 vi.mock('./tip-cursor', () => ({
 	profileForTiprack: (n: string) => (/20ul/i.test(n) ? 'wax' : 'reagent'),
 	nextStudioTipWell: async (robotId: string, profile: string) => {
 		tipMock.calls.push({ robotId, profile });
-		return { well: 'A3', index: tipMock.index, source: 'studio', at: new Date() };
-	}
+		return { well: 'A3', index: tipMock.index, source: tipMock.source, at: new Date() };
+	},
+	clearManualTip: async () => {}
 }));
 vi.mock('./protocol-freshness', () => ({}));
 vi.mock('$lib/server/services/deck-calibration/run-guard', () => ({ resolveDeckBinding: async () => ({}), DeckBindingError: class {} }));
@@ -538,6 +539,26 @@ describe('computeRunParameters — rack offsets (CALIB-5)', () => {
 
 		const none = await computeRunParameters('wax', new FormData(), schemaWith(['arm_cart_x']) as any, '2vIu0fzsbqzkZ7_Zjj3h2', null);
 		expect(none.runTimeParameterValues).not.toHaveProperty('bims_next_tip_index');
+	});
+
+	it('bims_tip_exact: true only for a next tip set by hand on the Run tab', async () => {
+		const schema = [
+			...schemaWith(['arm_cart_x']),
+			{ variableName: 'bims_next_tip_index', type: 'int', default: -1, min: -1, max: 95 },
+			{ variableName: 'bims_tip_exact', type: 'bool', default: false }
+		];
+		try {
+			tipMock.source = 'manual';
+			tipMock.index = 3;
+			const r = await computeRunParameters('wax', new FormData(), schema as any, '2vIu0fzsbqzkZ7_Zjj3h2', null);
+			expect(r.runTimeParameterValues).toMatchObject({ bims_next_tip_index: 3, bims_tip_exact: true });
+			tipMock.source = 'run';
+			const auto = await computeRunParameters('wax', new FormData(), schema as any, '2vIu0fzsbqzkZ7_Zjj3h2', null);
+			expect(auto.runTimeParameterValues).toMatchObject({ bims_next_tip_index: 3, bims_tip_exact: false });
+		} finally {
+			tipMock.source = 'studio';
+			tipMock.index = 16;
+		}
 	});
 
 	it('rackLineForSchema: only the robot-arm stage protocol (arm_cart_x) reads the arm line', () => {
