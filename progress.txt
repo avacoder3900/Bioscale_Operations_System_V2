@@ -28382,3 +28382,18 @@ Tracked for later testing (not built, user's call):
   3b. Pre-created OT-2 run (above): ~1.7 s; only with an idle-run guard for maintenance runs.
 Tests: test_loop_driver.py 11 passed (4 new); arm-loop-drive 6, robot-prune 3, ot2-move-log 12 passed;
   test:arm-report 460/460. npm run check: 15 errors, same as master.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/7h9Z81V6Wjz12wzKxnF7bg8aHbW5
+Source: branch feat/arm-loop-speed-blindspots @ commit 5a05d96c (fast-forward of master)
+Retrieve this exact code: git checkout feat/arm-loop-speed-blindspots at commit 5a05d96c
+  (or: git log feat/arm-loop-speed-blindspots --oneline to find it if the branch has since moved on)
+What this deployment is for: arrival trace off the loop path, 25 s Pi wait budget, stop snapshot, OT-2 cancelled/5xx logs, profile + prune at loop end.
+After the deploy (from this PC, user's go to fix the blindspots and prune B07):
+- Backfill: 275 robot_arm_moves OT-2 rows with "Run was cancelled" set cancelled: true (2 real OT-2 failures remain).
+- Backfill: fillProfile saved on the 20 loops whose runs B07 still held (profileRun on B07's /runs over Tailscale).
+- B07 pruned by hand with the robot-prune rules: 15 runs deleted (kept the newest 5, current 2ed9b6e5), 7 protocols
+  deleted (kept 4ce03386 = BIMS robot record + e6f08f16 used by kept runs).
+- arm-pi NOT updated: offline on Tailscale (last seen ~19 h before) and not on the LAN. Still to do when it is up:
+  copy services/robot-arm/src/server/loop_driver.py to ~/robot-arm/src/server/, restart robot-arm only with
+  /sessions/active null and no loop driving; make the journal persistent (sudo mkdir -p /var/log/journal;
+  sudo systemd-tmpfiles --create --prefix /var/log/journal; sudo systemctl restart systemd-journald).
+  Until then the Pi's old driver works with the new BIMS (waits now come back within 25 s; it simply asks again).
