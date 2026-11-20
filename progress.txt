@@ -28423,7 +28423,7 @@ tape Record Without Scan deducts; uncatalogued not deducted; lot part refuses ow
 rejected-only lot part takes its barcode; undo returns stock) + headless Chrome walkthrough, no console
 errors. npm run check 15 errors / 451 warnings = current master baseline (master went 13→15 on
 2026-11-19 with the robot-arm calibrate pages, 0cc26707); none in touched files. Unit 1576 pass.
-Not committed.
+Committed in 1628d42f (see below).
 Follow-up (same day, user asked): "Record Without Scan" is now on EVERY unscanned part of the current
 step, not only the no-lot ones. A catalog part recorded that way is deducted from inventory with no lot
 (source manual; the bag's lot is only captured by scanning its label); a part not in the catalog is only
@@ -28434,4 +28434,11 @@ one per tool/supply with "× qty" when over 1, instead of one line. Files: servi
 toolList bullets). Verified on throwaway in-memory MongoDB: 8 service tests pass (incl. Record Without
 Scan on a lot part deducts 75→73 with no lot, undo puts it back, lot scan still works) + headless Chrome
 (pink disc bullets, button on all three parts, each deducts), no console errors. npm run check 15 / 451
-= baseline. Not committed.
+= baseline.
+Committed 1628d42f on feat/spu-build-no-lot-parts, merged to master by the user as PR #135 (merge 1bbe3887).
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/5FDFrLUgVErCkLSBC1NPZ5sfAp4c
+Source: branch master @ commit 1bbe3887 (merge of feat/spu-build-no-lot-parts @ 1628d42f)
+Retrieve this exact code: git checkout master at commit 1bbe3887
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Build SPUs — no-lot parts by own barcode, Record Without Scan on every part, pink Tools And Supplies bullets.
+No data changes needed after the deploy.
