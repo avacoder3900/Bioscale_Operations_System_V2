@@ -12,7 +12,8 @@ import {
 	handleScan,
 	loadBoard,
 	completeSection,
-	recordUncataloguedPart,
+	partScanOptions,
+	recordWithoutScan,
 	registerBucket,
 	reopenSection,
 	startBuild,
@@ -33,12 +34,15 @@ export const load: PageServerLoad = async ({ locals }) => {
 
 	// Live on-hand counts for every catalog-linked part on the WI.
 	const stock: Record<string, number> = {};
+	// How each part is recorded when its bag has no lot in BIMS: its own barcode, or Record Without Scan.
+	let partScan: Record<string, { lot: boolean; barcode: boolean }> = {};
 	if (wi) {
 		const ids = new Set<string>();
 		for (const s of wi.sections) for (const st of s.steps) for (const m of st.materials) if (m.kind === 'part' && m.partDefinitionId) ids.add(m.partDefinitionId);
 		if (ids.size) {
 			const parts = await PartDefinition.find({ _id: { $in: [...ids] } }).select('inventoryCount').lean();
 			for (const p of parts as any[]) stock[String(p._id)] = p.inventoryCount ?? 0;
+			partScan = await partScanOptions([...ids]);
 		}
 	}
 
@@ -52,6 +56,7 @@ export const load: PageServerLoad = async ({ locals }) => {
 		buckets: board.buckets,
 		nextBucketNumber: board.nextBucketNumber,
 		stock,
+		partScan,
 		canBuild: hasPermission(locals.user, 'spu:write')
 	};
 };
@@ -159,7 +164,7 @@ export const actions: Actions = {
 		const stepId = str(form.get('stepId'));
 		const materialId = str(form.get('materialId'));
 		if (!buildId || sectionNumber == null || !stepId || !materialId) return fail(400, { error: 'Part reference missing. Reload the page.' });
-		return respond(async () => recordUncataloguedPart({ buildId, sectionNumber, stepId, materialId }, await operatorFrom(form, locals)));
+		return respond(async () => recordWithoutScan({ buildId, sectionNumber, stepId, materialId }, await operatorFrom(form, locals)));
 	},
 
 	// A step's Yes/No question (e.g. "Is the heat shield already on the heater block?").

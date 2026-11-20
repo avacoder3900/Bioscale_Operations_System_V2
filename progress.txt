@@ -28397,3 +28397,41 @@ After the deploy (from this PC, user's go to fix the blindspots and prune B07):
   /sessions/active null and no loop driving; make the journal persistent (sudo mkdir -p /var/log/journal;
   sudo systemd-tmpfiles --create --prefix /var/log/journal; sudo systemctl restart systemd-journald).
   Until then the Pi's old driver works with the new BIMS (waits now come back within 25 s; it simply asks again).
+
+================================================================================
+2026-11-20 — feat/spu-build-no-lot-parts — Build SPUs: parts with no bag lot (own barcode / Record Without Scan)
+================================================================================
+Found by a scan the user pasted (693f7dcd-…): it is an extra barcode of PT-SPU-105 (40 T 5mm bore
+pulley, Sub-Assembly 1 step 4), which has no receiving lot in BIMS — so Build SPUs (lot labels only)
+refused it and every build stuck at that step. Same for PT-SPU-054 (Adhesive Tape for Antenna, SA4
+step 6) and PT-SPU-021 (Black Sheet Metal Enclosure, SA5 step 1), which have neither a lot nor a
+barcode. The other 41 linked WI parts have lots.
+User picked option 1:
+- A part with no usable bag lot (none, or only rejected/returned) can be scanned by its OWN barcode
+  (PartDefinition.barcode / altBarcodes; a typed part number still doesn't count) in the step's scan
+  box — routed through the same step-order rules and deducted from inventory without a lot.
+- "Record Without Scan" (was only for parts not in the catalog) now also shows for a catalog part
+  with neither a lot nor a barcode, and deducts it. Parts not in the catalog are still only recorded.
+- Parts that have a lot still need the bag's lot label; their own barcode is refused as before.
+- Each scan records source: lot | part_barcode | manual | uncatalogued; the row shows "Scanned ·
+  Part Barcode" / "Recorded Without Scan"; messages say "no bag lot"; Undo returns stock as usual.
+Files: services/spu-build.ts (findPartByBarcode, partHasLot, partScanOptions, recordPartBarcodeScan,
+routePart, recordWithoutScan — renamed from recordUncataloguedPart), models/spu-build.ts (scan.source),
+routes/spu/assembly-wi/build/+page.server.ts (partScan in load) + +page.svelte (part rows).
+Verified on throwaway in-memory MongoDB only: 8 service tests (pulley barcode deducts 1→0 with no lot;
+tape Record Without Scan deducts; uncatalogued not deducted; lot part refuses own barcode / button;
+rejected-only lot part takes its barcode; undo returns stock) + headless Chrome walkthrough, no console
+errors. npm run check 15 errors / 451 warnings = current master baseline (master went 13→15 on
+2026-11-19 with the robot-arm calibrate pages, 0cc26707); none in touched files. Unit 1576 pass.
+Not committed.
+Follow-up (same day, user asked): "Record Without Scan" is now on EVERY unscanned part of the current
+step, not only the no-lot ones. A catalog part recorded that way is deducted from inventory with no lot
+(source manual; the bag's lot is only captured by scanning its label); a part not in the catalog is only
+recorded. Scannable parts still show their scan hint next to the button; the own-barcode refusal for lot
+parts is unchanged. Build SPUs step cards now list Tools And Supplies as pink (text-pink-300) bullets,
+one per tool/supply with "× qty" when over 1, instead of one line. Files: services/spu-build.ts
+(recordWithoutScan no longer refuses lot/barcode parts), build/+page.svelte (button on every part,
+toolList bullets). Verified on throwaway in-memory MongoDB: 8 service tests pass (incl. Record Without
+Scan on a lot part deducts 75→73 with no lot, undo puts it back, lot scan still works) + headless Chrome
+(pink disc bullets, button on all three parts, each deducts), no console errors. npm run check 15 / 451
+= baseline. Not committed.

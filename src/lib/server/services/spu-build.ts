@@ -246,6 +246,40 @@ async function findPartByLabel(code: string): Promise<any | null> {
 	}).select('partNumber name').lean();
 }
 
+/** The part this code is the OWN barcode of (its printed label or an extra label) — not a lot, not a typed part number. */
+async function findPartByBarcode(code: string): Promise<any | null> {
+	return PartDefinition.findOne({
+		$or: [{ barcode: { $in: [code, code.toLowerCase(), code.toUpperCase()] } }, { altBarcodes: code.toLowerCase() }]
+	}).select('_id partNumber name').lean();
+}
+
+const UNUSABLE_LOT = ['rejected', 'returned'];
+
+/** Whether BIMS has a usable bag lot for this part (one not rejected or returned at receiving). */
+async function partHasLot(partDefinitionId: string): Promise<boolean> {
+	return Boolean(await ReceivingLot.exists({ 'part._id': partDefinitionId, status: { $nin: UNUSABLE_LOT } }));
+}
+
+/**
+ * How each part can be recorded on Build SPUs: `lot` = it has a usable bag lot (scan the
+ * bag's lot label); otherwise `barcode` = scan the part's own barcode; neither = the
+ * step shows "Record Without Scan". Both of the latter still deduct from inventory.
+ */
+export async function partScanOptions(partDefinitionIds: string[]): Promise<Record<string, { lot: boolean; barcode: boolean }>> {
+	const ids = [...new Set(partDefinitionIds.filter(Boolean))];
+	if (!ids.length) return {};
+	const [withLots, parts] = await Promise.all([
+		ReceivingLot.distinct('part._id', { 'part._id': { $in: ids }, status: { $nin: UNUSABLE_LOT } }),
+		PartDefinition.find({ _id: { $in: ids } }).select('barcode altBarcodes').lean()
+	]);
+	const lots = new Set((withLots as any[]).map(String));
+	const out: Record<string, { lot: boolean; barcode: boolean }> = {};
+	for (const p of parts as any[]) out[String(p._id)] = { lot: lots.has(String(p._id)), barcode: Boolean(p.barcode) || Boolean(p.altBarcodes?.length) };
+	return out;
+}
+
+export type ScanSource = 'lot' | 'part_barcode' | 'manual' | 'uncatalogued';
+
 /** A code that is some other kind of label, so it must never become a bucket. Null = none of these. */
 async function whatElseIsIt(code: string): Promise<string | null> {
 	if (/^BDG-/i.test(code)) return 'an operator badge';
@@ -308,6 +342,14 @@ export async function handleScan(
 		return recordLotScan({ buildId: input.buildId, sectionNumber: input.sectionNumber, code: raw }, op, lot);
 	}
 
+	// A part with no bag lot in BIMS is scanned by its own barcode instead (still deducted, without a lot).
+	if (input.buildId && input.sectionNumber != null) {
+		const part = await findPartByBarcode(raw);
+		if (part && !(await partHasLot(String(part._id)))) {
+			return recordPartBarcodeScan({ buildId: input.buildId, sectionNumber: input.sectionNumber, code: raw }, op, part);
+		}
+	}
+
 	const other = await whatElseIsIt(raw);
 	if (other) {
 		if (other === 'an operator badge') return warn(`${raw} is an operator badge. Use Change operator to switch who is building.`);
@@ -338,9 +380,12 @@ export async function recordLotScan(
 	const section = sectionOrThrow(wi, input.sectionNumber);
 	const label = tabLabel(section);
 
-	// Parts are scanned by the lot label on their bag; a bare part label is not enough.
+	// Parts are scanned by the lot label on their bag; a part's own barcode only counts
+	// when BIMS has no bag lot for that part (a typed part number never does).
 	const lot = resolvedLot ?? await findLot(code);
 	if (!lot) {
+		const own = await findPartByBarcode(code);
+		if (own && !(await partHasLot(String(own._id)))) return recordPartBarcodeScan(input, op, own);
 		const part = await findPartByLabel(code) as any;
 		if (part) {
 			const what = String(part.partNumber).toUpperCase() === code.toUpperCase() ? `${part.partNumber} is a part number` : `${code} is the part label for ${part.partNumber}`;
@@ -354,6 +399,25 @@ export async function recordLotScan(
 
 	const part = { partDefinitionId: lot.part?._id ?? null, partNumber: lot.part?.partNumber ?? null };
 	const pn = part.partNumber || lot.part?.name || `Lot ${lotName(lot)}`;
+	return routePart({ build, wi, section, part, pn, lot, scannedCode: code, source: 'lot' }, op);
+}
+
+/** Scan of a part's own barcode, for a part that has no bag lot in BIMS: deducted without a lot. */
+async function recordPartBarcodeScan(input: { buildId: string; sectionNumber: number; code: string }, op: BuildOperator, own: any): Promise<BuildOutcome> {
+	const build = await loadOpenBuild(input.buildId);
+	const wi = await requireWi();
+	const section = sectionOrThrow(wi, input.sectionNumber);
+	const part = { partDefinitionId: String(own._id), partNumber: own.partNumber ?? null };
+	return routePart({ build, wi, section, part, pn: own.partNumber || own.name, lot: null, scannedCode: input.code.trim(), source: 'part_barcode' }, op);
+}
+
+/** Put a scanned part on the current step (in step order), or say why it can't go there. */
+async function routePart(
+	args: { build: any; wi: any; section: any; part: { partDefinitionId: string | null; partNumber: string | null }; pn: string; lot: any | null; scannedCode: string; source: ScanSource },
+	op: BuildOperator
+): Promise<BuildOutcome> {
+	const { build, wi, section, part, pn } = args;
+	const label = tabLabel(section);
 	const hit = findStepForPart(section, build, part, wi);
 	const needs = (st: WiStep) => whatStepNeeds(st, build, wi);
 	if (hit.kind === 'section-scanned') return warn(`Every part for ${label} is already scanned on SPU ${build.buildNumber}. Confirm ${label} complete at the end of its steps. Nothing deducted.`);
@@ -368,7 +432,7 @@ export async function recordLotScan(
 			? `${pn} is not used in ${label}. It is used in ${elsewhere.join(', ')}. Nothing deducted.`
 			: `${pn} is not a part on this work instruction. Nothing deducted.`);
 	}
-	return applyPart({ build, wi, section, step: hit.step, material: hit.material, lot, scannedCode: code }, op);
+	return applyPart({ build, wi, section, step: hit.step, material: hit.material, lot: args.lot, scannedCode: args.scannedCode, source: args.source }, op);
 }
 
 /** What the current step is waiting on, as an instruction: "scan A, B" / "answer …" / "finish Cricut: Heat Shield". */
@@ -381,8 +445,12 @@ function whatStepNeeds(step: WiStep, build: any, wi: any): string {
 	return `finish ${proc ? tabLabel(proc) : 'its procedure'} and confirm it`;
 }
 
-/** A part that isn't in the catalog has no lot label to scan: record its use without a deduction. */
-export async function recordUncataloguedPart(input: { buildId: string; sectionNumber: number; stepId: string; materialId: string }, op: BuildOperator): Promise<BuildOutcome> {
+/**
+ * "Record Without Scan", offered on every part of the current step: a catalog part is deducted
+ * from inventory without a lot (scanning its bag's lot label is what records the lot); a part
+ * not in the catalog is only recorded.
+ */
+export async function recordWithoutScan(input: { buildId: string; sectionNumber: number; stepId: string; materialId: string }, op: BuildOperator): Promise<BuildOutcome> {
 	const build = await loadOpenBuild(input.buildId);
 	const wi = await requireWi();
 	const section = sectionOrThrow(wi, input.sectionNumber);
@@ -390,14 +458,13 @@ export async function recordUncataloguedPart(input: { buildId: string; sectionNu
 	if (!step) throw new BuildError('That step is no longer in this section. Reload the page.');
 	const material = partsOf(step).find((m) => m._id === input.materialId);
 	if (!material) throw new BuildError('That part is no longer on this step. Reload the page.');
-	if (material.partDefinitionId) throw new BuildError(`${partLabel(material)} is in the catalog. Scan the lot label on its bag.`);
 	const current = currentStep(section, build, wi);
 	if (current && current._id !== step._id) throw new BuildError(`Finish step ${current.stepNumber} first, then record ${partLabel(material)} for step ${step.stepNumber}.`);
-	return applyPart({ build, wi, section, step, material, lot: null, scannedCode: null }, op);
+	return applyPart({ build, wi, section, step, material, lot: null, scannedCode: null, source: material.partDefinitionId ? 'manual' : 'uncatalogued' }, op);
 }
 
 async function applyPart(
-	args: { build: any; wi: any; section: any; step: WiStep; material: WiMaterial; lot: any | null; scannedCode: string | null },
+	args: { build: any; wi: any; section: any; step: WiStep; material: WiMaterial; lot: any | null; scannedCode: string | null; source: ScanSource },
 	op: BuildOperator
 ): Promise<BuildOutcome> {
 	const { build, wi, section, step, material, lot } = args;
@@ -406,7 +473,9 @@ async function applyPart(
 	const quantity = Number(material.quantity) > 0 ? Number(material.quantity) : 1;
 	const unit = material.unit || 'ea';
 	const lotLabel = lot ? lotName(lot) : null;
-	const willDeduct = Boolean(lot) && deducts(material);
+	// Catalog parts come off inventory however they were recorded (bag lot, own barcode, or by hand);
+	// a part not in the catalog, or one set not to deduct, is only recorded.
+	const willDeduct = deducts(material) && args.source !== 'uncatalogued';
 	const pn = partLabel(material);
 
 	// Claim the slot before touching stock, so a scanner that fires twice can never deduct twice.
@@ -435,6 +504,7 @@ async function applyPart(
 					scannedCode: args.scannedCode,
 					receivingLotId: lot ? String(lot._id) : null,
 					lotLabel,
+					source: args.source,
 					operator: operatorDoc(op),
 					scannedAt: now
 				}
@@ -453,8 +523,8 @@ async function applyPart(
 				items: [{ materialId: material._id, quantity }],
 				unitsBuilt: 1,
 				deviceSerial: null,
-				notes: `SPU build ${build.buildNumber} · ${bucketLabel(build)} · lot ${lotLabel} · operator ${op.name}`,
-				lotId: String(lot._id),
+				notes: `SPU build ${build.buildNumber} · ${bucketLabel(build)} · ${lot ? `lot ${lotLabel}` : args.source === 'manual' ? 'no bag lot, recorded without scan' : 'no bag lot, part barcode scanned'} · operator ${op.name}`,
+				lotId: lot ? String(lot._id) : null,
 				spuBuildId: String(build._id)
 			}, op.user);
 			pull = r.results[0];
@@ -485,7 +555,7 @@ async function applyPart(
 			partNumber: material.partNumber ?? null,
 			name: material.name,
 			lot: lotLabel,
-			reason: lot ? 'material is set not to deduct from inventory' : 'part is not in the inventory catalog'
+			reason: material.partDefinitionId ? 'material is set not to deduct from inventory' : 'part is not in the inventory catalog'
 		});
 	}
 
@@ -498,14 +568,16 @@ async function applyPart(
 		: next._id !== step._id ? ` Step ${step.stepNumber} is scanned. Next: step ${next.stepNumber}.` : '';
 
 	if (!willDeduct) {
-		const why = lot ? 'it is set not to deduct from inventory' : 'it is not linked to the inventory catalog';
+		const why = material.partDefinitionId ? 'it is set not to deduct from inventory' : 'it is not linked to the inventory catalog';
 		return { kind: 'warn', message: `${pn} recorded for step ${step.stepNumber} on SPU ${build.buildNumber}, but ${why}, so nothing was deducted.${tail}` };
 	}
 	const after = pull?.newQuantity;
+	const from = lotLabel ? ` from ${lotLabel}` : '';
+	const noLot = lotLabel ? '' : ', no bag lot';
 	if (after != null && after < 0) {
-		return { kind: 'warn', message: `${pn}: deducted ${quantity} ${unit} from ${lotLabel}. Stock is now ${after}, so inventory is short.${tail}` };
+		return { kind: 'warn', message: `${pn}: deducted ${quantity} ${unit}${from}${noLot}. Stock is now ${after}, so inventory is short.${tail}` };
 	}
-	return { kind: 'ok', message: `${pn}: deducted ${quantity} ${unit} from ${lotLabel} (${pull?.previousQuantity} → ${after}).${tail}` };
+	return { kind: 'ok', message: `${pn}: deducted ${quantity} ${unit}${from} (${pull?.previousQuantity} → ${after})${noLot}.${tail}` };
 }
 
 // ── sections ───────────────────────────────────────────────────────────────
