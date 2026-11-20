@@ -110,6 +110,10 @@ const armWaxFillRunSchema = new Schema(
 		opentronsRunFinalStatus: String,
 		/** 2026-11-10: the OT-2 run as it stood when the loop failed — { at, status, message, last } (a failed loop leaves the run open). */
 		opentronsRunAtFail: Schema.Types.Mixed,
+		/** 2026-11-20: what the loop was doing when STOP RUN / Reset ended it — step, how long pending, OT-2 run, last event, Pi driver. */
+		stopSnapshot: Schema.Types.Mixed,
+		/** 2026-11-20: why the fill profile could not be saved at the loop's end ({ at, error }). */
+		fillProfileError: Schema.Types.Mixed,
 		/**
 		 * The run's fill profile (seconds per cart and per station, from the robot's
 		 * command log — $lib/robot-arm/run-profile), saved once the run is over

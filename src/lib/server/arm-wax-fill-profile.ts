@@ -7,6 +7,7 @@
  */
 import { connectDB, ArmWaxFillRun } from '$lib/server/db';
 import { getRobot, robotGet } from '$lib/server/opentrons/proxy';
+import { afterResponse } from '$lib/server/robot-arm-client';
 import { profileRun, type Ot2CommandSummary, type ProfileLandmarks, type RunProfile, type XY } from '$lib/robot-arm/run-profile';
 
 export class FillProfileError extends Error {
@@ -71,7 +72,25 @@ export async function loopFillProfile(loopId: string, opts: { refresh?: boolean 
 
 	const profile = profileRun(runId, commands, { status: run.status ?? null, startedAt: run.startedAt ?? null, completedAt: run.completedAt ?? null, landmarks });
 	if (profile.status && TERMINAL.has(profile.status)) {
-		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { fillProfile: profile } }).catch(() => null);
+		await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { fillProfile: profile }, $unset: { fillProfileError: 1 } }).catch(() => null);
 	}
 	return profile;
+}
+
+/**
+ * Save the loop's fill profile once its run has ended (2026-11-20): it was saved
+ * only when someone opened it, and the robot keeps only its last runs, so 0 of 63
+ * loops had one. After the response; a run not over yet saves nothing (the next
+ * end of the loop, or an open of the profile, saves it). Never throws.
+ */
+export async function saveFillProfile(loopId: string): Promise<void> {
+	if (process.env.VITEST || !loopId) return;
+	await loopFillProfile(loopId, { refresh: true }).catch(async (e) => {
+		const why = e instanceof Error ? e.message : String(e);
+		await ArmWaxFillRun.updateOne({ _id: loopId, fillProfile: null }, { $set: { fillProfileError: { at: new Date(), error: why.slice(0, 300) } } }).catch(() => null);
+	});
+}
+
+export function saveFillProfileLater(loopId: string): void {
+	afterResponse(saveFillProfile(loopId));
 }

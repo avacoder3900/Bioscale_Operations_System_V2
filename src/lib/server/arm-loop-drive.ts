@@ -35,7 +35,8 @@ import {
 	cycleWithdrawDone,
 	failLoop,
 	getLoop,
-	loopFinish
+	loopFinish,
+	withWaitBudget
 } from './arm-wax-fill';
 
 /** The BIMS address the Pi calls back. Production unless ARM_DRIVER_BIMS_URL says otherwise. */
@@ -78,6 +79,12 @@ export type DriveAction = (typeof DRIVE_ACTIONS)[number];
 const plain = (v: unknown) => JSON.parse(JSON.stringify(v));
 
 /**
+ * A wait step answers the Pi within this (2026-11-20; the Run tab keeps 85 s). The Pi's
+ * wait timeout is 60 s and it asks again on a timeout (loop_driver.py WAIT_ACTIONS).
+ */
+export const DRIVE_WAIT_BUDGET_MS = 25_000;
+
+/**
  * One step for the Pi's driver, as the loop's starter. Refused unless the loop
  * is driven by the Pi (driver 'arm-pi'), so the endpoint can never act on a
  * loop the browser is driving. Same return shapes as the Run tab's actions.
@@ -89,7 +96,11 @@ export async function runDriveStep(loopId: string, action: string, extra: Record
 	if (!d) throw new ArmWaxFillError('Loop not found.', 404);
 	if (d.driver !== 'arm-pi') throw new ArmWaxFillError('This loop is driven by the Run tab, not the arm Pi.', 409);
 	const user = { _id: String(d.startedBy?._id ?? 'arm-pi'), username: String(d.startedBy?.username ?? 'arm-pi') };
-	switch (action as DriveAction) {
+	return withWaitBudget(DRIVE_WAIT_BUDGET_MS, () => driveStep(user, loopId, action as DriveAction, extra));
+}
+
+async function driveStep(user: { _id: string; username: string }, loopId: string, action: DriveAction, extra: Record<string, unknown>): Promise<unknown> {
+	switch (action) {
 		case 'loopState':
 			return { loop: plain(await getLoop(loopId)) };
 		case 'awaitParked':
@@ -177,4 +188,12 @@ export async function armDriverStatus(): Promise<Record<string, unknown> | null>
 	} catch {
 		return null;
 	}
+}
+
+/** The Pi driver's status trimmed for a loop's stop snapshot: its step, note, error and last few events. */
+export async function armDriverAtStop(): Promise<Record<string, unknown> | null> {
+	const s = await armDriverStatus();
+	if (!s) return null;
+	const events = Array.isArray(s.events) ? (s.events as unknown[]).slice(0, 6) : [];
+	return { running: s.running ?? null, loopId: s.loop_id ?? null, step: s.step ?? null, note: s.note ?? null, error: s.error ?? null, events };
 }

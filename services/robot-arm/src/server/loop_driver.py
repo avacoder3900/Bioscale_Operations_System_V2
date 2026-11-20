@@ -23,6 +23,14 @@ the HTTP status, Vercel's x-vercel-id and the Pi's Wi-Fi, and the drive's
 events go to BIMS (action driveLog) when the drive ends — so a step whose
 answer never arrived shows on both sides.
 
+2026-11-20: a wait step's answer held ~85 s was lost on the Wi-Fi (BIMS answered
+at 86 s, the Pi timed out at 130 s, 2026-11-19). BIMS now answers the Pi's waits
+within ~25 s, and a wait that times out here is asked again (same request id,
+x-drive-attempt 2, 3). And a drive stopped while a step is in flight no longer
+blocks the next loop: start() takes over from a drive that was stopped, or whose
+loop BIMS says is no longer running; the old thread ends on its own after that
+step and touches nothing of the new drive.
+
 A step BIMS refuses ends the drive with failLoop, as the browser does; an
 arrival miss ("ARM DID NOT ARRIVE:") ends the drive WITHOUT failing the loop
 (the operator resumes it from the Run tab). Stop / STOP RUN stay on the Run
@@ -40,7 +48,13 @@ from typing import Any, Callable, Optional
 
 import httpx
 
-STEP_TIMEOUT_S = 130.0      # a BIMS wait step holds up to ~85 s (its maxDuration is 120)
+STEP_TIMEOUT_S = 130.0      # a BIMS step's maxDuration is 120 s
+#: The read-only waits: BIMS answers these within ~25 s (DRIVE_WAIT_BUDGET_MS); a timeout is asked again.
+WAIT_ACTIONS = frozenset({"loopState", "awaitParked", "cycleScanRead", "cycleFillWait", "cycleFailPrepare", "cycleSkipAhead", "playback"})
+WAIT_TIMEOUT_S = 60.0
+WAIT_ATTEMPTS = 3
+RETRY_STATUSES = frozenset({0, 502, 503, 504})
+RETRY_PAUSE_S = 1.0
 PLAY_POLL_S = 0.1
 PLAY_GRACE_S = 20.0
 SELF_URL = os.environ.get("ARM_SELF_URL", "http://127.0.0.1:8000")
@@ -91,18 +105,52 @@ class LoopDriver:
         self._seq = 0
         self._run_tag = ""
         self._drive_from = 0.0
+        self._gen = 0
+        self._local = threading.local()
+
+    # ---- which drive this thread is ----
+    def _mine(self) -> tuple[Optional[str], int]:
+        """(loop id, generation) of the drive the calling thread runs; the current one outside a drive thread."""
+        return getattr(self._local, "loop_id", self.loop_id), getattr(self._local, "gen", self._gen)
+
+    def _stale(self) -> bool:
+        """This thread's drive was taken over by a newer one."""
+        return getattr(self._local, "gen", self._gen) != self._gen
+
+    def _stopped(self) -> bool:
+        return self.stop_flag.is_set() or self._stale()
 
     # ---- outside ----
     def status(self) -> dict:
         with self.lock:
             return {**self.state, "events": list(reversed(self.events))[:60]}
 
+    def _old_loop_running(self, old_id: str) -> bool:
+        """BIMS says the drive's loop is still running (unknown counts as running)."""
+        r = self.step("loopState", loop_id=old_id)
+        if not r.get("ok"):
+            return r.get("status") != 404
+        return ((r.get("data") or {}).get("loop") or {}).get("status") == "running"
+
     def start(self, loop_id: str, bims_url: str) -> dict:
         with self.lock:
-            if self.thread and self.thread.is_alive():
-                if self.loop_id == loop_id:
-                    return {"ok": True, "already": True}
-                raise RuntimeError(f"already driving loop {self.loop_id}")
+            alive = bool(self.thread and self.thread.is_alive())
+            old_id, stopped = self.loop_id, self.stop_flag.is_set()
+            if alive and old_id == loop_id and not stopped:
+                return {"ok": True, "already": True}
+            if not self.bims_url:
+                self.bims_url = bims_url.rstrip("/")
+        took_over = None
+        if alive:
+            # A step still in flight for a stopped drive (or a loop that ended under it) must not block this one.
+            if not stopped and old_id and self._old_loop_running(old_id):
+                raise RuntimeError(f"already driving loop {old_id}")
+            took_over = old_id
+        with self.lock:
+            if took_over:
+                self.events.append({"at": time.time(), "note": f"took over from the drive of loop {took_over} (its step still in flight ends on its own)", "loop_id": loop_id})
+            self._gen += 1
+            self.stop_flag = threading.Event()
             self.loop_id = loop_id
             self.bims_url = bims_url.rstrip("/")
             self.stop_flag.clear()
@@ -116,9 +164,15 @@ class LoopDriver:
             with self.lock:
                 self.state.update(running=False, error=f"BIMS did not answer: {first.get('error')}", ended_at=time.time())
             raise RuntimeError(f"BIMS did not answer the drive endpoint: {first.get('error')}")
-        self.thread = threading.Thread(target=self._run, args=(first["data"]["loop"],), name="loop-driver", daemon=True)
+        self.thread = threading.Thread(target=self._drive, args=(first["data"]["loop"], loop_id, self._gen, self._drive_from), name="loop-driver", daemon=True)
         self.thread.start()
-        return {"ok": True}
+        return {"ok": True, **({"tookOver": took_over} if took_over else {})}
+
+    def _drive(self, loop: dict, loop_id: str, gen: int, since: float) -> None:
+        self._local.loop_id = loop_id
+        self._local.gen = gen
+        self._local.since = since
+        self._run(loop)
 
     def stop(self, loop_id: Optional[str] = None) -> dict:
         if loop_id and self.loop_id and loop_id != self.loop_id:
@@ -129,62 +183,78 @@ class LoopDriver:
 
     # ---- helpers ----
     def note(self, text: str, **kw: Any) -> None:
+        loop_id, _ = self._mine()
         with self.lock:
-            self.state["note"] = text
-            self.events.append({"at": time.time(), "note": text, **kw})
+            # A drive that was taken over keeps its notes in the events only; the status is the new drive's.
+            if not self._stale():
+                self.state["note"] = text
+            self.events.append({"at": time.time(), "note": text, "loop_id": loop_id, **kw})
 
-    def step(self, action: str, extra: Optional[dict] = None) -> dict:
-        """One BIMS step: {ok, data} or {ok: False, error, status}."""
-        body = {"loopId": self.loop_id, "action": action, **(extra or {})}
+    def _post(self, action: str, body: dict, req: str, attempt: int) -> tuple[dict, Optional[str]]:
+        if self._call:
+            return self._call(action, body), None
+        try:
+            key = os.environ.get("ROBOT_ARM_API_KEY", "")
+            headers = {"x-api-key": key, "x-drive-req": req, "x-drive-attempt": str(attempt)}
+            timeout = LOG_TIMEOUT_S if action == "driveLog" else WAIT_TIMEOUT_S if action in WAIT_ACTIONS else STEP_TIMEOUT_S
+            res = httpx.post(f"{self.bims_url}/api/robot-arm/wax-fill/drive", json=body, headers=headers, timeout=timeout)
+            try:
+                payload = res.json()
+            except Exception:
+                payload = {"error": res.text[:200]}
+            r = {"ok": True, "data": payload, "status": res.status_code} if res.status_code < 400 else {"ok": False, "error": str(payload.get("error") or f"HTTP {res.status_code}"), "status": res.status_code}
+            return r, res.headers.get("x-vercel-id")
+        except Exception as e:
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "status": 0}, None
+
+    def step(self, action: str, extra: Optional[dict] = None, loop_id: Optional[str] = None) -> dict:
+        """One BIMS step: {ok, data} or {ok: False, error, status}. A wait that times out is asked again (same req)."""
+        mine, _ = self._mine()
+        body = {"loopId": loop_id or mine, "action": action, **(extra or {})}
         with self.lock:
             self._seq += 1
             req = f"{self._run_tag}-{self._seq}"
-        sent_at = time.time()
-        t0 = time.perf_counter()
-        vercel_id = None
-        if self._call:
-            r = self._call(action, body)
-        else:
-            try:
-                key = os.environ.get("ROBOT_ARM_API_KEY", "")
-                headers = {"x-api-key": key, "x-drive-req": req, "x-drive-attempt": "1"}
-                timeout = LOG_TIMEOUT_S if action == "driveLog" else STEP_TIMEOUT_S
-                res = httpx.post(f"{self.bims_url}/api/robot-arm/wax-fill/drive", json=body, headers=headers, timeout=timeout)
-                vercel_id = res.headers.get("x-vercel-id")
-                try:
-                    payload = res.json()
-                except Exception:
-                    payload = {"error": res.text[:200]}
-                r = {"ok": True, "data": payload, "status": res.status_code} if res.status_code < 400 else {"ok": False, "error": str(payload.get("error") or f"HTTP {res.status_code}"), "status": res.status_code}
-            except Exception as e:
-                r = {"ok": False, "error": f"{type(e).__name__}: {e}", "status": 0}
-        if action != "driveLog":
-            with self.lock:
-                self.events.append({
-                    "at": time.time(), "sent_at": sent_at, "action": action, "ok": r.get("ok"),
-                    "ms": round((time.perf_counter() - t0) * 1000), "error": r.get("error"),
-                    "req": req, "attempt": 1, "status": r.get("status"), "vercel_id": vercel_id, "wifi": self._wifi(),
-                })
+        attempts = WAIT_ATTEMPTS if action in WAIT_ACTIONS else 1
+        r: dict = {}
+        for attempt in range(1, attempts + 1):
+            sent_at = time.time()
+            t0 = time.perf_counter()
+            r, vercel_id = self._post(action, body, req, attempt)
+            if action != "driveLog":
+                with self.lock:
+                    self.events.append({
+                        "at": time.time(), "sent_at": sent_at, "action": action, "ok": r.get("ok"),
+                        "ms": round((time.perf_counter() - t0) * 1000), "error": r.get("error"),
+                        "req": req, "attempt": attempt, "status": r.get("status"), "vercel_id": vercel_id, "wifi": self._wifi(),
+                        "loop_id": body["loopId"],
+                    })
+            if r.get("ok") or r.get("status") not in RETRY_STATUSES or attempt == attempts or self._stopped():
+                break
+            self._sleep(RETRY_PAUSE_S)
         return r
 
     def send_log(self) -> None:
         """This drive's events to BIMS's Movement Log (one call; on failure they stay in /ot2/loop-driver/status)."""
+        loop_id, _ = self._mine()
         with self.lock:
-            since = self._drive_from
-            events = [e for e in self.events if e.get("at", 0) >= since]
+            since = getattr(self._local, "since", self._drive_from)
+            events = [e for e in self.events if e.get("at", 0) >= since and e.get("loop_id", loop_id) == loop_id]
         if not events:
             return
         r = self.step("driveLog", {"events": events})
         # An event, not the note: the note keeps the drive's outcome ("grab failed: ...") for the Run tab.
         with self.lock:
-            self.events.append({"at": time.time(), "log": "sent to BIMS" if r.get("ok") else f"not sent: {r.get('error')}"})
+            self.events.append({"at": time.time(), "log": "sent to BIMS" if r.get("ok") else f"not sent: {r.get('error')}", "loop_id": loop_id})
 
     def must(self, step_name: str, action: str, extra: Optional[dict] = None) -> dict:
-        if self.stop_flag.is_set():
+        if self._stopped():
             raise DriveStopped()
         with self.lock:
-            self.state["step"] = action
+            if not self._stale():
+                self.state["step"] = action
         r = self.step(action, extra)
+        if self._stale():
+            raise DriveStopped()
         if not r.get("ok"):
             err = str(r.get("error") or "failed")
             raise DriveFailed(step_name, err, arrival_miss=err.startswith("ARM DID NOT ARRIVE:"))
@@ -216,7 +286,7 @@ class LoopDriver:
             if self._clock() - t0 > limit:
                 raise DriveFailed(step_name, f"the {step_name} play did not end within {limit:.0f} s")
             self._sleep(PLAY_POLL_S)
-        if self.stop_flag.is_set():
+        if self._stopped():
             raise DriveStopped()
         if run_id:
             self.step("settle", {"runId": run_id})
@@ -299,8 +369,11 @@ class LoopDriver:
             self.note("stopped: no further steps")
         except DriveFailed as e:
             with self.lock:
-                self.state["error"] = e.error
-            if e.arrival_miss:
+                if not self._stale():
+                    self.state["error"] = e.error
+            if self._stale():
+                self.note(f"{e.step} failed after this drive was taken over: {e.error}")
+            elif e.arrival_miss:
                 self.note(f"{e.error} — the loop stays where it is; resume it from the Run tab")
             else:
                 # A Stop / STOP RUN on the Run tab ends the loop under us: then the refusal is
@@ -314,7 +387,8 @@ class LoopDriver:
                     self.note(f"the loop ended while {e.step} was being driven: {e.error}")
         except Exception as e:
             with self.lock:
-                self.state["error"] = f"{type(e).__name__}: {e}"
+                if not self._stale():
+                    self.state["error"] = f"{type(e).__name__}: {e}"
             self.note(f"driver error: {type(e).__name__}: {e}")
         finally:
             try:
@@ -323,7 +397,8 @@ class LoopDriver:
                 with self.lock:
                     self.events.append({"at": time.time(), "log": f"not sent: {type(e).__name__}: {e}"})
             with self.lock:
-                self.state.update(running=False, ended_at=time.time())
+                if not self._stale():
+                    self.state.update(running=False, ended_at=time.time())
 
 
 DRIVER = LoopDriver()

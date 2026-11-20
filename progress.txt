@@ -28340,3 +28340,45 @@ Source: branch fix/tube-rack-hole-position @ commit b1c19724 (fast-forward of ma
 Retrieve this exact code: git checkout fix/tube-rack-hole-position at commit b1c19724
   (or: git log fix/tube-rack-hole-position --oneline to find it if the branch has since moved on)
 What this deployment is for: Run tab Next Tip, bims_tip_exact, stage Deploy RTP guard.
+
+================================================================================
+2026-11-20 — feat/arm-loop-speed-blindspots — Arm loop: arrival trace off the loop path, Pi drive fixes, stop/OT-2 diagnostics
+================================================================================
+From the 2026-11-19 log review (user picked speed ideas 2 and 3 and all six blindspots).
+Speed 2, arrival trace: since 2026-11-11 a loop step ended ~5.0 s after the planned play end (1.6 s before): the 3 s
+  /servos/trace held the bus and the loop's own arrival read waited behind it (+3.4 s per play, two plays a cycle).
+  A running loop's play now writes its Arrival row from assertArrived right after the loop's read (source loop_check);
+  afterPlay and the replay.stop webhook only write it if the loop has not after 20 s (detail.deferred). The trace yields
+  to a waiting play on the Pi, so a following grab is not held. Files: robot-arm-arrival.ts, arm-wax-fill.ts.
+Speed 3, OT-2 run ahead of time: NOT built. The data says POST /runs takes ~1.7 s on the robot (B07 loops 2026-11-19
+  18:41 and 19:04); the one 17.5 s start (19:05:50) came 10 s after a STOP RUN, while the robot was still ending the old
+  run (its DELETE got 409 RunNotIdle). A pre-created run would save ~1.7 s but needs the cart count and Tiprack Refilled
+  before Start, and an idle current run blocks maintenance runs (scan sweep, Jog, Calibrate). Built instead: after a
+  loop's run ends (loopFinish, halt home, blocking-run cancel, failLoop when the run ended) BIMS saves the fill profile,
+  then prunes the robot: keeps the current run, the newest 5 runs, every run not ended, and every protocol the BIMS robot
+  record lists or a kept run uses (src/lib/server/opentrons/robot-prune.ts, audit arm_wax_fill.robot_pruned). B07 sat at
+  the 20-run cap, so every start also deleted an old run.
+Blindspot 1, lost Pi answers: Pi-driven wait steps now answer within 25 s (withWaitBudget / DRIVE_WAIT_BUDGET_MS,
+  AsyncLocalStorage; the Run tab keeps 85 s). loop_driver.py: wait steps (loopState, awaitParked, cycleScanRead,
+  cycleFillWait, cycleFailPrepare, cycleSkipAhead, playback) time out at 60 s and are asked again up to 3 times on
+  0/502/503/504, same x-drive-req, x-drive-attempt 1..3. Play steps are never asked twice.
+Blindspot 2, Stop did not release the Pi: awaitPause now answers 409 at once when the loop is no longer running
+  (sendEnd opts out). loop_driver.py start() takes over from a drive that was stopped, or whose loop BIMS says is not
+  running; the old thread (generation counter, thread-local loop id) ends on its own and touches nothing of the new drive.
+Blindspot 3, stop reasons: haltLoop / resetLoop save stopSnapshot on the loop: step, cycle, barcode, how long the step
+  had been pending (latest cycle timestamp), pending instruction, driver, the Pi driver's step/note/last 6 events (read
+  beside stopArmDriver, so STOP RUN waits no longer), the OT-2 run's status/pause/last marker (read started with the
+  stop, 5 s cap) and the last loop audit event.
+Blindspot 4: OT-2 commands the run was cancelled under ("Run was cancelled", RunStopped*) get cancelled: true
+  (ot2CommandCancelled); the Movement Log shows Cancelled, not Failed. Existing rows need a backfill (below).
+Blindspot 5: an OT-2 5xx through the Pi link attaches the tails of the robot's server.log and api.log
+  (GET /logs/<name>?format=text&records=40) to the ot2_call row as detail.robotLogs, after the response.
+Blindspot 6: the fill profile is saved at every loop end (was only on open; 0 of 63 loops had one);
+  fillProfileError records why not. Pi journal persistence: see the Pi entry below.
+Tracked for later testing (not built, user's call):
+  1. Withdraw on ARM CLEAR (gantry off the stage) instead of PARKED: changes the collision gate.
+  4. Coarse-then-fine tip probe (~47 x 0.1 mm moves, ~20 s at every loop start).
+  5. Lower the 11.5 uL remainder so one trip fills two rows (wax process decision).
+  3b. Pre-created OT-2 run (above): ~1.7 s; only with an idle-run guard for maintenance runs.
+Tests: test_loop_driver.py 11 passed (4 new); arm-loop-drive 6, robot-prune 3, ot2-move-log 12 passed;
+  test:arm-report 460/460. npm run check: 15 errors, same as master.

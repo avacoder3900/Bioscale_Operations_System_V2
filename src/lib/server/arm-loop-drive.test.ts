@@ -11,6 +11,7 @@ vi.mock('$lib/server/db', () => ({
 vi.mock('./robot-arm-client', () => ({ robotArmFetchRaw: async () => ({ ok: true, status: 200, text: '{}', headers: new Headers() }) }));
 vi.mock('./robot-arm-animation', () => ({ afterPlay: async () => ({}), playbackActive: async () => null }));
 const getLoop = vi.fn(async () => ({ _id: 'L1', status: 'running' }));
+const budgets: number[] = [];
 vi.mock('./arm-wax-fill', () => {
 	class ArmWaxFillError extends Error {
 		status: number;
@@ -20,7 +21,7 @@ vi.mock('./arm-wax-fill', () => {
 		}
 	}
 	const f = async () => ({});
-	return { ArmWaxFillError, getLoop: (...a: unknown[]) => getLoop(...(a as [])), cycleAwaitParked: f, cycleDecide: f, cycleFail: f, cycleFailDone: f, cycleFailPrepare: f, cycleFillWait: f, cycleGrab: f, cycleGrabDone: f, cycleScanRead: f, cycleScanStart: f, cycleSkipAhead: f, cycleWithdraw: f, cycleWithdrawDone: f, failLoop: f, loopFinish: f };
+	return { ArmWaxFillError, getLoop: (...a: unknown[]) => getLoop(...(a as [])), cycleAwaitParked: f, cycleDecide: f, cycleFail: f, cycleFailDone: f, cycleFailPrepare: f, cycleFillWait: f, cycleGrab: f, cycleGrabDone: f, cycleScanRead: f, cycleScanStart: f, cycleSkipAhead: f, cycleWithdraw: f, cycleWithdrawDone: f, failLoop: f, loopFinish: f, withWaitBudget: (ms: number, fn: () => Promise<unknown>) => (budgets.push(ms), fn()) };
 });
 
 const { runDriveStep, isArmPiKey, armPiDrives } = await import('./arm-loop-drive');
@@ -38,6 +39,12 @@ describe('arm Pi loop driver endpoint', () => {
 	it('runs a step for an arm-Pi loop', async () => {
 		loopDoc = { _id: 'L1', driver: 'arm-pi', startedBy: { _id: 'u', username: 'a' } };
 		expect(await runDriveStep('L1', 'loopState')).toEqual({ loop: { _id: 'L1', status: 'running' } });
+	});
+	it("answers the Pi's waits within 25 s, under its 60 s wait timeout", async () => {
+		loopDoc = { _id: 'L1', driver: 'arm-pi', startedBy: { _id: 'u', username: 'a' } };
+		budgets.length = 0;
+		await runDriveStep('L1', 'awaitParked');
+		expect(budgets).toEqual([25_000]);
 	});
 	it("takes only the Pi's key", () => {
 		expect(isArmPiKey(new Request('http://x', { headers: { 'x-api-key': 'pi-key-123' } }))).toBe(true);

@@ -458,6 +458,8 @@
 											{:else}
 												<span class="text-green-300">{m.device === 'ot2' ? 'Done' : m.device === 'link' ? 'Answered' : m.kind === 'pose_save' ? 'Saved' : m.kind.startsWith('reading_') ? 'Read' : 'Sent'}</span>
 											{/if}
+										{:else if m.cancelled}
+											<span style="color: var(--color-tron-text-secondary)">Cancelled</span>
 										{:else}
 											<span class="text-red-300">Failed</span>
 											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>

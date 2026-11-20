@@ -18,7 +18,7 @@
  * row did not.
  */
 import { connectDB } from './db/connection';
-import { RobotArmMove, RobotArmMoveSet, RobotArmPose, RobotArmSequence } from './db/models';
+import { ArmWaxFillRun, RobotArmMove, RobotArmMoveSet, RobotArmPose, RobotArmSequence } from './db/models';
 import { afterResponse, readReplayMeasured, readServoRegisters, readServoTrace, readServosTimed, type TimedReading } from './robot-arm-client';
 import { currentArmActor } from './robot-arm-move-log';
 import { isSettled, type ServoReading } from '$lib/robot-arm/move-log';
@@ -50,6 +50,13 @@ const TRACE_MS = 3000;
 const TRACE_HZ = 50;
 /** The play row is written once the Pi answers (a Pi recording's after its read-back): look for it this long. */
 const PLAY_ROW_WAIT_MS = 4_000;
+/**
+ * A running loop's play (2026-11-20): the 3 s trace held the bus while the loop's
+ * own arrival check waited behind it (+3.4 s per play, twice a cycle). The loop now
+ * writes the row itself right after its check (source 'loop_check'); the play's
+ * two ends only step in if the loop has not written it this long after.
+ */
+const LOOP_DEFER_MS = 20_000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const arrivalId = (runId: string) => `arrival-${runId}`;
@@ -147,10 +154,26 @@ async function pollArrived(busUntil: number): Promise<{ last: TimedReading | nul
 	return { last, settledMs: null, note: 'Still Moving' };
 }
 
+export type ArrivalSource = 'after_play' | 'replay_stop' | 'loop_check';
+
+/** The run is a play of a loop that is still running (grab, withdraw or fail). */
+async function isRunningLoopPlay(runId: string): Promise<boolean> {
+	const q = { status: 'running', $or: [{ 'cycles.grabArmRunId': runId }, { 'cycles.withdrawArmRunId': runId }, { 'cycles.failArmRunId': runId }] };
+	return !!(await ArmWaxFillRun.exists(q).catch(() => null));
+}
+
 /** Write the play's Arrival row (once per run). `source` says which end of the play asked. */
-export async function logPlayArrival(runId: string, source: 'after_play' | 'replay_stop'): Promise<void> {
+export async function logPlayArrival(runId: string, source: ArrivalSource): Promise<void> {
 	if (process.env.VITEST || !runId) return;
 	const id = arrivalId(runId);
+	let deferred = false;
+	if (source !== 'loop_check') {
+		await connectDB();
+		if (await isRunningLoopPlay(runId)) {
+			deferred = true;
+			await sleep(LOOP_DEFER_MS);
+		}
+	}
 	if (inFlight.has(id)) return;
 	inFlight.add(id);
 	try {
@@ -219,6 +242,8 @@ export async function logPlayArrival(runId: string, source: 'after_play' | 'repl
 			settledMs,
 			detail: {
 				source,
+				// The loop did not write it within LOOP_DEFER_MS: the trace started that much after the play ended.
+				deferred: deferred || undefined,
 				registersError: regs.error ? regs.error.slice(0, 200) : null,
 				traceError: read.traceError ? read.traceError.slice(0, 200) : null,
 				inPlayError: ip.error ? ip.error.slice(0, 200) : null
@@ -233,7 +258,7 @@ export async function logPlayArrival(runId: string, source: 'after_play' | 'repl
 }
 
 /** logPlayArrival after the response (Vercel waitUntil), so the caller does not wait for the arm to settle. */
-export const logPlayArrivalLater = (runId: string, source: 'after_play' | 'replay_stop'): void => afterResponse(logPlayArrival(runId, source));
+export const logPlayArrivalLater = (runId: string, source: ArrivalSource): void => afterResponse(logPlayArrival(runId, source));
 
 /**
  * A Pose Saved row: what the save stored and where the arm was. Runs after

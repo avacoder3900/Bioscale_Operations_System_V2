@@ -130,6 +130,18 @@ export function ot2CommandError(c: { error?: unknown }): string | null {
 	return String(e.detail ?? e.errorType ?? 'failed').slice(0, 300);
 }
 
+/**
+ * The command never failed on its own: the run was stopped or cancelled under it
+ * (2026-11-20: 248 of 291 failed OT-2 rows since 2026-11-09 were "Run was cancelled",
+ * which hid the real failures). The row stays ok: false, marked cancelled.
+ */
+export function ot2CommandCancelled(c: { status?: unknown; error?: unknown }): boolean {
+	if (c.status === 'succeeded') return false;
+	const e = c.error as { detail?: unknown; errorType?: unknown } | null | undefined;
+	if (!e) return false;
+	return /run was (cancelled|canceled|stopped)/i.test(String(e.detail ?? '')) || /^Run(Stopped|Cancelled)/i.test(String(e.errorType ?? ''));
+}
+
 /** Params kept on the row, capped so one command never bloats the log. */
 export function keptParams(params: unknown): Record<string, unknown> | null {
 	if (!params || typeof params !== 'object') return null;

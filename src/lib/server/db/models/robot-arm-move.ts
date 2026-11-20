@@ -46,6 +46,8 @@ const robotArmMoveSchema = new Schema(
 		/** False when the Pi refused or did not answer. */
 		ok: { type: Boolean, required: true },
 		error: { type: String, default: null },
+		/** An OT-2 command the run was cancelled under (2026-11-20): not ok, but not its own failure either. */
+		cancelled: { type: Boolean, default: undefined },
 		durationMs: { type: Number, default: null },
 		/** The BIMS page or route that sent it. */
 		from: { type: String, default: null },

@@ -54,7 +54,7 @@ import {
 	switchRobot
 } from '$lib/server/arm-wax-fill';
 import type { Actions, PageServerLoad } from './$types';
-import { armPiDrives, startArmDriver, stopArmDriver } from '$lib/server/arm-loop-drive';
+import { armDriverAtStop, armPiDrives, startArmDriver, stopArmDriver } from '$lib/server/arm-loop-drive';
 
 // startLoop runs the whole OT-2 start (freshness gate, create, play) in one
 // action, and the wait actions (awaitParked, cycleScanRead, cycleFillWait,
@@ -408,8 +408,9 @@ export const actions: Actions = {
 		const id = field(d, 'loopId');
 		if (!id) return fail(400, { error: 'loopId missing.' });
 		try {
-			await stopArmDriver(id);
-			return json(await haltLoop(user, id));
+			// The Pi driver's step as the stop lands (read beside the stop, so STOP RUN waits no longer).
+			const [piDriver] = await Promise.all([armDriverAtStop(), stopArmDriver(id)]);
+			return json(await haltLoop(user, id, { piDriver }));
 		} catch (err) {
 			return failFrom(err);
 		}
@@ -433,8 +434,8 @@ export const actions: Actions = {
 	resetLoop: async (ev) => {
 		const { user } = await writer(ev);
 		try {
-			await stopArmDriver(null);
-			return json(await resetLoop(user));
+			const [piDriver] = await Promise.all([armDriverAtStop(), stopArmDriver(null)]);
+			return json(await resetLoop(user, { piDriver }));
 		} catch (err) {
 			return failFrom(err);
 		}

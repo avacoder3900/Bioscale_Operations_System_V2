@@ -19,7 +19,7 @@
  */
 import { connectDB } from './db/connection';
 import { ArmWaxFillSettings, RobotArmMove } from './db/models';
-import { robotArmFetchRaw } from './robot-arm-client';
+import { afterResponse, robotArmFetchRaw } from './robot-arm-client';
 import { robotDelete, robotGet, robotPost } from './opentrons/proxy';
 
 export type ArmLinkMethod = 'GET' | 'POST' | 'DELETE' | 'PATCH' | 'PUT';
@@ -104,13 +104,37 @@ export async function armLinkFor(robot: { _id?: unknown; name?: string } | null 
 
 // ── Movement Log rows ────────────────────────────────────────────────────
 
+/** The robot server's own logs, read after an OT-2 5xx (2026-11-20). */
+const ROBOT_LOGS = ['server.log', 'api.log'] as const;
+const ROBOT_LOG_RECORDS = 40;
+const ROBOT_LOG_CHARS = 6000;
+
+/**
+ * An OT-2 answered 5xx (2026-11-18/19: a 500 ExceptionGroup on POST /maintenance_runs,
+ * "robot server is restarting"): BIMS saw only the status. The last lines of the
+ * robot server's own logs (GET /logs/<name> on :31950, through the same Pi link)
+ * go onto the row, after the response so the caller never waits. Never throws.
+ */
+async function attachRobotLogs(rowId: string): Promise<void> {
+	const logs: Record<string, string> = {};
+	for (const name of ROBOT_LOGS) {
+		try {
+			const r = await robotArmFetchRaw(`/ot2/api/logs/${name}?format=text&records=${ROBOT_LOG_RECORDS}&timeout_s=8`, { timeoutMs: 11_000 });
+			logs[name] = r.ok ? r.text.slice(-ROBOT_LOG_CHARS) : `not read: HTTP ${r.status} ${r.text.slice(0, 160)}`;
+		} catch (e) {
+			logs[name] = `not read: ${e instanceof Error ? e.message : String(e)}`.slice(0, 200);
+		}
+	}
+	await RobotArmMove.updateOne({ _id: rowId }, { $set: { 'detail.robotLogs': logs, 'detail.robotLogsAt': new Date() } }).catch(() => null);
+}
+
 async function logHop(o: { method: string; path: string; status: number | null; link: string | null; ms: number; robotMs: number | null; error: string | null; robot: any }): Promise<void> {
 	if (process.env.VITEST) return;
 	try {
 		await connectDB();
 		const via = o.link ? `via ${o.link}` : 'via queue';
 		const robotPart = o.robotMs != null ? ` (robot ${o.robotMs.toFixed(0)} ms)` : '';
-		await RobotArmMove.create({
+		const row = await RobotArmMove.create({
 			device: 'link',
 			at: new Date(Date.now() - o.ms),
 			endAt: new Date(),
@@ -124,6 +148,8 @@ async function logHop(o: { method: string; path: string; status: number | null; 
 			movedBy: null,
 			robot: o.robot ? { _id: String(o.robot._id ?? ''), name: String(o.robot.name ?? '') } : undefined
 		});
+		// The robot's own 5xx (it answered through the link): what its server logged.
+		if (o.link && o.status != null && o.status >= 500 && !o.path.startsWith('/logs/')) afterResponse(attachRobotLogs(String(row._id)));
 	} catch (err) {
 		console.warn('[ot2-arm-link] log row failed:', err instanceof Error ? err.message : err);
 	}

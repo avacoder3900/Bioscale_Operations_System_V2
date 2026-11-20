@@ -146,7 +146,9 @@ class LoopDriverTests(unittest.TestCase):
         })
         self.assertEqual(len(f.logs), 1)
         steps = [e for e in f.logs[0] if e.get("action")]
-        self.assertEqual([e["action"] for e in steps], ["awaitParked", "loopState", "failLoop"])
+        # A timed-out wait is asked twice more under the same request id.
+        self.assertEqual([e["action"] for e in steps], ["awaitParked"] * 3 + ["loopState", "failLoop"])
+        self.assertEqual([e["attempt"] for e in steps[:3]], [1, 2, 3])
         self.assertEqual(len({e["req"] for e in steps}), 3)
         self.assertFalse(steps[0]["ok"])
         self.assertIn("ReadTimeout", steps[0]["error"])
@@ -154,6 +156,75 @@ class LoopDriverTests(unittest.TestCase):
         self.assertTrue(any("grab failed" in (e.get("note") or "") for e in f.logs[0]))
         self.assertIn("grab failed", d.state["note"])
         self.assertEqual(d.events[-1].get("log"), "sent to BIMS")
+
+    def test_a_timed_out_wait_is_asked_again(self):
+        d, f = run_driver({
+            "loopState": [ok(loop=loop("fill"))],
+            "cycleFillWait": [{"ok": False, "error": "ReadTimeout", "status": 0}, ok(pending=False, loop=loop("done", status="completed"))],
+        })
+        self.assertEqual(f.calls, ["loopState", "cycleFillWait", "cycleFillWait"])
+        self.assertIsNone(d.state["error"])
+
+    def test_a_play_step_is_never_asked_twice(self):
+        d, f = run_driver({
+            "loopState": [ok(loop=loop("grab")), ok(loop=loop("grab"))],
+            "awaitParked": [ok(done=True, loop=loop("grab"))],
+            "cycleGrab": [{"ok": False, "error": "ReadTimeout", "status": 0}],
+            "failLoop": [ok(loop=loop("grab", status="failed"))],
+        })
+        self.assertEqual(f.calls.count("cycleGrab"), 1)
+
+    def test_a_stopped_drive_with_a_step_in_flight_is_taken_over(self):
+        import threading
+        release = threading.Event()
+        in_flight = threading.Event()
+
+        def call(action, body):
+            if action == "driveLog":
+                return {"ok": True, "data": {}}
+            if body["loopId"] == "A":
+                if action == "loopState":
+                    return ok(loop=loop("fill"))
+                in_flight.set()
+                release.wait(5)
+                return ok(pending=True, loop=loop("fill"))
+            if action == "loopState":
+                return ok(loop=dict(loop("done", status="completed"), _id="B"))
+            return {"ok": False, "error": "unexpected", "status": 500}
+
+        d = ld.LoopDriver(call=call, session_active=lambda: False)
+        d.start("A", "http://bims")
+        self.assertTrue(in_flight.wait(5))
+        d.stop("A")
+        r = d.start("B", "http://bims")
+        self.assertEqual(r.get("tookOver"), "A")
+        self.assertEqual(d.loop_id, "B")
+        release.set()
+        d.thread.join(5)
+        self.assertFalse(d.stop_flag.is_set())
+        self.assertNotEqual(d.state.get("error"), "unexpected")
+
+    def test_a_running_drive_of_a_running_loop_is_not_taken_over(self):
+        import threading
+        release = threading.Event()
+        in_flight = threading.Event()
+
+        def call(action, body):
+            if action == "driveLog":
+                return {"ok": True, "data": {}}
+            if action == "loopState":
+                return ok(loop=loop("fill"))
+            in_flight.set()
+            release.wait(5)
+            return ok(pending=False, loop=loop("done", status="completed"))
+
+        d = ld.LoopDriver(call=call, session_active=lambda: False)
+        d.start("A", "http://bims")
+        self.assertTrue(in_flight.wait(5))
+        with self.assertRaises(RuntimeError):
+            d.start("B", "http://bims")
+        release.set()
+        d.thread.join(5)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { camelTitle, commandTiming, loopStepLine, ot2CommandLine, pickLoggable, runNames, summarizeTiming } from './ot2-move-log';
+import { camelTitle, commandTiming, loopStepLine, ot2CommandCancelled, ot2CommandLine, pickLoggable, runNames, summarizeTiming } from './ot2-move-log';
 import { kindTitle, summarizeServoMoves } from './move-log';
 
 const names = runNames({
@@ -86,5 +86,17 @@ describe('onPiClock', () => {
 		expect(s.endAt?.toISOString()).toBe('2026-11-06T18:00:00.500Z');
 		expect(s.durationMs).toBe(500);
 		expect(onPiClock(t, null)).toBe(t);
+	});
+});
+
+describe('ot2CommandCancelled', () => {
+	it('marks a command the run was cancelled under', () => {
+		expect(ot2CommandCancelled({ status: 'failed', error: { errorType: 'RunStoppedError', detail: 'Run was cancelled' } })).toBe(true);
+		expect(ot2CommandCancelled({ status: 'failed', error: { detail: 'Run was cancelled' } })).toBe(true);
+	});
+	it('keeps real failures and successes apart', () => {
+		expect(ot2CommandCancelled({ status: 'failed', error: { errorType: 'PipetteOverpressure', detail: 'Overpressure' } })).toBe(false);
+		expect(ot2CommandCancelled({ status: 'succeeded', error: null })).toBe(false);
+		expect(ot2CommandCancelled({ status: 'failed' })).toBe(false);
 	});
 });

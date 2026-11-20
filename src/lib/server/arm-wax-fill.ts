@@ -80,12 +80,17 @@ import {
 	WaxFillingRun
 } from '$lib/server/db';
 import crypto from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { checkRobotConflict, findRobotConflict } from '$lib/server/manufacturing/resource-locks';
 import { getRobotsHealth, type RobotHealth } from '$lib/server/opentrons/health';
 import { consumeCarts, findBucketLabels, BucketError } from '$lib/server/services/bucket-service';
 import { currentProtocolEntry, recordResyncUpload } from '$lib/server/opentrons/protocol-freshness';
 import { recordArmLoopStep, syncOt2Robot } from '$lib/server/ot2-move-log';
 import { recordPiLoopEvents } from '$lib/server/arm-drive-log';
+import { logPlayArrivalLater } from '$lib/server/robot-arm-arrival';
+import { saveFillProfile } from '$lib/server/arm-wax-fill-profile';
+import { pruneRobotStore } from '$lib/server/opentrons/robot-prune';
+import { afterResponse } from '$lib/server/robot-arm-client';
 import { assembleProtocolUpload, bridgeDeviceIdForRobot, getRobot, uploadAssembledProtocol } from '$lib/server/opentrons/proxy';
 // 2026-11-06: every robot read / action goes through the arm Pi's cable link when it is
 // usable (one HTTPS hop, ~2 ms on the cable) and through the Mongo queue otherwise.
@@ -1947,11 +1952,14 @@ async function assertArrived(user: User, loopId: string, cycle: any, ref: Animat
 		end = await animationEnd(ref);
 		check = await checkArrival(end.target);
 	} catch (err) {
+		if (armRunId) logPlayArrivalLater(armRunId, 'loop_check');
 		throw new ArmWaxFillError(
 			`${ARRIVAL_MISS} the arm could not be checked after the ${what} (${err instanceof Error ? err.message : String(err)}). The OT-2 was NOT moved. Press Resume to play the ${what} again, or STOP RUN.`,
 			502
 		);
 	}
+	// The play's Arrival row (its 3 s trace) only now, after the loop's own read (2026-11-20).
+	if (armRunId) logPlayArrivalLater(armRunId, 'loop_check');
 	await audit(user, check.ok ? 'arm_wax_fill.arm_arrived' : 'arm_wax_fill.arm_not_arrived', 'arm_wax_fill_runs', loopId, {
 		cycle: cycle.index,
 		what,
@@ -2316,6 +2324,14 @@ type AwaitResult = { done: true; read: RunPauseRead } | { done: false; terminal:
 const AWAIT_POLL_MS = 750;
 /** One page action's wait budget (the action's maxDuration is 120 s). */
 const AWAIT_BUDGET_MS = 85_000;
+const waitBudgetStore = new AsyncLocalStorage<number>();
+/**
+ * Run `fn` with a shorter wait budget per call (the arm Pi's steps, 2026-11-20): an
+ * answer held for ~85 s was lost on the Pi's Wi-Fi (BIMS answered at 86 s, the Pi
+ * timed out at 130 s, 2026-11-19), so the Pi's waits now come back sooner and it asks again.
+ */
+export const withWaitBudget = <T>(ms: number, fn: () => Promise<T>): Promise<T> => waitBudgetStore.run(ms, fn);
+const waitBudgetMs = (): number => waitBudgetStore.getStore() ?? AWAIT_BUDGET_MS;
 
 /**
  * Wait for the run to pause at `expect`. Returns done:false with `terminal`
@@ -2329,8 +2345,8 @@ async function awaitPause(
 	user: User,
 	loop: any,
 	robot: any,
-	expect: ArmPause & { orClear?: number; orFilled?: number; orCalibrated?: boolean; uninstructed?: boolean },
-	maxWaitMs = AWAIT_BUDGET_MS
+	expect: ArmPause & { orClear?: number; orFilled?: number; orCalibrated?: boolean; uninstructed?: boolean; anyLoopStatus?: boolean },
+	maxWaitMs = waitBudgetMs()
 ): Promise<AwaitResult> {
 	const runId = String(loop.opentronsRunId ?? '');
 	if (!runId) throw new ArmWaxFillError('This loop has no robot run.', 409);
@@ -2350,6 +2366,11 @@ async function awaitPause(
 		} else {
 			r = await readRunPause(robot, runId);
 			fp = null;
+		}
+		// STOP RUN (or Reset) ended the loop while this wait held a step: answer now, so the
+		// arm Pi's driver is free for the next loop (2026-11-19: it stayed held ~90 s and refused it).
+		if (!expect.anyLoopStatus && !(await ArmWaxFillRun.exists({ _id: loop._id, status: 'running' }))) {
+			throw new ArmWaxFillError('The loop is no longer running.', 409);
 		}
 		if (OT2_RUN_TERMINAL.has(r.status)) return { done: false, terminal: r.status, read: r };
 		if (r.pause && r.pause.kind === expect.kind && r.pause.cart === expect.cart) return { done: true, read: r };
@@ -2427,7 +2448,7 @@ async function sendEnd(user: User, loop: any, robot: any, cart: number): Promise
 	try {
 		// The resume that carries `end` needs the run paused at the park; after a
 		// CLEAR the park is seconds away.
-		const w = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cart + 1, uninstructed: true }, 60_000);
+		const w = await awaitPause(user, loop, robot, { kind: 'PARKED', cart: cart + 1, uninstructed: true, anyLoopStatus: true }, 60_000);
 		if (!w.done) throw new Error(w.terminal ? `the robot run ended ${w.terminal}` : 'the run did not park within 60 s');
 		await writeInstruction(user, loop, robot, 'end', cart, null);
 		await resumeRun(robot, String(loop.opentronsRunId));
@@ -2557,7 +2578,7 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
 	let viaDaemon = false;
 	if (cycle.scanVia === 'arm-pi') {
 		const runId = String(loop.opentronsRunId);
-		const deadline = Date.now() + AWAIT_BUDGET_MS;
+		const deadline = Date.now() + waitBudgetMs();
 		let w: Awaited<ReturnType<typeof armScanWait>> = null;
 		for (;;) {
 			w = await armScanWait(robot, runId, cycle.index, Math.min(20, Math.max(1, (deadline - Date.now()) / 1000)));
@@ -2586,7 +2607,7 @@ export async function cycleScanRead(user: User, loopId: string): Promise<{ pendi
 		// The daemon's scan_at_pause reads the scanner the moment the run pauses at the scan position; wait for its answer.
 		let answer: { done: true; body: any } | { done: false } | null = null;
 		try {
-			answer = await pollBridgeCommand(String(cycle.scanCommandId), 'scan_at_pause', AWAIT_BUDGET_MS);
+			answer = await pollBridgeCommand(String(cycle.scanCommandId), 'scan_at_pause', waitBudgetMs());
 		} catch (e) {
 			if (e instanceof BridgeCommandFailed && /unknown command kind/i.test(e.message)) {
 				// The daemon predates scan_at_pause (1.5.0): poll the run from here instead.
@@ -3080,7 +3101,7 @@ export async function loopFinish(user: User, loopId: string): Promise<{ done: bo
 		return { done: true, status: null, loop: (await getLoop(loopId))! };
 	}
 	const robot = await loopRobot(loop);
-	const deadline = Date.now() + AWAIT_BUDGET_MS;
+	const deadline = Date.now() + waitBudgetMs();
 	let status: string | null = null;
 	for (;;) {
 		const r = await readRunPause(robot, String(loop.opentronsRunId));
@@ -3116,6 +3137,7 @@ export async function loopFinish(user: User, loopId: string): Promise<{ done: bo
 	// Every command of the ended run into the Movement Log; what the budget leaves, the Movement Log page reads on its next load.
 	await syncOt2Robot(String(loop.robot?._id ?? ''), { runId: String(loop.opentronsRunId), budgetMs: 10_000 });
 	await recordPiLoopEvents(loop);
+	afterLoopEnded(user, loopId);
 	return { done: true, status, loop: (await getLoop(loopId))! };
 }
 
@@ -3172,7 +3194,73 @@ export async function stopLoop(user: User, loopId: string): Promise<{ loop: Loop
  * /force-reset route (which aborts the one-cart WaxFillingRun and clears the
  * robot's own run). Nothing to end is not an error: the OT-2 side still runs.
  */
-export async function resetLoop(user: User): Promise<{ loop: LoopView | null; stoppedArm: boolean; torqueOn: boolean | null }> {
+/**
+ * After the loop's run has ended (2026-11-20), off the response: its fill profile
+ * is saved (the robot keeps only its last runs), then the robot's old runs and
+ * unused protocols are pruned so the next start's POST /runs does not delete one.
+ */
+function afterLoopEnded(user: User, loopId: string): void {
+	if (process.env.VITEST) return;
+	afterResponse(
+		(async () => {
+			await saveFillProfile(loopId);
+			const d = (await ArmWaxFillRun.findById(loopId).select('robot').lean()) as any;
+			const robot = await getRobot(String(d?.robot?._id ?? '')).catch(() => null);
+			if (!robot) return;
+			const r = await pruneRobotStore(robot);
+			if (r.runsDeleted.length || r.protocolsDeleted.length || r.errors.length) {
+				await audit(user, 'arm_wax_fill.robot_pruned', 'opentrons_robots', String(robot._id), { loopId, runsDeleted: r.runsDeleted, protocolsDeleted: r.protocolsDeleted, errors: r.errors });
+			}
+		})().catch(() => undefined)
+	);
+}
+
+/** The cycle's step timestamps; the latest says how long the step had been pending. */
+const CYCLE_TIMES = ['startedAt', 'gantryHomedForGrabAt', 'grabPlayedAt', 'scanReadAt', 'filledAt', 'gantryHomedForWithdrawAt', 'withdrawPlayedAt', 'gantryHomedForFailAt', 'failPlayedAt'] as const;
+
+/** The Pi driver's status at the stop, trimmed for the loop record. */
+export type PiDriverAtStop = Record<string, unknown> | null;
+
+/**
+ * What the loop was doing when STOP RUN or Reset ended it (2026-11-20): 9 of 10
+ * loops on 2026-11-19 ended "halted by the operator" and nothing said at what.
+ * The step and how long it had been pending, the OT-2 run's state and last
+ * marker (read as the stop began, before the cancel lands), BIMS's last loop
+ * event, and the arm Pi driver's step. Bounded (~5 s) and never throws.
+ */
+async function stopSnapshot(loop: any, cycle: any, how: 'halt' | 'reset', piDriver: PiDriverAtStop, run: Promise<RunPauseRead | null>): Promise<Record<string, unknown>> {
+	const at = new Date();
+	const times = CYCLE_TIMES.map((k) => [k, cycle?.[k] ? new Date(cycle[k]).getTime() : 0] as const).filter(([, t]) => t > 0);
+	const latest = times.reduce<readonly [string, number] | null>((a, b) => (!a || b[1] > a[1] ? b : a), null);
+	const [r, lastEvent] = await Promise.all([
+		run.catch(() => null),
+		(AuditLog.findOne({ tableName: 'arm_wax_fill_runs', recordId: String(loop._id) }).sort({ changedAt: -1 }).select('action changedAt').lean() as Promise<any>).catch(() => null)
+	]);
+	return {
+		at,
+		how,
+		cycle: cycle?.index ?? null,
+		step: cycle?.step ?? null,
+		barcode: cycle?.barcode ?? null,
+		stepSince: latest ? { field: latest[0], at: new Date(latest[1]), ms: at.getTime() - latest[1] } : null,
+		pendingInstruction: loop.pendingInstruction ?? null,
+		driver: loop.driver ?? null,
+		piDriver,
+		opentronsRun: r ? { status: r.status, message: r.message, pause: r.pause, last: r.last, prev: r.prev } : loop.opentronsRunId ? { read: 'no answer in 5 s' } : null,
+		lastEvent: lastEvent ? { action: lastEvent.action, at: lastEvent.changedAt, msAgo: at.getTime() - new Date(lastEvent.changedAt).getTime() } : null
+	};
+}
+
+/** The loop's OT-2 run, read now (started beside the stop's cancel so it shows what was going on), or null after 5 s. */
+function readRunAtStop(loop: any): Promise<RunPauseRead | null> {
+	if (!loop?.opentronsRunId || loop.runFinished) return Promise.resolve(null);
+	return Promise.race([
+		getRobot(String(loop.robot?._id ?? '')).then((robot) => (robot ? readRunPause(robot, String(loop.opentronsRunId)) : null)),
+		waitMs(5000).then(() => null)
+	]).catch(() => null);
+}
+
+export async function resetLoop(user: User, opts: { piDriver?: PiDriverAtStop } = {}): Promise<{ loop: LoopView | null; stoppedArm: boolean; torqueOn: boolean | null }> {
 	await connectDB();
 	const d = (await ArmWaxFillRun.findOne({ status: 'running' }).sort({ createdAt: -1 }).lean()) as any;
 	let stoppedArm = false;
@@ -3186,11 +3274,12 @@ export async function resetLoop(user: User): Promise<{ loop: LoopView | null; st
 	if (!d) return { loop: null, stoppedArm, torqueOn };
 	const loopId = String(d._id);
 	const cycle = d.cycles?.[d.cycles.length - 1];
+	const snapshot = await stopSnapshot(d, cycle, 'reset', opts.piDriver ?? null, readRunAtStop(d));
 	const now = new Date();
 	if (cycle && !['done', 'failed', 'stopped'].includes(cycle.step)) {
 		await patchCycle(loopId, cycle.index, { step: 'stopped', error: 'force reset to idle', endedAt: now });
 	}
-	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', stopRequested: true, error: 'force reset to idle', endedAt: now } });
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', stopRequested: true, error: 'force reset to idle', endedAt: now, stopSnapshot: snapshot } });
 	await audit(user, 'arm_wax_fill.force_reset', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step: cycle?.step ?? null, stoppedArm, torqueOn });
 	return { loop: await getLoop(loopId), stoppedArm, torqueOn };
 }
@@ -3287,8 +3376,10 @@ export interface HaltResult {
  * (haltHomeGantry) and only after the robot confirms it is home runs the arm's
  * Return to home — the arm never moves over the stage before the OT-2 is up.
  */
-export async function haltLoop(user: User, loopId: string): Promise<HaltResult> {
+export async function haltLoop(user: User, loopId: string, opts: { piDriver?: PiDriverAtStop } = {}): Promise<HaltResult> {
 	const { loop, cycle } = await runningLoop(loopId);
+	// Read the OT-2 run now, beside the stop (never ahead of it): what it was doing when the operator pressed STOP RUN.
+	const runAtStop = readRunAtStop(loop);
 	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { stopRequested: true } });
 	let stoppedArm = false;
 	let torqueOn: boolean | null = null;
@@ -3318,8 +3409,9 @@ export async function haltLoop(user: User, loopId: string): Promise<HaltResult> 
 	}
 	const now = new Date();
 	await patchCycle(loopId, cycle.index, { step: 'stopped', error: HALT_REASON, endedAt: now });
-	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', error: HALT_REASON, endedAt: now } });
-	await audit(user, 'arm_wax_fill.halt', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, robotNotes });
+	const snapshot = await stopSnapshot(loop, cycle, 'halt', opts.piDriver ?? null, runAtStop);
+	await ArmWaxFillRun.updateOne({ _id: loopId }, { $set: { status: 'stopped', error: HALT_REASON, endedAt: now, stopSnapshot: snapshot } });
+	await audit(user, 'arm_wax_fill.halt', 'arm_wax_fill_runs', loopId, { cycle: cycle.index, step: cycle.step, stoppedArm, torqueOn, robotNotes, stepSince: snapshot.stepSince, opentronsRun: snapshot.opentronsRun });
 	await recordPiLoopEvents({ ...(await ArmWaxFillRun.findById(loopId).select('robot startedAt endedAt opentronsRunId').lean()), _id: loopId });
 	return { loop: (await getLoop(loopId))!, stoppedArm, torqueOn, robotNotes };
 }
@@ -3385,6 +3477,7 @@ export async function haltHomeGantry(user: User, loopId: string): Promise<{ home
 	const at = new Date();
 	const waitedMs = Date.now() - t0;
 	await audit(user, 'arm_wax_fill.halt_gantry_home', 'arm_wax_fill_runs', loopId, { robotId, waitedMs, lastRun: cur, notes });
+	afterLoopEnded(user, loopId);
 	return { homedAt: at.toISOString(), waitedMs, notes };
 }
 
@@ -3422,6 +3515,7 @@ export async function cancelBlockingRun(user: User, rawRunId: unknown): Promise<
 	await audit(user, 'arm_wax_fill.blocking_run_cancel', 'wax_filling_runs', runId, { robotId: settings.robotId, status: conflict.status, loopId, warning });
 	// The robot run's last commands into the Movement Log (2026-11-10), so the log shows how it ended.
 	if (run?.opentronsRunId) await syncOt2Robot(settings.robotId, { runId: String(run.opentronsRunId), budgetMs: 6000 });
+	if (loopId) afterLoopEnded(user, loopId);
 	return { runId, warning, loop: loopId ? await getLoop(loopId) : null };
 }
 
@@ -3438,6 +3532,8 @@ export async function failLoop(user: User, loopId: string, step: string, error: 
 	await audit(user, 'arm_wax_fill.loop_failed', 'arm_wax_fill_runs', loopId, { cycle: cycle?.index ?? null, step, error: msg });
 	await recordRunAtFail(loop);
 	await recordPiLoopEvents(loop);
+	// A run that ended under the loop (runEndedMidLoop) can be profiled now; one left open is profiled when it is cancelled.
+	if (loop.runFinished) afterLoopEnded(user, loopId);
 	return (await getLoop(loopId))!;
 }
 

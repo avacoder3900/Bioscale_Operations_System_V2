@@ -72,6 +72,8 @@ export interface ArmMoveRow {
 	line: string;
 	ok: boolean;
 	error: string | null;
+	/** OT-2: the run was cancelled under the command (2026-11-20). */
+	cancelled?: boolean;
 	durationMs: number | null;
 	from: string | null;
 	movedBy: { _id?: string; username?: string } | null;
@@ -258,7 +260,7 @@ export async function listArmMoves(o: ArmMoveFilter & { limit?: number | null } 
 	let find = RobotArmMove.find(moveQuery(o)).sort({ at: -1 });
 	if (o.limit !== null) find = find.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000));
 	const rows = await find
-		.select('device at endAt kind servo goal delta goals what line ok error durationMs from movedBy robot runId seq params cart readings moveId frameCount frameStats arrival servoState poseSave poseId settledMs')
+		.select('device at endAt kind servo goal delta goals what line ok error cancelled durationMs from movedBy robot runId seq params cart readings moveId frameCount frameStats arrival servoState poseSave poseId settledMs')
 		.lean();
 	return JSON.parse(JSON.stringify(rows));
 }
