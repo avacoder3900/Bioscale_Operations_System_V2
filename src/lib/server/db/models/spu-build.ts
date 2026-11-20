@@ -53,6 +53,9 @@ const scanSchema = new Schema({
 	scannedCode: { type: String, default: null }, // raw value from the scanner
 	receivingLotId: { type: String, default: null },
 	lotLabel: { type: String, default: null },    // lotNumber / bag barcode shown to people
+	// how the part was recorded: its bag's lot label; its own barcode or "Record Without Scan"
+	// (both only for a part with no bag lot in BIMS, still deducted); or not in the catalog
+	source: { type: String, enum: ['lot', 'part_barcode', 'manual', 'uncatalogued'], default: 'lot' },
 	inventoryTransactionId: { type: String, default: null },
 	materialPullId: { type: String, default: null },
 	previousQuantity: { type: Number, default: null },

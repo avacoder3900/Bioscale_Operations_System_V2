@@ -124,8 +124,12 @@
 	function onHand(m: any): number | null {
 		return m.partDefinitionId && m.partDefinitionId in data.stock ? data.stock[m.partDefinitionId] : null;
 	}
-	function toolList(step: any) {
-		return toolsOf(step).map((m: any) => (m.partNumber ? `${m.name} (${m.partNumber})` : m.name)).join(', ');
+	// Tools, aids and supplies for a step, one bullet each: "Torx T10 Screwdriver (TOOL-SPU-048)", "… × 2".
+	function toolList(step: any): { key: string; label: string }[] {
+		return toolsOf(step).map((m: any) => {
+			const qty = Number(m.quantity) > 1 ? ` × ${m.quantity}${m.unit && m.unit !== 'ea' ? ` ${m.unit}` : ''}` : '';
+			return { key: m._id, label: `${m.name}${m.partNumber ? ` (${m.partNumber})` : ''}${qty}` };
+		});
 	}
 	const toneClass: Record<BuildTone, string> = {
 		done: 'border-green-500/40 bg-green-900/20 text-green-300',
@@ -721,8 +725,13 @@
 										{/if}
 									</div>
 								{/if}
-								{#if tools}
-									<p class="mt-3 text-xs text-[var(--color-tron-text-secondary)]">Tools and supplies: {tools}</p>
+								{#if tools.length}
+									<div class="mt-3">
+										<div class="text-xs font-semibold uppercase tracking-wide text-pink-300">Tools And Supplies</div>
+										<ul class="mt-1 list-disc space-y-0.5 pl-5 text-sm text-pink-300">
+											{#each tools as t (t.key)}<li>{t.label}</li>{/each}
+										</ul>
+									</div>
 								{/if}
 
 								{#if parts.length}
@@ -733,6 +742,8 @@
 											{@const qty = Number(m.quantity) > 0 ? Number(m.quantity) : 1}
 											{@const short = !rec && deducts(m) && stock != null && stock < qty}
 											{@const note = [short ? 'Not enough on hand for this step.' : '', m.notes ?? ''].filter(Boolean).join(' ')}
+											{@const ps = m.partDefinitionId ? data.partScan?.[m.partDefinitionId] : null}
+											{@const nothingToScan = !m.partDefinitionId || Boolean(ps && !ps.lot && !ps.barcode)}
 											<div class="flex flex-wrap items-center gap-x-4 gap-y-2 rounded border px-3 py-2.5 {rec ? 'border-green-500/30 bg-green-900/10' : 'border-[var(--color-tron-border)] bg-[var(--color-tron-bg)]'}">
 												<div class="min-w-0 flex-[1_1_16rem]">
 													<div class="font-semibold text-[var(--color-tron-text)]"><span class="font-mono text-[var(--color-tron-cyan)]">{m.partNumber ?? '—'}</span> · {m.name}</div>
@@ -746,7 +757,7 @@
 													{@const canUndo = rec.status === 'recorded' && data.canBuild && operator && (active.status !== 'cancelled' || rec.deducted)}
 													<div class="flex flex-wrap items-center gap-3">
 														<div class="text-sm font-semibold text-green-300">
-															{#if rec.status === 'pending'}Recording…{:else if rec.status === 'undoing'}Undoing…{:else if rec.deducted}Scanned · {rec.lotLabel} · {rec.previousQuantity} → {rec.newQuantity} · {rec.operator?.name}{:else}{rec.lotLabel ? `Scanned · ${rec.lotLabel}` : 'Recorded'} · not deducted · {rec.operator?.name}{/if}
+															{#if rec.status === 'pending'}Recording…{:else if rec.status === 'undoing'}Undoing…{:else if rec.deducted}{rec.lotLabel ? `Scanned · ${rec.lotLabel}` : rec.source === 'manual' ? 'Recorded Without Scan' : 'Scanned · Part Barcode'} · {rec.previousQuantity} → {rec.newQuantity} · {rec.operator?.name}{:else}{rec.lotLabel ? `Scanned · ${rec.lotLabel}` : 'Recorded'} · not deducted · {rec.operator?.name}{/if}
 														</div>
 														{#if canUndo && !isCorrecting('scan', rec._id)}
 															<button type="button" onclick={() => startCorrection('scan', rec._id)} aria-label="Undo the scan of {m.partNumber ?? ''} {m.name}" class="min-h-11 rounded border border-[var(--color-tron-border)] px-3 text-sm text-[var(--color-tron-text-secondary)] hover:border-amber-500/60 hover:text-amber-300">Undo</button>
@@ -771,17 +782,18 @@
 															</div>
 														</form>
 													{/if}
-												{:else if isCurrent && !m.partDefinitionId}
+												{:else if isCurrent}
+													{#if !nothingToScan}
+														<div class="text-xs text-[var(--color-tron-text-secondary)]">{ps && !ps.lot ? 'Scan its part barcode below' : 'Scan its bag below'}</div>
+													{/if}
 													<form method="POST" action="?/recordPart" use:enhance={actionEnhance}>
 														{@render who()}
 														<input type="hidden" name="buildId" value={active._id} />
 														<input type="hidden" name="sectionNumber" value={section.number} />
 														<input type="hidden" name="stepId" value={step._id} />
 														<input type="hidden" name="materialId" value={m._id} />
-														<button type="submit" disabled={busy} aria-label="Record {m.partNumber ?? ''} {m.name} as used without a scan" class="min-h-11 rounded border border-[var(--color-tron-cyan)]/50 px-3.5 text-sm font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-50">Record without scan</button>
+														<button type="submit" disabled={busy} aria-label="Record {m.partNumber ?? ''} {m.name} without a scan" class="min-h-11 rounded border border-[var(--color-tron-cyan)]/50 px-3.5 text-sm font-semibold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/10 disabled:opacity-50">Record Without Scan</button>
 													</form>
-												{:else if isCurrent}
-													<div class="text-xs text-[var(--color-tron-text-secondary)]">Scan its bag below</div>
 												{/if}
 											</div>
 										{/each}
