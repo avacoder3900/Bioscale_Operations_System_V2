@@ -28528,3 +28528,8 @@ equalled the repo's previous versions; backups *.bak-20261124-events), robot-arm
 /sessions/active null and the loop driver idle. /openapi.json lists /gpio/events; boot rows for
 17/27/22 "mode op, driven low"; first outside row for 17 at 20:07:40. Log ~/.bims-arm/gpio-events.jsonl.
 npm run check 16 (= clean master). Unit tests 1064 pass.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/Cy85sm4JDJTtrLc8X6SHS4JKMMRc
+Source: branch master @ commit 183cc28b (merge of PR #137, feat/arm-gpio-events @ d5856b54)
+Retrieve this exact code: git checkout master at commit 183cc28b
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: arm Pi GPIO pin changes in the Movement Log (GPIO filter, warnings, live Solenoid card)
