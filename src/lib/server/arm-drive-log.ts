@@ -5,6 +5,7 @@
 import { connectDB, ArmWaxFillRun } from '$lib/server/db';
 import { insertOt2Docs } from './ot2-move-log';
 import { robotArmFetchRaw } from './robot-arm-client';
+import { syncGpioEvents } from './robot-arm-gpio-events';
 import { answeredRow, piEventRows, piLoopEventRows, receivedRow, type DriveRow } from '$lib/robot-arm/drive-log';
 
 type RobotRef = { _id: string; name: string } | undefined;
@@ -80,6 +81,8 @@ export async function recordPiLoopEvents(loop: any): Promise<number> {
 			events
 		});
 		const robot = loop.robot?._id ? { _id: String(loop.robot._id), name: String(loop.robot.name ?? '') } : undefined;
+		// The loop's trapdoor and belt pin changes too (2026-11-24), while the Pi still has them in memory.
+		await syncGpioEvents({ timeoutMs: 4000, force: true });
 		return await insertRows(rows, robot);
 	} catch (err) {
 		console.warn('[arm-drive-log] Pi loop events not read:', err instanceof Error ? err.message : err);

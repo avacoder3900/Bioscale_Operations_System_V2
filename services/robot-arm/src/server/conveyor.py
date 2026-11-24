@@ -50,6 +50,36 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+try:  # every pin change, kept for BIMS (gpio_events.py, 2026-11-24); GET /gpio/events serves them
+    from src.server import gpio_events as _events
+except Exception:  # pragma: no cover - run outside the service tree
+    try:
+        from . import gpio_events as _events  # type: ignore
+    except Exception:
+        _events = None  # type: ignore[assignment]
+
+
+class _NoLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+def _write_lock():
+    return _events.write_lock if _events is not None else _NoLock()
+
+
+def _as(source: str, **meta):
+    """Writes inside are logged with this source, or nothing without gpio_events."""
+    return _events.source(source, **meta) if _events is not None else _NoLock()
+
+
+def _record(state: int, ms: Optional[int] = None) -> None:
+    if _events is not None:
+        _events.record(PIN, state, ms=ms)
+
 router = APIRouter(prefix="/conveyor", tags=["conveyor"])
 
 # ---------------------------------------------------------------- config
@@ -102,31 +132,46 @@ class _Backend:
             return self._sim_state
         return int(bool(self._device.value))  # type: ignore[union-attr]
 
-    def on(self) -> None:
-        self._ensure_open()
+    def read_if_open(self) -> Optional[int]:
+        """The pin's level for the gpio_events watcher; None until this service has claimed it."""
+        if self._simulated is None:
+            return None
         if self._simulated:
-            self._sim_state = 1
-            return
-        self._device.on()  # type: ignore[union-attr]
+            return self._sim_state
+        return int(bool(self._device.value)) if self._device is not None else None  # type: ignore[union-attr]
+
+    def on(self, ms: Optional[int] = None) -> None:
+        self._ensure_open()
+        with _write_lock():
+            if self._simulated:
+                self._sim_state = 1
+            else:
+                self._device.on()  # type: ignore[union-attr]
+            _record(1, ms)
 
     def off(self) -> None:
         if self._simulated is None:
             return  # never opened: nothing to turn off
-        if self._simulated:
-            self._sim_state = 0
-            return
-        try:
-            self._device.off()  # type: ignore[union-attr]
-        except Exception as exc:
-            print(f"[conveyor] off failed on BCM {PIN}: {exc}", flush=True)
+        with _write_lock():
+            if self._simulated:
+                self._sim_state = 0
+                _record(0)
+                return
+            try:
+                self._device.off()  # type: ignore[union-attr]
+                _record(0)
+            except Exception as exc:
+                print(f"[conveyor] off failed on BCM {PIN}: {exc}", flush=True)
 
     def force_low(self) -> None:
         """Drive the pin low, claiming it first if nothing has yet."""
         self._ensure_open()
-        if self._simulated:
-            self._sim_state = 0
-            return
-        self._device.off()  # type: ignore[union-attr]
+        with _write_lock():
+            if self._simulated:
+                self._sim_state = 0
+            else:
+                self._device.off()  # type: ignore[union-attr]
+            _record(0)
 
     def close(self) -> None:
         self.off()
@@ -140,7 +185,20 @@ class _Backend:
 
 
 _backend = _Backend()
-atexit.register(_backend.off)
+
+
+def _off_at_exit() -> None:
+    with _as("shutdown"):
+        _backend.off()
+
+
+atexit.register(_off_at_exit)
+if _events is not None:
+    try:
+        _events.note_boot([PIN])
+        _events.register(PIN, _backend.read_if_open)
+    except Exception as _exc:  # never stop the service over its log
+        print(f"[conveyor] pin events not started: {_exc}", flush=True)
 
 
 class _Job:
@@ -165,7 +223,8 @@ def all_off() -> None:
     """Stop the belt and cancel any pending pulse. Safe to call from anywhere."""
     if _job.active:
         _job.task.cancel()  # type: ignore[union-attr]
-    _backend.off()
+    with _as("all-off", note="stop"):
+        _backend.off()
 
 
 def close() -> None:
@@ -193,7 +252,7 @@ def pulse_blocking(pin: int, ms: int, stop_event: Optional[threading.Event] = No
         return {"ok": False, "pin": pin, "ms": ms, "error": "the previous conveyor step is still running"}
     t0 = time.monotonic()
     try:
-        _backend.on()
+        _backend.on(ms=ms)
         try:
             if stop_event is not None:
                 stop_event.wait(ms / 1000.0)
@@ -212,7 +271,7 @@ async def _run(delay_ms: int, ms: int) -> None:
     try:
         if delay_ms > 0:
             await asyncio.sleep(delay_ms / 1000.0)
-        _backend.on()
+        _backend.on(ms=ms)
         _job.on_at = time.monotonic()
         await asyncio.sleep(ms / 1000.0)
     finally:
@@ -269,7 +328,9 @@ async def conveyor_pulse(req: PulseRequest) -> dict:
     _job.delay_ms = req.delay_ms
     _job.started_at = time.monotonic()
     _job.on_at = None
-    _job.task = asyncio.create_task(_run(req.delay_ms, req.ms))
+    # The task copies this context, so its on and off are logged as BIMS's pulse.
+    with _as("bims-pulse", note=f"delay {req.delay_ms} ms" if req.delay_ms else None):
+        _job.task = asyncio.create_task(_run(req.delay_ms, req.ms))
     # Let a zero-delay pulse switch the belt on before answering, so the
     # status in the response is the real one.
     await asyncio.sleep(0)
@@ -291,5 +352,6 @@ async def conveyor_stop() -> dict:
 @router.post("/off")
 async def conveyor_force_off() -> dict:
     """One write: BCM 22 low. Leaves any pulse task alone (use /stop for that)."""
-    _backend.force_low()
+    with _as("all-off", note="Force Off"):
+        _backend.force_low()
     return _status()

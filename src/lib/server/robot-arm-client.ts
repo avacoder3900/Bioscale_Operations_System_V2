@@ -613,7 +613,11 @@ export interface GpioPulseResult {
 }
 
 export interface GpioStatus {
-	pins: Record<string, { state: number }>;
+	/** last / last_on: the pin's newest change and newest "on" (gpio_events.py, 2026-11-24); absent on an older Pi. */
+	pins: Record<string, { state: number; last?: GpioPinEvent | null; last_on?: GpioPinEvent | null }>;
+	read_at?: string | null;
+	/** The Pi keeps its pin changes (GET /gpio/events). */
+	events?: boolean;
 	simulated: boolean;
 	busy: boolean;
 	allowed_pins?: number[];
@@ -622,6 +626,19 @@ export interface GpioStatus {
 	replay_fire?: boolean;
 	/** The Pi's replay sets a step's own P / D / I (`gains` frames, 2026-11-19); absent on an older Pi. */
 	replay_gains?: boolean;
+}
+
+export interface GpioPinEvent {
+	id?: string;
+	at: string;
+	pin?: number;
+	state: number | null;
+	source: string;
+	ms?: number;
+	held_ms?: number;
+	run_id?: string;
+	loop_id?: string;
+	note?: string;
 }
 
 // Conveyor belt on BCM 22 (pin 15). A pulse is fire-and-forget on the Pi, so

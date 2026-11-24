@@ -58,8 +58,8 @@ export const currentArmActor = (): ArmActor | null => actorStore.getStore() ?? n
 
 export interface ArmMoveRow {
 	_id: string;
-	/** 'ot2' for an Opentrons command; missing or 'arm' for the arm. */
-	device?: 'arm' | 'ot2' | 'link';
+	/** 'ot2' for an Opentrons command, 'gpio' for an arm Pi pin change; missing or 'arm' for the arm. */
+	device?: 'arm' | 'ot2' | 'link' | 'gpio';
 	at: string;
 	endAt?: string | null;
 	/** An arm kind, or an OT-2 commandType for an Opentrons row. */
@@ -95,6 +95,10 @@ export interface ArmMoveRow {
 	poseSave?: PoseSaveReport | null;
 	poseId?: string | null;
 	settledMs?: number | null;
+	/** Wax-fill loop rows and GPIO rows fired while a loop drove the arm. */
+	loopId?: string | null;
+	/** GPIO rows (2026-11-24): pin, state, source, pulse ms, held ms, the Pi's note and event id. */
+	detail?: Record<string, unknown> | null;
 }
 
 export async function recordArmMove(
@@ -226,7 +230,7 @@ export async function recordOt2Action(o: {
 export interface ArmMoveFilter {
 	sinceMinutes?: number | null;
 	servo?: number | null;
-	device?: 'arm' | 'ot2' | 'link' | null;
+	device?: 'arm' | 'ot2' | 'link' | 'gpio' | null;
 	/** A Movement Log type group id ("ot2:liquid"); picks its device too. */
 	group?: string | null;
 	/** One exact kind ("aspirate"); wins over the group. */
@@ -238,8 +242,8 @@ function moveQuery(o: ArmMoveFilter): Record<string, unknown> {
 	const g = moveGroup(o.group);
 	const device = o.servo ? 'arm' : (g?.device ?? o.device ?? null);
 	// Rows from before 2026-11-06 carry no device: they are the arm's. A servo means the arm.
-	if (device === 'ot2' || device === 'link') q.device = device;
-	else if (device === 'arm') q.device = { $nin: ['ot2', 'link'] };
+	if (device === 'ot2' || device === 'link' || device === 'gpio') q.device = device;
+	else if (device === 'arm') q.device = { $nin: ['ot2', 'link', 'gpio'] };
 	if (o.kind) q.kind = o.kind;
 	else if (g) q.kind = groupKindQuery(g);
 	if (o.sinceMinutes && o.sinceMinutes > 0) q.at = { $gte: new Date(Date.now() - o.sinceMinutes * 60_000) };
@@ -260,7 +264,7 @@ export async function listArmMoves(o: ArmMoveFilter & { limit?: number | null } 
 	let find = RobotArmMove.find(moveQuery(o)).sort({ at: -1 });
 	if (o.limit !== null) find = find.limit(Math.min(Math.max(o.limit ?? 500, 1), 5000));
 	const rows = await find
-		.select('device at endAt kind servo goal delta goals what line ok error cancelled durationMs from movedBy robot runId seq params cart readings moveId frameCount frameStats arrival servoState poseSave poseId settledMs')
+		.select('device at endAt kind servo goal delta goals what line ok error cancelled durationMs from movedBy robot runId loopId seq params cart readings moveId frameCount frameStats arrival servoState poseSave poseId settledMs detail')
 		.lean();
 	return JSON.parse(JSON.stringify(rows));
 }
@@ -295,10 +299,10 @@ export async function countArmMoves(o: ArmMoveFilter = {}): Promise<number> {
 }
 
 /** Every kind in the log per device, for the type filter. */
-export async function listMoveKinds(): Promise<{ device: 'arm' | 'ot2' | 'link'; kind: string; count: number }[]> {
+export async function listMoveKinds(): Promise<{ device: 'arm' | 'ot2' | 'link' | 'gpio'; kind: string; count: number }[]> {
 	await connectDB();
 	const rows: { _id: { device: string; kind: string }; count: number }[] = await RobotArmMove.aggregate([
-		{ $group: { _id: { device: { $cond: [{ $in: ['$device', ['ot2', 'link']] }, '$device', 'arm'] }, kind: '$kind' }, count: { $sum: 1 } } }
+		{ $group: { _id: { device: { $cond: [{ $in: ['$device', ['ot2', 'link', 'gpio']] }, '$device', 'arm'] }, kind: '$kind' }, count: { $sum: 1 } } }
 	]);
-	return rows.map((r) => ({ device: r._id.device as 'arm' | 'ot2' | 'link', kind: r._id.kind, count: r.count }));
+	return rows.map((r) => ({ device: r._id.device as 'arm' | 'ot2' | 'link' | 'gpio', kind: r._id.kind, count: r.count }));
 }

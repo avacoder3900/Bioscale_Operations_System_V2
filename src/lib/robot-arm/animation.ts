@@ -115,11 +115,26 @@ export const DEFAULT_FIRE_WAIT_S = 1;
 
 /** The Pi's solenoid state as the Animate pages show it (GET /gpio/status). */
 export interface SolenoidStatus {
-	pins: Record<string, { state: number }>;
+	/** last / lastOn (2026-11-24): the pin's newest change and newest "on", from the Pi's gpio_events.py; absent on an older Pi. */
+	pins: Record<string, { state: number; last?: SolenoidPinEvent | null; lastOn?: SolenoidPinEvent | null }>;
 	simulated: boolean;
 	busy: boolean;
 	/** The Pi's replay fires `fire` frames; false on a Pi without the 2026-10-28 replay. */
 	replayFire: boolean;
+	/** When BIMS read it (ISO). */
+	readAt?: string;
+	/** ⚠ lines for a pin high with nothing to explain it ($lib/robot-arm/gpio-events). */
+	warnings?: string[];
+}
+
+/** One pin change as the Pi recorded it (services/robot-arm gpio_events.py). */
+export interface SolenoidPinEvent {
+	at: string;
+	state: number | null;
+	source: string;
+	ms?: number;
+	run_id?: string;
+	loop_id?: string;
 }
 
 /** A fire step's target (solenoid or conveyor) and pulse; the wait after it is the step's holdS. */

@@ -5,7 +5,8 @@
  *     → { moves: [...newest first], total, summary: [{ servo, moves, reversals }],
  *         timing: [{ device, kind, count, totalS, avgS, maxS }] }
  *
- * device: 'arm', 'ot2' (the OT-2's commands) or 'link' (BIMS → OT-2 hops), 2026-11-06; all when left out.
+ * device: 'arm', 'ot2' (the OT-2's commands) or 'link' (BIMS → OT-2 hops), 2026-11-06; 'gpio' (the arm Pi's
+ * pin changes, read from the Pi first, 2026-11-24); all when left out.
  * group: a type group from $lib/robot-arm/move-types; kind: one exact type.
  * total: how many rows match, past the limit.
  *
@@ -22,6 +23,7 @@ import { isAgentApiKey } from '$lib/server/api-auth';
 import { countArmMoves, getArmMoveFrames, getArmMoveInPlay, getArmMoveTrace, listArmMoves } from '$lib/server/robot-arm-move-log';
 import { summarizeServoMoves } from '$lib/robot-arm/move-log';
 import { summarizeTiming } from '$lib/robot-arm/ot2-move-log';
+import { syncGpioEvents } from '$lib/server/robot-arm-gpio-events';
 
 export const GET: RequestHandler = async ({ request, url }) => {
 	if (!isAgentApiKey(request)) return json({ error: 'Unauthorized' }, { status: 401 });
@@ -34,11 +36,12 @@ export const GET: RequestHandler = async ({ request, url }) => {
 	const minutes = Number(url.searchParams.get('minutes')) || null;
 	const servo = Number(url.searchParams.get('servo')) || null;
 	const d = url.searchParams.get('device');
-	const device: 'arm' | 'ot2' | 'link' | null = d === 'arm' || d === 'ot2' || d === 'link' ? d : null;
+	const device: 'arm' | 'ot2' | 'link' | 'gpio' | null = d === 'arm' || d === 'ot2' || d === 'link' || d === 'gpio' ? d : null;
 	const group = url.searchParams.get('group');
 	const kind = url.searchParams.get('kind');
 	const limit = Number(url.searchParams.get('limit')) || 500;
 	const filter = { sinceMinutes: minutes, servo, device, group, kind };
+	const gpio = device === 'gpio' || (!device && !servo && (!group || group.startsWith('gpio:'))) ? await syncGpioEvents({ timeoutMs: 4000 }) : null;
 	const [moves, total] = await Promise.all([listArmMoves({ ...filter, limit }), countArmMoves(filter)]);
-	return json({ moves, total, summary: summarizeServoMoves(moves), timing: summarizeTiming(moves) });
+	return json({ moves, total, summary: summarizeServoMoves(moves), timing: summarizeTiming(moves), ...(gpio ? { gpio } : {}) });
 };

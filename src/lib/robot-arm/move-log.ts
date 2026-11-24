@@ -89,7 +89,16 @@ export const FIRE_KINDS = new Set<string>(['fire', 'fire_sequence', 'conveyor', 
 const pinLabel = (pin: unknown): string => FIRE_TARGETS.find((t) => t.pin === pin)?.label ?? `GPIO ${String(pin)}`;
 
 /** Arm kinds by name; an OT-2 row's kind is its commandType ("moveToWell" → "Move To Well"). */
-export const kindTitle = (k: string): string => KIND_TITLES[k as ArmMoveKind] ?? camelTitle(k);
+/** Arm Pi GPIO rows (2026-11-24, $lib/robot-arm/gpio-events). */
+const GPIO_KIND_TITLES: Record<string, string> = {
+	gpio_on: 'Pin On',
+	gpio_off: 'Pin Off',
+	gpio_boot: 'Pin At Start',
+	gpio_unexplained: 'High With No Cause',
+	gpio_stuck: 'Stuck On'
+};
+
+export const kindTitle = (k: string): string => KIND_TITLES[k as ArmMoveKind] ?? GPIO_KIND_TITLES[k] ?? camelTitle(k);
 
 const num = (v: unknown): number | null => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : null);
 const obj = (v: unknown): Record<string, unknown> | null => (v && typeof v === 'object' ? (v as Record<string, unknown>) : null);

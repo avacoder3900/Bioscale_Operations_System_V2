@@ -59,7 +59,11 @@ export const MOVE_GROUPS: MoveGroup[] = [
 	// 2026-11-10: each loop step the arm Pi asked BIMS for, as BIMS and the Pi each saw it ($lib/robot-arm/drive-log).
 	{ id: 'link:drive', device: 'link', title: 'Arm Pi Drive Step', kinds: ['drive_received', 'drive_answered', 'pi_drive_step', 'pi_drive_note'] },
 	// 2026-11-10: the instruction / announcement handshake as the Pi saw it (read from the Pi when a loop ends).
-	{ id: 'link:handshake', device: 'link', title: 'Loop Handshake', kinds: ['pi_loop_event'] }
+	{ id: 'link:handshake', device: 'link', title: 'Loop Handshake', kinds: ['pi_loop_event'] },
+	// 2026-11-24: every change of the arm Pi's output pins, as the Pi recorded it ($lib/robot-arm/gpio-events).
+	{ id: 'gpio:pin', device: 'gpio', title: 'Pin Change', kinds: ['gpio_on', 'gpio_off'] },
+	{ id: 'gpio:boot', device: 'gpio', title: 'Service Start', kinds: ['gpio_boot'] },
+	{ id: 'gpio:warning', device: 'gpio', title: 'High With No Cause', kinds: ['gpio_unexplained', 'gpio_stuck'] }
 ];
 
 const BY_ID = new Map(MOVE_GROUPS.map((g) => [g.id, g]));
@@ -68,7 +72,7 @@ export const moveGroup = (id: string | null | undefined): MoveGroup | null => (i
 
 /** The group a row's kind falls in. Arm kinds are all named; an unnamed OT-2 kind is Other. */
 export function groupOfKind(device: string | null | undefined, kind: string): MoveGroup | null {
-	const d: MoveDevice = device === 'ot2' ? 'ot2' : device === 'link' ? 'link' : 'arm';
+	const d: MoveDevice = device === 'ot2' || device === 'link' || device === 'gpio' ? device : 'arm';
 	return MOVE_GROUPS.find((g) => g.device === d && g.kinds.includes(kind)) ?? (d === 'ot2' ? BY_ID.get('ot2:other')! : null);
 }
 
