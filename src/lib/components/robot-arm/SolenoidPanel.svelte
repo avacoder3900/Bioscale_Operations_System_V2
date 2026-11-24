@@ -12,10 +12,18 @@
 	 * that solenoid and pulse; without it, both solenoids with a pulse box.
 	 * A conveyor step turns the card into the belt's (2026-11-05): its title,
 	 * its GPIO 22 · Pin 15 chip, no solenoid pin status.
+	 *
+	 * Live pins (2026-11-24): the card re-reads the Pi every few seconds while
+	 * it is shown and the tab is visible, and once more right after a Test
+	 * Fire's pulse has ended, so a chip never stays orange from a read taken
+	 * mid-pulse. It shows when the pins were read and, per solenoid, when it
+	 * was last turned on and by what (the Pi's gpio_events.py), plus a ⚠ line
+	 * for a pin high with nothing to explain it.
 	 */
 	import { deserialize } from '$app/forms';
 	import { HideToggle } from '$lib/robot-arm/hide-toggle.svelte';
 	import { onMount } from 'svelte';
+	import { gpioSourceTitle } from '$lib/robot-arm/gpio-events';
 	import { CONVEYOR_FIRE, DEFAULT_PULSE_MS, MAX_PULSE_MS, MIN_PULSE_MS, SOLENOIDS, solenoidLabel, type FireSpec, type FireTarget, type SolenoidStatus } from '$lib/robot-arm/animation';
 
 	interface Props {
@@ -42,23 +50,35 @@
 		return deserialize(await res.text());
 	}
 
+	let reading = false;
 	async function refresh() {
+		if (reading) return;
+		reading = true;
 		try {
 			const r = await action('solenoids', {});
 			if (r.type === 'success') status = ((r.data as { solenoids?: SolenoidStatus | null } | undefined)?.solenoids ?? null) as SolenoidStatus | null;
 		} catch {
 			/* keep the last status */
+		} finally {
+			reading = false;
 		}
 	}
 
+	const POLL_MS = 3000;
 	onMount(() => {
 		if (armReachable && !initial) void refresh();
+		const t = setInterval(() => {
+			if (armReachable && !panel.hidden && !firing && document.visibilityState === 'visible') void refresh();
+		}, POLL_MS);
+		return () => clearInterval(t);
 	});
 
 	async function fire(solenoid: FireTarget, ms: number) {
 		if (firing) return;
 		firing = solenoid;
 		note = null;
+		// Once more after the pulse has ended (a belt pulse returns before it ends).
+		setTimeout(() => void refresh(), ms + 400);
 		try {
 			const r = await action('testFire', { solenoid, pulseMs: String(ms) });
 			const d = (r.type === 'success' || r.type === 'failure' ? r.data : null) as { success?: string; error?: string } | null;
@@ -73,6 +93,23 @@
 
 	const clampMs = (v: number) => Math.min(MAX_PULSE_MS, Math.max(MIN_PULSE_MS, Math.round(Number.isFinite(v) ? v : DEFAULT_PULSE_MS)));
 	const pinOn = (pin: number) => status?.pins?.[String(pin)]?.state === 1;
+	const clock = (iso: string | null | undefined) => {
+		const d = iso ? new Date(iso) : null;
+		return d && !isNaN(d.getTime()) ? d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+	};
+	const day = (iso: string) => {
+		const d = new Date(iso);
+		return d.toDateString() === new Date().toDateString() ? clock(iso) : `${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} ${clock(iso)}`;
+	};
+	/** "On Since 14:01:10  Replay Fire" / "Last On Nov 23 14:01:10  BIMS Pulse  100 ms". */
+	function lastOnLine(pin: number): string | null {
+		const p = status?.pins?.[String(pin)];
+		const e = p?.lastOn;
+		if (!e) return p?.last === undefined ? null : 'Never On';
+		return [`${p?.state === 1 ? 'On Since' : 'Last On'} ${day(e.at)}`, gpioSourceTitle(e.source), e.ms != null ? `${e.ms} ms` : null, e.loop_id ? `Loop ${e.loop_id}` : null]
+			.filter(Boolean)
+			.join('  ');
+	}
 	const muted = 'color: var(--color-tron-text-secondary)';
 	const blue = 'background: rgba(56,189,248,0.15); color: var(--color-tron-cyan); border: 1px solid var(--color-tron-cyan);';
 	const input = 'rounded border bg-black/40 px-2 py-1 text-sm';
@@ -112,6 +149,18 @@
 				{status.replayFire ? ' · Fire Steps Supported' : ''}
 			{/if}
 		</p>
+		{#if status && !belt}
+			<div class="mt-1 space-y-0.5 font-mono text-[11px]" style={muted}>
+				{#if status.readAt}<p>Read {clock(status.readAt)}</p>{/if}
+				{#each SOLENOIDS as s (s.id)}
+					{@const line = lastOnLine(s.pin)}
+					{#if line}<p><span style="color: {pinOn(s.pin) ? '#fbbf24' : 'var(--color-tron-text)'}">{s.id}</span>  {line}</p>{/if}
+				{/each}
+			</div>
+			{#each status.warnings ?? [] as w (w)}
+				<p class="mt-1 text-[11px]" style="color: #fbbf24">{w}</p>
+			{/each}
+		{/if}
 		{#if armReachable && status && !status.replayFire}
 			<p class="mt-1 text-[11px]" style="color: #fbbf24">
 				Pi replay cannot fire steps; move sets with fire steps will not play.

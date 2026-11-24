@@ -7,7 +7,8 @@ inside the service, so /e-stop and shutdown can always force them low, and so
 no second process fights the service for the libgpiod line handles.
 
 Endpoints (auth is applied by app.py when the router is included):
-    GET  /gpio/status            {pins: {"17": {state: 0|1}}, simulated, busy}
+    GET  /gpio/status            {pins: {"17": {state: 0|1, last_on: {...}}}, simulated, busy, read_at}
+    GET  /gpio/events?since=     every pin change, GPIO 22 too (gpio_events.py, 2026-11-24)
     POST /gpio/pulse             {pin: 17, ms: 1000}
     POST /gpio/sequence          {pins: [17, 27], ms: 1000, gap_ms: 500}
 
@@ -49,6 +50,14 @@ from typing import Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+
+try:  # every pin change, kept for BIMS (2026-11-24); a Pi without the module still pulses
+    from src.server import gpio_events as _events
+except Exception:  # pragma: no cover - run outside the service tree
+    try:
+        from . import gpio_events as _events  # type: ignore
+    except Exception:
+        _events = None  # type: ignore[assignment]
 
 router = APIRouter(prefix="/gpio", tags=["gpio"])
 
@@ -134,22 +143,38 @@ class _Backend:
         dev = self._devices.get(pin)
         return int(bool(dev.value)) if dev is not None else 0  # type: ignore[attr-defined]
 
-    def on(self, pin: int) -> None:
-        self._ensure_open()
+    def read_if_open(self, pin: int) -> Optional[int]:
+        """The pin's level for the gpio_events watcher; None until this service has claimed it."""
+        if self._simulated is None:
+            return None
         if self._simulated:
-            self._sim_state[pin] = 1
-            return
-        self._devices[pin].on()  # type: ignore[attr-defined]
+            return self._sim_state.get(pin, 0)
+        dev = self._devices.get(pin)
+        return int(bool(dev.value)) if dev is not None else None  # type: ignore[attr-defined]
+
+    def on(self, pin: int, ms: Optional[int] = None) -> None:
+        self._ensure_open()
+        with _write_lock():
+            if self._simulated:
+                self._sim_state[pin] = 1
+            else:
+                self._devices[pin].on()  # type: ignore[attr-defined]
+            if _events is not None:
+                _events.record(pin, 1, ms=ms)
 
     def off(self, pin: int) -> None:
         if self._simulated is None:
             return  # never opened: nothing to turn off
-        if self._simulated:
-            self._sim_state[pin] = 0
-            return
-        dev = self._devices.get(pin)
-        if dev is not None:
-            dev.off()  # type: ignore[attr-defined]
+        with _write_lock():
+            if self._simulated:
+                self._sim_state[pin] = 0
+            else:
+                dev = self._devices.get(pin)
+                if dev is None:
+                    return
+                dev.off()  # type: ignore[attr-defined]
+            if _events is not None:
+                _events.record(pin, 0)
 
     def all_off(self) -> None:
         for p in ALLOWED_PINS:
@@ -159,7 +184,29 @@ class _Backend:
                 print(f"[gpio] all_off failed on BCM {p}: {exc}", flush=True)
 
 
+def _write_lock():
+    """gpio_events' lock, so the watcher never reads a pin between its write and its record."""
+    return _events.write_lock if _events is not None else _NO_LOCK
+
+
+class _NoLock:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+_NO_LOCK = _NoLock()
+
 _backend = _Backend()
+if _events is not None:
+    try:
+        _events.note_boot(ALLOWED_PINS)
+        for _p in ALLOWED_PINS:
+            _events.register(_p, lambda _p=_p: _backend.read_if_open(_p))
+    except Exception as _exc:  # never stop the service over its log
+        print(f"[gpio] pin events not started: {_exc}", flush=True)
 _lock = asyncio.Lock()
 #: Held while ANY coil is energised, by any caller (REST or the replay thread).
 _coil_lock = threading.Lock()
@@ -169,14 +216,23 @@ REPLAY_FIRE_SUPPORTED = False
 REPLAY_GAINS_SUPPORTED = False
 
 
+def _as(source: str, **meta):
+    """Writes inside are logged with this source (gpio_events), or nothing without the module."""
+    if _events is None:
+        return _NoLock()
+    return _events.source(source, **meta)
+
+
 def all_off() -> None:
     """Force every solenoid pin low. Called from /e-stop and on shutdown."""
-    _backend.all_off()
+    with _as("all-off", note="e-stop or stop"):
+        _backend.all_off()
 
 
 def close() -> None:
     """Release the GPIO lines. Called from the lifespan shutdown path."""
-    _backend.close()
+    with _as("shutdown"):
+        _backend.close()
 
 
 # ---------------------------------------------------------------- helpers
@@ -193,7 +249,7 @@ def _check_ms(ms: int) -> None:
 
 async def _pulse_locked(pin: int, ms: int) -> None:
     """Drive one pin high for ms, then low. Caller holds _lock and _coil_lock."""
-    _backend.on(pin)
+    _backend.on(pin, ms=ms)
     try:
         await asyncio.sleep(ms / 1000.0)
     finally:
@@ -220,7 +276,7 @@ def pulse_blocking(pin: int, ms: int, stop_event: Optional[threading.Event] = No
         return {"ok": False, "pin": pin, "ms": ms, "error": "another solenoid pulse did not finish in time"}
     t0 = time.monotonic()
     try:
-        _backend.on(pin)
+        _backend.on(pin, ms=ms)
         try:
             if stop_event is not None:
                 stop_event.wait(ms / 1000.0)
@@ -250,10 +306,20 @@ class SequenceRequest(BaseModel):
 
 # ---------------------------------------------------------------- routes
 
+def _pin_status(p: int) -> dict:
+    out: dict = {"state": _backend.state(p)}
+    if _events is not None:
+        out["last"] = _events.last(p)
+        out["last_on"] = _events.last_on(p)
+    return out
+
+
 @router.get("/status")
 async def gpio_status() -> dict:
     return {
-        "pins": {str(p): {"state": _backend.state(p)} for p in ALLOWED_PINS},
+        "pins": {str(p): _pin_status(p) for p in ALLOWED_PINS},
+        "read_at": _events.now_iso() if _events is not None else None,
+        "events": _events is not None,
         "allowed_pins": ALLOWED_PINS,
         "max_pulse_ms": MAX_PULSE_MS,
         "simulated": _backend.simulated,
@@ -261,6 +327,22 @@ async def gpio_status() -> dict:
         "replay_fire": REPLAY_FIRE_SUPPORTED,
         "replay_gains": REPLAY_GAINS_SUPPORTED,
     }
+
+
+@router.get("/events")
+async def gpio_events_route(since: Optional[str] = None, limit: int = 500) -> dict:
+    """Every pin change since `since` (ISO), oldest first; the conveyor's GPIO 22 too."""
+    if _events is None:
+        raise HTTPException(status_code=501, detail="gpio_events.py is not installed on this Pi")
+    pins: Dict[str, Optional[int]] = {str(p): _backend.read_if_open(p) for p in ALLOWED_PINS}
+    try:
+        from src.server import conveyor as _belt
+
+        pins[str(_belt.PIN)] = _belt._backend.read_if_open()
+    except Exception:
+        pass
+    last = {k: _events.last(int(k)) for k in pins}
+    return {"events": _events.events(since, limit), "boot_id": _events.BOOT_ID, "now": _events.now_iso(), "pins": pins, "last": last}
 
 
 @router.post("/pulse")
@@ -274,7 +356,8 @@ async def gpio_pulse(req: PulseRequest) -> dict:
         if not _coil_lock.acquire(blocking=False):
             raise _coil_busy()
         try:
-            await _pulse_locked(req.pin, req.ms)
+            with _as("bims-pulse"):
+                await _pulse_locked(req.pin, req.ms)
         finally:
             _coil_lock.release()
     return {
@@ -297,10 +380,11 @@ async def gpio_sequence(req: SequenceRequest) -> dict:
         if not _coil_lock.acquire(blocking=False):
             raise _coil_busy()
         try:
-            for i, p in enumerate(req.pins):
-                if i > 0 and req.gap_ms > 0:
-                    await asyncio.sleep(req.gap_ms / 1000.0)
-                await _pulse_locked(p, req.ms)
+            with _as("bims-pulse", note="sequence"):
+                for i, p in enumerate(req.pins):
+                    if i > 0 and req.gap_ms > 0:
+                        await asyncio.sleep(req.gap_ms / 1000.0)
+                    await _pulse_locked(p, req.ms)
         finally:
             _coil_lock.release()
     return {

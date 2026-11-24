@@ -10,6 +10,11 @@
 	 * or the queue, with the Pi's and the robot's ms.
 	 * Timing sets the three side by side ($lib/robot-arm/ot2-move-log).
 	 *
+	 * GPIO rows (2026-11-24): every change of the arm Pi's output pins
+	 * (Trapdoor A / B, Conveyor Belt) with what turned it on, read from the Pi
+	 * on each load, and a ⚠ row for a pin high with nothing to explain it
+	 * ($lib/robot-arm/gpio-events).
+	 *
 	 * Filters (2026-11-06): device, a broad type group or one exact type
 	 * ($lib/robot-arm/move-types), time, servo, and the newest N rows (100
 	 * unless changed; All for every row), with "Showing N Of Total".
@@ -111,13 +116,14 @@
 		{ minutes: 10080, title: 'Last 7 Days' },
 		{ minutes: 0, title: 'All Time' }
 	];
-	const devices: { device: 'arm' | 'ot2' | 'link' | null; title: string }[] = [
+	const devices: { device: 'arm' | 'ot2' | 'link' | 'gpio' | null; title: string }[] = [
 		{ device: null, title: 'All' },
 		{ device: 'arm', title: 'Robot Arm' },
 		{ device: 'ot2', title: 'Opentron' },
-		{ device: 'link', title: 'Link' }
+		{ device: 'link', title: 'Link' },
+		{ device: 'gpio', title: 'GPIO' }
 	];
-	const DEVICE_TITLES = { arm: 'Robot Arm', ot2: 'Opentron', link: 'Link' } as const;
+	const DEVICE_TITLES = { arm: 'Robot Arm', ot2: 'Opentron', link: 'Link', gpio: 'GPIO' } as const;
 	const servos = [1, 2, 3, 4, 5, 6];
 
 	const jointTitle = (sid: number) =>
@@ -126,7 +132,7 @@
 	interface View {
 		minutes: number;
 		servo: number | null;
-		device: 'arm' | 'ot2' | 'link' | null;
+		device: 'arm' | 'ot2' | 'link' | 'gpio' | null;
 		group: string | null;
 		kind: string | null;
 		count: number | 'all';
@@ -146,7 +152,7 @@
 	}
 
 	/** A device keeps the type only when the type is that device's. */
-	function deviceHref(device: 'arm' | 'ot2' | 'link' | null): string {
+	function deviceHref(device: 'arm' | 'ot2' | 'link' | 'gpio' | null): string {
 		const g = moveGroup(data.group);
 		const keepGroup = !!device && g?.device === device;
 		const keepKind = !!device && !!data.kind && data.kinds.some((k) => k.device === device && k.kind === data.kind);
@@ -261,7 +267,7 @@
 				<a href={href({ minutes: w.minutes })} class={data.minutes === w.minutes ? on : off}>{w.title}</a>
 			{/each}
 		</div>
-		{#if data.device !== 'ot2'}
+		{#if data.device !== 'ot2' && data.device !== 'gpio'}
 			<div class="flex flex-wrap items-center gap-2">
 				<span class={label}>Servo</span>
 				<a href={href({ servo: null })} class={!data.servo ? on : off}>All Servos</a>
@@ -299,6 +305,12 @@
 		{:else if r.pending && r.logged > 0}
 			<p class="text-xs" style="color: var(--color-tron-text-secondary)">More Opentron {robotShort(r.robot)} Commands Load On Refresh</p>
 		{/if}
+	{/each}
+	{#if data.gpio?.error}
+		<p class="text-xs" style="color: var(--color-tron-text-secondary)">GPIO Not Read: {data.gpio.error}</p>
+	{/if}
+	{#each data.gpio?.warnings ?? [] as w (w)}
+		<div class="rounded border border-yellow-500/40 bg-yellow-900/10 p-2 text-xs text-yellow-300">{w}</div>
 	{/each}
 
 	{#if data.movesError}
@@ -340,7 +352,7 @@
 			</section>
 		{/if}
 
-		{#if data.device !== 'ot2'}
+		{#if data.device !== 'ot2' && data.device !== 'gpio'}
 			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 				<table class="w-full text-left text-xs">
 					<thead style="color: var(--color-tron-text-secondary)">
@@ -393,6 +405,8 @@
 											<span class="ml-1" style="color: var(--color-tron-text-secondary)">{robotShort(m.robot?.name)}</span>
 										{:else if m.device === 'link'}
 											<span class="{badge} border-[var(--color-tron-border)]" style="color: var(--color-tron-text-secondary)">Link</span>
+										{:else if m.device === 'gpio'}
+											<span class="{badge} border-[var(--color-tron-border)]" style="color: var(--color-tron-text)">GPIO</span>
 										{:else}
 											<span class="{badge} border-[var(--color-tron-orange)] text-[var(--color-tron-orange)]">Robot Arm</span>
 										{/if}
@@ -450,7 +464,10 @@
 									</td>
 									<td class="whitespace-nowrap pr-3 font-mono">{took(m)}</td>
 									<td class="pr-3">
-										{#if m.ok}
+										{#if m.device === 'gpio'}
+											{#if m.ok}<span class="text-green-300">Logged</span>
+											{:else}<span class="text-yellow-300">⚠</span><span class="ml-1" style="color: var(--color-tron-text-secondary)">{m.error}</span>{/if}
+										{:else if m.ok}
 											{#if m.kind === 'arrival'}
 												{#if m.arrival?.reached === true}<span class="text-green-300">Reached</span>
 												{:else if m.arrival?.reached === false}<span class="text-yellow-300">Missed</span>

@@ -37,6 +37,7 @@ import { forgetPreviewPath, lookUpPath, PreviewWriteError, writePreviewRecording
 import { ArmMotionBusy, claimArmMotion, releaseArmMotion } from './robot-arm-motion';
 import { withPlayRecording } from './robot-arm-move-log';
 import { logPlayArrivalLater, logPoseSave } from './robot-arm-arrival';
+import { syncGpioEvents } from './robot-arm-gpio-events';
 import { archiveToR2, ArchiveError, listArchived, purgeNow, restoreFromR2, whoUses } from '$lib/server/robot-arm-archive';
 import { DEFAULT_JOINT_NAMES } from '$lib/robot-arm/recording-cleanup';
 import {
@@ -1465,7 +1466,11 @@ async function requireReplayGains(): Promise<void> {
 export async function solenoidStatus(): Promise<SolenoidStatus | null> {
 	try {
 		const s = await robotArm.gpioStatus();
-		return { pins: s.pins ?? {}, simulated: !!s.simulated, busy: !!s.busy, replayFire: !!s.replay_fire };
+		const pins: SolenoidStatus['pins'] = {};
+		for (const [k, v] of Object.entries(s.pins ?? {})) pins[k] = { state: v.state, last: v.last ?? null, lastOn: v.last_on ?? null };
+		// The Pi's pin changes into the Movement Log while the card is open (2026-11-24); a Pi without them costs nothing.
+		const sync = s.events ? await syncGpioEvents({ timeoutMs: 3000 }) : null;
+		return { pins, simulated: !!s.simulated, busy: !!s.busy, replayFire: !!s.replay_fire, readAt: new Date().toISOString(), warnings: sync?.warnings ?? [] };
 	} catch {
 		return null;
 	}

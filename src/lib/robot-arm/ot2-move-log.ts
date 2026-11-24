@@ -11,7 +11,8 @@
 import type { Ot2CommandSummary } from './run-profile';
 import { runActionOf } from './run-history';
 
-export type MoveDevice = 'arm' | 'ot2' | 'link';
+/** 'gpio' (2026-11-24): the arm Pi's output pin changes ($lib/robot-arm/gpio-events). */
+export type MoveDevice = 'arm' | 'ot2' | 'link' | 'gpio';
 
 /** Ids → names from GET /runs/{id}: labware by slot and load name, pipettes by name and mount. */
 export interface Ot2RunNames {
@@ -223,7 +224,7 @@ export function summarizeTiming(rows: TimedRow[]): TimingRow[] {
 	const m = new Map<string, TimingRow>();
 	for (const r of rows) {
 		if (!r.endAt || r.durationMs == null) continue;
-		const device: MoveDevice = r.device === 'ot2' ? 'ot2' : r.device === 'link' ? 'link' : 'arm';
+		const device: MoveDevice = r.device === 'ot2' || r.device === 'link' || r.device === 'gpio' ? r.device : 'arm';
 		const key = `${device}|${r.kind}`;
 		const t = m.get(key) ?? { device, kind: r.kind, count: 0, totalS: 0, avgS: 0, maxS: 0 };
 		const s = r.durationMs / 1000;
@@ -233,7 +234,7 @@ export function summarizeTiming(rows: TimedRow[]): TimingRow[] {
 		m.set(key, t);
 	}
 	const out = [...m.values()].map((t) => ({ ...t, totalS: Math.round(t.totalS * 10) / 10, avgS: Math.round((t.totalS / t.count) * 100) / 100, maxS: Math.round(t.maxS * 100) / 100 }));
-	const order: Record<MoveDevice, number> = { arm: 0, ot2: 1, link: 2 };
+	const order: Record<MoveDevice, number> = { arm: 0, ot2: 1, link: 2, gpio: 3 };
 	return out.sort((a, b) => (a.device === b.device ? b.totalS - a.totalS : order[a.device] - order[b.device]));
 }
 

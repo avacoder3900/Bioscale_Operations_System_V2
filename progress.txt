@@ -28472,3 +28472,41 @@ Source: branch master @ commit fcaf790e (merge of PR #136, feat/arm-tab-ui @ 7ef
 Retrieve this exact code: git checkout master at commit fcaf790e
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Robot Arm UI pass — Status toggle, per-section text sizes, Run Setup trimmed
+
+================================================================================
+2026-11-24 — feat/arm-gpio-events — every arm Pi GPIO pin change in the Movement Log
+================================================================================
+Why: the Teach page's Trapdoor Solenoids card showed "A · GPIO 17" orange on 2026-11-24
+while nothing was pulsing, and no log could say why. BIMS only logged the pulses it asked
+for (last audit row 2026-11-19 20:49 UTC), and GET /gpio/status is the state at one instant.
+
+Pi (services/robot-arm, NOT installed yet — needs the SSH trip):
+- New src/server/gpio_events.py: ring buffer (2000) + ~/.bims-arm/gpio-events.jsonl
+  (rotated at 512 KB, reloaded at start). One event per pin transition: at, pin, state,
+  source (bims-pulse / replay-fire / loop-driver / all-off / shutdown / boot / unknown),
+  ms, held_ms, run_id, loop_id, note. Boot rows read each pin with `pinctrl get` before
+  the service claims it. A 1 s watcher records any change the service did not make as
+  "unknown". Writes and the watcher share one lock.
+- gpio.py: backend on()/off() record under that lock; REST pulses tagged bims-pulse;
+  replay fire thread inferred from its thread name (run_id, loop_id when the loop driver
+  runs); new GET /gpio/events?since=&limit= (GPIO 22 included); /gpio/status pins carry
+  last / last_on, plus read_at and events:true. Route comes with the existing
+  include_router, no installer change.
+- conveyor.py: same for GPIO 22 = Pin 15 (pulse, stop, Force Off, atexit).
+- Barcode scanner drives no pin: its scan follows a replay fire (logged as replay-fire).
+- tests_local/test_gpio_events.py: 9 tests, simulated pins, all pass.
+
+BIMS:
+- $lib/robot-arm/gpio-events.ts (pure): rows with device 'gpio' (kinds gpio_on / gpio_off /
+  gpio_boot), _id from the Pi event id so re-reads never double; ⚠ warning rows
+  gpio_unexplained (high, newest event not an on) and gpio_stuck (high 3 s past its pulse),
+  one per pin per newest event; BIMS pulse matched to its fire row for the user.
+- $lib/server/robot-arm-gpio-events.ts syncGpioEvents(): reads since the newest logged row
+  (5 s overlap), throttled to one read per 4 s. Called by the Movement Log load, GET
+  /api/robot-arm/moves (device=gpio or all), the solenoids status read, and at loop end.
+- Movement Log: GPIO device filter + groups Pin Change / Service Start / High With No Cause.
+- SolenoidPanel.svelte: polls every 3 s while shown and the tab is visible, re-reads after
+  the pulse length; shows Read time and per solenoid On Since / Last On + source; ⚠ lines.
+
+npm run check: 16 errors, same as clean origin/master today (baseline has moved 15 → 16;
+none in touched files). Unit tests: src/lib/robot-arm 359 pass, src/lib/server 704 pass.
