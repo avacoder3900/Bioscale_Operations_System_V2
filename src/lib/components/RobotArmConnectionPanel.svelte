@@ -155,14 +155,14 @@
 >
 	<div class="flex items-start justify-between gap-2">
 		<h2
-			class="inline-flex min-w-0 flex-wrap items-center gap-2 text-sm font-semibold tracking-wide"
+			class="inline-flex min-w-0 flex-wrap items-center gap-2 text-[length:var(--arm-text-label,0.875rem)] font-semibold tracking-wide"
 			style="color: var(--color-tron-text)"
 		>
 			<span class="inline-block h-2.5 w-2.5 rounded-full" style="background: {dotColor}" title={label}></span>
 			ARM
-			<span class="text-xs font-normal" style="color: {dotColor}">{label}</span>
+			<span class="text-[length:var(--arm-text-body,0.75rem)] font-normal" style="color: {dotColor}">{label}</span>
 			{#if dryRun === true}
-				<span class="rounded px-1.5 py-0.5 text-[10px] font-semibold" style="background: rgba(34,197,94,0.15); color: #22c55e;">DRY RUN</span>
+				<span class="rounded px-1.5 py-0.5 text-[length:var(--arm-text-tiny,10px)] font-semibold" style="background: rgba(34,197,94,0.15); color: #22c55e;">DRY RUN</span>
 			{/if}
 		</h2>
 		<div class="flex shrink-0 items-center gap-2">
@@ -170,7 +170,7 @@
 				type="button"
 				onclick={refresh}
 				disabled={refreshing}
-				class="min-h-[36px] rounded border px-3 text-xs disabled:opacity-50"
+				class="min-h-[36px] rounded border px-3 text-[length:var(--arm-text-body,0.75rem)] disabled:opacity-50"
 				style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
 			>
 				{refreshing ? 'Refreshing…' : 'Refresh'}
@@ -178,7 +178,7 @@
 			<button
 				type="button"
 				onclick={() => setHidden(!hidden)}
-				class="min-h-[36px] rounded border px-3 text-xs"
+				class="min-h-[36px] rounded border px-3 text-[length:var(--arm-text-body,0.75rem)]"
 				style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
 				aria-expanded={!hidden}
 			>
@@ -189,7 +189,7 @@
 
 	{#if !reachable}
 		<div
-			class="mt-2 rounded border p-2 text-xs"
+			class="mt-2 rounded border p-2 text-[length:var(--arm-text-body,0.75rem)]"
 			style="border-color: #ef4444; background: rgba(239,68,68,0.08); color: var(--color-tron-text)"
 		>
 			<p class="font-semibold">Cannot Reach Robot Arm</p>
@@ -204,13 +204,13 @@
 		<button
 			type="button"
 			onclick={() => setDiagnosisHidden(false)}
-			class="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
+			class="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[length:var(--arm-text-body,0.75rem)] font-semibold text-amber-200 hover:bg-amber-500/20"
 		>
 			Show Warning
 		</button>
 	{:else if diagnosis}
 		<div
-			class="mt-2 flex items-start gap-3 rounded border p-2 text-xs"
+			class="mt-2 flex items-start gap-3 rounded border p-2 text-[length:var(--arm-text-body,0.75rem)]"
 			style="border-color: #f59e0b; background: rgba(245,158,11,0.08); color: var(--color-tron-text)"
 		>
 			<span class="flex-1">⚠ {diagnosis}</span>
@@ -238,7 +238,7 @@
 	</div>
 
 	{#if reachable && !hidden}
-		<div class="-mx-3 mt-2 border-t px-3 pt-2 text-xs sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
+		<div class="-mx-3 mt-2 border-t px-3 pt-2 text-[length:var(--arm-text-body,0.75rem)] sm:-mx-4 sm:px-4" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
 			<!-- Moved down from the page header (2026-11-04). -->
 			<p class="flex items-center gap-1.5">
 				<span class="h-2 w-2 rounded-full bg-green-500"></span>

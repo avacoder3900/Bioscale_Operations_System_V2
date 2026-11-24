@@ -464,7 +464,7 @@
 	<div class="flex items-center justify-between gap-2" title="Running on {robotName}">
 		<TransportPill state={conn} onRetry={() => void session?.retryDirect()} />
 		<span
-			class="rounded-full border px-3 py-1 text-xs font-medium uppercase tracking-wider {statusColor(
+			class="rounded-full border px-3 py-1 text-[length:var(--arm-text-body,0.75rem)] font-medium uppercase tracking-wider {statusColor(
 				displayStatus
 			)}"
 		>
@@ -473,7 +473,7 @@
 	</div>
 
 	{#if visibleError}
-		<div class="rounded border border-red-500/40 bg-red-900/10 p-2 text-xs text-red-300">
+		<div class="rounded border border-red-500/40 bg-red-900/10 p-2 text-[length:var(--arm-text-body,0.75rem)] text-red-300">
 			{visibleError}
 		</div>
 	{/if}
@@ -484,7 +484,7 @@
 			onclick={() => handleAction('play')}
 			disabled={!canPlay || !!actionInFlight || (lockArmPauses && displayStatus === 'paused' && !operatorPaused)}
 			title={lockArmPauses && displayStatus === 'paused' && !operatorPaused ? 'This pause is the loop\'s own handshake (parked in the wax / at the scan position) — the loop resumes it itself. Resume is only for a Pause you pressed here.' : ''}
-			class="flex-1 rounded border border-green-500/50 bg-green-900/20 px-4 py-2 text-sm font-medium text-green-300 transition-colors hover:bg-green-900/40 disabled:cursor-not-allowed disabled:opacity-30"
+			class="flex-1 rounded border border-green-500/50 bg-green-900/20 px-4 py-2 text-[length:var(--arm-text-label,0.875rem)] font-medium text-green-300 transition-colors hover:bg-green-900/40 disabled:cursor-not-allowed disabled:opacity-30"
 		>
 			▶ {displayStatus === 'paused' ? 'Resume' : 'Play'}
 		</button>
@@ -492,7 +492,7 @@
 			type="button"
 			onclick={() => handleAction('pause')}
 			disabled={!canPause || !!actionInFlight}
-			class="flex-1 rounded border border-yellow-500/50 bg-yellow-900/20 px-4 py-2 text-sm font-medium text-yellow-300 transition-colors hover:bg-yellow-900/40 disabled:cursor-not-allowed disabled:opacity-30"
+			class="flex-1 rounded border border-yellow-500/50 bg-yellow-900/20 px-4 py-2 text-[length:var(--arm-text-label,0.875rem)] font-medium text-yellow-300 transition-colors hover:bg-yellow-900/40 disabled:cursor-not-allowed disabled:opacity-30"
 		>
 			⏸ Pause
 		</button>
@@ -502,7 +502,7 @@
 				if (confirm('Stop this run? This cannot be undone.')) handleAction('stop');
 			}}
 			disabled={!canStop || !!actionInFlight}
-			class="flex-1 rounded border border-red-500/50 bg-red-900/20 px-4 py-2 text-sm font-medium text-red-300 transition-colors hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-30"
+			class="flex-1 rounded border border-red-500/50 bg-red-900/20 px-4 py-2 text-[length:var(--arm-text-label,0.875rem)] font-medium text-red-300 transition-colors hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-30"
 		>
 			■ Stop
 		</button>
@@ -510,15 +510,15 @@
 
 	{#if TERMINAL.has(runStatus)}
 		{#if runStatus === 'failed' && run?.errors?.length}
-			<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2 text-xs text-red-300">
+			<div class="mt-2 rounded border border-red-500/40 bg-red-900/15 p-2 text-[length:var(--arm-text-body,0.75rem)] text-red-300">
 				<p class="font-semibold">Why it failed</p>
 				<ul class="mt-1 space-y-1">
 					{#each run.errors as e (e.id ?? e.detail ?? e.errorType)}
-						<li class="font-mono text-[11px] leading-snug text-red-200/90">{e.detail ?? e.errorType ?? 'Unknown error'}</li>
+						<li class="font-mono text-[length:var(--arm-text-small,11px)] leading-snug text-red-200/90">{e.detail ?? e.errorType ?? 'Unknown error'}</li>
 					{/each}
 				</ul>
 				{#if run.errors.some((e: any) => /labware/i.test(e.detail ?? '') && /not found/i.test(e.detail ?? ''))}
-					<p class="mt-1 text-[10px] text-red-300/70">A custom labware definition isn't on this robot — re-upload the protocol bundled with its labware (the Opentrons app does this automatically; the cloud import does not).</p>
+					<p class="mt-1 text-[length:var(--arm-text-tiny,10px)] text-red-300/70">A custom labware definition isn't on this robot — re-upload the protocol bundled with its labware (the Opentrons app does this automatically; the cloud import does not).</p>
 				{/if}
 			</div>
 		{/if}

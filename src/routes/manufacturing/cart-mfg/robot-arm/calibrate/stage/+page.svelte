@@ -925,7 +925,7 @@
 
 	// ── OT-2 robot bar (the Run page's, 2026-11-06) ──────────────────────────
 	// The same bar as on Wax Fill → Run: robot menu, bridge health (polled every
-	// 10 s), Identify, Lights, Home, Conveyor, Recover. No Stage Calibration link:
+	// 10 s), Lights, Recover. No Stage Calibration link:
 	// this is that page. Home and the robot menu wait while this page's Jog run
 	// (a Dry Fill plays in it) or a loop holds the robot; Recover ends all of them.
 	let robotMenuOpen = $state(false);
@@ -934,7 +934,7 @@
 	$effect(() => {
 		health = data.health;
 	});
-	let robotBusy = $state<'restart' | 'reset' | 'home' | 'lights' | 'identify' | null>(null);
+	let robotBusy = $state<'restart' | 'reset' | 'lights' | null>(null);
 	let robotMsg = $state<{ text: string; level: 'info' | 'warn' | 'error' } | null>(null);
 	let lightsOn = $state<boolean | null>(null);
 	const robotHeld = $derived(!!runId || locked);
@@ -1079,23 +1079,6 @@
 		}
 	}
 
-	/** Home the OT-2 gantry (not while this page's Jog run or a loop holds the robot). */
-	async function homeGantry() {
-		if (!robotId || robotBusy) return;
-		if (!confirm(`Home all axes on ${robotName}? Make sure the deck is clear.`)) return;
-		robotBusy = 'home';
-		robotMsg = null;
-		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/home`, { method: 'POST', credentials: 'same-origin' });
-			const body = await res.json().catch(() => ({}));
-			say(res.ok ? 'Homed.' : (body.message ?? body.error ?? 'Home failed.'), res.ok ? 'info' : 'error');
-		} catch (e) {
-			say(`Home failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
-		} finally {
-			robotBusy = null;
-		}
-	}
-
 	async function toggleLights() {
 		if (!robotId || robotBusy) return;
 		robotBusy = 'lights';
@@ -1115,21 +1098,7 @@
 		}
 	}
 
-	async function identify() {
-		if (!robotId || robotBusy) return;
-		robotBusy = 'identify';
-		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/identify`, { method: 'POST', credentials: 'same-origin' });
-			if (!res.ok) say('Could not reach the robot to blink its lights.', 'error');
-		} catch {
-			say('Could not reach the robot to blink its lights.', 'error');
-		} finally {
-			robotBusy = null;
-		}
-	}
-
 	const ctl = 'rounded border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50';
-	const ctlPlain = `${ctl} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]`;
 
 	// ── Tip: pick up, probe on the calibrator, swap, drop; fixture teach ─────
 	let hasTip = $state(false);
@@ -1484,7 +1453,7 @@
 		<a href={WAX_FILL_HREF} class="rounded border border-[var(--color-tron-cyan)]/50 bg-[var(--color-tron-cyan)]/10 px-2.5 py-1 text-xs font-medium text-[var(--color-tron-cyan)] transition-colors hover:bg-[var(--color-tron-cyan)]/20">Wax Fill →</a>
 	</div>
 
-	<!-- The OT-2 robot bar, as on Wax Fill → Run: health, robot menu, Identify, Lights, Home, Conveyor, Recover. -->
+	<!-- The OT-2 robot bar, as on Wax Fill → Run: health, robot menu, Lights, Recover. -->
 	<div class="rounded border px-3 py-2 text-xs {health?.status === 'hung' ? 'border-red-500/50 bg-red-900/10' : 'border-[var(--color-tron-border)] bg-black/30'}" aria-label="Robot controls">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div class="flex min-w-0 items-center gap-2">
@@ -1520,18 +1489,10 @@
 				<ArmLinkChip link={data.link} />
 			</div>
 			<div class="flex flex-wrap items-center gap-1">
-				<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
-					{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
-				</button>
 				<button type="button" onclick={toggleLights} disabled={!robotId || robotBusy !== null} title="Toggle the rail lights"
 					class="{ctl} {lightsOn ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
 					{lightsOn === null ? 'Lights' : lightsOn ? 'Lights On' : 'Lights Off'}
 				</button>
-				<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || robotHeld}
-					title={locked ? 'Not while a run is on' : runId ? 'Close the Jog run first' : 'Home all axes'} class={ctlPlain}>
-					{robotBusy === 'home' ? 'Homing…' : 'Home'}
-				</button>
-				<a href="/manufacturing/cart-mfg/robot-arm/teach" title="Pulse the cooling belt (Teach tab)" class={ctlPlain}>Conveyor</a>
 				<button type="button" onclick={(e) => void recover(e.shiftKey)} disabled={!robotId || robotBusy !== null}
 					title="Ends any loop or Dry Fill, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"
 					class="{ctl} {health?.status === 'hung' ? 'border-red-500/60 bg-red-900/30 text-red-200 hover:bg-red-900/50' : 'border-red-500/40 bg-red-900/15 text-red-300 hover:bg-red-900/30'}">

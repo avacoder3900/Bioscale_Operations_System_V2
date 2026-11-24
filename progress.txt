@@ -28442,3 +28442,28 @@ Retrieve this exact code: git checkout master at commit 1bbe3887
   (or: git log master --oneline to find it if the branch has since moved on)
 What this deployment is for: Build SPUs — no-lot parts by own barcode, Record Without Scan on every part, pink Tools And Supplies bullets.
 No data changes needed after the deploy.
+
+================================================================================
+2026-11-24 — feat/arm-tab-ui — Robot Arm tab UI pass: Status toggle, text-size categories, Setup trimmed
+================================================================================
+Worktree ../Bioscale_V2-wt-arm-ui off origin/master c605aa7b; dev server on localhost:5180.
+- robot-arm/+layout.svelte: Status button (heartbeat icon) beside Maintenance unmounts the Arm status card +
+  Arm Camera rail (camera feed stops; choice in localStorage, a view convenience). Maintenance gets a wrench
+  icon; both styled like the Run/Teach/Calibrate tabs. TEXT_SIZES defines --arm-text-micro/tiny/small/body/
+  label/title (were 9/10/11/12/14/16px; now 11/12/13/16/16/18px); Run, the tab bar and the Status rail
+  components use text-[length:var(--arm-text-*)] (shared lib components carry the old size as fallback).
+  One scoped rule gives every enabled button/select/checkbox/label/slider/summary/menuitem the pointer cursor.
+- Run + Calibrate → Stage robot bar: Identify, Home, Conveyor removed (Lights + Recover left; dead helpers gone).
+- Run Setup: Wax Per Gate, Use Cable Link To The OT-2, Arm Pi Drives The Loop, Chain Withdraw And Next Grab
+  removed. saveSetup gets those fields undefined → saved volumes kept, the three switches saved ON.
+  (Evidence: Pi drove 9/10 loops since 11-10, the 10th auto-fell back; link 1234 ok / 12 fail, all OT-2-side.)
+  Channels To Fill now A, B, C. Scan Position card drops its "Taught … by …" line.
+- Run text sizes re-categorized per section: RUN_TEXT in run/+page.svelte (page, run, profile, setup,
+  protocol, anim, stagecal, history) → --<section>-<name> vars, seeded at the sizes on screen (Setup's
+  row names, Barcode Present Only and its parenthetical now share setup.option). Layout TEXT_SIZES still
+  sizes the tab bar + Status rail (body raised to 16px).
+- Protocol line reads "Stage Protocol: <file>.py" (Rehearsal/Carriage Protocol likewise). Stage Calibration
+  summary on Run drops the Dispense Depth and Stage Geometry cards (still on Calibrate → Stage; readiness
+  still blocks a start without a dispense depth). Run controls spread across the row (gap-x-8). Change
+  Animations is a blue button like Save Setup.
+npm run check: 15 errors = baseline, none in touched files. arm-loop-drive unit tests pass.

@@ -70,26 +70,62 @@
 	// dry_run.ok is always true — dry-run vs live is a config choice, not a
 	// fault — so the state worth showing is `value`.
 	let dryRun = $derived(data.arm.preflight?.checks?.dry_run?.value ?? null);
+
+	// Text sizes for the Robot Arm page. Every font size on Run, the tab bar and the
+	// Status rail uses one of these through var(--arm-text-<name>); change a size here.
+	// The comment after each is the size it replaced (2026-11-24).
+	const TEXT_SIZES = {
+		micro: '11px', // 9px
+		tiny: '12px', // 10px
+		small: '13px', // 11px
+		body: '16px', // 12px, text-xs
+		label: '16px', // 14px, text-sm
+		title: '18px' // 16px, text-base
+	};
+	const textSizeStyle = Object.entries(TEXT_SIZES)
+		.map(([name, size]) => `--arm-text-${name}: ${size}`)
+		.join('; ');
+
+	// Status shows or removes the Arm status card and the Arm Camera panel. Removing
+	// unmounts them, so the camera feed stops too. Per-browser view choice.
+	const STATUS_KEY = 'robot-arm-info-visible';
+	let statusVisible = $state(true);
+	$effect(() => {
+		try {
+			const saved = localStorage.getItem(STATUS_KEY);
+			if (saved !== null) statusVisible = saved === '1';
+		} catch {
+			/* storage blocked: keep the default */
+		}
+	});
+	function toggleStatus() {
+		statusVisible = !statusVisible;
+		try {
+			localStorage.setItem(STATUS_KEY, statusVisible ? '1' : '0');
+		} catch {
+			/* storage blocked: the choice lasts until reload */
+		}
+	}
 </script>
 
-<div class="space-y-2">
+<div class="arm-page space-y-2" style={textSizeStyle}>
 	<!-- One chrome row (2026-11-04): crumb + title, the tabs, then arm state and Maintenance on the right. -->
 	<div class="flex flex-wrap items-center gap-1 border-b pb-1.5" style="border-color: var(--color-tron-border)">
-		<div class="mr-2 flex min-w-0 items-center gap-1.5 text-xs">
+		<div class="mr-2 flex min-w-0 items-center gap-1.5 text-[length:var(--arm-text-body)]">
 			<a
 				href="/manufacturing/cart-mfg"
 				class="transition-colors hover:text-[var(--color-tron-cyan)]"
 				style="color: var(--color-tron-text-secondary)">Cart Mfg</a
 			>
 			<span style="color: var(--color-tron-text-secondary)">/</span>
-			<h1 class="text-sm font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
+			<h1 class="text-[length:var(--arm-text-label)] font-bold" style="color: var(--color-tron-cyan)">Robot Arm</h1>
 		</div>
 		{#each tabs as tab (tab.href)}
 			{@const active = currentPath.startsWith(tab.href)}
 			<a
 				href={tab.href}
 				title={tab.hint}
-				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-all duration-200
+				class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[length:var(--arm-text-body)] font-medium transition-all duration-200
 					{active
 					? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
 					: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
@@ -102,7 +138,7 @@
 			</a>
 		{/each}
 		<span class="grow"></span>
-		<span class="flex items-center gap-2 text-[11px]">
+		<span class="flex items-center gap-2 text-[length:var(--arm-text-small)]">
 			{#if data.arm.reachable}
 				{#if dryRun === true}
 					<span class="rounded border border-amber-500/50 bg-amber-500/10 px-1.5 py-px text-amber-300">
@@ -119,18 +155,46 @@
 		<a
 			href={maintenanceHref}
 			title="Leader arm, Pi recordings, jog, sync zero, clean-up"
-			class="rounded-md px-2 py-1 text-[11px] transition-colors
+			class="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[length:var(--arm-text-body)] font-medium transition-all duration-200
 				{maintActive
-				? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]'
-				: 'text-[var(--color-tron-text-secondary)] hover:text-[var(--color-tron-cyan)]'}"
+				? 'bg-[var(--color-tron-cyan)] text-[var(--color-tron-bg-primary)]'
+				: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
 			aria-current={maintActive ? 'page' : undefined}
 		>
+			<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					stroke-width="2"
+					d="M21.75 6.75a4.5 4.5 0 01-4.884 4.484c-1.076-.091-2.264.071-2.95.904l-7.152 8.684a2.548 2.548 0 11-3.586-3.586l8.684-7.152c.833-.686.995-1.874.904-2.95a4.5 4.5 0 016.336-4.486l-3.276 3.276a3.004 3.004 0 002.25 2.25l3.276-3.276c.256.565.398 1.192.398 1.852z"
+				/>
+			</svg>
 			Maintenance
 		</a>
+		<button
+			type="button"
+			onclick={toggleStatus}
+			title={statusVisible ? 'Hide Status' : 'Show Status'}
+			aria-pressed={statusVisible}
+			class="flex cursor-pointer items-center gap-1.5 rounded-md px-2.5 py-1 text-[length:var(--arm-text-body)] font-medium transition-all duration-200
+				{statusVisible
+				? 'bg-[var(--color-tron-bg-tertiary)] text-[var(--color-tron-cyan)]'
+				: 'text-[var(--color-tron-text-secondary)] hover:bg-[var(--color-tron-bg-tertiary)] hover:text-[var(--color-tron-cyan)]'}"
+		>
+			<svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+				<path
+					stroke-linecap="round"
+					stroke-linejoin="round"
+					stroke-width="2"
+					d="M3 12h4l3-8 4 16 3-8h4"
+				/>
+			</svg>
+			Status
+		</button>
 	</div>
 
 	{#if !data.arm.reachable && data.arm.error}
-		<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-xs">
+		<div class="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-1.5 text-[length:var(--arm-text-body)]">
 			<p class="text-red-300">Cannot reach the robot-arm Pi: {data.arm.error}</p>
 		</div>
 	{/if}
@@ -140,11 +204,12 @@
 		co-visible with the controls. Below 1280px they stack above the tab
 		content. Never a modal.
 	-->
-	<div class="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_380px]">
+	<div class="grid grid-cols-1 gap-3 {statusVisible ? 'xl:grid-cols-[minmax(0,1fr)_380px]' : ''}">
 		<div class="min-w-0 xl:order-1">
 			{@render children()}
 		</div>
-		<div class="xl:order-2">
+		{#if statusVisible}
+			<div class="xl:order-2">
 			<div class="space-y-4 xl:sticky xl:top-4">
 				<RobotArmConnectionPanel
 					preflight={data.arm.preflight}
@@ -160,6 +225,27 @@
 					armReachable={data.arm.reachable}
 				/>
 			</div>
-		</div>
+			</div>
+		{/if}
 	</div>
 </div>
+
+<style>
+	/* Everything clickable on every Robot Arm tab shows the hand cursor, as links do (2026-11-24). */
+	.arm-page :global(
+			:is(
+				button,
+				select,
+				summary,
+				label:has(input[type='checkbox'], input[type='radio']),
+				input:is([type='checkbox'], [type='radio'], [type='range'], [type='file'], [type='color'], [type='submit'], [type='button'], [type='reset']),
+				input[type='file']::file-selector-button,
+				[role='button'],
+				[role='menuitem'],
+				[role='tab'],
+				[role='slider']
+			):not(:disabled, [aria-disabled='true'])
+		) {
+		cursor: pointer;
+	}
+</style>
