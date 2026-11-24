@@ -28467,3 +28467,8 @@ Worktree ../Bioscale_V2-wt-arm-ui off origin/master c605aa7b; dev server on loca
   still blocks a start without a dispense depth). Run controls spread across the row (gap-x-8). Change
   Animations is a blue button like Save Setup.
 npm run check: 15 errors = baseline, none in touched files. arm-loop-drive unit tests pass.
+Deployment: production — https://vercel.com/brevitest/bioscale-operations-system-mongodb/AeqeWJXCtiJks82zHSLTYhSa6YEk
+Source: branch master @ commit fcaf790e (merge of PR #136, feat/arm-tab-ui @ 7efb5650)
+Retrieve this exact code: git checkout master at commit fcaf790e
+  (or: git log master --oneline to find it if the branch has since moved on)
+What this deployment is for: Robot Arm UI pass — Status toggle, per-section text sizes, Run Setup trimmed
