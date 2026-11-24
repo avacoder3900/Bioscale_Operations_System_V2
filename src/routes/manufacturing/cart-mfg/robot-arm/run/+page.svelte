@@ -122,13 +122,6 @@
 	const currentCycle = $derived<LoopCycleView | null>(loop ? (loop.cycles[loop.cycles.length - 1] ?? null) : null);
 	const robotId = $derived(data.settings.robotId);
 	const anim = $derived(data.settings);
-	// Setup's Wax Per Gate boxes (sent to the stage protocol as vol_gate1…4).
-	const gateBoxes = $derived([
-		{ name: 'volGate1', label: 'Gate 1', value: data.settings.gateVolumes.g1 },
-		{ name: 'volGate2', label: 'Gate 2', value: data.settings.gateVolumes.g2 },
-		{ name: 'volGate3', label: 'Gate 3', value: data.settings.gateVolumes.g3 },
-		{ name: 'volGate4', label: 'Gate 4', value: data.settings.gateVolumes.g4 }
-	]);
 	// The robot runs the stage protocol (Wax_Filling_GEN7_ArmStage.py: fills the taught,
 	// tip-neutral cart location, loads no deck) rather than the legacy carriage protocol.
 	const stage = $derived(!!data.protocol?.declaresCartLocation);
@@ -794,7 +787,7 @@
 	$effect(() => {
 		health = data.health;
 	});
-	let robotBusy = $state<'restart' | 'reset' | 'home' | 'lights' | 'identify' | null>(null);
+	let robotBusy = $state<'restart' | 'reset' | 'lights' | null>(null);
 	let robotMsg = $state<{ text: string; level: 'info' | 'warn' | 'error' } | null>(null);
 	let lightsOn = $state<boolean | null>(null);
 
@@ -974,23 +967,6 @@
 		}
 	}
 
-	/** Home the OT-2 gantry (not during a loop or with the teach panel's maintenance run open). */
-	async function homeGantry() {
-		if (!robotId || robotBusy) return;
-		if (!confirm(`Home all axes on ${data.robotName ?? 'this robot'}? Make sure the deck is clear.`)) return;
-		robotBusy = 'home';
-		robotMsg = null;
-		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/home`, { method: 'POST', credentials: 'same-origin' });
-			const body = await res.json().catch(() => ({}));
-			say(res.ok ? 'Homed.' : (body.message ?? body.error ?? 'Home failed.'), res.ok ? 'info' : 'error');
-		} catch (e) {
-			say(`Home failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
-		} finally {
-			robotBusy = null;
-		}
-	}
-
 	async function toggleLights() {
 		if (!robotId || robotBusy) return;
 		robotBusy = 'lights';
@@ -1005,19 +981,6 @@
 			else say('Could not switch the rail lights.', 'error');
 		} catch {
 			say('Could not reach the robot for the lights.', 'error');
-		} finally {
-			robotBusy = null;
-		}
-	}
-
-	async function identify() {
-		if (!robotId || robotBusy) return;
-		robotBusy = 'identify';
-		try {
-			const res = await fetch(`/api/opentrons-lab/robots/${robotId}/identify`, { method: 'POST', credentials: 'same-origin' });
-			if (!res.ok) say('Could not reach the robot to blink its lights.', 'error');
-		} catch {
-			say('Could not reach the robot to blink its lights.', 'error');
 		} finally {
 			robotBusy = null;
 		}
@@ -1056,7 +1019,7 @@
 		}
 	}
 
-	const ctl = 'rounded border px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50';
+	const ctl = 'rounded border px-2.5 py-1 text-[length:var(--run-small-button)] font-medium transition-colors disabled:opacity-50';
 	const ctlPlain = `${ctl} border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]`;
 
 	// The calibration for this robot's wax fill (scan position, tip-neutral cart
@@ -1095,19 +1058,96 @@
 		if (cycle?.step === 'failed') return TILE_FAILED;
 		return TILE_NEUTRAL;
 	};
+	// ── Text sizes, one set per section of the Run tab (2026-11-24) ──────────────
+	// Each entry is a CSS variable --<section>-<name> used by that text only.
+	// Change a size here. The Status rail and the tab bar use TEXT_SIZES in +layout.svelte.
+	const RUN_TEXT = {
+		page: {
+			title: '18px', // Wax Fill
+			message: '16px', // saved / error banners at the top
+			'section-toggle': '16px', // SETUP & CALIBRATION
+			badge: '12px' // "2 To Fix"
+		},
+		run: {
+			'robot-bar': '16px', // robot name, health, the robot menu
+			'small-button': '16px', // Stage Calibration, Lights, Recover, Fill Profile buttons
+			message: '13px', // robot bar and loop messages
+			heading: '16px', // RUN
+			'main-button': '16px', // Start Run, Resume, Stop, Stop Run
+			'field-label': '16px', // Runs, Start At, Next Tip, Cart On The Stage labels; Set Next Tip
+			'field-value': '16px', // the boxes and dropdowns beside them
+			notice: '16px', // blocking list, return-home box, stop in progress
+			status: '16px', // loop status line
+			badge: '12px', // loop status chip
+			'step-tile': '16px', // Grab / Scan / Fill / Withdraw tiles
+			detail: '13px', // playback lines, step log
+			cycles: '13px' // Cycles table
+		},
+		profile: {
+			heading: '16px', // FILL PROFILE · LOOP
+			message: '16px',
+			note: '13px',
+			table: '13px'
+		},
+		setup: {
+			heading: '16px', // SETUP
+			'channels-heading': '16px', // Channels To Fill
+			'channel-letter': '20px', // A, B, C
+			option: '14px', // (Row V), Barcode Present Only, (don't check the cart, record nothing), Deck Position
+			warning: '13px', // amber protocol warnings
+			'protocol-line': '13px', // Protocol On Robot 3: …
+			'save-button': '16px' // Save Setup
+		},
+		protocol: {
+			heading: '16px', // PROTOCOL ON THE ROBOT
+			badge: '12px', // PRODUCTION STAGE FILL / REHEARSAL
+			file: '12px', // Stage Protocol: Wax_Filling_….py
+			choose: '14px', // Choose A Stage Protocol
+			'deploy-button': '14px', // Deploy To Robot
+			library: '12px', // Add Stage .py To Library, Browse…, No File Selected, Add To Library
+			message: '12px', // deploy / library results
+			text: '16px' // anything else in the block
+		},
+		anim: {
+			heading: '16px', // ANIMATIONS
+			'change-button': '16px', // Change Animations
+			'row-label': '16px', // Grab, Withdraw, Fail
+			name: '16px', // the bold white animation names
+			kind: '12px', // (Move Set) / (Sequence)
+			note: '12px', // Last Changed …
+			form: '16px', // the Change Animations pickers
+			'form-button': '16px' // Cancel, Save Animations
+		},
+		stagecal: {
+			heading: '16px', // STAGE CALIBRATION · ROBOT 3 · …
+			button: '16px', // Open Stage Calibration
+			'item-name': '14px', // Scan Position, Cart Location
+			value: '14px', // the blue values under Scan Position and Cart Location
+			warning: '13px' // amber "Taught without a probed tip" line
+		},
+		history: {
+			heading: '16px', // RECENT RUNS
+			filter: '16px',
+			table: '16px',
+			button: '16px' // the History button
+		}
+	};
+	const runTextStyle = Object.entries(RUN_TEXT)
+		.flatMap(([section, sizes]) => Object.entries(sizes).map(([name, size]) => `--${section}-${name}: ${size}`))
+		.join('; ');
 </script>
 
-<div class="space-y-3">
-	<h2 class="text-base font-semibold" style="color: var(--color-tron-cyan)">Wax Fill</h2>
+<div class="space-y-3" style={runTextStyle}>
+	<h2 class="text-[length:var(--page-title)] font-semibold" style="color: var(--color-tron-cyan)">Wax Fill</h2>
 
-	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{form.error}</div>{/if}
-	{#if form?.success}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-xs text-green-300">{form.success}</div>{/if}
-	{#if pageError}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-xs text-red-300">{pageError}</div>{/if}
+	{#if form?.error}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-[length:var(--page-message)] text-red-300">{form.error}</div>{/if}
+	{#if form?.success}<div class="rounded border border-green-500/30 bg-green-900/15 p-2 text-[length:var(--page-message)] text-green-300">{form.success}</div>{/if}
+	{#if pageError}<div class="rounded border border-red-500/40 bg-red-900/20 p-2 text-[length:var(--page-message)] text-red-300">{pageError}</div>{/if}
 
 	<!-- ── Run ───────────────────────────────────────────────────────── -->
 	<section class="rounded-lg border border-[var(--color-tron-cyan)]/30 bg-[var(--color-tron-surface)]/40 p-4 space-y-3">
-		<!-- The OT-2's card from the Robots board: health, Restart, Reset — plus Home, Lights, Identify. -->
-		<div class="rounded border px-3 py-2 text-xs {health?.status === 'hung' ? 'border-red-500/50 bg-red-900/10' : 'border-[var(--color-tron-border)] bg-black/30'}" aria-label="Robot controls">
+		<!-- The OT-2's card from the Robots board: health, Restart, Reset — plus Lights. -->
+		<div class="rounded border px-3 py-2 text-[length:var(--run-robot-bar)] {health?.status === 'hung' ? 'border-red-500/50 bg-red-900/10' : 'border-[var(--color-tron-border)] bg-black/30'}" aria-label="Robot controls">
 			<div class="flex flex-wrap items-center justify-between gap-2">
 				<div class="flex min-w-0 items-center gap-2">
 					<span class="h-2.5 w-2.5 shrink-0 rounded-full {healthDot(health?.status)}" title={health ? `${health.label}: ${health.detail}` : 'No health data'}></span>
@@ -1125,7 +1165,7 @@
 								class="absolute left-0 top-full z-20 mt-1 min-w-40 rounded border border-[var(--color-tron-border)] bg-[var(--color-tron-bg-primary)] p-1 shadow-lg">
 								{#each data.robots as r (r._id)}
 									<button type="submit" name="robotId" value={r._id} role="menuitem" disabled={switchingRobot}
-										class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-[var(--color-tron-bg-tertiary)] {r._id === robotId ? 'text-[var(--color-tron-cyan)]' : ''}"
+										class="flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[length:var(--run-robot-bar)] hover:bg-[var(--color-tron-bg-tertiary)] {r._id === robotId ? 'text-[var(--color-tron-cyan)]' : ''}"
 										style={r._id === robotId ? '' : 'color: var(--color-tron-text)'}>
 										<span class="w-3 shrink-0">{r._id === robotId ? '•' : ''}</span>
 										<span class="truncate">{r.name}</span>
@@ -1148,18 +1188,10 @@
 						class="{ctl} border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/20">
 						Stage Calibration
 					</a>
-					<button type="button" onclick={identify} disabled={!robotId || robotBusy !== null} title="Blink the rail lights to find this robot" class={ctlPlain}>
-						{robotBusy === 'identify' ? 'Blinking…' : 'Identify'}
-					</button>
 					<button type="button" onclick={toggleLights} disabled={!robotId || robotBusy !== null} title="Toggle the rail lights"
 						class="{ctl} {lightsOn ? 'border-[var(--color-tron-cyan)]/60 bg-[var(--color-tron-cyan)]/10 text-[var(--color-tron-cyan)]' : 'border-[var(--color-tron-border)] text-[var(--color-tron-text-secondary)] hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-text)]'}">
 						{lightsOn === null ? 'Lights' : lightsOn ? 'Lights On' : 'Lights Off'}
 					</button>
-					<button type="button" onclick={homeGantry} disabled={!robotId || robotBusy !== null || loop?.status === 'running'}
-						title={loop?.status === 'running' ? 'Not while a loop is running' : 'Home all axes'} class={ctlPlain}>
-						{robotBusy === 'home' ? 'Homing…' : 'Home'}
-					</button>
-					<a href="/manufacturing/cart-mfg/robot-arm/teach" title="Pulse the cooling belt (Teach tab)" class={ctlPlain}>Conveyor</a>
 					<!-- One Recover, as on the Robots board (2026-11-03): end the loop + force-reset, restart the robot server only when it is hung or unreachable (shift-click forces it). -->
 					<button type="button" onclick={(e) => void recover(e.shiftKey)} disabled={!robotId || robotBusy !== null}
 						title="Ends the loop, aborts any stale run and forces this robot back to idle; restarts the robot server only if it is hung or unreachable (shift-click: always restart)"
@@ -1169,71 +1201,71 @@
 				</div>
 			</div>
 			{#if robotMsg}
-				<p class="mt-1.5 text-[11px] {robotMsg.level === 'error' ? 'text-red-300' : robotMsg.level === 'warn' ? 'text-amber-300' : ''}" style={robotMsg.level === 'info' ? 'color: var(--color-tron-text-secondary)' : ''}>{robotMsg.text}</p>
+				<p class="mt-1.5 text-[length:var(--run-message)] {robotMsg.level === 'error' ? 'text-red-300' : robotMsg.level === 'warn' ? 'text-amber-300' : ''}" style={robotMsg.level === 'info' ? 'color: var(--color-tron-text-secondary)' : ''}>{robotMsg.text}</p>
 			{/if}
 		</div>
 
 		<div class="flex flex-wrap items-center justify-between gap-3">
-			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Run</h3>
+			<h3 class="text-[length:var(--run-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Run</h3>
 			{#if loop && loop.status === 'running'}
-				<div class="flex items-center gap-2">
+				<div class="flex items-center gap-4">
 					{#if !driving}
 						<button type="button" onclick={() => void (loop?.driver === 'arm-pi' ? resumeArmDriver() : drive())} disabled={busy}
-							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-sm font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
+							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-2 text-[length:var(--run-main-button)] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
 							Resume
 						</button>
 					{/if}
 					<button type="button" onclick={stop} disabled={busy || haltBusy || loop.stopRequested}
 						title="Lets the cart being filled finish and the arm withdraw it, then ends the loop"
-						class="rounded border border-red-500/50 bg-red-900/15 px-4 py-2 text-sm font-bold text-red-300 hover:bg-red-900/25 disabled:opacity-40">
+						class="rounded border border-red-500/50 bg-red-900/15 px-4 py-2 text-[length:var(--run-main-button)] font-bold text-red-300 hover:bg-red-900/25 disabled:opacity-40">
 						{loop.stopRequested ? 'Stopping After This Cart…' : 'Stop After This Cart'}
 					</button>
 					<button type="button" onclick={stopRun} disabled={busy || haltBusy}
 						title="Halts NOW: stops the arm and the OT-2 run where they are, then homes the OT-2 and runs the arm's Return to home"
-						class="rounded border border-red-500 bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500 disabled:opacity-40">
+						class="rounded border border-red-500 bg-red-600 px-4 py-2 text-[length:var(--run-main-button)] font-bold text-white hover:bg-red-500 disabled:opacity-40">
 						{haltBusy ? 'Stopping…' : 'STOP RUN'}
 					</button>
 				</div>
 			{:else if haltBusy}
-				<span class="text-xs font-semibold text-amber-300">Stop Run In Progress…</span>
+				<span class="text-[length:var(--run-notice)] font-semibold text-amber-300">Stop Run In Progress…</span>
 			{:else}
-				<form class="flex flex-wrap items-center gap-2" onsubmit={(e) => { e.preventDefault(); void start(); }}>
-					<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+				<form class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-x-8 gap-y-3 pl-6" onsubmit={(e) => { e.preventDefault(); void start(); }}>
+					<label class="flex items-center gap-3 text-[length:var(--run-field-label)]" style="color: var(--color-tron-text-secondary)">
 						Runs
 						<input type="number" min="1" max="500" bind:value={runs}
-							class="w-20 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)" />
+							class="w-20 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-[length:var(--run-field-value)]" style="color: var(--color-tron-text)" />
 					</label>
-					<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)" title="Where the first cart starts. Scan / Fill / Withdraw: a cart is already on the stage; the OT-2 still homes, takes and probes its tip and parks first.">
+					<label class="flex items-center gap-3 text-[length:var(--run-field-label)]" style="color: var(--color-tron-text-secondary)" title="Where the first cart starts. Scan / Fill / Withdraw: a cart is already on the stage; the OT-2 still homes, takes and probes its tip and parks first.">
 						Start At
-						<select bind:value={startAt} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-sm" style="color: var(--color-tron-text)">
+						<select bind:value={startAt} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-[length:var(--run-field-value)]" style="color: var(--color-tron-text)">
 							{#each Object.entries(START_AT_LABEL) as [v, l] (v)}<option value={v}>{l}</option>{/each}
 						</select>
 					</label>
-					<label class="flex items-center gap-1.5 text-xs" style="color: var(--color-tron-text-secondary)"
+					<label class="flex items-center gap-3 text-[length:var(--run-field-label)]" style="color: var(--color-tron-text-secondary)"
 						title="Tick after putting a fresh rack on the robot: the protocol takes its tip from A1 and resets the tip tracker on the robot (the protocol's Tiprack Refilled parameter). Leave off to keep taking the next fresh tip.">
 						<input type="checkbox" bind:checked={newTipRack} class="rounded border-[var(--color-tron-border)] bg-black/40" />
 						New Tip Rack
 					</label>
-					<label class="flex items-center gap-1.5 text-xs" style="color: var(--color-tron-text-secondary)">
+					<label class="flex items-center gap-3 text-[length:var(--run-field-label)]" style="color: var(--color-tron-text-secondary)">
 						Next Tip
 						{#if newTipRack}
 							<span class="font-mono" style="color: var(--color-tron-text)">A1</span>
 						{:else}
-							<select bind:value={nextTipPick} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)">
+							<select bind:value={nextTipPick} class="rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-[length:var(--run-field-value)]" style="color: var(--color-tron-text)">
 								{#each TIP_WELLS as w (w)}<option value={w}>{w}</option>{/each}
 							</select>
 							<button type="button" onclick={saveNextTip} disabled={busy || (!!loop && loop.status === 'running') || nextTipPick === (data.teach?.nextTipWell ?? '')}
-								class="rounded border border-green-500/50 bg-green-900/20 px-2 py-1.5 text-xs font-semibold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Set Next Tip</button>
+								class="rounded border border-green-500/50 bg-green-900/20 px-2 py-1.5 text-[length:var(--run-field-label)] font-semibold text-green-300 hover:bg-green-900/30 disabled:opacity-40">Set Next Tip</button>
 						{/if}
 					</label>
 					{#if startAt === 'decide'}
-						<label class="flex items-center gap-2 text-xs" style="color: var(--color-tron-text-secondary)">
+						<label class="flex items-center gap-3 text-[length:var(--run-field-label)]" style="color: var(--color-tron-text-secondary)">
 							Barcode
-							<input bind:value={startBarcode} required placeholder="Cart On The Stage" class="w-56 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-sm" style="color: var(--color-tron-text)" />
+							<input bind:value={startBarcode} required placeholder="Cart On The Stage" class="w-56 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono text-[length:var(--run-field-value)]" style="color: var(--color-tron-text)" />
 						</label>
 					{/if}
 					<button type="submit" disabled={busy || haltBusy || data.readiness.blocking.length > 0}
-						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-sm font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
+						class="rounded-lg bg-[var(--color-tron-cyan)] px-5 py-2 text-[length:var(--run-main-button)] font-semibold text-white hover:bg-[var(--color-tron-cyan)]/80 disabled:opacity-40">
 						{busy ? 'Starting…' : `Start A ${rehearsal ? 'Rehearsal ' : ''}Run Of ${runs} Loop${runs === 1 ? '' : 's'}`}
 					</button>
 				</form>
@@ -1241,7 +1273,7 @@
 		</div>
 
 		{#if haltStatus}
-			<div class="flex flex-wrap items-center gap-2 rounded border p-2 text-xs
+			<div class="flex flex-wrap items-center gap-2 rounded border p-2 text-[length:var(--run-notice)]
 				{halt?.phase === 'error' ? 'border-red-500/60 bg-red-900/20 text-red-200' : halt?.phase === 'done' ? 'border-green-500/40 bg-green-900/15 text-green-200' : 'border-amber-500/50 bg-amber-900/15 text-amber-200'}">
 				<span class="grow">{haltStatus}</span>
 				{#if halt?.phase === 'arm' && returnHome.loop?.running}
@@ -1267,7 +1299,7 @@
 
 		{#if !(loop && loop.status === 'running')}
 			{#if data.readiness.blocking.length}
-				<ul class="space-y-1 rounded border border-amber-500/40 bg-amber-900/15 p-2 text-xs text-amber-200">
+				<ul class="space-y-1 rounded border border-amber-500/40 bg-amber-900/15 p-2 text-[length:var(--run-notice)] text-amber-200">
 					{#each data.readiness.blocking as b (b)}
 						<li>
 							· {b}
@@ -1286,26 +1318,26 @@
 
 		{#if loop}
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3 space-y-3">
-				<div class="flex flex-wrap items-center justify-between gap-2 text-xs">
+				<div class="flex flex-wrap items-center justify-between gap-2 text-[length:var(--run-status)]">
 					<span style="color: var(--color-tron-text)">
 						<span class="font-semibold">Loop {currentCycle?.index ?? 0} of {loop.requestedRuns}</span>
 						· {loop.completedRuns} filled{#if loop.skippedRuns} · {loop.skippedRuns} skipped{/if} · {loop.robot.name}
 						{#if currentCycle?.barcode}· cart <span class="font-mono" style="color: var(--color-tron-cyan)">{currentCycle.barcode}</span>{/if}
 					</span>
-					<span class="rounded px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider
+					<span class="rounded px-2 py-0.5 text-[length:var(--run-badge)] font-bold uppercase tracking-wider
 						{loop.status === 'running' ? 'bg-[var(--color-tron-cyan)]/20 text-[var(--color-tron-cyan)]' : loop.status === 'completed' ? 'bg-green-900/30 text-green-300' : 'bg-red-900/30 text-red-300'}">
 						{loop.status}{driving ? ' · driving' : loop.status === 'running' ? ' · paused in this browser' : ''}
 					</span>
 				</div>
 				<div class="grid gap-2 {onFailRoute(currentCycle) ? 'grid-cols-6' : 'grid-cols-5'}">
 					{#each STEPS as s (s)}
-						<div class="rounded border px-2 py-2 text-center text-xs font-semibold {stepClass(currentCycle, s)}">{STEP_LABEL[s]}</div>
+						<div class="rounded border px-2 py-2 text-center text-[length:var(--run-step-tile)] font-semibold {stepClass(currentCycle, s)}">{STEP_LABEL[s]}</div>
 					{/each}
 					{#if onFailRoute(currentCycle)}
-						<div class="rounded border px-2 py-2 text-center text-xs font-semibold {failTileClass(currentCycle)}" title={currentCycle?.error ?? ''}>{STEP_LABEL.fail}</div>
+						<div class="rounded border px-2 py-2 text-center text-[length:var(--run-step-tile)] font-semibold {failTileClass(currentCycle)}" title={currentCycle?.error ?? ''}>{STEP_LABEL.fail}</div>
 					{/if}
 				</div>
-				{#if loop.error}<p class="text-xs text-red-300">{loop.error}</p>{/if}
+				{#if loop.error}<p class="text-[length:var(--run-message)] text-red-300">{loop.error}</p>{/if}
 				{#if loop.opentronsRunId && loop.status !== 'running'}
 					<div>
 						<button type="button" onclick={() => void loadProfile(loop!._id)} disabled={profileBusy} class={ctlPlain}
@@ -1316,12 +1348,12 @@
 				{/if}
 
 				{#if playback.running}
-					<div class="text-xs" style="color: var(--color-tron-text-secondary)">
+					<div class="text-[length:var(--run-detail)]" style="color: var(--color-tron-text-secondary)">
 						Arm: {playback.title} — {playback.elapsedS.toFixed(0)} / {playback.durationS.toFixed(0)} s
 						{#if playback.warnings.length}<span class="text-amber-300">· {playback.warnings.join(' ')}</span>{/if}
 					</div>
 				{:else if playback.settled}
-					<div class="text-[11px]" style="color: var(--color-tron-text-secondary)">{playback.settled}</div>
+					<div class="text-[length:var(--run-detail)]" style="color: var(--color-tron-text-secondary)">{playback.settled}</div>
 				{/if}
 
 				{#if loop.opentronsRunId && !loop.runFinished}
@@ -1330,7 +1362,7 @@
 				{/if}
 
 				{#if log.length}
-					<ul class="max-h-56 space-y-0.5 overflow-y-auto font-mono text-[11px]">
+					<ul class="max-h-56 space-y-0.5 overflow-y-auto font-mono text-[length:var(--run-detail)]">
 						{#each log as l, i (i)}
 							<li class={l.level === 'error' ? 'text-red-300' : l.level === 'warn' ? 'text-amber-300' : ''} style={l.level === 'info' ? 'color: var(--color-tron-text-secondary)' : ''}>
 								<span class="opacity-60">{l.at}</span> {l.text}
@@ -1340,9 +1372,9 @@
 				{/if}
 
 				{#if loop.cycles.length > 1 || loop.status !== 'running'}
-					<details class="text-xs">
+					<details class="text-[length:var(--run-cycles)]">
 						<summary class="cursor-pointer" style="color: var(--color-tron-text-secondary)">Cycles ({loop.cycles.length})</summary>
-						<table class="mt-2 w-full text-left text-[11px]">
+						<table class="mt-2 w-full text-left text-[length:var(--run-cycles)]">
 							<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-2">#</th><th class="pr-2">Step</th><th class="pr-2">Cart</th><th class="pr-2">Robot Run</th><th>Note</th></tr></thead>
 							<tbody>
 								{#each loop.cycles as c (c.index)}
@@ -1366,7 +1398,7 @@
 	{#if profileLoopId}
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4 space-y-2" aria-label="Fill profile">
 			<div class="flex flex-wrap items-center justify-between gap-2">
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Fill Profile · Loop <span class="font-mono normal-case tracking-normal">{profileLoopId.slice(0, 8)}…</span></h3>
+				<h3 class="text-[length:var(--profile-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Fill Profile · Loop <span class="font-mono normal-case tracking-normal">{profileLoopId.slice(0, 8)}…</span></h3>
 				<div class="flex items-center gap-1">
 					<button type="button" onclick={() => void loadProfile(profileLoopId!, true)} disabled={profileBusy} class={ctlPlain} title="Read the run from the robot again (the saved profile is replaced)">
 						{profileBusy ? 'Reading…' : 'Re-Read From The Robot'}
@@ -1374,13 +1406,13 @@
 					<button type="button" onclick={() => { profile = null; profileLoopId = null; profileError = null; }} class={ctlPlain}>Hide</button>
 				</div>
 			</div>
-			{#if profileError}<p class="text-xs text-red-300">{profileError}</p>{/if}
+			{#if profileError}<p class="text-[length:var(--profile-message)] text-red-300">{profileError}</p>{/if}
 			{#if profile}
-				<p class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+				<p class="text-[length:var(--profile-note)]" style="color: var(--color-tron-text-secondary)">
 					OT-2 run <span class="font-mono">{profile.runId.slice(0, 8)}…</span> {profile.status ?? ''} · {profile.commandCount} commands{#if profile.totalS != null} · {secs(profile.totalS)} s{/if} · read {when(profile.generatedAt)}.
 				</p>
 				<div class="overflow-x-auto">
-					<table class="w-full text-left text-[11px]">
+					<table class="w-full text-left text-[length:var(--profile-table)]">
 						<thead style="color: var(--color-tron-text-secondary)">
 							<tr>
 								<th class="pr-3 py-1">Phase</th>
@@ -1406,27 +1438,27 @@
 					</table>
 				</div>
 				{#if profile.notes.length}
-					<ul class="space-y-0.5 text-[11px] text-amber-300">
+					<ul class="space-y-0.5 text-[length:var(--profile-note)] text-amber-300">
 						{#each profile.notes as n, i (i)}<li>· {n}</li>{/each}
 					</ul>
 				{/if}
 			{:else if profileBusy}
-				<p class="text-xs" style="color: var(--color-tron-text-secondary)">Reading The Run…</p>
+				<p class="text-[length:var(--profile-message)]" style="color: var(--color-tron-text-secondary)">Reading The Run…</p>
 			{/if}
 		</section>
 	{/if}
 
 	<!-- Setup, animations, protocol and the stage calibration summary fold away once a run is on; they open by themselves while something blocks a start. -->
 	<details class="rounded-lg border border-[var(--color-tron-border)] p-3" open={!loop || data.readiness.blocking.length > 0}>
-	<summary class="cursor-pointer text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
+	<summary class="cursor-pointer text-[length:var(--page-section-toggle)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">
 		Setup &amp; Calibration
-		{#if data.readiness.blocking.length}<span class="ml-2 rounded border border-amber-500/40 bg-amber-900/15 px-2 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-amber-200">{data.readiness.blocking.length} To Fix</span>{/if}
+		{#if data.readiness.blocking.length}<span class="ml-2 rounded border border-amber-500/40 bg-amber-900/15 px-2 py-0.5 text-[length:var(--page-badge)] font-semibold normal-case tracking-normal text-amber-200">{data.readiness.blocking.length} To Fix</span>{/if}
 	</summary>
 	<div class="mt-3 grid grid-cols-1 gap-4 lg:grid-cols-2">
 		<!-- ── Setup ─────────────────────────────────────────────────── -->
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-4">
-			<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Setup</h3>
-			<form method="POST" action="?/saveSetup" use:enhance class="mt-3 space-y-3 text-xs">
+			<h3 class="text-[length:var(--setup-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Setup</h3>
+			<form method="POST" action="?/saveSetup" use:enhance class="mt-3 space-y-3 text-[length:var(--setup-option)]">
 				{#if !stage}
 					<label class="block">
 						<span style="color: var(--color-tron-text-secondary)">Deck Position (1–24)</span>
@@ -1435,84 +1467,55 @@
 					</label>
 				{/if}
 				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
-					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Channels To Fill</legend>
+					<legend class="px-1 text-[length:var(--setup-channels-heading)]" style="color: var(--color-tron-text-secondary)">Channels To Fill</legend>
 					<div class="flex flex-wrap gap-4">
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> C <span style="color: var(--color-tron-text-secondary)">(Row X)</span></label>
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> B <span style="color: var(--color-tron-text-secondary)">(Row W)</span></label>
-						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> A <span style="color: var(--color-tron-text-secondary)">(Row V)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelA" checked={data.settings.channels.a} /> <span class="text-[length:var(--setup-channel-letter)]">A</span> <span class="text-[length:var(--setup-option)]" style="color: var(--color-tron-text-secondary)">(Row V)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelB" checked={data.settings.channels.b} /> <span class="text-[length:var(--setup-channel-letter)]">B</span> <span class="text-[length:var(--setup-option)]" style="color: var(--color-tron-text-secondary)">(Row W)</span></label>
+						<label class="flex items-center gap-2" style="color: var(--color-tron-text)"><input type="checkbox" name="channelC" checked={data.settings.channels.c} /> <span class="text-[length:var(--setup-channel-letter)]">C</span> <span class="text-[length:var(--setup-option)]" style="color: var(--color-tron-text-secondary)">(Row X)</span></label>
 					</div>
-					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<p class="mt-1 text-[length:var(--setup-warning)]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol && !data.protocol.declaresChannels}<span class="text-amber-300">The protocol on the robot fills all three rows; deploy the current stage .py.</span>{/if}
 					</p>
 				</fieldset>
-				<fieldset class="rounded border border-[var(--color-tron-border)] p-2">
-					<legend class="px-1" style="color: var(--color-tron-text-secondary)">Wax Per Gate (µL)</legend>
-					<div class="grid grid-cols-4 gap-2">
-						{#each gateBoxes as box (box.name)}
-							<label class="block">
-								<span style="color: var(--color-tron-text-secondary)">{box.label}</span>
-								<input name={box.name} type="number" min="0.1" max="20" step="0.01" value={box.value} required
-									class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 font-mono" style="color: var(--color-tron-text)" />
-							</label>
-						{/each}
-					</div>
-					{#if data.protocol && !data.protocol.rehearsal && !data.protocol.declaresGateVolumes}
-						<p class="mt-1 text-[11px] text-amber-300">The protocol on the robot fills with its own volumes; deploy the current stage .py.</p>
-					{/if}
-				</fieldset>
-				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
-					<input type="checkbox" name="chainGrab" checked={data.settings.chainGrab} class="mt-0.5" />
-					<span>Chain Withdraw And Next Grab</span>
-				</label>
 				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)"
 					title="The scan only asks whether a barcode is there: any barcode passes (unknown cart, bucket label, any status), nothing is looked up, no cart is put on the wax run or recorded as wax-filled. Only a read of nothing takes the fail route. The rehearsal protocol always works this way; this box applies it to the production protocol too (wax is still dispensed).">
 					<input type="checkbox" name="scanPresenceOnly" checked={data.settings.scanPresenceOnly} class="mt-0.5" />
-					<span>Barcode Present Only <span class="text-[11px]">(don't check the cart, record nothing)</span></span>
-				</label>
-				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
-					<input type="checkbox" name="useArmLink" checked={data.settings.useArmLink} class="mt-0.5" />
-					<span>Use Cable Link To The OT-2</span>
-				</label>
-				<label class="flex items-start gap-2" style="color: var(--color-tron-text-secondary)">
-					<input type="checkbox" name="armPiDrives" checked={data.settings.armPiDrives} class="mt-0.5" />
-					<span>Arm Pi Drives The Loop</span>
+					<span>Barcode Present Only <span class="text-[length:var(--setup-option)]">(don't check the cart, record nothing)</span></span>
 				</label>
 				<div class="flex items-center justify-between gap-3">
-					<span class="text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<span class="text-[length:var(--setup-protocol-line)]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
 							Protocol On {data.robotName}: <span class="font-mono">{data.protocol.protocolName}</span>
 						{:else if data.settings.robotId}
 							<span class="text-amber-300">No wax-filling protocol on this robot.</span>
 						{/if}
 					</span>
-					<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save Setup</button>
+					<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-[length:var(--setup-save-button)] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save Setup</button>
 				</div>
 			</form>
 
 			<!-- Protocol on the robot: the production stage fill or the p300 rehearsal, from the library -->
 			{#if data.settings.robotId}
-				<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3 text-xs">
+				<div class="mt-4 border-t border-[var(--color-tron-border)] pt-3 text-[length:var(--protocol-text)]">
 					<div class="flex items-center justify-between gap-2">
-						<span class="font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol On The Robot</span>
+						<span class="text-[length:var(--protocol-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Protocol On The Robot</span>
 						{#if data.protocol?.rehearsal}
-							<span class="rounded border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 text-[10px] font-bold uppercase text-amber-300">Rehearsal · p300 · Air · No Wax</span>
+							<span class="rounded border border-amber-500/50 bg-amber-900/20 px-2 py-0.5 text-[length:var(--protocol-badge)] font-bold uppercase text-amber-300">Rehearsal · p300 · Air · No Wax</span>
 						{:else if data.protocol?.declaresCartLocation}
-							<span class="rounded border border-green-500/40 bg-green-900/15 px-2 py-0.5 text-[10px] font-bold uppercase text-green-300">Production Stage Fill</span>
+							<span class="rounded border border-green-500/40 bg-green-900/15 px-2 py-0.5 text-[length:var(--protocol-badge)] font-bold uppercase text-green-300">Production Stage Fill</span>
 						{/if}
 					</div>
-					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<p class="mt-1 text-[length:var(--protocol-file)]" style="color: var(--color-tron-text-secondary)">
 						{#if data.protocol}
-							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span> ·
-							{#if data.protocol.rehearsal}Rehearsal: nothing is dispensed.
-							{:else if data.protocol.declaresCartLocation}Stage protocol.
-							{:else}Carriage protocol; arm_cart_x/y/z not declared.{/if}
+							{#if data.protocol.rehearsal}Rehearsal Protocol:{:else if data.protocol.declaresCartLocation}Stage Protocol:{:else}Carriage Protocol:{/if}
+							<span class="font-mono" style="color: var(--color-tron-text)">{data.protocol.protocolName}</span>
 						{:else}
 							<span class="text-amber-300">No wax-filling protocol on this robot yet.</span>
 						{/if}
 					</p>
 					<div class="mt-2 flex items-center gap-2">
 						<select bind:value={deployLibraryId} disabled={deploying || loop?.status === 'running'}
-							class="min-w-0 flex-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 disabled:opacity-40" style="color: var(--color-tron-text)">
+							class="min-w-0 flex-1 rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5 text-[length:var(--protocol-choose)] disabled:opacity-40" style="color: var(--color-tron-text)">
 							<option value="">— Choose A Stage Protocol —</option>
 							{#each data.protocolOptions as o (o.libraryId)}
 								<option value={o.libraryId}>
@@ -1521,27 +1524,27 @@
 							{/each}
 						</select>
 						<button type="button" onclick={() => void deployProtocol()} disabled={!deployLibraryId || deploying || loop?.status === 'running'}
-							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
+							class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-[length:var(--protocol-deploy-button)] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
 							{deploying ? 'Deploying…' : 'Deploy To Robot'}
 						</button>
 					</div>
 					{#if data.protocolOptions.length === 0}
-						<p class="mt-1 text-[11px] text-amber-300">No Stage Protocol In The Library</p>
+						<p class="mt-1 text-[length:var(--protocol-message)] text-amber-300">No Stage Protocol In The Library</p>
 					{/if}
 					<div class="mt-2 flex flex-wrap items-center gap-2">
-						<label class="flex min-w-0 flex-1 items-center gap-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+						<label class="flex min-w-0 flex-1 items-center gap-2 text-[length:var(--protocol-library)]" style="color: var(--color-tron-text-secondary)">
 							<span class="shrink-0">Add Stage .py To Library</span>
 							<input type="file" accept=".py" disabled={addingToLibrary}
 								onchange={(e) => (libraryFile = (e.currentTarget as HTMLInputElement).files?.[0] ?? null)}
-								class="min-w-0 flex-1 text-[11px] file:mr-2 file:rounded file:border file:border-[var(--color-tron-border)] file:bg-black/30 file:px-2 file:py-1 file:text-[11px] file:text-[var(--color-tron-text)]" />
+								class="min-w-0 flex-1 text-[length:var(--protocol-library)] file:mr-2 file:rounded file:border file:border-[var(--color-tron-border)] file:bg-black/30 file:px-2 file:py-1 file:text-[length:var(--protocol-library)] file:text-[var(--color-tron-text)]" />
 						</label>
 						<button type="button" onclick={() => void addToLibrary()} disabled={!libraryFile || addingToLibrary}
-							class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-[11px] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
+							class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-[length:var(--protocol-library)] hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
 							{addingToLibrary ? 'Adding…' : 'Add To Library'}
 						</button>
 					</div>
 					{#if deployMsg}
-						<p class="mt-1 text-[11px] {deployMsg.ok ? 'text-green-300' : 'text-red-300'}">{deployMsg.text}</p>
+						<p class="mt-1 text-[length:var(--protocol-message)] {deployMsg.ok ? 'text-green-300' : 'text-red-300'}">{deployMsg.text}</p>
 					{/if}
 				</div>
 			{/if}
@@ -1552,16 +1555,16 @@
 		<!-- ── Animations ────────────────────────────────────────────── -->
 		<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 			<div class="flex items-center justify-between">
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Animations</h3>
+				<h3 class="text-[length:var(--anim-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Animations</h3>
 				{#if !changingAnimations}
 					<button type="button" onclick={() => (changingAnimations = true)} disabled={loop?.status === 'running'}
-						class="rounded border border-[var(--color-tron-border)] px-3 py-1 text-xs hover:border-[var(--color-tron-cyan)] disabled:opacity-40" style="color: var(--color-tron-text)">
+						class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-[length:var(--anim-change-button)] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25 disabled:opacity-40">
 						Change Animations
 					</button>
 				{/if}
 			</div>
 			{#if changingAnimations}
-				<form method="POST" action="?/saveAnimations" use:enhance={() => async ({ update }) => { changingAnimations = false; await update(); }} class="mt-3 space-y-3 text-xs">
+				<form method="POST" action="?/saveAnimations" use:enhance={() => async ({ update }) => { changingAnimations = false; await update(); }} class="mt-3 space-y-3 text-[length:var(--anim-form)]">
 					<label class="block">
 						<span style="color: var(--color-tron-text-secondary)">Grab</span>
 						<select name="grab" required class="mt-1 w-full rounded border border-[var(--color-tron-border)] bg-black/30 px-2 py-1.5" style="color: var(--color-tron-text)">
@@ -1584,21 +1587,21 @@
 						</select>
 					</label>
 					<div class="flex justify-end gap-2">
-						<button type="button" onclick={() => (changingAnimations = false)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-xs" style="color: var(--color-tron-text)">Cancel</button>
-						<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save Animations</button>
+						<button type="button" onclick={() => (changingAnimations = false)} class="rounded border border-[var(--color-tron-border)] px-3 py-1.5 text-[length:var(--anim-form-button)]" style="color: var(--color-tron-text)">Cancel</button>
+						<button type="submit" class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-[length:var(--anim-form-button)] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Save Animations</button>
 					</div>
 				</form>
 			{:else}
-				<dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-xs">
+				<dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-[length:var(--anim-row-label)]">
 					<dt style="color: var(--color-tron-text-secondary)">Grab</dt>
-					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.grabAnimation?.name ?? '— Not Chosen —'}{#if anim.grabAnimation}<span class="ml-1 font-normal opacity-60">({anim.grabAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
+					<dd class="text-[length:var(--anim-name)] font-semibold" style="color: var(--color-tron-text)">{anim.grabAnimation?.name ?? '— Not Chosen —'}{#if anim.grabAnimation}<span class="ml-1 text-[length:var(--anim-kind)] font-normal opacity-60">({anim.grabAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
 					<dt style="color: var(--color-tron-text-secondary)">Withdraw</dt>
-					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.withdrawAnimation?.name ?? '— Not Chosen —'}{#if anim.withdrawAnimation}<span class="ml-1 font-normal opacity-60">({anim.withdrawAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
+					<dd class="text-[length:var(--anim-name)] font-semibold" style="color: var(--color-tron-text)">{anim.withdrawAnimation?.name ?? '— Not Chosen —'}{#if anim.withdrawAnimation}<span class="ml-1 text-[length:var(--anim-kind)] font-normal opacity-60">({anim.withdrawAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'})</span>{/if}</dd>
 					<dt style="color: var(--color-tron-text-secondary)">Fail</dt>
-					<dd class="font-semibold" style="color: var(--color-tron-text)">{anim.failAnimation?.name ?? '— Not Chosen —'}{#if anim.failAnimation}<span class="ml-1 font-normal opacity-60">({anim.failAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'}{anim.withdrawAnimation && animValue(anim.failAnimation) === animValue(anim.withdrawAnimation) ? ', Same As Withdraw' : ''})</span>{/if}</dd>
+					<dd class="text-[length:var(--anim-name)] font-semibold" style="color: var(--color-tron-text)">{anim.failAnimation?.name ?? '— Not Chosen —'}{#if anim.failAnimation}<span class="ml-1 text-[length:var(--anim-kind)] font-normal opacity-60">({anim.failAnimation.kind === 'sequence' ? 'Sequence' : 'Move Set'}{anim.withdrawAnimation && animValue(anim.failAnimation) === animValue(anim.withdrawAnimation) ? ', Same As Withdraw' : ''})</span>{/if}</dd>
 				</dl>
 				{#if anim.animationsChangedAt}
-					<p class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Last Changed {when(anim.animationsChangedAt)}{anim.animationsChangedBy ? ` by ${anim.animationsChangedBy}` : ''}.</p>
+					<p class="mt-1 text-[length:var(--anim-note)]" style="color: var(--color-tron-text-secondary)">Last Changed {when(anim.animationsChangedAt)}{anim.animationsChangedBy ? ` by ${anim.animationsChangedBy}` : ''}.</p>
 				{/if}
 			{/if}
 		</section>
@@ -1606,31 +1609,19 @@
 	<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3 space-y-2">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div>
-				<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage Calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
+				<h3 class="text-[length:var(--stagecal-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Stage Calibration{#if data.robotName} · {data.robotName}{/if}{#if data.protocol} · <span class="font-mono normal-case tracking-normal">{data.protocol.protocolName}</span>{/if}</h3>
 			</div>
-			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-xs font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage Calibration</a>
+			<a href={STAGE_CALIBRATION_HREF} class="rounded border border-[var(--color-tron-cyan)] bg-[var(--color-tron-cyan)]/15 px-4 py-1.5 text-[length:var(--stagecal-button)] font-bold text-[var(--color-tron-cyan)] hover:bg-[var(--color-tron-cyan)]/25">Open Stage Calibration</a>
 		</div>
-		<div class="grid grid-cols-1 gap-2 text-xs sm:grid-cols-2">
+		<div class="grid grid-cols-1 gap-2 text-[length:var(--stagecal-item-name)] sm:grid-cols-2">
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Scan Position</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
-				{#if calibration?.scanPosition?.taughtAt}<div class="mt-1 text-[11px]" style="color: var(--color-tron-text-secondary)">Taught {when(calibration.scanPosition.taughtAt)}{calibration.scanPosition.taughtBy ? ` by ${calibration.scanPosition.taughtBy}` : ''}</div>{/if}
+				<div class="mt-1 font-mono text-[length:var(--stagecal-value)]" style="color: var(--color-tron-cyan)">{fmt(calibration?.scanPosition ?? null)}</div>
 			</div>
 			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
 				<div class="font-semibold" style="color: var(--color-tron-text)">Cart Location</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
-				{#if calibration?.cartLocation && !calibration.cartLocation.tipAdjust}<div class="mt-1 text-[11px] text-amber-300">Taught without a probed tip. Teach again.</div>{/if}
-			</div>
-			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-				<div class="font-semibold" style="color: var(--color-tron-text)">Dispense Depth</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">
-					{#if calibration?.dispenseDepth}{Math.abs(calibration.dispenseDepth.mm)} mm {calibration.dispenseDepth.mm >= 0 ? 'below' : 'above'} the rim{:else}Not Taught{/if}
-				</div>
-				{#if !calibration?.dispenseDepth}<div class="mt-1 text-[11px] text-amber-300">Required before a stage fill.</div>{/if}
-			</div>
-			<div class="rounded border border-[var(--color-tron-border)] bg-black/30 p-3">
-				<div class="font-semibold" style="color: var(--color-tron-text)">Stage Geometry</div>
-				<div class="mt-1 font-mono" style="color: var(--color-tron-cyan)">Rotation {calibration?.stageRotationDeg ?? 0}°</div>
+				<div class="mt-1 font-mono text-[length:var(--stagecal-value)]" style="color: var(--color-tron-cyan)">{fmt(calibration?.cartLocation ?? null)}</div>
+				{#if calibration?.cartLocation && !calibration.cartLocation.tipAdjust}<div class="mt-1 text-[length:var(--stagecal-warning)] text-amber-300">Taught without a probed tip. Teach again.</div>{/if}
 			</div>
 		</div>
 	</section>
@@ -1639,11 +1630,11 @@
 		{#if data.recentLoops.length}
 			<section class="rounded-lg border border-[var(--color-tron-border)] bg-[var(--color-tron-surface)] p-3">
 				<div class="flex items-center justify-between gap-2">
-					<h3 class="text-sm font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Runs</h3>
+					<h3 class="text-[length:var(--history-heading)] font-bold uppercase tracking-wider" style="color: var(--color-tron-text-secondary)">Recent Runs</h3>
 					<button
 						type="button"
 						onclick={() => setRecentHidden(!recentHidden)}
-						class="min-h-[36px] rounded border px-3 text-xs"
+						class="min-h-[36px] rounded border px-3 text-[length:var(--history-filter)]"
 						style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
 						aria-expanded={!recentHidden}
 					>
@@ -1651,7 +1642,7 @@
 					</button>
 				</div>
 				{#if !recentHidden}
-				<table class="mt-2 w-full text-left text-xs">
+				<table class="mt-2 w-full text-left text-[length:var(--history-table)]">
 					<thead style="color: var(--color-tron-text-secondary)"><tr><th class="pr-3 py-1">Started</th><th class="pr-3">By</th><th class="pr-3">Robot</th><th class="pr-3">Filled</th><th class="pr-3">Status</th><th class="pr-3">Note</th><th></th></tr></thead>
 					<tbody>
 						{#each data.recentLoops as l (l._id)}
@@ -1661,7 +1652,7 @@
 								<td class="pr-3">{l.robot.name}</td>
 								<td class="pr-3 font-mono">{l.completedRuns} / {l.requestedRuns}</td>
 								<td class="pr-3 {l.status === 'completed' ? 'text-green-300' : l.status === 'failed' ? 'text-red-300' : 'text-amber-300'}">{l.status ? l.status[0].toUpperCase() + l.status.slice(1) : ''}</td>
-								<td class="pr-3 text-[11px]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
+								<td class="pr-3 text-[length:var(--history-table)]" style="color: var(--color-tron-text-secondary)">{l.error ?? ''}</td>
 								<td class="py-1">
 									{#if l.opentronsRunId}
 										<button type="button" onclick={() => void loadProfile(l._id)} disabled={profileBusy} class={ctlPlain} title="Where this loop's OT-2 run spent its seconds">
@@ -1681,6 +1672,6 @@
 	</details>
 	<!-- History is its own page, one button away rather than a tab. -->
 	<div class="flex justify-center pt-2">
-		<a href="/manufacturing/cart-mfg/robot-arm/history" class="rounded-lg border border-[var(--color-tron-border)] px-5 py-2 text-sm font-semibold transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Open History</a>
+		<a href="/manufacturing/cart-mfg/robot-arm/history" class="rounded-lg border border-[var(--color-tron-border)] px-5 py-2 text-[length:var(--history-button)] font-semibold transition-colors hover:border-[var(--color-tron-cyan)] hover:text-[var(--color-tron-cyan)]" style="color: var(--color-tron-text-secondary)">Open History</a>
 	</div>
 </div>

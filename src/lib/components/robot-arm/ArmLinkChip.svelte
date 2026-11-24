@@ -15,7 +15,7 @@
 
 {#if link}
 	<span
-		class="rounded border px-1.5 py-0.5 text-[10px] font-semibold"
+		class="rounded border px-1.5 py-0.5 text-[length:var(--arm-text-tiny,10px)] font-semibold"
 		style={link.usable ? 'border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)' : 'border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)'}
 		title={link.usable ? `Arm Pi → OT-2 over the ${active === 'cable' ? 'USB cable' : 'office Wi-Fi'}` : (link.reason ?? '')}
 	>

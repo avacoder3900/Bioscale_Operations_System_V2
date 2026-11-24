@@ -108,12 +108,10 @@ export const actions: Actions = {
 				waxSourceLot: field(d, 'waxSourceLot'),
 				testMode: checked(d, 'testMode'),
 				channels: { c: checked(d, 'channelC'), b: checked(d, 'channelB'), a: checked(d, 'channelA') },
-				// A form without the volume boxes leaves the saved volumes as they are.
+				// Wax per gate is no longer on Setup (2026-11-24): a form without the volume boxes keeps the saved volumes.
 				gateVolumes: d.has('volGate1') ? { g1: field(d, 'volGate1'), g2: field(d, 'volGate2'), g3: field(d, 'volGate3'), g4: field(d, 'volGate4') } : undefined,
-				chainGrab: checked(d, 'chainGrab'),
-				useArmLink: checked(d, 'useArmLink'),
-				scanPresenceOnly: checked(d, 'scanPresenceOnly'),
-				armPiDrives: checked(d, 'armPiDrives')
+				// Chain withdraw + next grab, cable link and Pi driver are always on (2026-11-24): left out, saveSetup saves them on.
+				scanPresenceOnly: checked(d, 'scanPresenceOnly')
 			});
 			return { success: 'Setup saved.' };
 		} catch (err) {

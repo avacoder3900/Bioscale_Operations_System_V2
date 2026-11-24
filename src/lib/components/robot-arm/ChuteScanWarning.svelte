@@ -84,13 +84,13 @@
 	<button
 		type="button"
 		onclick={() => setHidden(false)}
-		class="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/20"
+		class="mt-2 rounded border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-[length:var(--arm-text-body,0.75rem)] font-semibold text-amber-200 hover:bg-amber-500/20"
 	>
 		Show Warning
 	</button>
 {:else if warning}
 	<div
-		class="mt-2 flex items-start gap-3 rounded border p-2 text-xs"
+		class="mt-2 flex items-start gap-3 rounded border p-2 text-[length:var(--arm-text-body,0.75rem)]"
 		style="border-color: #f59e0b; background: rgba(245,158,11,0.08); color: var(--color-tron-text)"
 		role="alert"
 	>

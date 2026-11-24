@@ -121,7 +121,7 @@
 	const label = $derived(!known ? '?' : torqueOn ? 'ON' : torqueOn === false ? 'OFF' : 'MIXED');
 </script>
 
-<div class="flex flex-wrap items-center gap-2 border-t px-3 py-1.5 text-[11px]" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
+<div class="flex flex-wrap items-center gap-2 border-t px-3 py-1.5 text-[length:var(--arm-text-small,11px)]" style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)">
 	<span>Torque <span class="font-semibold" style="color: {color}">{label}</span></span>
 	{#if wentOff && torqueOn === false}
 		<span class="rounded px-1.5 py-0.5 font-semibold" style="background: rgba(245,158,11,0.18); color: #fbbf24; border: 1px solid #f59e0b" title="The servos report torque off, and Off was not pressed here. Power drop, a servo fault, or a session that ended without turning it back on. Support the arm, then press On.">Torque Went Off</span>

@@ -287,7 +287,7 @@
 	<!-- First line: the Pi's heat, then the Wi-Fi it is on. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
-			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight {level === 'critical' ? 'animate-pulse' : ''}"
+			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[length:var(--arm-text-small,11px)] leading-tight {level === 'critical' ? 'animate-pulse' : ''}"
 			style="color: {color}; border: 1px solid {level === 'ok' ? 'var(--color-tron-border)' : color}; background: {level === 'ok' ? 'transparent' : 'rgba(0,0,0,0.25)'}"
 			{title}
 			aria-live={level === 'critical' || level === 'hot' ? 'polite' : 'off'}
@@ -296,7 +296,7 @@
 		</span>
 		{#if net}
 			<span
-				class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight"
+				class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[length:var(--arm-text-small,11px)] leading-tight"
 				style="color: {netColor}; border: 1px solid {netState === 'ok' || netState === 'unknown' ? 'var(--color-tron-border)' : netColor}; background: {netState === 'ok' || netState === 'unknown' ? 'transparent' : 'rgba(0,0,0,0.25)'}"
 				title={netTitle}
 				aria-live={netState === 'wrong' || netState === 'none' ? 'polite' : 'off'}
@@ -310,7 +310,7 @@
 	<!-- Second line: every follower servo's temperature, servo 1 first. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
-			class="inline-flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight {servoLevel === 'hot' ? 'animate-pulse' : ''}"
+			class="inline-flex shrink-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded px-1.5 py-0.5 font-mono text-[length:var(--arm-text-small,11px)] leading-tight {servoLevel === 'hot' ? 'animate-pulse' : ''}"
 			style="color: {servoRowColor}; border: 1px solid {servoLevel === 'ok' ? 'var(--color-tron-border)' : servoRowColor}; background: {servoLevel === 'ok' ? 'transparent' : 'rgba(0,0,0,0.25)'}"
 			title={servoRowTitle}
 			aria-live={servoLevel === 'hot' ? 'polite' : 'off'}
@@ -326,7 +326,7 @@
 	<!-- Second line when the Pi answered but the servos did not: say why instead of showing nothing. -->
 	<div class="flex flex-wrap items-center gap-1.5">
 		<span
-			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[11px] leading-tight"
+			class="shrink-0 rounded px-1.5 py-0.5 font-mono text-[length:var(--arm-text-small,11px)] leading-tight"
 			style="color: #f59e0b; border: 1px solid #f59e0b; background: rgba(0,0,0,0.25)"
 			title={servoErrorTitle}
 			aria-live="polite"

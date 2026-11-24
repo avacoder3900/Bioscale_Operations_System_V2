@@ -560,7 +560,7 @@
 				/>
 			</svg>
 			<span
-				class="truncate text-xs font-bold uppercase tracking-wider"
+				class="truncate text-[length:var(--arm-text-body,0.75rem)] font-bold uppercase tracking-wider"
 				style="color: var(--color-tron-text-secondary)"
 			>
 				Arm Camera
@@ -582,7 +582,7 @@
 		<button
 			type="button"
 			onclick={() => (collapsed = !collapsed)}
-			class="min-h-[44px] shrink-0 rounded border px-3 text-xs"
+			class="min-h-[44px] shrink-0 rounded border px-3 text-[length:var(--arm-text-body,0.75rem)]"
 			style="border-color: var(--color-tron-cyan); color: var(--color-tron-cyan)"
 			aria-expanded={!collapsed}
 		>
@@ -594,21 +594,21 @@
 		<div class="px-3 pb-3">
 			{#if !armReachable}
 				<div
-					class="rounded border border-red-500/40 bg-red-500/10 p-3 text-xs"
+					class="rounded border border-red-500/40 bg-red-500/10 p-3 text-[length:var(--arm-text-body,0.75rem)]"
 					style="color: var(--color-tron-text)"
 				>
 					Arm Unreachable
 				</div>
 			{:else if camerasError}
 				<div
-					class="rounded border border-red-500/40 bg-red-500/10 p-3 text-xs"
+					class="rounded border border-red-500/40 bg-red-500/10 p-3 text-[length:var(--arm-text-body,0.75rem)]"
 					style="color: var(--color-tron-text)"
 				>
 					Could not list cameras: {camerasError}
 				</div>
 			{:else if cameras.length === 0}
 				<div
-					class="rounded border p-3 text-xs"
+					class="rounded border p-3 text-[length:var(--arm-text-body,0.75rem)]"
 					style="border-color: var(--color-tron-border); color: var(--color-tron-text-secondary)"
 				>
 					No Cameras Configured
@@ -644,7 +644,7 @@
 						</RotatedFrame>
 					{:else}
 						<div
-							class="flex aspect-[4/3] w-full items-center justify-center text-xs"
+							class="flex aspect-[4/3] w-full items-center justify-center text-[length:var(--arm-text-body,0.75rem)]"
 							style="color: var(--color-tron-text-secondary)"
 						>
 							{#if paused}
@@ -659,13 +659,13 @@
 
 					{#if reconnecting}
 						<div
-							class="absolute inset-x-0 bottom-0 bg-red-600/80 px-2 py-1 text-center text-[11px] text-white"
+							class="absolute inset-x-0 bottom-0 bg-red-600/80 px-2 py-1 text-center text-[length:var(--arm-text-small,11px)] text-white"
 						>
 							Reconnecting… {failures} failed frame{failures === 1 ? '' : 's'}
 						</div>
 					{:else if stale}
 						<div
-							class="absolute inset-x-0 bottom-0 bg-amber-600/80 px-2 py-1 text-center text-[11px] text-white"
+							class="absolute inset-x-0 bottom-0 bg-amber-600/80 px-2 py-1 text-center text-[length:var(--arm-text-small,11px)] text-white"
 						>
 							No new frame for {Math.round((now - (lastFrameAt ?? now)) / 1000)}s
 						</div>
@@ -673,7 +673,7 @@
 						<!-- A frozen frame with no label is indistinguishable from a
 						     live one. Always say why it stopped. -->
 						<div
-							class="absolute inset-x-0 bottom-0 bg-black/70 px-2 py-1 text-center text-[11px] text-white"
+							class="absolute inset-x-0 bottom-0 bg-black/70 px-2 py-1 text-center text-[length:var(--arm-text-small,11px)] text-white"
 						>
 							{paused ? 'Paused' : 'Paused In Background'}
 						</div>
@@ -682,13 +682,13 @@
 
 				<!-- Pi-reported error, verbatim -->
 				{#if selectedStatus?.error}
-					<div class="mt-2 rounded border border-red-500/40 bg-red-500/10 p-2 text-[11px] text-red-300">
+					<div class="mt-2 rounded border border-red-500/40 bg-red-500/10 p-2 text-[length:var(--arm-text-small,11px)] text-red-300">
 						{selectedStatus.error}
 					</div>
 				{/if}
 
 				{#if selectedStatus && !selectedStatus.running && frameCount === 0}
-					<p class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+					<p class="mt-2 text-[length:var(--arm-text-small,11px)]" style="color: var(--color-tron-text-secondary)">
 						{#if selectedStatus.state === 'absent'}
 							No Colour Camera Found
 						{:else if selectedStatus.state === 'error' && selectedStatus.error}
@@ -700,7 +700,7 @@
 				{/if}
 
 				<!-- Controls -->
-				<div class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+				<div class="mt-2 flex flex-wrap items-center gap-2 text-[length:var(--arm-text-body,0.75rem)]">
 					{#if cameras.length > 1}
 						<select
 							bind:value={selected}
@@ -836,7 +836,7 @@
 				</div>
 
 				<!-- Health strip: real numbers, no reassuring fiction -->
-				<div class="mt-2 text-[11px]" style="color: var(--color-tron-text-secondary)">
+				<div class="mt-2 text-[length:var(--arm-text-small,11px)]" style="color: var(--color-tron-text-secondary)">
 					{#if reportedSize}{reportedSize} · {/if}
 					{#if transport === 'direct'}
 						direct from the Pi ({route === 'tailnet' ? 'Tailscale' : route === 'tunnel' ? 'Cloudflare tunnel' : 'public'})
