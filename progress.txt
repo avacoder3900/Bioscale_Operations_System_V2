@@ -28510,3 +28510,21 @@ BIMS:
 
 npm run check: 16 errors, same as clean origin/master today (baseline has moved 15 → 16;
 none in touched files). Unit tests: src/lib/robot-arm 359 pass, src/lib/server 704 pass.
+
+2026-11-24 (later) — feat/arm-gpio-events — installed on arm-pi; GPIO 17 finding
+Before installing, `pinctrl get 17` on arm-pi showed "op dl pn | hi": GPIO 17 an output the
+service (consumer "lg") drives LOW, but reading HIGH. Sampled 100x: a regular wave, high ~3-4
+of every ~11 reads at 2.7 ms per read (~16 ms period, ~60 Hz, ~1/3 duty). GPIO 27 and 22 flat 0;
+neighbour GPIO 18 (Pin 12) unused. So the orange "A · GPIO 17" chip was a real level read by
+/gpio/status, with no software driving it high: a wiring / driver-board / ground fault to check
+by hand (not tested by driving the pin).
+Because of it the watcher was reworked before install: it tracks what the service drives
+separately from what the pin reads; a differing level opens an episode with one row ("reads high
+while driven low"), a count row every 10 min, one row when it reads as driven for 60 s. No row
+per read. BIMS lines: "Reads High While Driven Low", "Still Reads ...", "Reads As Driven Again";
+warning "⚠ ... High  Reads High While Driven Low". Pi tests 11 pass.
+Installed on arm-pi 20:07 UTC: gpio_events.py (new), gpio.py, conveyor.py (the Pi's copies
+equalled the repo's previous versions; backups *.bak-20261124-events), robot-arm restarted with
+/sessions/active null and the loop driver idle. /openapi.json lists /gpio/events; boot rows for
+17/27/22 "mode op, driven low"; first outside row for 17 at 20:07:40. Log ~/.bims-arm/gpio-events.jsonl.
+npm run check 16 (= clean master). Unit tests 1064 pass.

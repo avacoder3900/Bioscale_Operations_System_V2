@@ -17,6 +17,7 @@ SERVER = os.path.join(HERE, "..", "src", "server")
 TMP = tempfile.mkdtemp()
 os.environ["GPIO_EVENTS_LOG"] = os.path.join(TMP, "gpio-events.jsonl")
 os.environ["GPIO_WATCH_S"] = "0.05"
+os.environ["GPIO_WATCH_QUIET_S"] = "0.3"
 
 # fastapi / pydantic stand-ins: only what gpio.py and conveyor.py touch at import.
 fastapi = types.ModuleType("fastapi")
@@ -123,13 +124,38 @@ class TestGpioEvents(unittest.TestCase):
 
     def test_outside_change_is_unknown(self):
         with ev.write_lock:
-            gpio._backend._sim_state[17] = 1  # a write this service did not make
+            gpio._backend._sim_state[17] = 1  # a level this service did not drive
         time.sleep(0.3)
         rows = new_events(self.since)
-        self.assertTrue(any(e["pin"] == 17 and e["state"] == 1 and e["source"] == "unknown" for e in rows), rows)
-        gpio.all_off()
+        self.assertEqual([(e["pin"], e["state"], e["source"], e["driven"]) for e in rows], [(17, 1, "unknown", 0)])
+        self.assertEqual(rows[0]["note"], "reads high while driven low")
+        with ev.write_lock:
+            gpio._backend._sim_state[17] = 0
+        time.sleep(0.6)
         rows = new_events(self.since)
-        self.assertEqual((rows[-1]["state"], rows[-1]["source"]), (0, "all-off"))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1]["state"], 0)
+        self.assertIn("reads as driven (low) again", rows[1]["note"])
+
+    def test_flicker_is_one_episode(self):
+        # GPIO 17 on 2026-11-24: a ~60 Hz wave while driven low. Never a row per read.
+        for i in range(12):
+            with ev.write_lock:
+                gpio._backend._sim_state[27] = i % 2
+            time.sleep(0.06)
+        with ev.write_lock:
+            gpio._backend._sim_state[27] = 0
+        time.sleep(0.6)
+        rows = [e for e in new_events(self.since) if e["pin"] == 27]
+        self.assertEqual([e["state"] for e in rows], [1, 0])
+        self.assertGreater(rows[1]["odd_reads"], 1)
+
+    def test_pulse_during_watch_is_not_outside(self):
+        t = threading.Thread(target=lambda: gpio.pulse_blocking(17, 200), name="replay-fire")
+        t.start()
+        t.join(3)
+        time.sleep(0.1)
+        self.assertEqual([e["source"] for e in new_events(self.since)], ["replay-fire", "replay-fire"])
 
     def test_no_event_without_change(self):
         gpio.all_off()

@@ -11,8 +11,9 @@ checked. Now gpio.py and conveyor.py report each write here.
     GET /gpio/events?since=<iso>&limit=500     (route lives in gpio.py)
         {events: [...oldest first], boot_id, now, pins: {"17": 0, ...}, last: {"17": {...}}}
 
-Each event: {id, at (ISO, UTC), pin, state (0|1), source, ms?, held_ms?,
-run_id?, loop_id?, note?}. Sources:
+Each event: {id, at (ISO, UTC), pin, state (0|1, the level), source, ms?,
+held_ms?, run_id?, loop_id?, note?, driven? (boot and unknown rows: what the
+pin is driven to)}. Sources:
     bims-pulse    a REST pulse (/gpio/pulse, /gpio/sequence, /conveyor/pulse)
     replay-fire   a replay's or /fires/play's fire timer (run_id = the Pi's run)
     loop-driver   a replay fire while the wax-fill loop driver runs (loop_id)
@@ -25,9 +26,10 @@ The chute barcode scanner drives no pin: its scan runs after a replay fire,
 which is logged as replay-fire.
 
 Only transitions are kept (a write that leaves the pin as it was is not an
-event). A watcher thread reads the pins once a second and records any change
-this service did not make, so a local script or `pinctrl set` shows as
-"unknown". Writes and the watcher share one lock so a pulse is never mistaken
+event). A watcher thread reads the pins once a second and records a level
+that differs from what the pin is driven to, so a local script, `pinctrl set`
+or a wiring fault shows as "unknown": one row when it starts, a count every
+10 min while it lasts, one row when it ends (never one per read). Writes and the watcher share one lock so a pulse is never mistaken
 for an outside change.
 
 Bounded: RING_SIZE events in memory, and a JSONL file in ~/.bims-arm that is
@@ -57,6 +59,10 @@ RING_SIZE = int(os.environ.get("GPIO_EVENTS_RING", "2000"))
 LOG_PATH = Path(os.environ.get("GPIO_EVENTS_LOG", str(Path.home() / ".bims-arm" / "gpio-events.jsonl")))
 LOG_MAX_BYTES = int(os.environ.get("GPIO_EVENTS_LOG_MAX_BYTES", str(512 * 1024)))
 WATCH_S = float(os.environ.get("GPIO_WATCH_S", "1.0"))
+#: A pin reading as driven for this long ends its outside-level episode (s).
+QUIET_S = float(os.environ.get("GPIO_WATCH_QUIET_S", "60"))
+#: While an episode lasts, one count row this often (s), never one row per read.
+REPORT_S = float(os.environ.get("GPIO_WATCH_REPORT_S", "600"))
 
 SOURCES = ("bims-pulse", "replay-fire", "loop-driver", "all-off", "shutdown", "boot", "unknown")
 
@@ -67,7 +73,10 @@ write_lock = threading.RLock()
 
 _ring: deque = deque(maxlen=RING_SIZE)
 _seq = 0
-_last_state: Dict[int, int] = {}
+#: What this service last drove each pin to (or the drive found at boot).
+_driven: Dict[int, int] = {}
+#: Pins whose level is not what they are driven to: {since, last_odd, last_report, reads, odd}.
+_odd: Dict[int, dict] = {}
 _last_on_at: Dict[int, float] = {}
 _readers: Dict[int, Callable[[], Optional[int]]] = {}
 _watcher: Optional[threading.Thread] = None
@@ -139,7 +148,7 @@ def record(pin: int, state: int, ms: Optional[int] = None, **meta) -> Optional[d
     try:
         with write_lock:
             state = 1 if state else 0
-            if _last_state.get(pin) == state:
+            if _driven.get(pin) == state:
                 return None
             now = time.time()
             info = _infer()
@@ -155,7 +164,7 @@ def record(pin: int, state: int, ms: Optional[int] = None, **meta) -> Optional[d
                 ev.pop("ms", None)
                 if pin in _last_on_at:
                     ev["held_ms"] = int((now - _last_on_at.pop(pin)) * 1000)
-            _last_state[pin] = state
+            _driven[pin] = state
             return _add(ev)
     except Exception as exc:
         print(f"[gpio_events] record failed: {exc}", flush=True)
@@ -169,11 +178,16 @@ def _pinctrl_levels(pins: List[int]) -> Dict[int, dict]:
         r = subprocess.run(["pinctrl", "get", ",".join(str(p) for p in pins)], capture_output=True, text=True, timeout=2)
     except Exception:
         return out
-    # "17: op dl pd | lo // GPIO17 = output"
+    # "17: op dl pd | lo // GPIO17 = output"  (dl / dh = the output is driven low / high)
     for line in r.stdout.splitlines():
-        m = re.match(r"\s*(\d+):\s*(\S+).*\|\s*(hi|lo)\b", line)
+        m = re.match(r"\s*(\d+):\s*(\S+)\s*(d[lh])?.*\|\s*(hi|lo)\b", line)
         if m:
-            out[int(m.group(1))] = {"mode": m.group(2), "state": 1 if m.group(3) == "hi" else 0}
+            drive = m.group(3)
+            out[int(m.group(1))] = {
+                "mode": m.group(2),
+                "state": 1 if m.group(4) == "hi" else 0,
+                "driven": (1 if drive == "dh" else 0) if (m.group(2) == "op" and drive) else None,
+            }
     return out
 
 
@@ -185,11 +199,13 @@ def note_boot(pins: List[int]) -> None:
             f = found.get(p)
             if f is None:
                 _add({"at": _iso(time.time()), "pin": p, "state": None, "source": "boot", "note": "not read (no pinctrl)"})
+                _driven.setdefault(p, 0)
             else:
-                _add({"at": _iso(time.time()), "pin": p, "state": f["state"], "source": "boot", "note": f"mode {f['mode']}"})
-                _last_state[p] = f["state"]
-                if f["state"] == 1:
-                    _last_on_at[p] = time.time()
+                drv = f["driven"]
+                note = f"mode {f['mode']}" + ("" if drv is None else f", driven {'high' if drv else 'low'}")
+                _add({"at": _iso(time.time()), "pin": p, "state": f["state"], "driven": drv, "source": "boot", "note": note})
+                # The service claims the pin driven low, so that is what it is driven to from here.
+                _driven.setdefault(p, 0)
 
 
 def register(pin: int, reader: Callable[[], Optional[int]]) -> None:
@@ -211,6 +227,51 @@ def _read(pin: int) -> Optional[int]:
         return None
 
 
+def _outside(pin: int, state: int, note: str, **extra) -> None:
+    """A level this service did not drive. Caller holds write_lock."""
+    _add({"at": _iso(time.time()), "pin": pin, "state": state, "driven": _driven.get(pin), "source": "unknown", "note": note, **extra})
+
+
+def _hl(v: Optional[int]) -> str:
+    return "high" if v == 1 else "low" if v == 0 else "?"
+
+
+def _check(pin: int, level: int, claimed: bool) -> None:
+    """One read of `pin` against what it is driven to. Caller holds write_lock.
+
+    A level that differs opens an episode: one row then, one count row every
+    REPORT_S while it lasts, one row when the pin has read as driven for
+    QUIET_S. A pin that flickers (seen on GPIO 17, 2026-11-24: a ~60 Hz wave
+    while driven low) never writes a row per read.
+    """
+    now = time.time()
+    driven = _driven.get(pin)
+    if driven is None:
+        _driven[pin] = level
+        return
+    ep = _odd.get(pin)
+    where = "" if claimed else "; not claimed by this service"
+    if level != driven:
+        if ep is None:
+            _odd[pin] = {"since": now, "last_odd": now, "last_report": now, "reads": 1, "odd": 1}
+            _outside(pin, level, f"reads {_hl(level)} while driven {_hl(driven)}{where}")
+            return
+        ep["reads"] += 1
+        ep["odd"] += 1
+        ep["last_odd"] = now
+    elif ep is not None:
+        ep["reads"] += 1
+        if now - ep["last_odd"] >= QUIET_S:
+            dur = int(now - ep["since"])
+            _outside(pin, level, f"reads as driven ({_hl(driven)}) again; {ep['odd']} of {ep['reads']} reads were {_hl(1 - driven)} over {dur} s", odd_reads=ep["odd"], reads=ep["reads"])
+            del _odd[pin]
+            return
+    if ep is not None and now - ep["last_report"] >= REPORT_S:
+        span = int(now - ep["last_report"])
+        _outside(pin, 1 - driven, f"still: {ep['odd']} of {ep['reads']} reads {_hl(1 - driven)} while driven {_hl(driven)} in the last {span} s{where}", odd_reads=ep["odd"], reads=ep["reads"])
+        ep.update(last_report=now, reads=0, odd=0)
+
+
 def _watch() -> None:
     ticks = 0
     while True:
@@ -223,18 +284,14 @@ def _watch() -> None:
                     level = _read(pin)
                     if level is None:
                         unclaimed.append(pin)
-                        continue
-                    if pin in _last_state and _last_state[pin] != level:
-                        record(pin, level, source="unknown", note="changed with no write from this service")
-                    elif pin not in _last_state:
-                        _last_state[pin] = level
+                    else:
+                        _check(pin, level, True)
             if unclaimed and ticks % 10 == 0:
                 # Not claimed by this service yet: pinctrl can still see an outside driver.
                 found = _pinctrl_levels(unclaimed)
                 with write_lock:
                     for pin, f in found.items():
-                        if pin in _last_state and _last_state[pin] != f["state"]:
-                            record(pin, f["state"], source="unknown", note=f"pin not claimed by this service; mode {f['mode']}")
+                        _check(pin, f["state"], False)
         except Exception as exc:
             print(f"[gpio_events] watcher: {exc}", flush=True)
 

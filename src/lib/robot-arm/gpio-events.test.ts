@@ -62,6 +62,14 @@ describe('gpio warnings', () => {
 		expect(gpioWarnings({ pins: { '27': 1 }, last: { '27': { ...on, pin: 27, source: 'boot' } }, now })[0].line).toContain('Found High At Service Start');
 	});
 
+	it('names a pin that reads high while driven low', () => {
+		const odd = { id: 'b2-9', at: now, pin: 17, state: 1, source: 'unknown', driven: 0, note: 'reads high while driven low' };
+		expect(gpioEventLine(odd)).toBe('Trapdoor A · GPIO 17 Reads High While Driven Low');
+		expect(gpioEventLine({ ...odd, note: 'still: 200 of 600 reads high', odd_reads: 200, reads: 600 })).toBe('Trapdoor A · GPIO 17 Still Reads High While Driven Low  200 Of 600 Reads High');
+		expect(gpioEventLine({ ...odd, state: 0, note: 'reads as driven (low) again; 3 of 70 reads were high over 70 s', odd_reads: 3, reads: 70 })).toBe('Trapdoor A · GPIO 17 Reads As Driven Again  3 Of 70 Reads High');
+		expect(gpioWarnings({ pins: { '17': 1 }, last: { '17': odd }, now })[0].line).toBe('⚠ Trapdoor A · GPIO 17 High  Reads High While Driven Low');
+	});
+
 	it('warns for a pin still high long after its pulse', () => {
 		const w = gpioWarnings({ pins: { '17': 1 }, last: { '17': on }, now: '2026-11-24T15:00:12.000Z' });
 		expect(w[0].kind).toBe('gpio_stuck');

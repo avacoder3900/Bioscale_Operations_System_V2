@@ -25,6 +25,11 @@ export interface PiGpioEvent {
 	run_id?: string;
 	loop_id?: string;
 	note?: string;
+	/** Boot and unknown rows: what the pin is driven to (0 | 1), null when not an output. */
+	driven?: number | null;
+	/** Unknown rows that count a stretch of reads: how many of them differed from the drive. */
+	odd_reads?: number;
+	reads?: number;
 }
 
 export interface PiGpioEventsReply {
@@ -79,6 +84,13 @@ export function gpioEventLine(e: PiGpioEvent): string {
 		const found = e.state === 1 ? 'High' : e.state === 0 ? 'Low' : null;
 		return join(`${pin} ${found ? `Found ${found} At Service Start` : 'Not Read At Service Start'}`);
 	}
+	if (e.source === 'unknown' && e.driven != null) {
+		const hl = (v: number | null | undefined) => (v === 1 ? 'High' : 'Low');
+		const count = e.odd_reads != null && e.reads != null ? `${e.odd_reads} Of ${e.reads} Reads ${hl(e.driven === 1 ? 0 : 1)}` : null;
+		if (e.note?.startsWith('still')) return join(`${pin} Still Reads ${hl(e.state)} While Driven ${hl(e.driven)}`, count);
+		if (e.note?.includes('again')) return join(`${pin} Reads As Driven Again`, count);
+		return join(`${pin} Reads ${hl(e.state)} While Driven ${hl(e.driven)}`);
+	}
 	return join(
 		`${pin} ${e.state === 1 ? 'On' : 'Off'}`,
 		gpioSourceTitle(e.source),
@@ -132,7 +144,7 @@ export function gpioEventRow(e: PiGpioEvent, who: { from?: string | null; movedB
 		movedBy: who.movedBy ?? null,
 		...(e.run_id ? { runId: e.run_id } : {}),
 		...(e.loop_id ? { loopId: e.loop_id } : {}),
-		detail: { pin: e.pin, state: e.state, source: e.source, ms: e.ms ?? null, heldMs: e.held_ms ?? null, note: e.note ?? null, eventId: e.id }
+		detail: { pin: e.pin, state: e.state, driven: e.driven ?? null, source: e.source, ms: e.ms ?? null, heldMs: e.held_ms ?? null, oddReads: e.odd_reads ?? null, reads: e.reads ?? null, note: e.note ?? null, eventId: e.id }
 	};
 }
 
@@ -159,7 +171,15 @@ export function gpioWarnings(reply: Pick<PiGpioEventsReply, 'pins' | 'last' | 'n
 		const last = reply.last?.[k] ?? null;
 		const title = gpioPinTitle(pin);
 		if (!last || last.state !== 1 || last.source === 'boot' || last.source === 'unknown') {
-			const why = !last ? 'No Event' : last.source === 'boot' ? 'Found High At Service Start' : last.source === 'unknown' ? 'Turned On Outside The Pi Service' : 'No On Event';
+			const why = !last
+				? 'No Event'
+				: last.source === 'unknown' && last.driven === 0
+					? 'Reads High While Driven Low'
+					: last.source === 'boot'
+						? 'Found High At Service Start'
+						: last.source === 'unknown'
+							? 'Turned On Outside The Pi Service'
+							: 'No On Event';
 			out.push({ pin, kind: 'gpio_unexplained', line: `⚠ ${title} High  ${why}`, lastEventId: last?.id ?? null });
 			continue;
 		}
